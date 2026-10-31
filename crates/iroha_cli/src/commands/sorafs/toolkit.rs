@@ -16,7 +16,7 @@ use kotodama_lang::{
     session::CompilerSession,
 };
 use norito::json::{Map, Value};
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, PorMerkleTree,
     fetch_plan::{TOOLKIT_PACK_REPORT_SCHEMA_V1, try_chunk_fetch_specs_to_json},
@@ -97,8 +97,10 @@ impl Command {
             Self::Validate(command) => command.run(),
             Self::Sign(args) => validation::run_sign(args),
             Self::ReleaseManifest(args) => validation::run_release_manifest(args),
-            Self::ReleaseManifestReceipt(args) => validation::release_manifest_receipt::run(args),
-            Self::FinalPromotionReceipt(args) => validation::final_promotion_receipt::run(args),
+            Self::ReleaseManifestReceipt(args) => {
+                validation::release_manifest_receipt::run(&(args))
+            }
+            Self::FinalPromotionReceipt(args) => validation::final_promotion_receipt::run(&(args)),
             Self::Compile(_) | Self::Pack(_) => Err(validation::CliError::Config(
                 "compile and pack are separate toolkit operations".to_owned(),
             )),
@@ -173,7 +175,18 @@ impl CompileArgs {
         }
         let driver = BuildDriver::for_current_executable(CompilerSession::default())
             .map_err(|error| eyre!(error))?;
-        let output = if self.source != Path::new("-") {
+        let output = if self.source == Path::new("-") {
+            if self.source_root.is_some() {
+                return Err(eyre!("--source-root requires a file input"));
+            }
+            driver.build_source(SourceBuildRequest {
+                source,
+                source_name,
+                profile: "sorafs".to_owned(),
+                layout,
+                mode: PublishMode::Write,
+            })
+        } else {
             let physical = self.source.canonicalize()?;
             let default_root = self
                 .source
@@ -196,12 +209,12 @@ impl CompileArgs {
                         ));
                     }
                 }
-                if let Some(summary) = &self.json_out {
-                    if input == &output_identity(summary)? {
-                        return Err(eyre!(
-                            "JSON summary must not replace a Kotodama source file"
-                        ));
-                    }
+                if let Some(summary) = &self.json_out
+                    && input == &output_identity(summary)?
+                {
+                    return Err(eyre!(
+                        "JSON summary must not replace a Kotodama source file"
+                    ));
                 }
             }
             driver.build_project(LinkedSourceBuildRequest {
@@ -219,17 +232,6 @@ impl CompileArgs {
                     }
                 },
                 profile: "sorafs".into(),
-                layout,
-                mode: PublishMode::Write,
-            })
-        } else {
-            if self.source_root.is_some() {
-                return Err(eyre!("--source-root requires a file input"));
-            }
-            driver.build_source(SourceBuildRequest {
-                source,
-                source_name,
-                profile: "sorafs".to_owned(),
                 layout,
                 mode: PublishMode::Write,
             })
@@ -264,7 +266,7 @@ impl Run for CompileArgs {
             let mut output = tempfile::NamedTempFile::new_in(
                 path.parent()
                     .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or(Path::new(".")),
+                    .unwrap_or_else(|| Path::new(".")),
             )?;
             output.write_all(&bytes)?;
             output.persist(path).wrap_err_with(|| {
@@ -283,7 +285,7 @@ fn output_identity(path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
         .ok_or_else(|| eyre!("output path must name a file"))?;
@@ -424,7 +426,7 @@ impl PackArgs {
                 chunk_digest_sha3,
                 manifest_filename.as_deref(),
             );
-            let mut rng = OsRng;
+            let mut rng = SysRng;
             let envelope = encrypt_payload(&manifest_bytes, &aad, &recipient, &mut rng)
                 .wrap_err("failed to encrypt hybrid payload envelope")?;
             let envelope_bytes =

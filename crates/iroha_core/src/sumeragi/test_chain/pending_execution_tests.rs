@@ -438,7 +438,7 @@ fn changed_original_genesis_configuration_is_rejected_before_publication() {
     .1;
     assert!(
         matches!(*error, crate::block::BlockValidationError::GenesisPolicyMismatch {
-        expected_execution, actual_execution, expected_nexus, actual_nexus,
+        expected_execution, actual_execution, expected_nexus, actual_nexus, ..
     } if expected_execution != actual_execution || expected_nexus != actual_nexus)
     );
     assert_eq!(prepared.state.view().height(), 0);

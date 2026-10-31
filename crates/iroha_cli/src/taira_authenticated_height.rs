@@ -4,15 +4,15 @@ use super::*;
 use std::time::Instant;
 
 /// A poll can report progress without authorizing an unauthenticated height.
-pub(crate) enum HeightObservationV1 {
+pub enum HeightObservationV1 {
     Pending,
-    Verified(VerifiedCommittedHeightV1),
+    Verified(Box<VerifiedCommittedHeightV1>),
 }
 
 /// Only this module can construct a height accepted by the bootstrap controller.
 /// Its public evidence contains every immediate successor from the signed genesis.
 #[derive(JsonSerialize)]
-pub(crate) struct VerifiedCommittedHeightV1 {
+pub struct VerifiedCommittedHeightV1 {
     schema: String,
     network_id: NetworkId,
     genesis_block_hash: HashOf<BlockHeader>,
@@ -147,9 +147,9 @@ impl VerifiedCommittedHeightV1 {
             validators,
         )?;
         for proof in &self.proofs {
-            let verified = verifier.verify(proof)?;
+            let authenticated = verifier.verify(proof)?;
             if proof.block_header.height() == height {
-                return Ok(verified);
+                return Ok(authenticated);
             }
         }
         Err(eyre!("carrier is absent from the authenticated prefix"))
@@ -170,7 +170,7 @@ struct PeerHeightEvidenceV1 {
 }
 
 /// A verified chain is retained only in memory; every emitted height requires new peer reads.
-pub(crate) struct AuthenticatedHeightObserverV1 {
+pub struct AuthenticatedHeightObserverV1 {
     authority: Authority,
     peers: Vec<PeerV1>,
     verifier: Option<SumeragiFinalityVerifier>,
@@ -217,7 +217,7 @@ impl HeightReads for NativeReads {
     ) -> Result<SumeragiFinalityAttestation> {
         self.clients[peer]
             .get_sumeragi_finality_attestation(height, challenge, identity, self.root_scope)
-            .map(|attestation| attestation.into_attestation())
+            .map(iroha::client::AuthenticatedFinalityAttestation::into_attestation)
     }
 
     fn next_proof(
@@ -439,10 +439,9 @@ impl AuthenticatedHeightObserverV1 {
                 PeerRead::Pending => None,
             })
             .max_by_key(|(_, proof)| proof.body.finality_proof.block_header.height())
+            && !self.synchronize(reads, index, tip, deadline, &mut new_proofs)?
         {
-            if !self.synchronize(reads, index, tip, deadline, &mut new_proofs)? {
-                return Ok(HeightObservationV1::Pending);
-            }
+            return Ok(HeightObservationV1::Pending);
         }
         let mut pending = false;
         for read in &after {
@@ -490,7 +489,7 @@ impl AuthenticatedHeightObserverV1 {
         };
         require_operation_budget(deadline, "publishing authenticated committed height")?;
         self.emitted_height = target_height.get();
-        Ok(HeightObservationV1::Verified(evidence))
+        Ok(HeightObservationV1::Verified(Box::new(evidence)))
     }
 
     fn synchronize(

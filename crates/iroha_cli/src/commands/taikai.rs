@@ -34,9 +34,9 @@ use norito::{
     json::{self, JsonSerialize, Map, Value},
 };
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     rand_core::TryCryptoRng,
-    rngs::{OsRng, StdRng},
+    rngs::{StdRng, SysRng},
 };
 use sorafs_car::{
     taikai::{
@@ -807,17 +807,14 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
-    let salt = match explicit {
-        Some(hex) => parse_hex_32(hex, "hkdf-salt"),
-        None => random_cek_hkdf_salt(),
-    }?;
+    let salt = explicit.map_or_else(random_cek_hkdf_salt, |hex| parse_hex_32(hex, "hkdf-salt"))?;
     if salt.iter().all(|byte| *byte == 0) {
         return Err(eyre!("hkdf-salt must not be all zero"));
     }
     Ok(salt)
 }
 fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
-    random_cek_hkdf_salt_with_rng(&mut OsRng)
+    random_cek_hkdf_salt_with_rng(&mut SysRng)
 }
 fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32]> {
     let mut salt = [0u8; 32];
@@ -1514,10 +1511,11 @@ fn sync_policy_output_parent(_path: &Path) -> std::io::Result<()> {
 #[cfg(unix)]
 fn set_policy_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
-    options.custom_flags(
+    options.custom_flags(i32::from_ne_bytes(
         (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-            .bits() as i32,
-    );
+            .bits()
+            .to_ne_bytes(),
+    ));
 }
 
 #[cfg(windows)]
@@ -2073,11 +2071,11 @@ impl EdgeSummary {
 fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
     match seed {
         Some(seed) => Ok(StdRng::seed_from_u64(seed)),
-        None => StdRng::try_from_os_rng()
+        None => StdRng::try_from_rng(&mut rand::rngs::SysRng)
             .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}")),
     }
 }
-fn jittered_drift<R: Rng + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
+fn jittered_drift<R: RngExt + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
     if jitter_ms == 0 {
         return base;
     }
@@ -2988,7 +2986,7 @@ impl ExtensionMatcher {
 mod tests {
     use super::*;
     use iroha::data_model::taikai::TaikaiTrackKind;
-    use rand::RngCore as _;
+    use rand::Rng as _;
     use std::{fs, path::Path};
 
     fn policy_output_tempdir() -> tempfile::TempDir {
@@ -3033,7 +3031,7 @@ mod tests {
     }
     impl std::error::Error for FailingTryRngError {}
     struct FailingTryRng;
-    impl rand::rand_core::TryRngCore for FailingTryRng {
+    impl rand::rand_core::TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)

@@ -1,0 +1,188 @@
+[
+  {
+    "cargo_record": {
+      "cfgs": [
+        "norito_enable_rans_bundles"
+      ],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/norito-17b5690e3b043734/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/norito#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(norito_enable_cabac)\ncargo:rustc-check-cfg=cfg(norito_enable_trellis)\ncargo:rustc-check-cfg=cfg(norito_enable_rans_bundles)\ncargo:rerun-if-env-changed=ENABLE_CABAC\ncargo:rerun-if-env-changed=ENABLE_TRELLIS\ncargo:rustc-cfg=norito_enable_rans_bundles\ncargo:rerun-if-env-changed=NORITO_CHECK_BINDINGS_SYNC\ncargo:rerun-if-env-changed=NORITO_SKIP_BINDINGS_SYNC\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_sumeragi-bbb744a5c553df85/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_sumeragi#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_mutation, values(any()))\ncargo:rerun-if-env-changed=SUMERAGI_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_data_model-3a4cf12df9ab75d2/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_model_mutation, values(\"DM1\", \"DM2\", \"DM3\", \"DM4\", \"DM5\", \"DM6\", \"DM7\", \"DM8\", \"DM9\", \"DM10\", \"DM11\", \"DM12\", \"DM13\", \"DM14\"))\ncargo:rerun-if-env-changed=SUMERAGI_MODEL_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha-d8d2ef2b5e2c0499/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_sdk_mutation, values(\"SDK1\"))\ncargo:rerun-if-env-changed=SUMERAGI_SDK_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [
+        "fastpq_cuda_unavailable"
+      ],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/fastpq_prover-cb2180bbda3338b6/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rerun-if-changed=build.rs\ncargo:rustc-cfg=fastpq_cuda_unavailable\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/ivm-d0aa41d734fa50f7/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/ivm#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rerun-if-changed=spec/syscalls.toml\ncargo:rerun-if-changed=src/assets/iso20022_schema_v1/schema_v1.tsv\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_core-a122fb3eb3c1599c/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_core_mutation, values(any()))\ncargo:rerun-if-env-changed=SUMERAGI_CORE_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/kotodama_lang-f95b08c54567f58f/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/kotodama_lang#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rerun-if-changed=grammar/v1.lex\ncargo:rerun-if-changed=src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv\ncargo:rerun-if-changed=src/assets/diagnostics_v1/compile_fail_cases_v1.tsv\ncargo:rerun-if-changed=src/assets/diagnostics_v1/secret_reject_cases_v1.tsv\ncargo:rerun-if-changed=src/i18n/translations/messages.v1.tsv\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_deploy-b832bac240db81c2/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_deploy#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_deploy_mutation, values(\"DEP1\", \"DEP2\", \"DEP3\", \"DEP4\", \"DEP5\", \"DEP6\", \"DEP7\"))\ncargo:rerun-if-env-changed=SUMERAGI_DEPLOY_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_torii-d120f7cc82afe659/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii#2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_torii_mutation, values(\"TOR1\", \"TOR2\"))\ncargo:rerun-if-env-changed=SUMERAGI_TORII_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/irohad_lib-ce62861518199ca2/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/irohad#irohad_lib@2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-check-cfg=cfg(sumeragi_daemon_mutation, values(any()))\ncargo:rerun-if-env-changed=SUMERAGI_DAEMON_MUTATION\ncargo:rerun-if-changed=build.rs\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [
+        [
+          "VERGEN_CARGO_TARGET_TRIPLE",
+          "aarch64-apple-darwin"
+        ],
+        [
+          "VERGEN_CARGO_FEATURES",
+          "bridge,cli,default,offline-visual-codecs"
+        ],
+        [
+          "VERGEN_GIT_SHA",
+          "local-fast-build"
+        ]
+      ],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/iroha_cli-feedcd3630a538d8/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/bins#iroha_cli@2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-env=VERGEN_CARGO_TARGET_TRIPLE=aarch64-apple-darwin\ncargo:rustc-env=VERGEN_CARGO_FEATURES=bridge,cli,default,offline-visual-codecs\ncargo:rustc-env=VERGEN_GIT_SHA=5f2c71063ba4d4d65cc8195ff3f3360a4cd29334\ncargo:rerun-if-env-changed=VERGEN_GIT_SHA\ncargo:rerun-if-env-changed=IROHA_DPN_VALIDATOR_RELEASE_COMMIT\ncargo:rerun-if-changed=/Users/takemiyamakoto/soramitsudev/iroha/.git/HEAD\ncargo:rerun-if-changed=/Users/takemiyamakoto/soramitsudev/iroha/.git/refs/heads/optimizations\n"
+  },
+  {
+    "cargo_record": {
+      "cfgs": [],
+      "env": [
+        [
+          "VERGEN_CARGO_TARGET_TRIPLE",
+          "aarch64-apple-darwin"
+        ],
+        [
+          "VERGEN_CARGO_FEATURES",
+          "daemon,dag-recovery-verify,default,expensive-telemetry,gost,schema-endpoint,sm,telemetry"
+        ],
+        [
+          "VERGEN_GIT_SHA",
+          "local-fast-build"
+        ]
+      ],
+      "linked_libs": [],
+      "linked_paths": [],
+      "out_dir": "/Users/takemiyamakoto/soramitsudev/iroha/target/release-runtime536/release/build/irohad-e4d5359f39577b70/out",
+      "package_id": "path+file:///Users/takemiyamakoto/soramitsudev/iroha/crates/irohad/bins#irohad@2.0.0-rc.2.0",
+      "reason": "build-script-executed"
+    },
+    "text": "cargo:rustc-env=VERGEN_CARGO_TARGET_TRIPLE=aarch64-apple-darwin\ncargo:rustc-env=VERGEN_CARGO_FEATURES=daemon,dag-recovery-verify,default,expensive-telemetry,gost,schema-endpoint,sm,telemetry\ncargo:rustc-env=VERGEN_GIT_SHA=5f2c71063ba4d4d65cc8195ff3f3360a4cd29334\ncargo:rerun-if-env-changed=VERGEN_GIT_SHA\ncargo:rerun-if-env-changed=IROHA_DPN_VALIDATOR_RELEASE_COMMIT\ncargo:rerun-if-changed=/Users/takemiyamakoto/soramitsudev/iroha/.git/HEAD\ncargo:rerun-if-changed=/Users/takemiyamakoto/soramitsudev/iroha/.git/refs/heads/optimizations\n"
+  }
+]

@@ -1,5 +1,7 @@
 //! Real World capture releases writers and preserves the exact unpublished cut.
 
+type WorldMutation<'a> = (&'a str, fn(&World));
+
 use super::*;
 use crate::{
     smartcontracts::isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
@@ -560,7 +562,7 @@ fn every_inventory_field_binds_untouched_current_and_undo_publications() {
             ]
         };
     }
-    let owners: &[(&str, fn(&World))] = &with_world_overlay_fields!(invalidators);
+    let owners: &[WorldMutation<'_>] = &with_world_overlay_fields!(invalidators);
     let world = fixture();
     for &(name, publish_same_values) in owners {
         let detached = capture(world.block());

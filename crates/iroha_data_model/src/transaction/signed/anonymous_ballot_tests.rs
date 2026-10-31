@@ -33,10 +33,10 @@ fn field(bytes: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut length = bytes.len();
     while length >= 128 {
-        result.push((length as u8 & 0x7f) | 0x80);
+        result.push(u8::try_from(length & 0x7f).expect("masked length fits one byte") | 0x80);
         length >>= 7;
     }
-    result.push(length as u8);
+    result.push(u8::try_from(length).expect("remaining length is below 128"));
     result.extend_from_slice(bytes);
     result
 }

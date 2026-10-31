@@ -1232,7 +1232,65 @@ impl Directory {
         temporary_attempts: u32,
         before: &mut impl FnMut(AtomicWriteStep, &Path) -> io::Result<()>,
     ) -> io::Result<()> {
-        self.revalidate()?;
+        self.write_atomic_from_staging_observed(
+            self,
+            name,
+            bytes,
+            mode,
+            crate::AtomicWriteOptions {
+                private_destination,
+                temporary_attempts,
+            },
+            before,
+        )
+    }
+
+    pub(super) fn write_atomic_from_staging(
+        &self,
+        staging: &Self,
+        name: &OsStr,
+        bytes: &[u8],
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        self.write_atomic_from_staging_observed(
+            staging,
+            name,
+            bytes,
+            mode,
+            crate::AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 128,
+            },
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    pub(super) fn write_atomic_from_staging_observed(
+        &self,
+        staging: &Self,
+        name: &OsStr,
+        bytes: &[u8],
+        mode: PublishMode,
+        options: crate::AtomicWriteOptions,
+        before: &mut impl FnMut(AtomicWriteStep, &Path) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let crate::AtomicWriteOptions {
+            private_destination,
+            temporary_attempts,
+        } = options;
+        // Both original directory owners remain retained through publication and cleanup.
+        let revalidate = || {
+            self.revalidate()?;
+            staging.revalidate()
+        };
+        revalidate()?;
+        let destination_identity = self.identity()?;
+        let staging_identity = staging.identity()?;
+        if destination_identity.volume != staging_identity.volume {
+            return Err(invalid("atomic publication requires one native volume"));
+        }
+        let same_directory = destination_identity == staging_identity;
+        revalidate()?;
         let destination = self.path().join(name);
         if mode == PublishMode::Replace {
             match open_file(
@@ -1253,9 +1311,9 @@ impl Directory {
         }
         let (temporary, mut file) = (0..temporary_attempts)
             .find_map(|_| {
-                let path = self.path().join(temporary_name());
+                let path = staging.path().join(temporary_name());
                 if let Err(error) =
-                    before(AtomicWriteStep::CreateTemp, &path).and_then(|()| self.revalidate())
+                    before(AtomicWriteStep::CreateTemp, &path).and_then(|()| revalidate())
                 {
                     return Some(Err(error));
                 }
@@ -1278,33 +1336,44 @@ impl Directory {
                     "private staging names exhausted",
                 ))
             })?;
+        let mut published = false;
         let result = (|| {
             let (head, tail) = bytes.split_at(bytes.len() / 2);
             before(AtomicWriteStep::WriteHead, &temporary)?;
-            self.revalidate()?;
+            revalidate()?;
             file.write_all(head)?;
             before(AtomicWriteStep::WriteTail, &temporary)?;
-            self.revalidate()?;
+            revalidate()?;
             file.write_all(tail)?;
             before(AtomicWriteStep::SyncFile, &temporary)?;
-            self.revalidate()?;
+            revalidate()?;
             file.sync_all()?;
             let staged = snapshot(&file, true, false)?;
-            self.revalidate()?;
+            revalidate()?;
             before(AtomicWriteStep::Publish, &destination)?;
-            self.revalidate()?;
+            revalidate()?;
             rename_handle(&file, &destination, mode)?;
+            published = true;
             before(AtomicWriteStep::Published, &destination)?;
             file.sync_all()?;
             if staged.id != snapshot(&file, true, false)?.id {
                 return Err(changed());
             }
             before(AtomicWriteStep::SyncDirectory, self.path())?;
-            self.sync()
+            revalidate()?;
+            self.sync()?;
+            if !same_directory {
+                before(AtomicWriteStep::SyncDirectory, staging.path())?;
+                revalidate()?;
+                staging.sync()?;
+            }
+            revalidate()
         })();
-        if result.is_err() {
-            // The retained source handle prevents path substitution until it is closed. A
-            // failed post-rename sync deliberately leaves the destination for reconciliation.
+        if result.is_err() && !published {
+            // Roll back only the unpublished original through its still-held handle.
+            // Directory/name failures never grant authority over a substituted object.
+            // Once renamed, even an alias at the old temporary name cannot authorize
+            // disposal of the published original after a later durability failure.
             let same = open_file(
                 &temporary,
                 FILE_READ_ATTRIBUTES,

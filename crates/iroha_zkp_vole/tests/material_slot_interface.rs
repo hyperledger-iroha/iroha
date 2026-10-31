@@ -10,7 +10,7 @@
 
 use aes::{
     Block,
-    cipher::{BlockEncrypt, KeyInit},
+    cipher::{BlockCipherEncrypt, KeyInit},
 };
 use iroha_zkp_vole::{
     bavc::{LeafInput, leaf_commit_as},

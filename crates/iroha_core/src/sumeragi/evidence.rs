@@ -5,7 +5,7 @@
 //! Local observations never enter World until a canonical block admits the same proof.
 
 /// Immutable original-pool World evidence values and explicit typed restoration.
-pub(crate) mod record;
+pub mod record;
 
 use crate::state::{
     EvidencePreparationError, NativeExecutionTip, State, StateReadOnly, StateView, WorldReadOnly,
@@ -25,21 +25,20 @@ use iroha_sumeragi::message::Evidence as NativeEvidence;
 use mv::storage::StorageReadOnly;
 
 /// Maximum number of original reports admitted by one carrier.
-pub(crate) const MAX_EVIDENCE_ADMISSIONS_PER_BLOCK: usize = 8;
+pub const MAX_EVIDENCE_ADMISSIONS_PER_BLOCK: usize = 8;
 /// Aggregate canonical proof bytes admitted by one carrier.
-pub(crate) const MAX_EVIDENCE_ADMISSION_BYTES: usize =
-    iroha_sumeragi::message::MAX_EVIDENCE_FRAME_BYTES;
+pub const MAX_EVIDENCE_ADMISSION_BYTES: usize = iroha_sumeragi::message::MAX_EVIDENCE_FRAME_BYTES;
 /// Four maximum global rosters of retained forensic records.
-pub(crate) const MAX_COMMITTED_EVIDENCE_RECORDS: usize = 4 * 31;
+pub const MAX_COMMITTED_EVIDENCE_RECORDS: usize = 4 * 31;
 /// Aggregate canonical proof bytes retained in World.
-pub(crate) const MAX_COMMITTED_EVIDENCE_BYTES: usize = 4 * MAX_EVIDENCE_ADMISSION_BYTES;
+pub const MAX_COMMITTED_EVIDENCE_BYTES: usize = 4 * MAX_EVIDENCE_ADMISSION_BYTES;
 /// Aggregate canonical proof bytes retained only in this process.
 const MAX_LOCAL_EVIDENCE_BYTES: usize = 2 * MAX_EVIDENCE_ADMISSION_BYTES;
 const KEY_DOMAIN: &[u8] = b"iroha:native-consensus-evidence:v1\0";
 
 /// An invalid proof is distinct from local original-history or preparation refusal.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EvidenceAdmissionError {
+pub enum EvidenceAdmissionError {
     /// Original signed policy read, retaining unfinished local decode work.
     #[error(transparent)]
     Policy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
@@ -92,11 +91,11 @@ fn invalid(reason: &str) -> EvidenceAdmissionError {
 }
 
 /// Exact canonical proof-frame length, shared by block and retained-state bounds.
-pub(crate) fn evidence_encoded_len(evidence: &Evidence) -> usize {
+pub fn evidence_encoded_len(evidence: &Evidence) -> usize {
     evidence.native_frame().len()
 }
 /// Overflow-safe aggregate evidence byte accounting.
-pub(crate) fn checked_evidence_byte_sum(
+pub fn checked_evidence_byte_sum(
     initial: usize,
     lengths: impl IntoIterator<Item = usize>,
     limit: usize,
@@ -109,7 +108,7 @@ pub(crate) fn checked_evidence_byte_sum(
     })
 }
 /// Domain-separated key of the sole canonical native proof. Pair ordering belongs to its codec.
-pub(crate) fn evidence_key(evidence: &Evidence) -> Hash {
+pub fn evidence_key(evidence: &Evidence) -> Hash {
     Hash::new_from_writer(|writer| {
         writer.write_all(KEY_DOMAIN)?;
         writer.write_all(evidence.native_frame())
@@ -125,7 +124,7 @@ fn horizon(world: &(impl WorldReadOnly + ?Sized)) -> Result<Option<u64>, Evidenc
 }
 /// Borrowed lifecycle fields shared by canonical fixture claims and actual World owners.
 /// This observation grants neither funding nor evidence authority.
-pub(crate) trait EvidenceLifecycleRecord {
+pub trait EvidenceLifecycleRecord {
     fn material(&self) -> &iroha_data_model::block::consensus::RecordedEvidenceV1;
     fn attribution(&self) -> &EvidenceAttribution;
     fn penalty_status(&self) -> EvidencePenaltyStatus;
@@ -196,7 +195,7 @@ fn native_lifecycle_evidence(
 /// reports retain their exact original incarnation until strictly after retirement admission
 /// closes; a native subject height never supplies this root-clock pruning boundary.
 /// Closed SCCP records are permanent under SCCP §4.11, including after Applied.
-pub(crate) fn committed_evidence_record_is_prunable(
+pub fn committed_evidence_record_is_prunable(
     world: &(impl WorldReadOnly + ?Sized),
     record: &(impl EvidenceLifecycleRecord + ?Sized),
     height: u64,
@@ -250,12 +249,12 @@ pub(crate) fn committed_evidence_record_is_prunable(
     })
 }
 /// Borrowed count and byte-capacity observation, without copying nested proofs.
-pub(crate) struct CommittedEvidenceCapacity {
+pub struct CommittedEvidenceCapacity {
     pub(crate) record_capacity_exceeded: bool,
     pub(crate) byte_capacity_exceeded: bool,
 }
 /// Validate retained-table capacity before allocating a penalty plan.
-pub(crate) fn committed_evidence_capacity(
+pub fn committed_evidence_capacity(
     world: &(impl WorldReadOnly + ?Sized),
 ) -> CommittedEvidenceCapacity {
     let mut count = 0usize;
@@ -287,7 +286,7 @@ pub(crate) fn committed_evidence_capacity(
 }
 
 /// Exact parent-derived terminal prune plan retains its original backing through application.
-pub(crate) fn committed_evidence_prune_keys_from_state(
+pub fn committed_evidence_prune_keys_from_state(
     state: &State,
     height: u64,
 ) -> Result<ChargedBuffer<Hash>, EvidenceAdmissionError> {
@@ -323,7 +322,7 @@ fn shares_offender(left: &EvidenceAttribution, right: &EvidenceAttribution) -> b
 /// Original independently verified attribution for exactly one proposed evidence frame.
 /// Private fields prevent raw proof or snapshot decoding from manufacturing admission.
 /// The exact original graph follows one immutable body into World; metadata alone copies.
-pub(crate) struct AdmittedEvidence {
+pub struct AdmittedEvidence {
     key: Hash,
     attribution: Option<super::evidence_history::FundedEvidenceAttribution>,
     body: Option<iroha_allocation::ChargedShared<record::EvidenceRecordBody>>,
@@ -407,7 +406,7 @@ impl AdmittedEvidence {
     fn allocation_bytes(&self) -> Option<usize> {
         self.attribution.as_ref().map_or_else(
             || self.body.as_ref()?.execution_allocation_bytes(),
-            |attribution| attribution.allocation_bytes(),
+            super::evidence_history::FundedEvidenceAttribution::allocation_bytes,
         )
     }
     fn native_frame(&self) -> Option<&[u8]> {
@@ -446,7 +445,7 @@ impl AdmittedEvidence {
 }
 
 /// Same-block admission can never authorize mandatory slashing.
-pub(crate) fn validate_admission_penalty_separation(
+pub fn validate_admission_penalty_separation(
     admissions: &[AdmittedEvidence],
     actions: &[NposPenaltyAction],
 ) -> Result<(), EvidenceAdmissionError> {
@@ -464,15 +463,13 @@ pub(crate) fn validate_admission_penalty_separation(
 
 /// Reauthenticate restored records against actual native execution, including their attribution.
 /// A snapshot's key, claimed signer list or decoded context is never authority.
-pub(crate) fn validate_persisted_records(state: &State) -> Result<(), EvidenceAdmissionError> {
+pub fn validate_persisted_records(state: &State) -> Result<(), EvidenceAdmissionError> {
     restoration::validate(state)
 }
 
 /// Preserve the original resource owner when startup reconstructs a fresh State.
 /// A local admission refusal cannot be turned into an invalid snapshot verdict.
-pub(crate) fn restoration_failure(
-    error: EvidenceAdmissionError,
-) -> crate::state::MergeLedgerCommitError {
+pub fn restoration_failure(error: EvidenceAdmissionError) -> crate::state::MergeLedgerCommitError {
     use crate::{
         execution_attempt::ExecutionAttemptError as Attempt,
         state::{MergeLedgerCommitError as Restore, StateStorageAdmissionError},
@@ -707,7 +704,7 @@ struct LocalEvidence {
 }
 /// Finite flat local pool. Both descriptor backing and canonical frames retain original charges.
 #[derive(Default)]
-pub(crate) struct NativeEvidencePool {
+pub struct NativeEvidencePool {
     entries: Option<ChargedBuffer<LocalEvidence>>,
     bytes: usize,
 }
@@ -781,7 +778,7 @@ impl NativeEvidencePool {
         let policy = committed.sumeragi_npos_parameters()?;
         let horizon = policy
             .as_ref()
-            .map(|parameters| parameters.evidence_horizon_blocks())
+            .map(iroha_data_model::parameter::system::SumeragiNposParameters::evidence_horizon_blocks)
             .filter(|value| *value > 0);
         let mut index = 0;
         while index < entries.as_slice().len() {
@@ -814,10 +811,7 @@ impl NativeEvidencePool {
 
 /// Independently validate a reducer observation and retain only its bounded canonical bytes.
 /// Finalized World and stake remain unchanged. The actual candidate reauthenticates the proof.
-pub(crate) fn observe(
-    state: &State,
-    native: &NativeEvidence,
-) -> Result<bool, EvidenceAdmissionError> {
+pub fn observe(state: &State, native: &NativeEvidence) -> Result<bool, EvidenceAdmissionError> {
     let evidence = Evidence::from_native(native).map_err(EvidenceAdmissionError::from)?;
     let generation = state.state_view_generation();
     let view = state.view();
@@ -847,7 +841,7 @@ pub(crate) fn observe(
 /// Keep only bounded canonical bytes from this lane reducer. This is deliberately not
 /// authentication or monetary admission: the proposer and every follower independently read
 /// original global custody and complete native ancestry before publishing any attribution.
-pub(crate) fn observe_lane(
+pub fn observe_lane(
     state: &State,
     lane: iroha_model_base::topology::LaneId,
     incarnation: [u8; 32],
@@ -905,7 +899,7 @@ pub(crate) fn observe_lane(
 /// Only capture and selection-backing refusals propagate. A retryable per-report refusal
 /// ends the selection with the reports admitted before it; a terminal one skips that report.
 #[allow(unsafe_code)]
-pub(crate) fn pending_evidence_admissions(
+pub fn pending_evidence_admissions(
     state: &State,
     height: u64,
     generation: u64,
@@ -1007,7 +1001,7 @@ pub(crate) fn pending_evidence_admissions(
 }
 
 /// Move-only proposal selection retaining exact native frames and vector backing.
-pub(crate) struct FundedEvidenceAdmissions(iroha_allocation::RetainedPayload<Vec<Evidence>>);
+pub struct FundedEvidenceAdmissions(iroha_allocation::RetainedPayload<Vec<Evidence>>);
 
 impl FundedEvidenceAdmissions {
     /// Admit an allocation-free empty selection in the captured original pool.
@@ -1043,7 +1037,7 @@ impl std::fmt::Debug for FundedEvidenceAdmissions {
 
 /// Finality controls independently prepared from one pristine State generation.
 /// This token has no decoder or public constructor; application consumes it once.
-pub(crate) struct PreparedStakingEffects<'state> {
+pub struct PreparedStakingEffects<'state> {
     state: &'state State,
     generation: u64,
     header: BlockHeader,
@@ -1059,6 +1053,10 @@ pub(crate) struct PreparedStakingEffects<'state> {
 impl PreparedStakingEffects<'_> {
     /// Borrow the actual prepared action backing for production-path custody tests.
     #[cfg(test)]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The custody test observes an otherwise drop-only action owner."
+    )]
     pub(crate) fn action_slice_for_test(&self) -> &[NposPenaltyAction] {
         self._actions.as_slice()
     }
@@ -1103,7 +1101,11 @@ impl PreparedStakingEffects<'_> {
 }
 
 /// Check candidate evidence and exact deterministic parent penalties before writers are acquired.
-pub(crate) fn prepare<'state>(
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
+pub fn prepare<'state>(
     state: &'state State,
     block: &iroha_data_model::block::SignedBlock,
     generation: u64,
@@ -1210,7 +1212,8 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
         ) => BlockValidationError::ExecutionDeferred(reason),
         EvidenceAdmissionError::Policy(
             crate::execution_attempt::ExecutionAttemptError::Rejected(error),
-        ) => BlockValidationError::NposEffectsInvalid(error),
+        )
+        | EvidenceAdmissionError::Invalid(error) => BlockValidationError::NposEffectsInvalid(error),
         EvidenceAdmissionError::Preparation(error) => {
             BlockValidationError::EvidencePreparation(error)
         }
@@ -1219,6 +1222,9 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
         ),
         EvidenceAdmissionError::Source(
             crate::execution_attempt::ExecutionAttemptError::Deferred(local),
+        )
+        | EvidenceAdmissionError::History(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local),
         ) => BlockValidationError::ExecutionDeferred(local),
         EvidenceAdmissionError::Source(
             crate::execution_attempt::ExecutionAttemptError::Rejected(error),
@@ -1226,18 +1232,14 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
             reason: error.to_string(),
         },
         EvidenceAdmissionError::History(
-            crate::execution_attempt::ExecutionAttemptError::Deferred(local),
-        ) => BlockValidationError::ExecutionDeferred(local),
-        EvidenceAdmissionError::History(
             crate::execution_attempt::ExecutionAttemptError::Rejected(error),
         ) => BlockValidationError::LocalStorageRecoveryRequired {
             reason: error.to_string(),
         },
-        EvidenceAdmissionError::Invalid(error) => BlockValidationError::NposEffectsInvalid(error),
     }
 }
 
-pub(crate) mod admission;
+pub mod admission;
 
 #[cfg(test)]
 mod tests;

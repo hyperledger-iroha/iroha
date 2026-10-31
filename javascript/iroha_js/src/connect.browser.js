@@ -1,8 +1,8 @@
-import { x25519 } from "@noble/curves/ed25519";
-import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { blake2b } from "@noble/hashes/blake2b";
-import { hkdf } from "@noble/hashes/hkdf";
-import { sha256 } from "@noble/hashes/sha2";
+import { x25519 } from "@noble/curves/ed25519.js";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { blake2b } from "@noble/hashes/blake2.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { AccountAddress } from "./address.js";
 import { requireToriiNativeIdentity, toriiNativeIdentityEd25519Key } from "./nativeAccountInspection.js";
 import { crc64Xz } from "./crc64Xz.js";
@@ -266,7 +266,7 @@ export function createConnectSessionPreview(options = {}) {
       : requireNonEmptyString(options.node, "node");
   const privateKey = options.appKeyPair?.privateKey
     ? toUint8Array(options.appKeyPair.privateKey, "appKeyPair.privateKey")
-    : x25519.utils.randomPrivateKey();
+    : x25519.utils.randomSecretKey();
   if (privateKey.length !== 32) {
     throw new RangeError(`appKeyPair.privateKey must be 32 bytes (received ${privateKey.length})`);
   }
@@ -1482,6 +1482,16 @@ export function createConnectAppSession(options = {}) {
       pendingSign.reject(error);
       pendingSign = null;
     }
+    // Close the transport after terminal protocol failures so socket observers
+    // also stop treating an approved session as usable. Set closed first because
+    // custom WebSocket implementations may dispatch their close event inline.
+    if (typeof socket.close === "function" && socket.readyState !== 2 && socket.readyState !== 3) {
+      try {
+        socket.close();
+      } catch {
+        // Preserve the original session failure even if transport cleanup fails.
+      }
+    }
   }
 
   function sendFrame(bytes) {
@@ -1578,11 +1588,6 @@ export function createConnectAppSession(options = {}) {
             );
             approvalFailure = error;
             failSession(error);
-            try {
-              socket.close();
-            } catch {
-              // The session is already closed locally; socket close is best-effort.
-            }
             return;
           }
           const nativeIdentity = inspectAccountIdentity === undefined ? undefined

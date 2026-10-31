@@ -9,8 +9,8 @@ use iroha_crypto::PublicKey;
 
 /// Export the existing native trust format without resetting or contacting a network.
 #[derive(Debug, clap::Args)]
-pub(crate) struct ExportProfile {
-    /// Independently selected canonical checked NetworkId of the retained network.
+pub struct ExportProfile {
+    /// Independently selected canonical checked `NetworkId` of the retained network.
     #[arg(long, value_parser = parse_network_id)]
     network_id: NetworkId,
     /// Explicit canonical chain ID selected by the network operator; absent from signed genesis.
@@ -19,7 +19,7 @@ pub(crate) struct ExportProfile {
     /// Explicit account address discriminant selected by the network operator.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     chain_discriminant: u16,
-    /// Exact public SignedBlockWire genesis file.
+    /// Exact public `SignedBlockWire` genesis file.
     #[arg(long, value_name = "FILE")]
     genesis_signed: PathBuf,
     /// Canonical public genesis key, with an optional final newline.
@@ -85,7 +85,7 @@ fn derive_profile(
 }
 
 #[cfg(unix)]
-pub(crate) struct PublicInput {
+pub struct PublicInput {
     path: PathBuf,
     file: File,
     snapshot: fs::Metadata,
@@ -219,11 +219,13 @@ pub(super) fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
         Mode::empty(),
     )?);
     let revalidate = || -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
         let named = fs::symlink_metadata(&parent_path)?;
         let held = parent.metadata()?;
         private_metadata(&named, true)?;
         private_metadata(&held, true)?;
-        use std::os::unix::fs::MetadataExt as _;
+
         require(
             named.dev() == held.dev() && named.ino() == held.ino(),
             "profile output directory changed",
@@ -704,11 +706,13 @@ mod tests {
                 3 => changed[0].torii_origin = "https://name:password@example.com/".into(),
                 4 => changed[1].torii_origin = changed[0].torii_origin.clone(),
                 _ => {
+                    use norito::codec::Encode as _;
+
                     let foreign =
                         KeyPair::try_from_seed(vec![99; 32], Algorithm::BlsNormal).unwrap();
                     changed[0].peer_id =
                         iroha_model_base::peer::PeerId::new(foreign.public_key().clone());
-                    use norito::codec::Encode as _;
+
                     changed[0].node_fingerprint = Hash::new(changed[0].peer_id.encode());
                 }
             }
@@ -790,10 +794,10 @@ mod tests {
             vec!["--stdin-instructions"],
             vec!["--emit-instructions"],
         ] {
-            let mut argv = vec!["iroha".to_owned()];
-            argv.extend(globals.into_iter().map(str::to_owned));
-            argv.extend(plain.iter().skip(1).cloned());
-            let parsed = crate::Args::try_parse_from(argv).unwrap();
+            let mut arguments = vec!["iroha".to_owned()];
+            arguments.extend(globals.into_iter().map(str::to_owned));
+            arguments.extend(plain.iter().skip(1).cloned());
+            let parsed = crate::Args::try_parse_from(arguments).unwrap();
             let mut output = Vec::new();
             let error = crate::run_local_dataspace_profile(&parsed, &mut output)
                 .unwrap()

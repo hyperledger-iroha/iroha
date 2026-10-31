@@ -220,6 +220,112 @@ fn retained_lock_joins_refuse_replacement_and_hardlinks() {
     directory.require_same_lock("lock", &lock).unwrap();
 }
 
+#[test]
+fn private_lock_join_retains_original_and_never_creates_missing_names() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(root.path().join("private")).unwrap();
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("missing", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(!directory.path().join("missing").exists());
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn private_lock_join_refuses_replacement_hardlinks_and_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(root.path().join("private")).unwrap();
+    let selected = directory.path().join("lock");
+    let original = directory.path().join("original");
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    std::fs::rename(&selected, &original).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(!selected.exists());
+    let replacement = directory.create_lock("lock").unwrap();
+    replacement.try_lock().unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Other
+    );
+    drop(replacement);
+    std::fs::remove_file(&selected).unwrap();
+    std::fs::rename(&original, &selected).unwrap();
+    let alias = directory.path().join("alias");
+    std::fs::hard_link(&selected, &alias).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    std::fs::remove_file(alias).unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        directory
+            .require_same_lock("lock", &lock)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o600)).unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn private_lock_join_preserves_private_directory_and_ancestor_custody() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = PrivateDirectory::open_or_create(root.path().join("parent")).unwrap();
+    let directory = parent.create_child("private").unwrap();
+    let lock = directory.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    for path in [directory.path(), parent.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            directory
+                .require_same_lock("lock", &lock)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        directory.require_same_lock("lock", &lock).unwrap();
+    }
+    let original = root.path().join("original-parent");
+    std::fs::rename(parent.path(), &original).unwrap();
+    std::fs::create_dir(parent.path()).unwrap();
+    std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(directory.require_same_lock("lock", &lock).is_err());
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    assert!(original.join("private/lock").is_file());
+    std::fs::remove_dir(parent.path()).unwrap();
+    std::fs::rename(original, parent.path()).unwrap();
+    directory.require_same_lock("lock", &lock).unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn retained_owner_directory_kernel_handles_prevent_namespace_replacement() {

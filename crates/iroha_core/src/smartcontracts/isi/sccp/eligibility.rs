@@ -12,7 +12,7 @@ use iroha_data_model::{
 use mv::storage::StorageReadOnly as _;
 
 /// The four original facts used by fee eligibility and block cap classification.
-pub(crate) trait EligibilityRead {
+pub trait EligibilityRead {
     /// Original current generation's immutable start time and degraded-height counter.
     fn heartbeat_facts(&self) -> Option<(u64, u32)>;
     /// Earliest original reconciliation deadline; the ordered index is derived from records.
@@ -39,7 +39,7 @@ pub(crate) trait EligibilityRead {
 }
 
 /// Ordinary committed World read already retained by its caller.
-pub(crate) struct Current<'a, W: WorldReadOnly + ?Sized>(pub(crate) &'a W);
+pub struct Current<'a, W: WorldReadOnly + ?Sized>(pub(crate) &'a W);
 impl<W: WorldReadOnly + ?Sized> Copy for Current<'_, W> {}
 impl<W: WorldReadOnly + ?Sized> Clone for Current<'_, W> {
     fn clone(&self) -> Self {
@@ -55,7 +55,7 @@ impl<W: WorldReadOnly + ?Sized> EligibilityRead for Current<'_, W> {
             .sccp_reconciliation_due()
             .iter()
             .next()
-            .map(|(key, _)| key.0)
+            .map(|(key, ())| key.0)
     }
     fn heartbeat_facts(&self) -> Option<(u64, u32)> {
         let generation =
@@ -93,12 +93,10 @@ impl<W: WorldReadOnly + ?Sized> EligibilityRead for Current<'_, W> {
 
 /// Exact pre-block values retained by the acquired ordinary or replacement block.
 #[derive(Clone, Copy)]
-pub(crate) struct BlockParent<'a, 'world>(pub(crate) &'a WorldBlock<'world>);
+pub struct BlockParent<'a, 'world>(pub(crate) &'a WorldBlock<'world>);
 /// Exact pre-block values including this still-unapplied transaction's preimages.
 #[derive(Clone, Copy)]
-pub(crate) struct TransactionParent<'a, 'block, 'world>(
-    pub(crate) &'a WorldTransaction<'block, 'world>,
-);
+pub struct TransactionParent<'a, 'block, 'world>(pub(crate) &'a WorldTransaction<'block, 'world>);
 macro_rules! parent_read {
     ($owner:ty) => {
         impl EligibilityRead for $owner {
@@ -180,7 +178,7 @@ parent_read!(BlockParent<'_, '_>);
 parent_read!(TransactionParent<'_, '_, '_>);
 
 /// Shared progress kernel for the current World and original fee-eligibility preimage.
-pub(crate) fn inbound_may_progress(
+pub fn inbound_may_progress(
     source: &(impl EligibilityRead + ?Sized),
     record: &SccpInboundRecordV1,
     amount: u128,
@@ -198,25 +196,28 @@ pub(crate) fn inbound_may_progress(
     ) && record.status.is_pending()
         && revision.is_some_and(|r| {
             r.activation.settles()
-                && if let Some(accounting) = source
+                && source
                     .reconciliation((record.network, record.revision))
                     .filter(|record| record.rho.is_some())
-                {
-                    let rate = accounting.rho.expect("filtered reconciled rate");
-                    iroha_sccp::v1::reconciliation::payout(
-                        rate.backing,
-                        rate.denominator,
-                        accounting.settled_face,
-                        amount,
-                        r.liability.saturating_sub(
-                            source.pending_refunds((record.network, record.revision)),
-                        ),
+                    .map_or_else(
+                        || {
+                            r.liability >= amount
+                                && !r.forgery_held(source.forgery_max_generation())
+                                && r.quarantine.is_none()
+                        },
+                        |accounting| {
+                            let rate = accounting.rho.expect("filtered reconciled rate");
+                            iroha_sccp::v1::reconciliation::payout(
+                                rate.backing,
+                                rate.denominator,
+                                accounting.settled_face,
+                                amount,
+                                r.liability.saturating_sub(
+                                    source.pending_refunds((record.network, record.revision)),
+                                ),
+                            )
+                            .is_some_and(|payout| payout > 0)
+                        },
                     )
-                    .is_some_and(|payout| payout > 0)
-                } else {
-                    r.liability >= amount
-                        && !r.forgery_held(source.forgery_max_generation())
-                        && r.quarantine.is_none()
-                }
         })
 }

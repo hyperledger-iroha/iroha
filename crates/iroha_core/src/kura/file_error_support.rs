@@ -361,6 +361,10 @@ pub enum Error {
     /// Lane geometry requires Strict startup to complete canonical storage recovery
     LaneGeometryCanonicalRecoveryRequired,
     /// Lane geometry instance creation for lane {lane_id} at operation {operation} requires Strict startup recovery: {source}
+    #[expect(
+        clippy::doc_markdown,
+        reason = "These field names are displaydoc format placeholders and must keep their exact spelling."
+    )]
     LaneGeometryInstanceRecoveryRequired {
         /// Original operation's exact lane coordinate.
         lane_id: LaneId,
@@ -372,6 +376,10 @@ pub enum Error {
     },
 
     /// FASTPQ aggregate quota is full: {stable_count} records retaining {retained_bytes} bytes plus {incoming_bytes} incoming bytes under limits {maximum_records}/{maximum_bytes}
+    #[expect(
+        clippy::doc_markdown,
+        reason = "These field names are displaydoc format placeholders and must keep their exact spelling."
+    )]
     FastpqArtifactQuota {
         /// Exact original stable object count.
         stable_count: usize,

@@ -137,7 +137,7 @@ fn change(block: &mut WorldBlock<'_>, replacement: bool) {
         (2, "coin2"),
         (3, "added"),
     ] {
-        tx.bind_asset_definition_alias(&definition(i), asset_alias(name), None, None, 1)
+        tx.bind_asset_definition_alias(&definition(i), &(asset_alias(name)), None, None, 1)
             .unwrap();
         let name = if i == 2 { "router2" } else { name };
         tx.bind_contract_alias(&contract(i), contract_alias(name), None, None, 1)

@@ -39,7 +39,7 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletMarkerV1, KagemushaWalletOperationKindV1, KagemushaWalletRecoveryCapsuleV1,
     KagemushaWalletStateCommitmentV1,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use super::{
     KagemushaWalletLostCustodyV1, KagemushaWalletProviderErrorV1,
@@ -353,6 +353,10 @@ pub enum KagemushaWalletAdvanceOutcomeV1<R> {
 }
 
 /// Result of finishing a durable Selected marker (A6-A12).
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep the original retained result and durable marker inline without allocating at publication"
+)]
 pub(super) enum FinishedV1<R> {
     /// Released: the retained result and the durable Released marker.
     Released(KagemushaWalletRetainedV1<R>, KagemushaWalletDurableMarkerV1),
@@ -440,11 +444,17 @@ where
         self.require_storage()?;
         // A2.
         let boot = self.boot();
-        let (selected, receipt_body) =
-            match self.validate_request(&current, request, &frame, &capsule_digest, &boot, owner) {
-                Ok(validated) => validated,
-                Err(reason) => return Ok(KagemushaWalletAdvanceOutcomeV1::NotPerformed(reason)),
-            };
+        let (selected, receipt_body) = match Self::validate_request(
+            &current,
+            request,
+            &frame,
+            &capsule_digest,
+            &boot,
+            owner,
+        ) {
+            Ok(validated) => validated,
+            Err(reason) => return Ok(KagemushaWalletAdvanceOutcomeV1::NotPerformed(reason)),
+        };
         let durable = self
             .cache
             .get(slot)
@@ -468,7 +478,7 @@ where
             owner,
             &durable,
             request,
-            selected,
+            &selected,
             receipt_body,
             &boot,
         )
@@ -726,7 +736,6 @@ where
     /// a capsule the Selected marker does not cover (another wallet or scheme), and a capsule
     /// the owner cannot certify.
     fn validate_request(
-        &self,
         current: &KagemushaWalletMarkerRecordV1,
         request: &KagemushaWalletAdvanceRequestV1<C>,
         frame: &[u8],
@@ -805,7 +814,7 @@ where
         owner: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
         current: &KagemushaWalletDurableMarkerV1,
         request: &KagemushaWalletAdvanceRequestV1<C>,
-        selected: KagemushaWalletMarkerRecordV1,
+        selected: &KagemushaWalletMarkerRecordV1,
         receipt_body: Vec<u8>,
         boot: &Result<[u8; 32], KagemushaWalletUnavailableV1>,
     ) -> Result<KagemushaWalletAdvanceOutcomeV1<R>, KagemushaWalletProviderErrorV1> {
@@ -1169,7 +1178,7 @@ where
             }
         })?;
         let mut bytes = vec![0_u8; size];
-        rand::rngs::OsRng.try_fill_bytes(&mut bytes).map_err(|_| {
+        rand::rngs::SysRng.try_fill_bytes(&mut bytes).map_err(|_| {
             KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
         })?;
         match self.store.write_new(

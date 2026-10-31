@@ -28,7 +28,7 @@ use thiserror::Error;
     name = "iroha_core::private_settlement::coordinator::PrivateSettlementBundleLifecycleV1"
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub(crate) enum PrivateSettlementBundleLifecycleV1 {
+pub enum PrivateSettlementBundleLifecycleV1 {
     /// Per-leg auditor evidence is still being collected.
     Collecting,
     /// Every leg has durable auditor evidence; Prepare QCs are being collected.
@@ -47,7 +47,7 @@ pub(crate) enum PrivateSettlementBundleLifecycleV1 {
 
 /// Result of inserting phase evidence into the coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
+pub enum PrivateSettlementCoordinatorOutcomeV1 {
     /// New evidence was stored without completing the current global barrier.
     Stored,
     /// The supplied evidence was identical or quorum-equivalent to existing evidence.
@@ -58,7 +58,7 @@ pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
 
 /// Deterministic in-memory projection of the durable private-settlement journal.
 #[derive(Clone, Debug)]
-pub(crate) struct PrivateSettlementBundleCoordinatorV1 {
+pub struct PrivateSettlementBundleCoordinatorV1 {
     manifest: AtomicPrivateSettlementV1,
     authority_catalog: PrivateSettlementAuthorityCatalogV1,
     audited_evidence: Vec<Option<Hash>>,
@@ -75,7 +75,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
     /// Construct one coordinator for the exact canonical manifest and authority catalog.
     pub(crate) fn new(
         manifest: AtomicPrivateSettlementV1,
-        authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+        authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
     ) -> Result<Self, PrivateSettlementCoordinatorErrorV1> {
         manifest
             .validate()
@@ -83,18 +83,16 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if authority_catalog.len() != manifest.legs.len() {
             return Err(PrivateSettlementCoordinatorErrorV1::Authority);
         }
-        for (leg, authority) in manifest.legs.iter().zip(&authority_catalog) {
+        for (leg, authority) in manifest.legs.iter().zip(authority_catalog) {
             validate_authority_cryptography_v1(authority)
                 .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
             if authority.route != leg.route {
                 return Err(PrivateSettlementCoordinatorErrorV1::Authority);
             }
         }
-        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
-            &manifest,
-            &authority_catalog,
-        )
-        .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
+        let authority_catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, authority_catalog)
+                .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
         let leg_count = manifest.legs.len();
         Ok(Self {
             manifest,
@@ -489,7 +487,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
 
 /// Redacted bundle-coordination failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementCoordinatorErrorV1 {
+pub enum PrivateSettlementCoordinatorErrorV1 {
     /// The manifest is not the canonical V1 bundle.
     #[error("private-settlement manifest is invalid")]
     Manifest,
@@ -540,7 +538,7 @@ impl PrivateSettlementCoordinatorErrorV1 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -625,11 +623,11 @@ pub(crate) mod tests {
             .expect("phase certificate")
     }
 
-    pub(crate) fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
+    pub fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator fixture");
         for index in 0..deltas.len() {
             let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
@@ -701,7 +699,7 @@ pub(crate) mod tests {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator");
         assert_eq!(coordinator.manifest(), &manifest);
         assert_eq!(
@@ -822,7 +820,7 @@ pub(crate) mod tests {
         let (fixture, deltas, authorities) = fixture_parts();
         let manifest = fixture.sidecar.manifest.clone();
         let mut coordinator =
-            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
                 .expect("coordinator");
         coordinator
             .record_audited(0, Hash::new(b"audit-0"), 12)
@@ -866,8 +864,9 @@ pub(crate) mod tests {
             Err(PrivateSettlementCoordinatorErrorV1::CarrierTooLarge)
         );
 
-        let mut expiring = PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities)
-            .expect("coordinator");
+        let mut expiring =
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), &authorities)
+                .expect("coordinator");
         let abort = expiring
             .terminate(
                 manifest.expiry_height + 1,

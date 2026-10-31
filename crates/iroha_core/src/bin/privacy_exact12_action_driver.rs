@@ -29,23 +29,16 @@ use iroha_core::privacy_release_evidence::{
 };
 use iroha_core_privacy::{
     privacy_dispatch::require_supported_privacy_action_role_v1,
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::compiled_privacy_profile_v1,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     block::BlockHeader,
-    isi::{
-        InstructionBox,
-        privacy::{
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
-        },
-    },
+    isi::privacy::SubmitPrivacyProofV1,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PrivacyActionRoleV1, PrivacyActiveLifecycleV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyActionRoleV1, PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyProofEnvelopeV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
         TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
     },
     transaction::{Executable, FeePaymentIntent, SignedTransaction},
@@ -81,10 +74,8 @@ const VERANGE_SETUP_IDENTITY_BINDING_DOMAIN: &[u8] =
     b"iroha.taira.verange_qualification_setup_identity.v1\0";
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_TRANSACTION_BYTES: usize = TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize;
-const MAX_RESPONSE_BYTES: usize = 2 * MAX_TRANSACTION_BYTES
-    + 2 * MAX_COMPILED_PROFILE_BYTES
-    + 2 * MAX_ACTIVATION_TEMPLATE_BYTES
-    + MAX_REQUEST_BYTES;
+const MAX_RESPONSE_BYTES: usize =
+    2 * MAX_TRANSACTION_BYTES + 2 * MAX_COMPILED_PROFILE_BYTES + MAX_REQUEST_BYTES;
 const MAX_TTL_MILLIS: u64 = 2 * 60 * 60 * 1_000;
 const MAX_CREATION_TIME_MILLIS: u64 = 9_223_372_036_854_775_807;
 const MAX_ASSET_DEFINITION_ID_BYTES: usize = 1024;
@@ -99,7 +90,7 @@ const MISSING_JINDO_KNOWLEDGE_SOUNDNESS: &str = "MissingDistributionWideKnowledg
 const MISSING_VERANGE_SETUP_AUTHORITY: &str =
     "MissingExactGenesisSourceClosedControllerSetupAuthorityIdentity";
 const MISSING_VERANGE_SETUP_TRANSACTION_BUNDLE: &str =
-    "MissingNativePublicOnlyVeRangePolicyActivationTransactionBundle";
+    "MissingNativePublicOnlyVeRangeAccountAndAssetSetupTransactionBundle";
 const MISSING_VERANGE_STATE_QUERY_EVIDENCE: &str =
     "MissingFourPeerCanonicalVeRangeCapabilityRowStateQueriesBeforeAfterRestart";
 const VERANGE_PUBLIC_ADMISSION_ARTIFACT_SCHEMA: &str =
@@ -109,13 +100,7 @@ const VERANGE_SETUP_REQUIREMENTS_SCHEMA: &str =
     "iroha.taira.verange_qualification_setup_requirements";
 const VERANGE_SETUP_REQUIREMENTS_SCHEMA_VERSION: u8 = 1;
 const VERANGE_QUALIFICATION_DOMAIN_ID: &str = "privacy.universal";
-const VERANGE_ACTIVATION_HEIGHT_RULE: &str =
-    "proposal_and_activation_equal_governed_execution_height";
-const VERANGE_ACTIVATION_LIFECYCLE: &str = "explicit-governed-registration-and-activation-v1";
-const VERANGE_GOVERNANCE_PERMISSION: &str = "CanEnactGovernance";
-const VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT: u64 = 1;
 const MAX_COMPILED_PROFILE_BYTES: usize = 64 * 1024;
-const MAX_ACTIVATION_TEMPLATE_BYTES: usize = 64 * 1024;
 /// One driver operation and the single Exact12 role it constructs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OperationSpecV1 {
@@ -274,7 +259,7 @@ struct BuildActionResponseV1 {
 /// This deliberately contains neither a setup transaction nor any secret,
 /// witness, endpoint, credential, or network outcome.  The explicit response
 /// missing-evidence list keeps qualification closed until the controller owns an
-/// already-admitted setup authority and a native policy/activation bundle.
+/// already-admitted setup authority and genuine account/asset setup transactions.
 #[derive(Debug, norito::JsonSerialize)]
 struct VeRangePublicAdmissionArtifactsV1 {
     action_authority_account_id: String,
@@ -298,24 +283,18 @@ struct VeRangePublicAdmissionArtifactsV1 {
 }
 /// Canonical public requirements for a future controller-owned setup bundle.
 ///
-/// The same-block instruction pair is a binding template, not a signed
-/// instruction and not evidence that the setup authority exists in genesis.
+/// The public identity and asset requirements do not establish that either
+/// exists in committed state. The native verifier is selected by the compiled
+/// profile; optional committed resource limits remain a node admission concern.
 /// All signing material remains internal and absent from this response.
 #[derive(Debug, norito::JsonSerialize)]
 struct VeRangeQualificationSetupRequirementsV1 {
     action_authority_account_id: String,
     action_authority_public_key_hex: String,
-    activation_height_rule: String,
-    activation_instruction_wire_ids: Vec<String>,
-    activation_lifecycle: String,
-    activation_instructions_template_norito_hex: String,
-    activation_template_execution_height: u64,
-    activation_instructions_template_sha256: String,
     asset_definition_id: String,
     candidate_binding_sha256: String,
     compiled_profile_sha256: String,
     domain_id: String,
-    governance_permission: String,
     protocol_id: String,
     schema: String,
     schema_version: u8,
@@ -458,38 +437,6 @@ fn verange_setup_identity_binding_v1(
     hash.update(setup_public_key);
     hex::encode(hash.finalize())
 }
-/// Build the ordered governance pair; execution binds both operations to one block.
-fn verange_activation_instructions_v1(
-    compiled: &CompiledPrivacyProfileV1,
-) -> Result<Vec<InstructionBox>, String> {
-    if compiled.protocol_id != PrivacyProtocolIdV1::VeRangeTransparentRangeV1 {
-        return Err("VeRange activation template requires the exact compiled protocol".to_owned());
-    }
-    let height = VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT;
-    let proposal = compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height: height,
-        },
-    ));
-    proposal
-        .validate()
-        .map_err(|error| format!("native VeRange proposal template is invalid: {error}"))?;
-    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: height,
-        activated_at_height: height,
-        state_since_height: height,
-    });
-    proposal
-        .lifecycle
-        .validate_transition_to(&active)
-        .map_err(|error| {
-            format!("native VeRange explicit activation template is invalid: {error}")
-        })?;
-    Ok(vec![
-        RegisterPrivacyProtocolActivationV1::new(proposal).into(),
-        TransitionPrivacyProtocolLifecycleV1::new(compiled.protocol_id, active).into(),
-    ])
-}
 fn verange_public_admission_artifacts_v1(
     authority: &AccountId,
     policy_id: [u8; 32],
@@ -507,7 +454,7 @@ fn verange_public_admission_artifacts_v1(
     compiled_profile
         .validate()
         .map_err(|error| format!("native VeRange compiled profile is invalid: {error}"))?;
-    let PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(limits) =
+    let PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(limits) =
         compiled_profile.protocol_limits
     else {
         return Err("native VeRange compiled profile has the wrong limit tag".to_owned());
@@ -519,16 +466,6 @@ fn verange_public_admission_artifacts_v1(
     {
         return Err("native VeRange compiled profile violates its byte bound".to_owned());
     }
-    let activation_instructions = verange_activation_instructions_v1(&compiled)?;
-    let activation_template_bytes =
-        norito::to_bytes(&activation_instructions).map_err(|error| {
-            format!("cannot encode native VeRange activation instruction pair: {error}")
-        })?;
-    if activation_template_bytes.is_empty()
-        || activation_template_bytes.len() > MAX_ACTIVATION_TEMPLATE_BYTES
-    {
-        return Err("native VeRange activation template violates its byte bound".to_owned());
-    }
     let compiled_profile_sha256 = sha256_hex(&compiled_profile_bytes);
     let setup_identity_binding_sha256 = verange_setup_identity_binding_v1(
         candidate,
@@ -538,20 +475,10 @@ fn verange_public_admission_artifacts_v1(
     let setup_requirements = VeRangeQualificationSetupRequirementsV1 {
         action_authority_account_id: authority_account_id.clone(),
         action_authority_public_key_hex: hex::encode(&public_key_bytes),
-        activation_height_rule: VERANGE_ACTIVATION_HEIGHT_RULE.to_owned(),
-        activation_instruction_wire_ids: vec![
-            RegisterPrivacyProtocolActivationV1::WIRE_ID.to_owned(),
-            TransitionPrivacyProtocolLifecycleV1::WIRE_ID.to_owned(),
-        ],
-        activation_lifecycle: VERANGE_ACTIVATION_LIFECYCLE.to_owned(),
-        activation_instructions_template_norito_hex: hex::encode(&activation_template_bytes),
-        activation_template_execution_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-        activation_instructions_template_sha256: sha256_hex(&activation_template_bytes),
         asset_definition_id: asset_definition_id.to_string(),
         candidate_binding_sha256: hex::encode(candidate),
         compiled_profile_sha256: compiled_profile_sha256.clone(),
         domain_id: VERANGE_QUALIFICATION_DOMAIN_ID.to_owned(),
-        governance_permission: VERANGE_GOVERNANCE_PERMISSION.to_owned(),
         protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1
             .canonical_label()
             .to_owned(),
@@ -718,24 +645,25 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
     let transaction: SignedTransaction = match operation.operation {
         ZK_ACE_OPERATION => {
             build_privacy_release_zk_ace_network_action_v1(
-                context,
+                &(context),
                 authority,
                 counterparty,
                 asset_definition_id,
                 ZK_ACE_RELEASE_AMOUNT,
-                *fixture_seed,
-                *proof_seed,
+                (*fixture_seed, *proof_seed),
                 &private_key,
             )
             .map_err(|error| format!("native ZK-ACE action construction failed: {error:?}"))?
             .transaction
         }
         ANONYMOUS_PGC_OPERATION => {
+            // The non-shipping driver selects both complete contexts explicitly;
+            // only the payment is returned by this operation.
             build_privacy_release_anonymous_pgc_network_action_v1(
-                context,
+                &context,
+                &context,
                 asset_definition_id,
                 pool_id,
-                0,
                 *fixture_seed,
                 &private_key,
             )
@@ -744,10 +672,10 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         VERANGE_OPERATION => {
             build_privacy_release_verange_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 PrivacyPolicyIdV1::new(policy_seed),
-                VERANGE_RELEASE_VALUES.to_vec(),
+                VERANGE_RELEASE_VALUES.as_ref(),
                 *fixture_seed,
                 &private_key,
             )
@@ -761,7 +689,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         BOOTLE_LANTERN_OPERATION => {
             build_privacy_release_bootle_lantern_network_action_v1(
-                context,
+                &(context),
                 *fixture_seed,
                 &private_key,
             )
@@ -772,7 +700,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         ORCHARD_OPERATION => {
             build_privacy_release_orchard_network_action_v1(
-                context,
+                &(context),
                 pool_id,
                 asset_definition_id,
                 counterparty,
@@ -785,7 +713,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         FCMP_OPERATION => {
             build_privacy_release_fcmp_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 pool_id,
                 *fixture_seed,
@@ -796,7 +724,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         IVM_PRIVATE_NOTE_OPERATION => {
             build_privacy_release_ivm_private_note_network_action_v1(
-                context,
+                &(context),
                 asset_definition_id,
                 pool_id,
                 counterparty,
@@ -807,18 +735,16 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
             .transaction
         }
         PQ_MASP_OPERATION => {
-            let preactivation_context = incremented_context_v1(&context, 1, 1)?;
-            let replay_context = incremented_context_v1(&context, 2, 2)?;
-            let post_restart_replay_context = incremented_context_v1(&context, 3, 3)?;
-            // The constructor returns the full preactivation/canonical/replay/
-            // post-restart set, but the v1 IPC has no typed artifact bundle.
+            let replay_context = incremented_context_v1(&context, 1, 1)?;
+            let post_restart_replay_context = incremented_context_v1(&context, 2, 2)?;
+            // The constructor returns the canonical/replay/post-restart set,
+            // but the v1 IPC has no typed artifact bundle.
             // Returning only this canonical transaction therefore remains
             // explicitly construction-only and cannot satisfy a controller case.
             let actions = build_privacy_release_pq_masp_network_actions_v1(
-                preactivation_context,
-                context,
-                replay_context,
-                post_restart_replay_context,
+                &(context),
+                &(replay_context),
+                &(post_restart_replay_context),
                 *fixture_seed,
                 &private_key,
             )
@@ -884,6 +810,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::isi::InstructionBox;
     const REQUEST_ID_GOLDEN: &str =
         include_str!("../../../../fixtures/privacy_exact12_action_driver_request_id_v1.json");
     #[derive(Debug, norito::JsonDeserialize)]
@@ -920,49 +847,86 @@ mod tests {
         );
     }
     #[test]
-    fn verange_activation_template_is_one_governed_same_block_pair() {
-        let compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
-        let pair = verange_activation_instructions_v1(&compiled).unwrap();
-        assert_eq!(pair.len(), 2);
-        let proposal = pair[0]
-            .as_any()
-            .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
-            .unwrap();
-        let transition = pair[1]
-            .as_any()
-            .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
-            .unwrap();
+    fn verange_public_setup_binds_identity_asset_and_native_profile() {
+        let candidate = [0x11; 32];
+        let authority = verange_setup_authority_v1(&[0x22; 32]).unwrap();
+        let asset = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("privacy", "universal").unwrap(),
+            "range_value".parse().unwrap(),
+        );
+        let artifacts =
+            verange_public_admission_artifacts_v1(&authority, [0x33; 32], &candidate, &asset)
+                .unwrap();
+        let profile_bytes = hex::decode(&artifacts.compiled_profile_norito_hex).unwrap();
+        let profile: PrivacyCompiledProfileSnapshotV1 =
+            norito::decode_from_bytes(&profile_bytes).unwrap();
         assert_eq!(
-            proposal.activation,
-            compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT
-                }
-            ))
+            profile,
+            PrivacyCompiledProfileSnapshotV1::from(
+                compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+                    .unwrap()
+            )
         );
-        assert_eq!(transition.protocol_id, compiled.protocol_id);
         assert_eq!(
-            transition.next_lifecycle,
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-                activated_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-                state_since_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-            })
+            artifacts.compiled_profile_sha256,
+            sha256_hex(&profile_bytes)
         );
-        assert!(
-            proposal
-                .activation
-                .lifecycle
-                .can_transition_to(&transition.next_lifecycle)
+        let requirements = &artifacts.setup_requirements;
+        assert_eq!(
+            requirements.action_authority_account_id,
+            authority.to_string()
         );
-        assert!(norito::to_bytes(&pair).unwrap().len() <= MAX_ACTIVATION_TEMPLATE_BYTES);
-    }
-    #[test]
-    fn verange_activation_template_rejects_another_compiled_protocol() {
-        let compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
-        assert!(verange_activation_instructions_v1(&compiled).is_err());
+        assert_eq!(requirements.asset_definition_id, asset.to_string());
+        assert_eq!(
+            requirements.candidate_binding_sha256,
+            hex::encode(candidate)
+        );
+        assert_eq!(
+            requirements.compiled_profile_sha256,
+            artifacts.compiled_profile_sha256
+        );
+        assert_eq!(
+            requirements.setup_authority_account_id,
+            verange_setup_authority_v1(&candidate).unwrap().to_string()
+        );
+        assert_eq!(
+            requirements.setup_identity_binding_sha256,
+            verange_setup_identity_binding_v1(
+                &candidate,
+                &requirements.setup_authority_account_id,
+                &hex::decode(&requirements.setup_authority_public_key_hex).unwrap(),
+            )
+        );
+        let wire = norito::json::to_string(requirements).unwrap();
+        assert_eq!(
+            artifacts.setup_requirements_sha256,
+            sha256_hex(wire.as_bytes())
+        );
+        let value: norito::json::Value = norito::json::from_str(&wire).unwrap();
+        let mut keys: Vec<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "action_authority_account_id",
+                "action_authority_public_key_hex",
+                "asset_definition_id",
+                "candidate_binding_sha256",
+                "compiled_profile_sha256",
+                "domain_id",
+                "protocol_id",
+                "schema",
+                "schema_version",
+                "setup_authority_account_id",
+                "setup_authority_public_key_hex",
+                "setup_identity_binding_sha256",
+            ]
+        );
     }
     #[test]
     fn verange_setup_identity_is_candidate_only() {

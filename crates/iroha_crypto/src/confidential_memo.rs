@@ -8,8 +8,8 @@
 
 use aead::{Aead as _, KeyInit as _, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
-use hkdf::Hkdf;
-use rand::RngCore as _;
+use hkdf::SimpleHkdf;
+use rand::Rng as _;
 use sha3::{Digest as _, Sha3_256};
 use soranet_pq::{
     HedgedChaCha20Rng, MlKemError, MlKemKeyPair, MlKemSuite, RngError, decapsulate_mlkem,
@@ -348,7 +348,7 @@ fn derive_wrap_key(
     wrap_nonce: &[u8; CONFIDENTIAL_MEMO_NONCE_BYTES_V1],
     payload_nonce: &[u8; CONFIDENTIAL_MEMO_NONCE_BYTES_V1],
 ) -> Result<Zeroizing<[u8; 32]>, ConfidentialMemoErrorV1> {
-    let hkdf = Hkdf::<Sha3_256>::new(Some(WRAP_KDF_SALT_V1), shared_secret);
+    let hkdf = SimpleHkdf::<Sha3_256>::new(Some(WRAP_KDF_SALT_V1), shared_secret);
     let mut info = Vec::with_capacity(WRAP_KDF_INFO_V1.len() + 1 + 1 + 32 + 24 + 24);
     info.extend_from_slice(WRAP_KDF_INFO_V1);
     info.push(suite.wire_tag());

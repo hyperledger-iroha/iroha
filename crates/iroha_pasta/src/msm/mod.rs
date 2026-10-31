@@ -12,6 +12,8 @@
 //! - [`msm_secret_bounded_cancellable`]: the same secret kernel with a bound
 //!   chosen from public protocol data and checked against every scalar before
 //!   planning. It does not choose a width from witness values.
+//! - [`msm_secret_columns_cancellable`]: one secret MSM per column over shared
+//!   bases, run as a bounded number of admitted single-task kernels.
 //! - [`FixedBaseTable`]: precomputed window multiples of a fixed commitment
 //!   key; one bucket set and no doublings per MSM.
 //!
@@ -20,7 +22,7 @@
 //! admission never blocks. [`MemoryBudget`] limits each kernel,
 //! while [`SharedMemoryBudget`] bounds all concurrent MSM scratch in the process
 //! to 64 MiB. Contention lowers the plan, streams contiguous chunks through bounded
-//! kernels, or selects allocation-free serial multiplication when no chunk fits.
+//! kernels, or selects allocation-free windowed multiplication when no chunk fits.
 //! Nested Rayon work never waits for memory admission.
 //!
 //! Results are exact group elements and therefore identical across thread
@@ -36,8 +38,9 @@ pub use budget::{
 pub use fixed_base::FixedBaseTable;
 
 use crate::{CancellationToken, Cancelled};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::curve::PastaCurve;
@@ -89,6 +92,13 @@ impl From<BudgetExceeded> for MsmError {
 
 /// Below this many points the MSM multiplies point by point.
 const SMALL_MSM: usize = 8;
+
+/// Window width of the allocation-free fallback: `2^6 - 1` stack buckets.
+const STACK_WINDOW: usize = 6;
+
+/// Above this many points the allocation-free fallback uses windows: one bucket
+/// addition per point and window costs less than point-by-point multiplication.
+const STACK_WINDOWED_MIN: usize = 32;
 
 /// Computes `sum_i scalars[i] * bases[i]` for public scalars.
 ///
@@ -187,6 +197,130 @@ pub fn msm_secret_cancellable<C: PastaCurve>(
     cancellation: Option<&CancellationToken>,
 ) -> Result<C, MsmError> {
     msm_impl::<C, true>(scalars, bases, budget, shared, cancellation, None)
+}
+
+/// One secret MSM per column over the same `bases`, returned in column order.
+///
+/// Committing many columns concurrently through [`msm_secret_cancellable`] lets
+/// nested work stealing open more kernels than the shared ceiling admits; the
+/// refused ones stream or take the allocation-free path. Here one reservation
+/// admits `lanes` single-task plans at once (at most the pool size and the column
+/// count). Each lane claims the next column and runs it on its own thread, so no
+/// more kernels exist than were admitted, and fast workers claim more columns.
+/// Columns left after the last full round of lanes, and every column when fewer
+/// than two lanes fit, run one at a time on the whole pool through
+/// [`msm_secret_cancellable`]. Every result is the exact group element that
+/// [`msm_secret_cancellable`] returns for its column.
+///
+/// # Errors
+/// [`MsmError::LengthMismatch`] (every column is checked before any work) or
+/// [`MsmError::TooLarge`]; otherwise as [`msm_secret_cancellable`], for the
+/// lowest failing column. Every Rayon task has joined and all secret scratch is
+/// wiped before an error is returned.
+pub fn msm_secret_columns_cancellable<C: PastaCurve>(
+    columns: &[&[C::ScalarExt]],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C>, MsmError> {
+    CancellationToken::checkpoint(cancellation)?;
+    if let Some(column) = columns.iter().find(|column| column.len() != bases.len()) {
+        return Err(MsmError::LengthMismatch(crate::LengthMismatch {
+            left: column.len(),
+            right: bases.len(),
+        }));
+    }
+    let n = bases.len();
+    if u32::try_from(n).is_err() {
+        return Err(MsmError::TooLarge { n });
+    }
+    let whole_pool = |column: &[C::ScalarExt]| {
+        msm_impl::<C, true>(column, bases, budget, shared, cancellation, None)
+    };
+    let wanted = rayon::current_num_threads().min(columns.len());
+    // Secret plans assume full-width scalars, never their values.
+    let admitted = if wanted < 2 || n <= SMALL_MSM {
+        None
+    } else {
+        pippenger::plan(n, 255, 1, budget.bytes()).and_then(|plan| {
+            admit_lanes(plan.bytes, wanted, shared).map(|(lanes, scratch)| (plan, lanes, scratch))
+        })
+    };
+    let Some((plan, lanes, scratch)) = admitted else {
+        return columns.iter().map(|column| whole_pool(column)).collect();
+    };
+    let head = columns.len() - columns.len() % lanes;
+    let next = AtomicUsize::new(0);
+    let claimed: Vec<Vec<(usize, Result<C, MsmError>)>> = (0..lanes)
+        .into_par_iter()
+        .map(|_| {
+            let mut done = Vec::new();
+            loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(column) = columns[..head].get(index) else {
+                    break;
+                };
+                let sum = run_plan::<C, true>(column, bases, plan, cancellation);
+                let failed = sum.is_err();
+                done.push((index, sum));
+                if failed {
+                    // Every lane stops at its next claim; the error is reported below.
+                    next.store(head, Ordering::Relaxed);
+                    break;
+                }
+            }
+            done
+        })
+        .collect();
+    drop(scratch);
+    let mut sums: Vec<Option<C>> = vec![None; head];
+    let mut failure: Option<(usize, MsmError)> = None;
+    for (index, sum) in claimed.into_iter().flatten() {
+        match sum {
+            Ok(point) => sums[index] = Some(point),
+            Err(error) if failure.is_none_or(|(lowest, _)| index < lowest) => {
+                failure = Some((index, error));
+            }
+            Err(_) => {}
+        }
+    }
+    if let Some((_, error)) = failure {
+        return Err(error);
+    }
+    // Without a failure every head column was claimed exactly once; computing any
+    // unclaimed one here keeps the result total without trusting that invariant.
+    let mut out = Vec::with_capacity(columns.len());
+    for (sum, column) in sums.into_iter().zip(columns) {
+        out.push(match sum {
+            Some(point) => point,
+            None => whole_pool(column)?,
+        });
+    }
+    for column in &columns[head..] {
+        out.push(whole_pool(column)?);
+    }
+    Ok(out)
+}
+
+/// Reserve scratch for `wanted` concurrent kernels of `plan_bytes` each, or as many
+/// as fit; two is the fewest worth running instead of one whole-pool kernel.
+fn admit_lanes(
+    plan_bytes: usize,
+    wanted: usize,
+    shared: &SharedMemoryBudget,
+) -> Option<(usize, ScratchReservation<'_>)> {
+    let mut lanes = wanted.min(shared.available_bytes() / plan_bytes.max(1));
+    while lanes >= 2 {
+        if let Some(scratch) = plan_bytes
+            .checked_mul(lanes)
+            .and_then(|bytes| shared.try_reserve(bytes))
+        {
+            return Some((lanes, scratch));
+        }
+        lanes -= 1;
+    }
+    None
 }
 
 /// Borrowed secret scalars checked against one independently chosen public bit bound.
@@ -383,7 +517,7 @@ fn streaming_msm<C: PastaCurve, const SECRET: bool>(
         else {
             // Zero available scratch, a lost series of admission races, or a
             // tiny remainder: no heap allocation or waiting is needed.
-            let sum = Zeroizing::new(small_msm::<C, SECRET>(
+            let sum = Zeroizing::new(stack_msm::<C, SECRET>(
                 &scalars[position..],
                 &bases[position..],
                 cancellation,
@@ -418,10 +552,25 @@ fn planned_msm<C: PastaCurve, const SECRET: bool>(
     _scratch: ScratchReservation<'_>,
     cancellation: Option<&CancellationToken>,
 ) -> Result<C, MsmError> {
+    run_plan::<C, SECRET>(scalars, bases, plan, cancellation)
+}
+
+/// The kernel of [`planned_msm`], for scratch its caller already holds. A plan
+/// with one concurrent task runs entirely on the calling thread.
+fn run_plan<C: PastaCurve, const SECRET: bool>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    plan: pippenger::Plan,
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
     CancellationToken::checkpoint(cancellation)?;
     // Identity bases contribute nothing and would break the affine formulas.
     let skip: Vec<bool> = bases.iter().map(|b| bool::from(b.is_identity())).collect();
-    let digits = pippenger::Digits::new_cancellable(scalars, plan.c, plan.nw, cancellation)?;
+    let digits = if plan.concurrency == 1 {
+        pippenger::Digits::new_serial_cancellable(scalars, plan.c, plan.nw, cancellation)?
+    } else {
+        pippenger::Digits::new_cancellable(scalars, plan.c, plan.nw, cancellation)?
+    };
     let tasks = plan.groups * plan.chunks;
     // Waves of at most `plan.concurrency` tasks bound the live bucket memory.
     let mut windows = Zeroizing::new(vec![C::identity(); plan.nw]);
@@ -479,6 +628,72 @@ fn small_msm<C: PastaCurve, const SECRET: bool>(
     Ok(*acc)
 }
 
+/// Allocation-free MSM for zero-fit shared scratch: point by point for tiny
+/// inputs, otherwise [`windowed_msm`].
+fn stack_msm<C: PastaCurve, const SECRET: bool>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
+    if scalars.len() <= STACK_WINDOWED_MIN {
+        small_msm::<C, SECRET>(scalars, bases, cancellation)
+    } else {
+        windowed_msm::<C, SECRET>(scalars, bases, cancellation)
+    }
+}
+
+/// Unsigned [`STACK_WINDOW`]-bit windows with `2^STACK_WINDOW - 1` projective
+/// buckets on the stack, on the calling thread.
+///
+/// From the top window down, the accumulator is doubled `STACK_WINDOW` times and
+/// gains `sum_d d * B_d`, where bucket `B_d` sums the finite bases whose window
+/// digit is `d` (complete mixed additions, so equal and opposite points are
+/// exact). Per point and window this is one addition instead of the constant-time
+/// multiplier's doublings, additions and table scans. Bucket selection follows
+/// the digits, as in the planned secret kernel; buckets, sums and limbs are wiped.
+fn windowed_msm<C: PastaCurve, const SECRET: bool>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    cancellation: Option<&CancellationToken>,
+) -> Result<C, MsmError> {
+    const BUCKETS: usize = (1 << STACK_WINDOW) - 1;
+    let mut acc = Zeroizing::new(C::identity());
+    let mut buckets = Zeroizing::new([C::identity(); BUCKETS]);
+    for window in (0..256_usize.div_ceil(STACK_WINDOW)).rev() {
+        CancellationToken::checkpoint(cancellation)?;
+        for _ in 0..STACK_WINDOW {
+            *acc = acc.double();
+        }
+        buckets.fill(C::identity());
+        for (index, (scalar, base)) in scalars.iter().zip(bases).enumerate() {
+            if index % 1024 == 0 {
+                CancellationToken::checkpoint(cancellation)?;
+            }
+            // Identity bases contribute nothing and would break the mixed formula.
+            if bool::from(base.is_identity()) {
+                continue;
+            }
+            let limbs = Zeroizing::new(scalar.to_canonical_limbs());
+            let digit = pippenger::window_bits(&limbs, window * STACK_WINDOW, STACK_WINDOW);
+            if let Some(slot) = usize::try_from(digit)
+                .ok()
+                .and_then(|digit| digit.checked_sub(1))
+            {
+                buckets[slot] = crate::curve::add_mixed_finite(&buckets[slot], base);
+            }
+        }
+        let mut running = Zeroizing::new(C::identity());
+        let mut sum = Zeroizing::new(C::identity());
+        for bucket in buckets.iter().rev() {
+            *running += bucket;
+            *sum += *running;
+        }
+        *acc += *sum;
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(*acc)
+}
+
 /// Reference MSM by independent scalar multiplications (tests and
 /// differential checks).
 pub fn msm_naive<C: PastaCurve>(scalars: &[C::ScalarExt], bases: &[C::AffineExt]) -> C {
@@ -496,7 +711,7 @@ mod tests {
     use ff::Field;
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn shared_msm_parity<C: PastaCurve>() {
         let scalars = (0..48)
@@ -629,6 +844,10 @@ mod tests {
 
 #[cfg(test)]
 mod bounded_tests;
+
+#[cfg(test)]
+#[path = "columns_tests.rs"]
+mod columns_tests;
 
 #[cfg(test)]
 #[path = "streaming_tests.rs"]

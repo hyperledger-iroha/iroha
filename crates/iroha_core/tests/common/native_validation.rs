@@ -19,7 +19,7 @@ use iroha_data_model::{block::SignedBlock, transaction::SignedTransaction};
 use iroha_sumeragi::{message::BlockHeader, preimage::payload_hash, types::ControlWitness};
 use std::{borrow::Cow, time::Duration};
 
-pub(super) fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) -> SignedBlock {
+pub fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) -> SignedBlock {
     let inputs = txs
         .into_iter()
         .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
@@ -37,7 +37,7 @@ pub(super) fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) 
     .expect("native resultless proposal assembly")
 }
 
-pub(super) fn validate(
+pub fn validate(
     chain: &CertifiedTestChain,
     proposal: SignedBlock,
 ) -> Result<ValidBlock, Box<BlockValidationError>> {
@@ -77,6 +77,15 @@ pub(super) fn validate(
     )
     .unwrap();
     let topology = Topology::new(chain.validators().iter().map(|(peer, _)| peer.clone()));
+    let uid_bindings =
+        iroha_core::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+            chain
+                .state()
+                .world
+                .sccp_committee_generations
+                .allocation_budget(),
+        )
+        .expect("original native binding preparation bank");
     ValidBlock::validate_sumeragi_block(
         proposal,
         &topology,
@@ -89,7 +98,13 @@ pub(super) fn validate(
         &bytes,
         chain.state(),
         None,
+        &uid_bindings,
         None,
+        &mut Default::default(),
+        &iroha_core::execution_attempt::PolicyDecodeControls::try_new(
+            &chain.state().ivm_execution_budget(),
+        )
+        .unwrap(),
     )
     .unpack(|_| {})
     .map(|(valid, _)| valid)

@@ -2617,11 +2617,13 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             name,
             spec,
             mintable,
+            owning_domain,
         } => {
             f(asset);
             f(name);
             f(spec);
             f(mintable);
+            f(owning_domain);
         }
         TransferAsset {
             from,
@@ -2910,6 +2912,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         ir::Instr::ZkVerify { payload, .. }
         | ir::Instr::VerifyProof { payload, .. }
+        | ir::Instr::PresentX509 { payload, .. }
         | ir::Instr::VendorExecuteInstruction { payload, .. }
         | ir::Instr::VendorExecuteQuery { payload, .. }
         | ir::Instr::QueryExecuteNorito { payload, .. }
@@ -3185,7 +3188,7 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::GetMerklePath { dest, .. }
         | ir::Instr::GetMerkleCompact { dest, .. }
         | ir::Instr::GetRegisterMerkleCompact { dest, .. } => Some(dest),
-        ir::Instr::VerifyProof { dest, .. } => Some(dest),
+        ir::Instr::VerifyProof { dest, .. } | ir::Instr::PresentX509 { dest, .. } => Some(dest),
         ir::Instr::Sm4GcmSeal { dest, .. } => Some(dest),
         ir::Instr::Sm4GcmOpen { dest, .. } => Some(dest),
         ir::Instr::Sm4CcmSeal { dest, .. } => Some(dest),

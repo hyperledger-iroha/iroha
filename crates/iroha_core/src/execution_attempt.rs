@@ -3,6 +3,9 @@
 use iroha_data_model::ValidationFail;
 use ivm::error::{ExecutionDeferral, VMError};
 
+mod policy_decode;
+pub(crate) use policy_decode::PolicyDecodeControls;
+
 /// Native Core boundary at which an unfinished execution returned to its caller.
 ///
 /// This is non-wire diagnostic context. It grants no retry, execution or finality
@@ -504,18 +507,20 @@ pub(crate) fn prepared_signature_block_attempt_error<E>(
         PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
             BlockSignatureCustodyError::ControlAdmission(original),
         )) => ExecutionAttemptError::Deferred(original.into()),
-        PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
-            BlockSignatureCustodyError::ControlAllocation(original),
-        )) => ExecutionAttemptError::Deferred(control(original)),
-        PreparedSignatureBlockError::PenaltyActions(
+        PreparedSignatureBlockError::Decode(
+            PreparedDecodeError::Destination(BlockSignatureCustodyError::ControlAllocation(
+                original,
+            ))
+            | PreparedDecodeError::Scope(PreparedDecodeScopeError::Allocation(original)),
+        )
+        | PreparedSignatureBlockError::PenaltyActions(
             NposPenaltyActionsCustodyError::ControlAllocation(
                 original @ PrepaidSharedError::Allocator { .. },
             ),
-        ) => ExecutionAttemptError::Deferred(control(original)),
-        PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Allocation(original))
-        | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
-            PreparedDecodeScopeError::Allocation(original),
-        )) => ExecutionAttemptError::Deferred(control(original)),
+        )
+        | PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Allocation(original)) => {
+            ExecutionAttemptError::Deferred(control(original))
+        }
         PreparedSignatureBlockError::Scope(PreparedDecodeScopeError::Reservation(_))
         | PreparedSignatureBlockError::Decode(PreparedDecodeError::Scope(
             PreparedDecodeScopeError::Reservation(_),
@@ -561,6 +566,93 @@ pub(crate) fn norito_decode_attempt_error<E>(
         return ExecutionAttemptError::Deferred(reason.into());
     }
     ExecutionAttemptError::Rejected(rejected(error))
+}
+
+/// Preserve a known unavailable public-key parser at a transaction decode boundary.
+///
+/// Public-key codecs retain the canonical algorithm name in `UnsupportedFeature`.
+/// Only that exact identity, coupled with an actually absent parser in this build,
+/// becomes local readiness deferral. Unknown features, supported algorithms and
+/// malformed input stay with the original caller; resource refusals have their
+/// separate original-owner path.
+#[must_use]
+pub fn crypto_public_key_decode_deferred(error: &norito::Error) -> Option<ExecutionDeferred> {
+    iroha_crypto::UnsupportedImplementation::from_public_key_decode_error(error)
+        .map(|original| ExecutionDeferral::CryptoImplementationUnavailable(original).into())
+}
+
+#[cfg(test)]
+#[path = "execution_attempt/crypto_decode_tests.rs"]
+mod crypto_decode_tests;
+
+/// Decode a native policy with counter controls owned by its executing transaction.
+/// Read-only callers use the same canonical kernel without inventing a transaction owner.
+/// TODO: admit decoded policy graphs and caller scratch with their own allocation owners.
+pub(crate) fn canonical_policy_decode<T>(
+    owner: Option<&crate::state::WorldTransaction<'_, '_>>,
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<T, norito::CanonicalDecodeControlError>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    if let Some(owner) = owner {
+        let budget = owner.sccp_committee_generations.allocation_budget();
+        // SPEC: §13.4 HC974 substitutes the policy decoder's original pool.
+        #[cfg(all(test, sumeragi_core_mutation = "HC974"))]
+        let substituted = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
+        #[cfg(all(test, sumeragi_core_mutation = "HC974"))]
+        let budget = &substituted;
+        if let Some(original) = owner.policy_decode_controls.as_ref() {
+            return original.decode(budget, bytes, limits);
+        }
+        norito::decode_canonical_with_owned_controls(bytes, limits, budget)
+    } else {
+        norito::core::classify_decode_attempt(|| {
+            norito::decode_canonical_with_limits(bytes, limits)
+        })
+        .map_err(norito::CanonicalDecodeControlError::Decode)
+    }
+}
+
+/// Preserve the original policy counter admission, allocator, or enclosing decode refusal.
+/// An internal prepaid-layout mismatch remains an invariant rejection, never a pool wait.
+pub(crate) fn canonical_decode_control_attempt_error<E>(
+    error: norito::CanonicalDecodeControlError,
+    rejected: impl FnOnce(norito::CanonicalDecodeControlError) -> E,
+) -> ExecutionAttemptError<E> {
+    use norito::CanonicalDecodeControlError;
+    match error {
+        CanonicalDecodeControlError::Scope(norito::core::PreparedDecodeScopeError::Allocation(
+            original @ iroha_allocation::PrepaidSharedError::Allocator { .. },
+        )) => ExecutionAttemptError::Deferred(
+            iroha_allocation::AllocatorRefusal::try_from(original)
+                .expect("matched physical retained canonical-control refusal")
+                .into(),
+        ),
+        CanonicalDecodeControlError::Scope(_) => {
+            ExecutionAttemptError::Deferred(ExecutionDeferral::LocalInvariantViolation.into())
+        }
+        CanonicalDecodeControlError::Decode(error) => {
+            canonical_decode_attempt_error(error, |error| {
+                rejected(CanonicalDecodeControlError::Decode(error))
+            })
+        }
+        CanonicalDecodeControlError::Admission(original) => {
+            ExecutionAttemptError::Deferred(original.into())
+        }
+        CanonicalDecodeControlError::Control(
+            original @ iroha_allocation::PrepaidSharedError::Allocator { .. },
+        ) => ExecutionAttemptError::Deferred(
+            iroha_allocation::AllocatorRefusal::try_from(original)
+                .expect("matched physical canonical-control refusal")
+                .into(),
+        ),
+        error @ CanonicalDecodeControlError::Control(
+            iroha_allocation::PrepaidSharedError::Reservation(_),
+        ) => ExecutionAttemptError::Rejected(rejected(error)),
+    }
 }
 
 /// Consume the canonical decoder's captured origin after its caller scopes retire.
@@ -805,6 +897,25 @@ impl crate::state::StateTransaction<'_, '_> {
             Ok(reason) => self.defer_execution(reason),
             Err(error) => deterministic(error),
         }
+    }
+
+    /// Hydrate the real verifier registry without certifying a local refusal as rejection.
+    ///
+    /// Call this before the host borrows this transaction for query execution. The original
+    /// verifier refusal moves into the transaction's sticky attempt owner; deterministic
+    /// registry defects retain their existing validation diagnostic.
+    pub(crate) fn hydrate_zk_snapshots_for_execution<QS>(
+        &mut self,
+        host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<'_, '_, QS>,
+    ) -> Result<(), ValidationFail>
+    where
+        QS: Default + crate::smartcontracts::ivm::host::QueryStateAccess,
+    {
+        host.set_zk_snapshots_from_state(self).map_err(|error| {
+            self.vm_error_to_validation_fail(error, |error| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+            })
+        })
     }
 
     /// Keep analysis allocation refusal local before constructing a diagnostic.
@@ -2300,3 +2411,6 @@ fn prepared_parent_service_attempt_preserves_original_capacity_and_allocator_fie
     drop(blocker);
     assert_eq!(pool.reserved_bytes(), 0);
 }
+
+#[cfg(all(test, feature = "zk-stark"))]
+mod zk_snapshot_refusal_tests;

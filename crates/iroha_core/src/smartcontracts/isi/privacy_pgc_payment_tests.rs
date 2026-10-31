@@ -1,18 +1,21 @@
 #[test]
-fn payment_requires_registered_production_qualification_before_effects() {
-    let bootstrap = valid_bootstrap_instruction();
+fn public_payment_uses_compiled_defaults_and_rolls_back_with_its_transaction() {
+    let bootstrap = valid_bootstrap_fixture();
     let payment = valid_payment_instruction();
-    let state = state_with_activation(active_lifecycle());
+    let payment_bytes = u64::try_from(
+        norito::canonical_frame_len(&payment.envelope).expect("canonical payment size"),
+    )
+    .expect("payment length");
+    let state = state_with_default_privacy_policy();
     let mut block = state.block(test_header());
     {
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         bootstrap
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("native bootstrap is available before production qualification");
+            .execute_signed(&ALICE_ID, &mut transaction)
+            .expect("complete native bootstrap using compiled defaults");
         transaction.apply();
     }
-    let mut transaction = block.transaction();
     let snapshot = |transaction: &StateTransaction<'_, '_>| {
         (
             transaction
@@ -42,36 +45,65 @@ fn payment_requires_registered_production_qualification_before_effects() {
             transaction.privacy_budget_for_testing(),
         )
     };
+    let mut transaction = block.transaction();
     let before = snapshot(&transaction);
-    assert!(
-        transaction
-            .world
-            .privacy_exact12_qualification
-            .get()
-            .is_none()
+    assert_eq!(
+        transaction.world.privacy_protocol_policies.iter().count(),
+        0
     );
     bind_payment_instruction(&mut transaction, &payment);
-    let error = payment
+    payment
         .execute(&ALICE_ID, &mut transaction)
-        .expect_err("an active compiled profile cannot authorize production execution");
+        .expect("public native payment uses the available compiled profile with no policy row");
+    let after = snapshot(&transaction);
     assert_eq!(
-        smart_contract_parameter_message(&error),
-        "privacy Exact12 production qualification is not registered"
+        after.0, before.0,
+        "bootstrap supply provenance remains unchanged"
     );
-    assert_eq!(snapshot(&transaction), before);
+    assert_ne!(
+        after.1, before.1,
+        "native payment replaces account ciphertexts"
+    );
+    assert_eq!(after.2.len(), before.2.len() + 1);
+    assert_ne!(
+        after.3, before.3,
+        "native payment advances the authenticated root head"
+    );
+    assert_eq!(
+        after.4,
+        (1, payment_bytes, before.4.2 + 1, before.4.3 + payment_bytes)
+    );
+    assert_eq!(privacy_map_counts(&transaction), (1, 16, 2, 1));
+    let head = transaction
+        .world
+        .privacy_root_heads
+        .iter()
+        .next()
+        .unwrap()
+        .1;
+    assert_eq!(head.epoch(), 2);
+    assert_eq!(head.retained_root_count(), 2);
+    // A successful native proof stages effects only in its owning transaction.
+    drop(transaction);
+    let verification = block.transaction();
+    assert_eq!(snapshot(&verification), before);
+    assert_eq!(
+        verification.world.privacy_protocol_policies.iter().count(),
+        0
+    );
 }
 
 #[test]
 fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects() {
-    let bootstrap = valid_bootstrap_instruction();
+    let bootstrap = valid_bootstrap_fixture();
     let payment = valid_payment_instruction();
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let mut block = state.block(test_header());
     {
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         bootstrap
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect("complete native bootstrap");
         transaction.apply();
     }
@@ -162,20 +194,20 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
 }
 #[test]
 fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
-    let bootstrap = valid_bootstrap_instruction();
+    let bootstrap = valid_bootstrap_fixture();
     let mut payment = valid_payment_instruction();
     let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &mut payment.envelope.proof else {
         unreachable!("Anonymous PGC payment fixture")
     };
     let middle = proof.bytes.len() / 2;
     proof.bytes[middle] ^= 1;
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let mut block = state.block(test_header());
     {
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         bootstrap
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect("complete native bootstrap");
         transaction.apply();
     }
@@ -206,13 +238,12 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
         .collect::<Vec<_>>();
     let budget_before = transaction.privacy_budget_for_testing();
     bind_payment_instruction(&mut transaction, &payment);
-    let error =
-        execute_privacy_proof_after_admission_for_test(payment, &ALICE_ID, &mut transaction)
-            .expect_err("one-bit proof mutation");
+    let error = payment
+        .execute(&ALICE_ID, &mut transaction)
+        .expect_err("one-bit proof mutation");
     assert_eq!(
         smart_contract_parameter_message(&error),
-        "privacy proof admission rejected: native Anonymous-PGC verification failed: \
-             Anonymous-PGC payment proof equation failed",
+        "privacy PGC payment verification failed: Anonymous-PGC payment proof equation failed",
         "unexpected typed proof rejection: {error:?}"
     );
     assert_eq!(
@@ -259,15 +290,13 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
 }
 #[test]
 fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() {
-    let bootstrap = valid_bootstrap_instruction();
+    let bootstrap = valid_bootstrap_fixture();
     let payment = valid_payment_instruction();
     let payment_bytes = u64::try_from(
-        norito::to_bytes(&payment.envelope)
-            .expect("payment encoding")
-            .len(),
+        norito::canonical_frame_len(&payment.envelope).expect("canonical payment size"),
     )
     .expect("payment length");
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let header = test_header();
     let header_hash = header.hash();
     let mut block = state.block(header);
@@ -276,22 +305,23 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         grant_governance(&mut transaction);
         bootstrap
             .clone()
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect("complete native bootstrap");
         transaction.apply();
     }
     {
         let mut transaction = block.transaction();
-        let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(bootstrap.bootstrap.namespace)
-            .expect("invariant key");
+        let invariant_key =
+            PrivacyPgcPoolInvariantKeyV1::new(bootstrap.request.bootstrap.namespace)
+                .expect("invariant key");
         let invariant_before = *transaction
             .world
             .privacy_pgc_pool_invariants
             .get(&invariant_key)
             .expect("bootstrapped invariant");
         let first_key = PrivacyPgcAccountKeyV1::new(
-            bootstrap.bootstrap.namespace,
-            bootstrap.bootstrap.accounts[0].public_key,
+            bootstrap.request.bootstrap.namespace,
+            bootstrap.request.bootstrap.accounts[0].public_key,
         )
         .expect("first account key");
         let first_balance_before = transaction
@@ -301,12 +331,10 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .expect("first account")
             .encrypted_balance();
         bind_payment_instruction(&mut transaction, &payment);
-        execute_privacy_proof_after_admission_for_test(
-            payment.clone(),
-            &ALICE_ID,
-            &mut transaction,
-        )
-        .expect("complete native payment");
+        payment
+            .clone()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("complete native payment");
         assert_eq!(privacy_map_counts(&transaction), (1, 16, 2, 1));
         assert_eq!(
             transaction
@@ -327,7 +355,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             "the complete successor table must replace current ciphertexts"
         );
         let head_key = PrivacyRootHeadKeyV1::new(
-            bootstrap.bootstrap.namespace,
+            bootstrap.request.bootstrap.namespace,
             PrivacyRootRoleV1::PgcAccountState,
         )
         .expect("head key");
@@ -350,7 +378,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         let mut transaction = block.transaction();
         let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
         next_limits.retained_root_count = 1;
-        SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 300, next_limits)
+        SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT + 300, next_limits)
             .execute(&ALICE_ID, &mut transaction)
             .expect("schedule exact delayed PGC retention tightening");
         transaction.apply();
@@ -373,7 +401,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         "effective-height hook must prune PGC history to the tightened cap"
     );
     let head_key = PrivacyRootHeadKeyV1::new(
-        bootstrap.bootstrap.namespace,
+        bootstrap.request.bootstrap.namespace,
         PrivacyRootRoleV1::PgcAccountState,
     )
     .expect("PGC head key");
@@ -385,8 +413,8 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
     let anchor = head
         .retention_anchor()
         .expect("pruning must commit the removed prefix anchor");
-    assert_eq!(anchor.epoch(), bootstrap.bootstrap.initial_epoch);
-    assert_eq!(anchor.root(), bootstrap.bootstrap.initial_root);
+    assert_eq!(anchor.epoch(), bootstrap.request.bootstrap.initial_epoch);
+    assert_eq!(anchor.root(), bootstrap.request.bootstrap.initial_root);
     assert_eq!(
         transaction
             .world
@@ -401,14 +429,14 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .world
             .privacy_consensus_policy
             .get()
-            .pending_tightening,
+            .pending_update,
         None
     );
     let counts_before = privacy_map_counts(&transaction);
     bind_payment_instruction(&mut transaction, &payment);
-    let error =
-        execute_privacy_proof_after_admission_for_test(payment, &ALICE_ID, &mut transaction)
-            .expect_err("stale payment replay");
+    let error = payment
+        .execute(&ALICE_ID, &mut transaction)
+        .expect_err("stale payment replay");
     assert!(
         smart_contract_parameter_message(&error).contains("StaleHead"),
         "unexpected replay rejection: {error:?}"

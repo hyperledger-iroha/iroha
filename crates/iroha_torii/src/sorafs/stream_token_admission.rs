@@ -345,7 +345,7 @@ impl StreamTokenAdmissionCaptureV1 {
                 Ok(StreamTokenReconciliationOutcomeV1::Idle)
             }
             StreamTokenGatewayReconciliationReadV1::Checked(pending) => self
-                .reconcile_readback(None, deadline, pending)
+                .reconcile_readback(None, deadline, &(pending))
                 .map(|outcome| StreamTokenReconciliationOutcomeV1::Reconciled(outcome.delivered)),
         }
     }
@@ -398,13 +398,13 @@ impl StreamTokenAdmissionCaptureV1 {
     ) -> Result<StreamTokenReconcileBatchV1, StreamTokenGatewayAdmissionErrorV1> {
         self.ensure_configured_binding(deadline)?;
         let pending = self.provider.pending(self.reconcile_max_items, deadline)?;
-        self.reconcile_readback(required_record, deadline, pending)
+        self.reconcile_readback(required_record, deadline, &(pending))
     }
     fn reconcile_readback(
         &self,
         required_record: Option<&StreamTokenGatewayAdmissionRecordV1>,
         deadline: Instant,
-        pending: StreamTokenGatewayAdmissionReadbackV1,
+        pending: &StreamTokenGatewayAdmissionReadbackV1,
     ) -> Result<StreamTokenReconcileBatchV1, StreamTokenGatewayAdmissionErrorV1> {
         pending.validate(self.reconcile_max_items, self.expected_qualification)?;
         self.ensure_configured_binding(deadline)?;

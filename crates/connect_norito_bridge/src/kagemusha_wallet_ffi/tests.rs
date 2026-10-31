@@ -7,6 +7,8 @@ use advance::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod resume_tests;
+
 pub(super) struct TestWallet {
     pub(super) calls: Arc<AtomicUsize>,
     pub(super) drops: Arc<AtomicUsize>,
@@ -18,7 +20,24 @@ impl Drop for TestWallet {
     }
 }
 impl Wallet for TestWallet {
-    fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+        Ok(maintenance::ReceiptStep::Empty)
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        Ok(maintenance::WakeHint::Age(
+            state::DeferredArchiveWakeHintV1::NoAgeWake,
+        ))
+    }
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+        Ok(maintenance::DrainPlan::Finished(
+            state::DeferredArchiveDrainV1::NoWork,
+        ))
+    }
+
+    fn maintenance(&mut self) -> Result<maintenance::View> {
+        Ok(maintenance::View::Released)
+    }
+    fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(Response {
             kind: 12,
@@ -49,9 +68,11 @@ impl Wallet for TestWallet {
             }),
         })
     }
-    fn review(&mut self, input: review::Input) -> Result<Response> {
+    fn review(&mut self, _exchange_id: u64, input: review::Input) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let review::Input::Unload {
+            request_id,
+            expectation,
             amount,
             charge,
             beneficiary,
@@ -59,6 +80,8 @@ impl Wallet for TestWallet {
         else {
             panic!("expected Unload review fixture")
         };
+        assert_ne!(request_id, [0; 32]);
+        assert!(matches!(expectation, state::ReviewExpectationV1::Fresh));
         assert_eq!(beneficiary, Some(vec![3, 255, 0, 1]));
         assert_eq!(
             state::OperationActionV1::Unload { amount, charge },
@@ -99,6 +122,10 @@ impl Wallet for TestWallet {
             3 => completion(Some(state::Completion::DeliveryDataLoss)),
             _ => Err(Failure::unavailable(UNAVAILABLE, U::Io(5))),
         }
+    }
+    fn has_pending_operation(&mut self) -> Result<bool> {
+        // This fixture's resume always returns the same selected Pending outcome.
+        Ok(true)
     }
     fn resume(&mut self) -> Result<Response> {
         completion(Some(state::Completion::Pending))
@@ -196,7 +223,14 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         (8, 7, 1 << 29, 3)
     );
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, std::ptr::null(), &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                std::ptr::null(),
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(
@@ -778,7 +812,14 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -786,7 +827,14 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
     assert!(result.bytes.is_null());
     request.first_length = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -823,7 +871,14 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     // The stand-in install owner echoes the exact list and certificate originals; the
     // stand-in operation owner would refuse as PROOF_REJECTED.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         0
     );
     assert_eq!(result.status, 1);
@@ -837,13 +892,27 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     let identity = [1; 32];
     request.request_id = identity.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.selector = 6;
     request.request_id = zero.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     // The list needs its certificate set.
@@ -851,13 +920,20 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     request.second = std::ptr::null();
     request.second_length = 0;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                id,
+                test_exchange_id(id),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // The typed call reaches Wallet::install_blacklist, never Wallet::execute.
     let response = execute(
-        id,
+        &test_invocation(id).unwrap(),
         requests::Call::InstallBlacklist {
             list: vec![9],
             certificates: vec![10],
@@ -866,19 +942,22 @@ fn c_selector_five_installs_the_local_list_through_the_owner_and_is_no_operation
     .unwrap();
     assert_eq!((response.kind, response.bytes), (1, vec![9, 10]));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let captured = test_invocation(id).unwrap();
     close(id).unwrap();
+    assert_eq!(test_invocation(id).err().unwrap().status, CLOSED);
     assert_eq!(
         execute(
-            id,
+            &captured,
             requests::Call::InstallBlacklist {
                 list: vec![9],
                 certificates: vec![10],
-            },
+            }
         )
         .unwrap_err()
         .status,
         CLOSED
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -903,7 +982,24 @@ fn a_local_blacklist_refusal_is_its_own_status_never_invalid_or_a_proof_verdict(
     // A wallet without a local-list owner refuses the install as invalid input.
     struct Bare;
     impl Wallet for Bare {
-        fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+            Ok(maintenance::ReceiptStep::Empty)
+        }
+        fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+            Ok(maintenance::WakeHint::Age(
+                state::DeferredArchiveWakeHintV1::NoAgeWake,
+            ))
+        }
+        fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+            Ok(maintenance::DrainPlan::Finished(
+                state::DeferredArchiveDrainV1::NoWork,
+            ))
+        }
+
+        fn maintenance(&mut self) -> Result<maintenance::View> {
+            Ok(maintenance::View::Released)
+        }
+        fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
             unreachable!()
         }
         fn snapshot(&mut self) -> Result<state::Snapshot> {
@@ -916,6 +1012,9 @@ fn a_local_blacklist_refusal_is_its_own_status_never_invalid_or_a_proof_verdict(
             unreachable!()
         }
         fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            unreachable!()
+        }
+        fn has_pending_operation(&mut self) -> Result<bool> {
             unreachable!()
         }
         fn resume(&mut self) -> Result<Response> {
@@ -1016,7 +1115,14 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     let mut result = WalletResult::default();
     // Unload must first pass review; direct execution never reaches the owner.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_execute_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_execute_v1(
+                handle,
+                test_exchange_id(handle),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1027,7 +1133,11 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     companion.extend_from_slice(&[3, 255, 0, 1]);
     let review = WalletReviewRequest {
         selector: request.selector,
+        expectation: 0,
         amount: request.amount,
+        request_id32: request.request_id,
+        expected_projection: std::ptr::null(),
+        expected_projection_length: 0,
         first: request.first,
         first_length: request.first_length,
         second: companion.as_ptr(),
@@ -1035,7 +1145,14 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
     };
     // The stand-in review owner asserts the exact unsigned amount and charge originals.
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_review_v1(handle, &review, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_review_v1(
+                handle,
+                test_exchange_id(handle),
+                &review,
+                &mut result,
+            )
+        },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1104,7 +1221,14 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                handle,
+                test_setup_exchange_request(handle, &request),
+                &request,
+                &mut result,
+            )
+        },
         0
     );
     assert_eq!(result.status, 12);
@@ -1115,7 +1239,14 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
     crate::connect_norito_free(result.bytes);
     request.token = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                handle,
+                test_setup_exchange_request(handle, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert!(result.bytes.is_null());
@@ -1141,7 +1272,14 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     };
     let mut result = WalletResult::default();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         CLOSED
     );
     assert_eq!(result.status, CLOSED);
@@ -1149,13 +1287,27 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     assert_eq!(result.length, 0);
     request.setup_id = zero.as_ptr();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.setup_id = id.as_ptr();
     request.token = 1;
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     request.token = 0;
@@ -1163,7 +1315,14 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     request.first = overlong.as_ptr();
     request.first_length = overlong.len();
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        unsafe {
+            connect_norito_kagemusha_wallet_setup_v1(
+                0,
+                test_setup_exchange_request(0, &request),
+                &request,
+                &mut result,
+            )
+        },
         INVALID
     );
     assert!(result.bytes.is_null());
@@ -1228,7 +1387,7 @@ fn callback_generation_recovery_preserves_original_none_unavailable_and_bounds()
     let payment = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
     let bytes = payment
         .verifying_key()
-        .to_encoded_point(false)
+        .to_sec1_point(false)
         .as_bytes()
         .to_vec();
     let expected =
@@ -1336,6 +1495,135 @@ fn retained_intake_and_preparation_refusals_map_to_resource_without_reclassifica
 }
 
 #[test]
+fn invalid_state_reasons_report_closed_causes_without_changing_the_refusal() {
+    for (error, reason) in [
+        (state::Error::Invalid("ledger activation unconfirmed"), 200),
+        (state::Error::Invalid("ledger Load request"), 201),
+        (state::Error::Invalid("ledger Load request identity"), 201),
+        (state::Error::Invalid("changed ledger Load request"), 202),
+        (state::Error::Invalid("ledger Load lifecycle"), 203),
+        (state::Error::Invalid("G1 validation"), 204),
+        (state::Error::Invalid("archive encoding"), 205),
+        (state::Error::Invalid("private archive encoding"), 205),
+        (state::Error::Invalid("index object size"), 206),
+        (state::Error::Invalid("index value size"), 206),
+        (state::Error::Invalid("provider handle poisoned"), 207),
+        (state::Error::NoHead, 208),
+        (state::Error::Collected, 209),
+        (state::Error::Invalid("incoming lineage verdict"), 242),
+        (state::Error::Invalid("unlisted private diagnostic"), -1),
+    ] {
+        let failure = Failure::from(error);
+        assert_eq!(
+            failure,
+            Failure {
+                status: INVALID,
+                reason,
+                platform_code: 0
+            }
+        );
+        // The public C projection preserves the closed reason without a diagnostic payload.
+        let mut out = WalletResult::default();
+        let returned = unsafe { exports::output(&mut out, || Err(failure)) };
+        assert_eq!(
+            (returned, out.status, out.reason, out.platform_code),
+            (INVALID, INVALID, reason, 0)
+        );
+        assert_eq!(out.length, 0);
+        assert!(out.bytes.is_null());
+    }
+}
+
+#[test]
+fn invalid_provider_reasons_survive_state_and_enrollment_wrapping() {
+    use advance::KagemushaWalletProviderErrorV1 as E;
+    for (field, reason) in [
+        ("provider handle poisoned", 207),
+        ("archive.manifest_size", 220),
+        ("archive.head_not_released", 221),
+        ("archive.stale_checkpoint", 222),
+        ("archive.immutable_record", 223),
+        ("archive.call_failed", 224),
+        ("marker.archive_checkpoint", 225),
+        ("marker.generation", 226),
+        ("marker.state", 227),
+        ("marker.phase", 228),
+        ("marker.frame", 229),
+        ("marker.selected_generation", 230),
+        ("marker.completion_digest", 231),
+        ("marker.slot", 232),
+        ("marker.anchor_kind", 233),
+        ("marker.superseded", 234),
+        ("marker.retired_generation", 235),
+        ("archive.slot", 237),
+        ("archive.call", 238),
+        ("archive.pending_records", 239),
+        ("archive.record_size", 240),
+        ("archive size", 240),
+        ("current source", 241),
+        ("marker.unlisted private diagnostic", -1),
+        ("archive.unlisted private diagnostic", -1),
+    ] {
+        let error = E::Invalid { field };
+        let expected = Failure {
+            status: INVALID,
+            reason,
+            platform_code: 0,
+        };
+        assert_eq!(Failure::from(error), expected);
+        assert_eq!(Failure::from(state::Error::Provider(error)), expected);
+        assert_eq!(
+            Failure::from(iroha_core_zk::kagemusha_wallet_enrollment_v1::Error::Provider(error)),
+            expected
+        );
+    }
+    let expected = Failure {
+        status: INVALID,
+        reason: 236,
+        platform_code: 0,
+    };
+    assert_eq!(Failure::from(E::NoReplaceUnsupported), expected);
+    assert_eq!(
+        Failure::from(state::Error::Provider(E::NoReplaceUnsupported)),
+        expected
+    );
+    assert_eq!(
+        Failure::from(
+            iroha_core_zk::kagemusha_wallet_enrollment_v1::Error::Provider(E::NoReplaceUnsupported)
+        ),
+        expected
+    );
+}
+
+#[test]
+fn invalid_reason_diagnostics_preserve_every_platform_unavailability_cause() {
+    use advance::{KagemushaWalletProviderErrorV1 as E, KagemushaWalletUnavailableV1 as U};
+    for (cause, reason, platform_code) in [
+        (U::Locked, 0, 0),
+        (U::BeforeFirstUnlock, 1, 0),
+        (U::Busy, 2, 0),
+        (U::Io(17), 3, 17),
+        (U::Platform(-27), 4, -27),
+        (U::KeyUnusable, 5, 0),
+        (U::PermanentlyInvalidated, 6, 0),
+    ] {
+        for (error, status) in [
+            (E::Unavailable(cause), UNAVAILABLE),
+            (E::Uncertain(cause), UNCERTAIN),
+        ] {
+            assert_eq!(
+                Failure::from(error),
+                Failure {
+                    status,
+                    reason,
+                    platform_code
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn custody_failure_reasons_report_only_the_existing_closed_cause() {
     use advance::{KagemushaWalletLostCustodyV1 as L, KagemushaWalletProviderErrorV1 as E};
     for (error, reason) in [
@@ -1414,7 +1702,6 @@ fn custody_failure_reasons_preserve_other_failure_contracts() {
     }
     for (error, status) in [
         (E::NoSpace, NOT_ENOUGH_STORAGE),
-        (E::NoReplaceUnsupported, INVALID),
         (E::Invalid { field: "unchanged" }, INVALID),
         (E::KeyLost, TERMINAL),
         (E::Terminal, TERMINAL),
@@ -1424,12 +1711,126 @@ fn custody_failure_reasons_preserve_other_failure_contracts() {
 }
 
 #[test]
+fn custody_witness_reasons_identify_open_predicates_without_changing_the_refusal() {
+    for (object, reason) in [
+        ("canonical archive record", 131),
+        ("provider archive authentication", 132),
+        ("archive manifest digest", 133),
+        ("archive manifest binding", 134),
+        ("archive manifest publication", 135),
+        ("manifest before bootstrap", 136),
+        ("manifest ahead of custody", 137),
+        ("manifest head conflict", 138),
+        ("indexed boundary", 139),
+        ("indexed boundary head", 140),
+        ("capsule chain", 141),
+        ("duplicate committed operation", 142),
+        ("duplicate committed Send", 143),
+        ("duplicate committed Receive", 144),
+        ("bootstrap boundary", 145),
+        ("selected capsule", 146),
+        ("capsule binding", 147),
+        ("released completion", 148),
+        ("completion binding", 149),
+        ("step metadata", 150),
+        ("indexed sequence", 151),
+        ("step index", 152),
+        ("selected preparation source snapshot", 153),
+        ("changed source custody", 154),
+        ("index object", 155),
+        ("index object digest", 156),
+        ("index node hash", 157),
+        ("index leaf size", 158),
+        ("index branch", 159),
+        ("index publication digest", 160),
+        ("duplicate committed fee claim", 161),
+        ("fee Request original", 162),
+        ("earned fee originals size", 163),
+        ("earned fee originals binding", 164),
+        ("fold head binding", 165),
+        ("fold index gap", 166),
+        ("recorded Ω", 167),
+        ("source-bound Ω identity", 168),
+    ] {
+        let expected = Failure {
+            status: CUSTODY_LOST,
+            reason,
+            platform_code: 0,
+        };
+        assert_eq!(Failure::from(state::Error::WitnessLost(object)), expected);
+        // The real account-finish path wraps coordinator initialization failures.
+        assert_eq!(
+            Failure::from(state::NativeOpenErrorV1::State(state::Error::WitnessLost(
+                object
+            ))),
+            expected
+        );
+    }
+}
+
+#[test]
+fn custody_witness_reason_is_bounded_for_unknown_private_labels_and_preserves_other_errors() {
+    let expected = Failure {
+        status: CUSTODY_LOST,
+        reason: 130,
+        platform_code: 0,
+    };
+    for label in [
+        "unlisted witness predicate",
+        "/private/wallet/slot/0123456789abcdef",
+        "private key or user payload must never appear",
+    ] {
+        let observed = Failure::from(state::Error::WitnessLost(label));
+        assert_eq!(observed, expected);
+        assert!(!format!("{observed:?}").contains(label));
+    }
+    assert_eq!(
+        Failure::from(state::Error::Provider(
+            advance::KagemushaWalletProviderErrorV1::Unavailable(
+                advance::KagemushaWalletUnavailableV1::Io(17)
+            )
+        )),
+        Failure {
+            status: UNAVAILABLE,
+            reason: 3,
+            platform_code: 17,
+        }
+    );
+    assert_eq!(
+        Failure::from(state::Error::Invalid("ledger activation unconfirmed")),
+        Failure::invalid(200)
+    );
+    assert_eq!(Failure::from(state::Error::NoHead), Failure::invalid(208));
+    assert_eq!(
+        Failure::from(state::Error::FoldRequired),
+        Failure::code(FOLD_REQUIRED)
+    );
+}
+
+#[test]
 fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication_failure() {
     struct Bracket {
         events: Vec<&'static str>,
         close_failure: Option<Failure>,
     }
     impl Wallet for Bracket {
+        fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+            Ok(maintenance::ReceiptStep::Empty)
+        }
+        fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+            Ok(maintenance::WakeHint::Age(
+                state::DeferredArchiveWakeHintV1::NoAgeWake,
+            ))
+        }
+        fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+            Ok(maintenance::DrainPlan::Finished(
+                state::DeferredArchiveDrainV1::NoWork,
+            ))
+        }
+
+        fn maintenance(&mut self) -> Result<maintenance::View> {
+            Ok(maintenance::View::Released)
+        }
         fn open_archive_call(&mut self) {
             self.events.push("open");
         }
@@ -1438,7 +1839,7 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
                 .push(if succeeded { "publish" } else { "discard" });
             self.close_failure.map_or(Ok(()), Err)
         }
-        fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        fn setup(&mut self, _exchange_id: u64, _: setup::Setup) -> Result<Response> {
             unreachable!()
         }
         fn snapshot(&mut self) -> Result<state::Snapshot> {
@@ -1451,6 +1852,9 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
             unreachable!()
         }
         fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            unreachable!()
+        }
+        fn has_pending_operation(&mut self) -> Result<bool> {
             unreachable!()
         }
         fn resume(&mut self) -> Result<Response> {

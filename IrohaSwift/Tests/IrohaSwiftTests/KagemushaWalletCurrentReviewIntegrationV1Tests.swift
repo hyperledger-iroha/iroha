@@ -2,6 +2,8 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
+private final class KagemushaWalletReviewOriginV1: @unchecked Sendable {}
+
 /// Unadmitted managed DATA fixtures only; no Native, keys, proof or custody invocation.
 final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
   private func projection(_ selector: UInt8 = 1) -> Data {
@@ -33,13 +35,39 @@ final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
   func testOriginBindingAndAliasCannotReplayToken() throws {
     let owner = KagemushaWalletReviewOriginV1(), another = KagemushaWalletReviewOriginV1()
     let data = try KagemushaWalletReviewProjectionV1(projection())
-    let review = try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:19,sequenceHigh:0,detail:0,bytes:data.bytes).review(origin:owner,expected:.send)
+    let review = try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:19,sequenceHigh:0,detail:0,bytes:data.bytes).readyFixture(origin:owner,expected:.send)
     XCTAssertThrowsError(try review.consume(origin: another))
     let alias = review
     XCTAssertEqual(try alias.consume(origin: owner), 19)
     XCTAssertThrowsError(try review.consume(origin: owner))
-    XCTAssertThrowsError(try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:0,sequenceHigh:0,detail:0,bytes:data.bytes).review(origin:owner,expected:.send))
-    XCTAssertThrowsError(try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:UInt64.max,sequenceHigh:0,detail:0,bytes:data.bytes).review(origin:owner,expected:.send))
+    XCTAssertThrowsError(try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:0,sequenceHigh:0,detail:0,bytes:data.bytes).readyFixture(origin:owner,expected:.send))
+    XCTAssertThrowsError(try KagemushaWalletReviewReplyV1(status:18,reason:-1,platformCode:0,sequenceLow:UInt64.max,sequenceHigh:0,detail:0,bytes:data.bytes).readyFixture(origin:owner,expected:.send))
+  }
+  func testOnlyExactTypedNativePreflightCanRetainTheSameReview() throws {
+    let origin = KagemushaWalletReviewOriginV1(), foreign = KagemushaWalletReviewOriginV1()
+    for reason in [UInt32(1), 2, 6] {
+      let review = try KagemushaWalletReviewReplyV1(status: 18, reason: -1, platformCode: 0,
+        sequenceLow: 19, sequenceHigh: 0, detail: 0, bytes: projection()).readyFixture(origin: origin, expected: .send)
+      let token = try review.consume(origin: origin)
+      let retained = try KagemushaWalletCallV1(status: 65, sequenceLow: token,
+        sequenceHigh: 0, detail: reason, bytes: Data())
+      XCTAssertEqual(KagemushaWalletReviewMaintenanceWaitV1(rawValue: retained.detail)?.rawValue, reason)
+      XCTAssertThrowsError(try retained.completion())
+      XCTAssertThrowsError(try review.retainAfterPreflight(origin: foreign, consumed: token, result: retained))
+      XCTAssertThrowsError(try review.retainAfterPreflight(origin: origin, consumed: token + 1, result: retained))
+      let unknown = try KagemushaWalletCallV1(status: 0, sequenceLow: 0,
+        sequenceHigh: 0, detail: 0, bytes: Data())
+      XCTAssertThrowsError(try review.retainAfterPreflight(origin: origin, consumed: token, result: unknown))
+      try review.retainAfterPreflight(origin: origin, consumed: token, result: retained)
+      XCTAssertThrowsError(try review.retainAfterPreflight(origin: origin, consumed: token, result: retained))
+      XCTAssertThrowsError(try review.consume(origin: foreign))
+      XCTAssertEqual(try review.consume(origin: origin), token)
+      XCTAssertThrowsError(try review.consume(origin: origin))
+    }
+    for reason in [UInt32(0), 3, 4, 5, 7, .max] {
+      XCTAssertThrowsError(try KagemushaWalletCallV1(status: 65, sequenceLow: 19,
+        sequenceHigh: 0, detail: reason, bytes: Data()))
+    }
   }
   func testMalformedProjectionAndCompletionSeparation() throws {
     XCTAssertThrowsError(try KagemushaWalletCallV1(status: 18, sequenceLow: 19, sequenceHigh: 0, detail: 0, bytes: projection()))
@@ -57,29 +85,29 @@ final class KagemushaWalletCurrentReviewIntegrationV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletReviewProjectionV1(changed))
   }
   func testFixedInputBoundsAndForeignFieldRefusal() throws {
-    _ = try KagemushaWalletReviewInputV1(selector: 1, first: Data(repeating: 1, count: 10_034), second: Data(repeating: 2, count: 4_096))
-    _ = try KagemushaWalletReviewInputV1(selector: 8, amount: .init(low: UInt64.max, high: UInt64.max))
-    _ = try KagemushaWalletReviewInputV1(selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: KagemushaWalletUnloadChargeReviewV1.encode(certificates: Data(repeating: 1, count: 10_034), beneficiary: Data(repeating: 2, count: 4_096)))
+    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_034), second: Data(repeating: 2, count: 4_096))
+    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: UInt64.max, high: UInt64.max))
+    _ = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_024), second: KagemushaWalletUnloadChargeReviewV1.encode(certificates: Data(repeating: 1, count: 10_034), beneficiary: Data(repeating: 2, count: 4_096)))
     let makers: [() throws -> KagemushaWalletReviewInputV1] = [
-      { try .init(selector: 2, first: Data([1])) },
-      { try .init(selector: 1) },
-      { try .init(selector: 1, first: Data(repeating: 1, count: 10_035), second: Data([1])) },
-      { try .init(selector: 1, amount: .init(low: 1, high: 0), first: Data([1]), second: Data([1])) },
-      { try .init(selector: 1, first: Data([1])) },
-      { try .init(selector: 1, second: Data([1])) },
-      { try .init(selector: 1, first: Data([1]), second: Data(repeating: 2, count: 4_097)) },
-      { try .init(selector: 8) },
-      { try .init(selector: 8, amount: .init(low: 1, high: 0), first: Data([1])) },
-      { try .init(selector: 8, amount: .init(low: 1, high: 0), second: Data([1])) },
-      { try .init(selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_025), second: Data([1])) },
-      { try .init(selector: 8, amount: .init(low: 1, high: 0), first: Data([1]), second: Data(repeating: 1, count: 10_001)) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 2, first: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data(repeating: 1, count: 10_035), second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, amount: .init(low: 1, high: 0), first: Data([1]), second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: Data([1]), second: Data(repeating: 2, count: 4_097)) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data(repeating: 1, count: 1_025), second: Data([1])) },
+      { try .init(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 8, amount: .init(low: 1, high: 0), first: Data([1]), second: Data(repeating: 1, count: 10_035)) },
     ]
     for make in makers { XCTAssertThrowsError(try make()) }
   }
   func testReviewIntakeKeepsExactCOriginals() throws {
     var request = Data(repeating: 7, count: 10_034)
     var account = Data(repeating: 9, count: 4_096)
-    let input = try KagemushaWalletReviewInputV1(selector: 1, first: request, second: account)
+    let input = try KagemushaWalletReviewInputV1(requestID: Data(repeating: 1, count: 32), expectation: .fresh, selector: 1, first: request, second: account)
     request[0] = 0; account[0] = 0
     input.withRequest { value in
       XCTAssertEqual(value.pointee.selector, 1)

@@ -44,7 +44,7 @@ use TransitionError as Error;
 
 /// Exact deterministic subject value, carrying no verified proof or serving capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum GatewayCheckedValueV1 {
+pub enum GatewayCheckedValueV1 {
     /// Current qualification; enabled admission is a separate predicate.
     Qualification,
     /// Immutable original admission with its exact current delivery state; never serving evidence.
@@ -61,7 +61,7 @@ pub(crate) enum GatewayCheckedValueV1 {
 
 /// Same-World inputs and subject claim; no cryptographic finality is implied.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GatewayCheckedReadV1 {
+pub struct GatewayCheckedReadV1 {
     /// Independently selected current policy and operational head.
     pub current: GatewayCurrentV1,
     /// Exact requested value at this read cut.
@@ -71,14 +71,14 @@ pub(crate) struct GatewayCheckedReadV1 {
 fn has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    permission: Permission,
+    permission: &Permission,
 ) -> bool {
     world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
+        && (world.account_contains_inherent_permission(authority, permission)
             || world
                 .account_roles_iter(authority)
                 .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
+                .any(|role| role.permissions().any(|token| token == permission)))
 }
 
 fn current(
@@ -139,12 +139,12 @@ fn roles(
         || !has_permission(
             state.world(),
             &check.expected_observer,
-            CanCheckSorafsStreamTokenGateway { gateway_id }.into(),
+            &(CanCheckSorafsStreamTokenGateway { gateway_id }.into()),
         )
         || !has_permission(
             state.world(),
             &check.expected_operator,
-            CanOperateSorafsStreamTokenGateway { gateway_id }.into(),
+            &(CanOperateSorafsStreamTokenGateway { gateway_id }.into()),
         )
     {
         return Err(Error::BindingMismatch);
@@ -175,7 +175,7 @@ fn committed_cut(
 }
 
 /// Read a retained admission from the same exact current World and actual committed cut.
-pub(crate) fn read_admission(
+pub fn read_admission(
     state: &impl StateReadOnly,
     current: &GatewayCurrentV1,
     sequence: u64,
@@ -214,7 +214,7 @@ fn exact_current(state: &impl StateReadOnly, current: &GatewayCurrentV1) -> Resu
 
 /// Construct the exact complete oldest-pending prefix before committing an independent challenge.
 /// This construction does not authorize a caller or authenticate a remote readback.
-pub(crate) fn read_pending(
+pub fn read_pending(
     state: &impl StateReadOnly,
     current: &GatewayCurrentV1,
     max_items: u32,
@@ -385,7 +385,7 @@ fn subject(
 
 /// Re-evaluate current policy, permissions and exact subject at an independently sampled time.
 /// The caller must still authenticate the signed challenged Check and historical executions.
-pub(crate) fn evaluate_current(
+pub fn evaluate_current(
     state: &impl StateReadOnly,
     request: &Request,
     now_ms: u64,
@@ -404,7 +404,7 @@ pub(crate) fn evaluate_current(
 /// first verify durable floor, Check and original-history evidence outside its publication lease,
 /// then bind this fresh State view to that same proven source and lease generation. The returned
 /// claim is not a proof or capability and cannot replace that verification.
-pub(crate) fn evaluate_current_rows(
+pub fn evaluate_current_rows(
     state: &impl StateReadOnly,
     request: &Request,
     now_ms: u64,
@@ -422,7 +422,7 @@ pub(crate) fn evaluate_current_rows(
 
 /// Evaluate the exact direct native Check without writing any World row.
 /// Native authorization must derive `execution` from the actual signed source instruction.
-pub(crate) fn evaluate_check(
+pub fn evaluate_check(
     tx: &StateTransaction<'_, '_>,
     request: &Request,
     execution: &Execution,

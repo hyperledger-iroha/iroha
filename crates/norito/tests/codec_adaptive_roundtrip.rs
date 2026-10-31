@@ -5,7 +5,7 @@ use norito::{
         DecodeFlagsGuard, {self},
     },
 };
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 type SampleEntry = (u16, Vec<u8>, Vec<Vec<u8>>, Option<String>);
 type Sample = Vec<SampleEntry>;
 fn random_sample(rng: &mut StdRng) -> Sample {

@@ -20,10 +20,7 @@ use crate::{
 };
 use iroha_crypto::{
     Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key,
-    blake2::{
-        Blake2bVar,
-        digest::{Update as Blake2Update, VariableOutput},
-    },
+    blake2::{Blake2b, digest::consts::U32},
 };
 use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
@@ -1558,19 +1555,6 @@ pub(crate) const fn allocation_gas(bytes: u64) -> u64 {
         bytes.saturating_add(gas::ALLOCATION_GAS_WORD_BYTES - 1) / gas::ALLOCATION_GAS_WORD_BYTES,
     )
 }
-/// Return whether a syscall belongs to the optional ShangMi family.
-#[must_use]
-pub(crate) const fn is_sm_syscall(number: u32) -> bool {
-    matches!(
-        number,
-        syscalls::SYSCALL_SM3_HASH
-            | syscalls::SYSCALL_SM2_VERIFY
-            | syscalls::SYSCALL_SM4_GCM_SEAL
-            | syscalls::SYSCALL_SM4_GCM_OPEN
-            | syscalls::SYSCALL_SM4_CCM_SEAL
-            | syscalls::SYSCALL_SM4_CCM_OPEN
-    )
-}
 /// Compute exact, side-effect-free gas quotes for VM-local helper syscalls
 /// shared by the standalone, core, and world-state hosts.
 ///
@@ -1906,7 +1890,6 @@ pub struct DefaultHost {
     axt_policy: std::sync::Arc<dyn axt::AxtPolicy>,
     fastpq_batch_active: bool,
     fastpq_batch_has_entries: bool,
-    sm_enabled: bool,
     current_time_ms: u64,
     current_block_height: u64,
     access_log: AccessLog,
@@ -1941,7 +1924,6 @@ impl DefaultHost {
             axt_policy: std::sync::Arc::new(axt::AllowAllAxtPolicy),
             fastpq_batch_active: false,
             fastpq_batch_has_entries: false,
-            sm_enabled: false,
             current_time_ms: 0,
             current_block_height: 0,
             access_log: AccessLog::default(),
@@ -2124,15 +2106,6 @@ impl DefaultHost {
     pub fn set_network_id(&mut self, network_id: iroha_data_model::NetworkId) {
         self.network_id = Some(network_id);
     }
-    /// Enable or disable SM helper syscalls for this host.
-    pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
-        self.sm_enabled = enabled;
-        self
-    }
-    /// Toggle SM helper support at runtime.
-    pub fn set_sm_enabled(&mut self, enabled: bool) {
-        self.sm_enabled = enabled;
-    }
     /// Set the deterministic block time returned by time syscalls.
     pub fn set_current_time_ms(&mut self, time_ms: u64) {
         self.current_time_ms = time_ms;
@@ -2300,14 +2273,7 @@ impl DefaultHost {
         vm.alloc_host_tlv(&out)
     }
     fn blake2b256(payload: &[u8]) -> [u8; 32] {
-        let mut digest = [0u8; 32];
-        let mut hasher =
-            Blake2bVar::new(32).expect("32-byte Blake2b output size must be supported");
-        hasher.update(payload);
-        hasher
-            .finalize_variable(&mut digest)
-            .expect("fixed Blake2b output buffer has the requested length");
-        digest
+        Blake2b::<U32>::digest(payload).into()
     }
     fn hash_syscall_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
@@ -2626,10 +2592,6 @@ impl IVMHost for DefaultHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if metering.metering == SyscallMetering::Staged {
-            return Ok(0);
-        }
-        if is_sm_syscall(number) && !self.sm_enabled {
-            // Disabled ShangMi helpers fail before doing metered work.
             return Ok(0);
         }
         if let Some(quote) = common_syscall_gas_quote(number, vm)? {
@@ -3942,9 +3904,6 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_SM3_HASH => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
@@ -4019,9 +3978,6 @@ impl IVMHost for DefaultHost {
                 Ok(Self::hash_syscall_gas(payload_len))
             }
             crate::syscalls::SYSCALL_SM2_VERIFY => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let msg_tlv = vm.validate_tlv(vm.register(10))?;
                 let sig_tlv = vm.validate_tlv(vm.register(11))?;
                 let pk_tlv = vm.validate_tlv(vm.register(12))?;
@@ -4043,11 +3999,11 @@ impl IVMHost for DefaultHost {
                         return Err(VMError::NoritoInvalid);
                     }
                     input_len = input_len.saturating_add(distid_tlv.payload.len());
-                    std::str::from_utf8(distid_tlv.payload)
-                        .map(|s| s.to_owned())
-                        .map_err(|_| VMError::NoritoInvalid)?
+                    std::str::from_utf8(distid_tlv.payload).map_err(|_| VMError::NoritoInvalid)?
                 } else {
-                    Sm2PublicKey::default_distid()
+                    // An omitted ABI operand has one protocol meaning on all nodes.
+                    // The process default is only a key-generation convenience.
+                    Sm2PublicKey::DEFAULT_DISTID
                 };
                 let gas = Self::verify_gas(input_len);
                 let msg = msg_tlv.payload;
@@ -4065,7 +4021,7 @@ impl IVMHost for DefaultHost {
                         return Ok(gas);
                     }
                 };
-                let public_key = match Sm2PublicKey::from_sec1_bytes(&distid, pk_tlv.payload) {
+                let public_key = match Sm2PublicKey::from_sec1_bytes(distid, pk_tlv.payload) {
                     Ok(pk) => pk,
                     Err(_) => {
                         vm.set_register(10, 0);
@@ -4077,9 +4033,6 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_SM4_GCM_SEAL => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let key_tlv = vm.validate_tlv(vm.register(10))?;
                 let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
@@ -4129,9 +4082,6 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_SM4_GCM_OPEN => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let key_tlv = vm.validate_tlv(vm.register(10))?;
                 let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
@@ -4187,9 +4137,6 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_SM4_CCM_SEAL => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let key_tlv = vm.validate_tlv(vm.register(10))?;
                 let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
@@ -4237,9 +4184,6 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_SM4_CCM_OPEN => {
-                if !self.sm_enabled {
-                    return Err(VMError::PermissionDenied);
-                }
                 let key_tlv = vm.validate_tlv(vm.register(10))?;
                 let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
@@ -6660,7 +6604,7 @@ mod tests {
             .expect("unsupported scheme still reports processed gas");
         assert!(actual <= quote);
         let mut vm = IVM::new(u64::MAX);
-        let mut host = DefaultHost::new().with_sm_enabled(true);
+        let mut host = DefaultHost::new();
         for (register, payload) in [
             (10, Vec::new()),
             (11, Vec::new()),
@@ -6716,7 +6660,7 @@ mod tests {
                 Err(VMError::NoritoInvalid)
             ));
             assert_eq!(vm.register(10), message);
-            let mut sm_host = DefaultHost::new().with_sm_enabled(true);
+            let mut sm_host = DefaultHost::new();
             assert!(matches!(
                 sm_host.syscall(syscalls::SYSCALL_SM2_VERIFY, &mut vm),
                 Err(VMError::NoritoInvalid)
@@ -6830,13 +6774,13 @@ mod tests {
         assert_eq!(actual, quote);
     }
     #[test]
-    fn disabled_and_unknown_syscall_quotes_fail_closed_without_over_reserving() {
+    fn malformed_sm_and_unknown_syscall_quotes_fail_closed() {
         let vm = IVM::new(u64::MAX);
         let host = DefaultHost::new();
-        assert!(matches!(
-            host.prepare_syscall(syscalls::SYSCALL_SM3_HASH, &vm),
-            Ok(0)
-        ));
+        let error = host
+            .prepare_syscall(syscalls::SYSCALL_SM3_HASH, &vm)
+            .expect_err("SM quoting validates the input even on a new host");
+        assert!(!matches!(error, VMError::PermissionDenied));
         assert_eq!(
             (host.prepare_syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &vm))
                 .expect("expected successful fixture result"),
@@ -6864,7 +6808,7 @@ mod tests {
         }
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let mut host = DefaultHost::new().with_sm_enabled(true);
+        let mut host = DefaultHost::new();
         let key = [0x11u8; 16];
         let nonce = [0x22u8; 12];
         let aad = b"aad";

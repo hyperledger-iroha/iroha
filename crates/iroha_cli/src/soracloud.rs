@@ -7,7 +7,7 @@
 //! weight-lifecycle helpers also use live Torii endpoints. Outbound mutation DTOs
 //! carry signed provenance only; single-signature account headers use canonical
 //! lowercase hex while signed bodies and paths retain I105. Protected GETs
-//! require the exact NetworkId and local key.
+//! require the exact `NetworkId` and local key.
 use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
 #[cfg(test)]
@@ -120,8 +120,8 @@ use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
-    rand_core::{TryCryptoRng, TryRngCore as _},
-    rngs::OsRng,
+    rand_core::{TryCryptoRng, TryRng as _},
+    rngs::SysRng,
 };
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -623,9 +623,9 @@ impl Command {
         match self {
             Self::App(command) => command.allows_fallback_config(),
             Self::Service(command) => command.allows_fallback_config(),
-            Self::Model(command) => command.allows_fallback_config(),
-            Self::Hf(command) => command.allows_fallback_config(),
-            Self::Agent(command) => command.allows_fallback_config(),
+            Self::Model(_) => ModelCommand::allows_fallback_config(),
+            Self::Hf(_) => HfCommand::allows_fallback_config(),
+            Self::Agent(_) => AgentCommand::allows_fallback_config(),
         }
     }
 }
@@ -919,7 +919,7 @@ impl ServiceCommand {
     }
 }
 impl AgentCommand {
-    fn allows_fallback_config(&self) -> bool {
+    fn allows_fallback_config() -> bool {
         false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -967,7 +967,7 @@ impl AgentCommand {
     }
 }
 impl ModelCommand {
-    fn allows_fallback_config(&self) -> bool {
+    fn allows_fallback_config() -> bool {
         false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -1012,7 +1012,7 @@ impl ModelCommand {
     }
 }
 impl HfCommand {
-    fn allows_fallback_config(&self) -> bool {
+    fn allows_fallback_config() -> bool {
         false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -1059,7 +1059,7 @@ enum InitTemplate {
     Baseline,
     /// Generate a hosted HTTP Soracloud starter that targets Inrou.
     HttpService,
-    /// Generate a Vue3/Vite static SPA starter with SoraFS publish workflow.
+    /// Generate a Vue3/Vite static SPA starter with `SoraFS` publish workflow.
     Site,
     /// Generate a Vue3 SPA + API starter with deterministic challenge-signature auth.
     Webapp,
@@ -1100,7 +1100,7 @@ impl InitArgs {
         )?)?;
         let mut service =
             load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
-        apply_init_template_defaults(self.template, &service_name, &mut service, &mut container)?;
+        apply_init_template_defaults(self.template, &service_name, &mut service, &mut container);
         service.service_name = service_name;
         service.service_version = service_version;
         let container_hash = container.workspace_hash()?;
@@ -1307,8 +1307,7 @@ impl LocalDevArgs {
             resolve_service_workspace_script(&self.container, &self.service, "dev.sh")?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let command = vec!["./dev.sh".to_owned()];
         if self.dry_run {
             return Ok(ServiceWorkspaceScriptOutput {
@@ -1378,9 +1377,10 @@ impl LocalDevArgs {
             });
         }
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "local dev script `{}` exited with status {rendered_status}",
                 script_path.display()
@@ -1447,8 +1447,7 @@ impl BuildAndSyncArgs {
             resolve_service_workspace_script(&self.container, &self.service, "build-and-sync.sh")?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let command = vec!["./build-and-sync.sh".to_owned()];
         if self.dry_run {
             return Ok(ServiceWorkspaceScriptOutput {
@@ -1488,9 +1487,10 @@ impl BuildAndSyncArgs {
             })?;
         let exit_status = status.code();
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "build-and-sync script `{}` exited with status {rendered_status}",
                 script_path.display()
@@ -1579,8 +1579,7 @@ impl WorkspaceMutationArgs {
             resolve_service_workspace_script(&self.container, &self.service, script_name)?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
         let initial_configs =
             canonicalize_cli_arg_path(self.initial_configs.as_deref(), "--initial-configs")?;
@@ -1660,9 +1659,10 @@ impl WorkspaceMutationArgs {
         })?;
         let exit_status = status.code();
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "{} script `{}` exited with status {rendered_status}",
                 mode.label_lowercase(),
@@ -1777,8 +1777,8 @@ impl AppInitArgs {
             .parse()
             .wrap_err("invalid derived api service name for soracloud app scaffold")?;
         container.runtime = SoraContainerRuntimeV1::Ivm;
-        container.bundle_path = "/bundles/api-service.to".to_owned();
-        container.entrypoint = "main".to_owned();
+        "/bundles/api-service.to".clone_into(&mut container.bundle_path);
+        "main".clone_into(&mut container.entrypoint);
         container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
         container
             .env
@@ -1792,7 +1792,7 @@ impl AppInitArgs {
         container.capabilities.allow_model_training = false;
         container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
         service.service_name = api_service_name.clone();
-        service.service_version = self.app_version.clone();
+        service.service_version.clone_from(&self.app_version);
         service.route = Some(SoraRouteTargetV1 {
             host: host.clone(),
             path_prefix: "/api".to_owned(),
@@ -1977,7 +1977,7 @@ define_torii_args! {
         /// Path to a `SoracloudAppManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
         manifest: PathBuf,
-        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Exact Unix-second retention boundary embedded in every `SoraFS` manifest in this release.
         /// Reuse the same value for every retry; it must remain ahead of consensus time.
         #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
         sorafs_retention_epoch: NonZeroU64,
@@ -2631,10 +2631,12 @@ impl AppStatusArgs {
                 app_phase_report("status", ok, notes.clone()),
                 skipped_app_phase("verify", "status reports control-plane presence only"),
             ],
-            None,
-            routes.clone(),
-            app_report_services_from_status(&services),
-            manifest.static_site.clone(),
+            AppReportInfrastructure {
+                app_infra_manifest_hash: None,
+                routes: routes.clone(),
+                services: app_report_services_from_status(&services),
+                static_site: manifest.static_site.clone(),
+            },
             blockers.clone(),
             if ok {
                 "No app status blockers found.".to_owned()
@@ -2728,15 +2730,17 @@ impl AppDoctorArgs {
                     && site.mount_path == "/"
                     && site.api_base_path.as_deref() == Some("/api")
             }),
-            match static_site {
-                Some(site) => format!(
-                    "publish_mode={} mount_path={} api_base_path={}",
-                    site.publish_mode,
-                    site.mount_path,
-                    site.api_base_path.as_deref().unwrap_or("<none>")
-                ),
-                None => "app manifest has no static_site section".to_owned(),
-            },
+            static_site.map_or_else(
+                || "app manifest has no static_site section".to_owned(),
+                |site| {
+                    format!(
+                        "publish_mode={} mount_path={} api_base_path={}",
+                        site.publish_mode,
+                        site.mount_path,
+                        site.api_base_path.as_deref().unwrap_or("<none>")
+                    )
+                },
+            ),
         );
         let hosted_services = plan
             .services
@@ -2800,15 +2804,14 @@ impl AppDoctorArgs {
             push_check(
                 &format!("bundle_file:{}", service_ref.service_name),
                 bundle_exists,
-                service_ref
-                    .bundle_file
-                    .as_deref()
-                    .map(|path| {
+                service_ref.bundle_file.as_deref().map_or_else(
+                    || "<none>".to_owned(),
+                    |path| {
                         resolve_manifest_path(&manifest_dir, path)
                             .display()
                             .to_string()
-                    })
-                    .unwrap_or_else(|| "<none>".to_owned()),
+                    },
+                ),
             );
             let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
             let bundle_is_in_service_workspace = service_workspace_dir
@@ -2984,10 +2987,12 @@ impl AppDoctorArgs {
                 skipped_app_phase("status", "app doctor does not query live status"),
                 skipped_app_phase("verify", "app doctor verifies local release readiness only"),
             ],
-            None,
-            plan.routes.clone(),
-            app_report_services_from_plan(&plan.services),
-            manifest.static_site.clone(),
+            AppReportInfrastructure {
+                app_infra_manifest_hash: None,
+                routes: plan.routes.clone(),
+                services: app_report_services_from_plan(&plan.services),
+                static_site: manifest.static_site.clone(),
+            },
             blockers,
             if ok {
                 "Run `iroha soracloud app release` to publish and submit the app.".to_owned()
@@ -3038,7 +3043,7 @@ pub struct InrouServicePreseedArgs {
     /// Exact Unix-second retention identity reused by the later online publication.
     #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
     sorafs_retention_epoch: NonZeroU64,
-    /// Exact validator account, active peer identity, and offline SoraFS store root.
+    /// Exact validator account, active peer identity, and offline `SoraFS` store root.
     #[arg(long = "inrou-preseed-target", value_name = "VALIDATOR,PEER,PATH")]
     inrou_preseed_targets: Vec<InrouOperatorPreseedTargetArg>,
     /// Exact common configured capacity of every selected store.
@@ -3133,7 +3138,7 @@ pub struct InrouAppPreseedArgs {
     /// Exact Unix-second retention identity reused by the later online release.
     #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
     sorafs_retention_epoch: NonZeroU64,
-    /// Exact validator account, active peer identity, and offline SoraFS store root.
+    /// Exact validator account, active peer identity, and offline `SoraFS` store root.
     #[arg(long = "inrou-preseed-target", value_name = "VALIDATOR,PEER,PATH")]
     inrou_preseed_targets: Vec<InrouOperatorPreseedTargetArg>,
     /// Exact common configured capacity of every selected store.
@@ -3274,7 +3279,7 @@ pub struct AppReleaseArgs {
     /// Path to a `SoracloudAppManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
-    /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+    /// Exact Unix-second retention boundary embedded in every `SoraFS` manifest in this release.
     /// Reuse the same value for every retry; it must remain ahead of consensus time.
     #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
     sorafs_retention_epoch: NonZeroU64,
@@ -3338,10 +3343,7 @@ impl AppReleaseArgs {
                     skipped_app_phase("status", "dry-run does not query live status"),
                     skipped_app_phase("verify", "dry-run reports the planned release only"),
                 ],
-                None,
-                plan.routes.clone(),
-                app_report_services_from_plan(&plan.services),
-                None,
+                AppReportInfrastructure { app_infra_manifest_hash: None, routes: plan.routes.clone(), services: app_report_services_from_plan(&plan.services), static_site: None },
                 vec!["dry-run did not build, publish, submit, reconcile, or live-verify the release".to_owned()],
                 "Run `iroha soracloud app simulate` for a local non-mutating readiness report or `iroha soracloud app release` without --dry-run to deploy.".to_owned(),
             );
@@ -3443,10 +3445,12 @@ impl AppReleaseArgs {
                         .collect(),
                 ),
             ],
-            app_infra_manifest_hash,
-            plan.routes.clone(),
-            app_report_services_from_plan(&plan.services),
-            None,
+            AppReportInfrastructure {
+                app_infra_manifest_hash,
+                routes: plan.routes.clone(),
+                services: app_report_services_from_plan(&plan.services),
+                static_site: None,
+            },
             status_response.report.blockers.clone(),
             if status_response.report.ok {
                 "Release submitted, reconciled against authoritative status, and passed live route/health verification.".to_owned()
@@ -3549,10 +3553,12 @@ impl AppSimulateArgs {
                 skipped_app_phase("status", "simulate never queries live Torii status"),
                 skipped_app_phase("verify", "simulate reports release readiness only"),
             ],
-            None,
-            plan.routes.clone(),
-            app_report_services_from_plan(&plan.services),
-            manifest.static_site.clone(),
+            AppReportInfrastructure {
+                app_infra_manifest_hash: None,
+                routes: plan.routes.clone(),
+                services: app_report_services_from_plan(&plan.services),
+                static_site: manifest.static_site.clone(),
+            },
             Vec::new(),
             "Run `iroha soracloud app release` against a Torii URL to publish and submit."
                 .to_owned(),
@@ -3584,8 +3590,7 @@ impl AppLocalDevArgs {
         let script_path = resolve_app_root_script(self.manifest.as_path(), "dev.sh")?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let command = vec!["./dev.sh".to_owned()];
         if self.dry_run {
             return Ok(AppLocalDevOutput {
@@ -3648,9 +3653,10 @@ impl AppLocalDevArgs {
             });
         }
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "local dev script `{}` exited with status {rendered_status}",
                 script_path.display()
@@ -3693,8 +3699,7 @@ impl AppBuildAndSyncArgs {
         let script_path = resolve_app_root_script(self.manifest.as_path(), "build-and-sync.sh")?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let command = vec!["./build-and-sync.sh".to_owned()];
         if self.dry_run {
             let plan = build_app_local_plan_output(self.manifest.as_path())?;
@@ -3731,9 +3736,10 @@ impl AppBuildAndSyncArgs {
             })?;
         let exit_status = status.code();
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "build-and-sync script `{}` exited with status {rendered_status}",
                 script_path.display()
@@ -3791,8 +3797,7 @@ impl AppReleaseWorkspaceArgs {
         let script_path = resolve_app_root_script(self.manifest.as_path(), "release.sh")?;
         let working_dir = script_path
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
         let command = build_app_release_workspace_command(self.timeout_secs);
         let mut notes = plan.notes;
@@ -3850,9 +3855,10 @@ impl AppReleaseWorkspaceArgs {
         })?;
         let exit_status = status.code();
         if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let rendered_status = exit_status.map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| code.to_string(),
+            );
             return Err(eyre!(
                 "release script `{}` exited with status {rendered_status}",
                 script_path.display()
@@ -3887,8 +3893,7 @@ impl AppReleaseWorkspaceArgs {
 fn resolve_app_root_script(manifest_path: &Path, script_name: &str) -> Result<PathBuf> {
     let manifest_dir = manifest_path
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let script_path = manifest_dir.join(script_name);
     if !script_path.is_file() {
         return Err(eyre!(
@@ -4057,12 +4062,10 @@ fn resolve_service_workspace_script(
 ) -> Result<PathBuf> {
     let container_dir = container_manifest
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let service_dir = service_manifest
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     if container_dir != service_dir {
         return Err(eyre!(
             "container manifest `{}` and service manifest `{}` must share a parent directory for workspace script resolution",
@@ -4092,8 +4095,7 @@ fn build_service_workspace_plan(
 ) -> Result<ServiceWorkspacePlan> {
     let container_dir = container_manifest
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let container: UnpublishedContainerManifestV1 = load_json(container_manifest)?;
     let service: SoraServiceManifestV1 = load_json(service_manifest)?;
     let bundle = UnpublishedDeploymentBundleV1 {
@@ -4213,16 +4215,30 @@ fn build_service_local_plan_output(
         notes: plan.notes,
     })
 }
+struct ServiceManifestPaths<'a> {
+    container_manifest: &'a Path,
+    service_manifest: &'a Path,
+}
+
+struct ServiceMutationPublication {
+    public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
+    bundle: ServiceBundlePublishOutput,
+    inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
+}
 fn build_direct_service_mutation_output(
-    container_manifest: &Path,
-    service_manifest: &Path,
+    ServiceManifestPaths {
+        container_manifest,
+        service_manifest,
+    }: ServiceManifestPaths<'_>,
     plan: ServiceWorkspacePlan,
     mode: MutationMode,
     torii_url: &str,
     uses_api_token: bool,
-    published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
-    published_bundle: ServiceBundlePublishOutput,
-    published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
+    ServiceMutationPublication {
+        public_discovery: published_public_discovery,
+        bundle: published_bundle,
+        inrou_guest_images: published_inrou_guest_images,
+    }: ServiceMutationPublication,
     response: norito::json::Value,
 ) -> ServiceMutationOutput {
     let mut notes = plan.notes;
@@ -4316,15 +4332,23 @@ fn app_report_services_from_status(
         })
         .collect()
 }
+struct AppReportInfrastructure {
+    app_infra_manifest_hash: Option<Hash>,
+    routes: Vec<AppLocalRoutePlanOutput>,
+    services: Vec<SoracloudAppReportServiceV1>,
+    static_site: Option<SoracloudAppStaticSiteV1>,
+}
 fn build_soracloud_app_report(
     app_name: String,
     manifest_path: String,
     ok: bool,
     phases: Vec<SoracloudAppPhaseReportV1>,
-    app_infra_manifest_hash: Option<Hash>,
-    routes: Vec<AppLocalRoutePlanOutput>,
-    services: Vec<SoracloudAppReportServiceV1>,
-    static_site: Option<SoracloudAppStaticSiteV1>,
+    AppReportInfrastructure {
+        app_infra_manifest_hash,
+        routes,
+        services,
+        static_site,
+    }: AppReportInfrastructure,
     blockers: Vec<String>,
     next_action: String,
 ) -> SoracloudAppReportV1 {
@@ -4387,8 +4411,7 @@ struct AppRootProjection {
 fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<AppRootProjection> {
     let manifest_dir = manifest_path
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let public_origin = normalize_app_public_origin_url(public_url, manifest_path)?;
     let hostname = public_origin
         .host_str()
@@ -4412,8 +4435,7 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
     manifest.validate()?;
     let manifest_dir = manifest_path
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let root = build_app_root_projection(manifest_path, &manifest.public_url)?;
     let frontend = build_app_frontend_projection(
         &manifest.public_url,
@@ -4605,7 +4627,7 @@ define_torii_args! {
         /// Canonical service bundle bytes to publish before submitting the deployment.
         #[arg(long, value_name = "PATH")]
         bundle_file: PathBuf,
-        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Exact Unix-second retention boundary embedded in every `SoraFS` manifest in this release.
         /// Reuse the same value for every retry; it must remain ahead of consensus time.
         #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
         sorafs_retention_epoch: NonZeroU64,
@@ -4765,22 +4787,28 @@ macro_rules! impl_service_bundle_mutation {
                     initial_service_configs,
                     initial_service_secrets,
                     precondition,
-                    &torii_url,
-                    self.api_token.as_deref(),
-                    self.timeout_secs,
-                    authority,
-                    key_pair,
+                    SoracloudMutationTarget {
+                        torii_url: &torii_url,
+                        api_token: self.api_token.as_deref(),
+                        timeout_secs: self.timeout_secs,
+                        authority,
+                        key_pair,
+                    },
                 )?;
                 Ok(build_direct_service_mutation_output(
-                    &self.container,
-                    &self.service,
+                    ServiceManifestPaths {
+                        container_manifest: &self.container,
+                        service_manifest: &self.service,
+                    },
                     plan,
                     mode,
                     &torii_url,
                     self.api_token.is_some(),
-                    published_public_discovery,
-                    published_bundle,
-                    inrou_guest_images,
+                    ServiceMutationPublication {
+                        public_discovery: published_public_discovery,
+                        bundle: published_bundle,
+                        inrou_guest_images,
+                    },
                     response,
                 ))
             }
@@ -4803,7 +4831,7 @@ define_torii_args! {
         /// Canonical service bundle bytes to publish before submitting the upgrade.
         #[arg(long, value_name = "PATH")]
         bundle_file: PathBuf,
-        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Exact Unix-second retention boundary embedded in every `SoraFS` manifest in this release.
         /// Reuse the same value for every retry; it must remain ahead of consensus time.
         #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
         sorafs_retention_epoch: NonZeroU64,
@@ -5192,7 +5220,7 @@ impl RollbackArgs {
             self.timeout_secs,
         )?;
         let mut output =
-            build_service_mutation_output(payload, &status_payload, &service_name, "Rollback")?;
+            build_service_mutation_output(&payload, &status_payload, &service_name, "Rollback")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -5266,7 +5294,7 @@ impl RolloutArgs {
             self.timeout_secs,
         )?;
         let mut output =
-            build_service_mutation_output(payload, &status_payload, &service_name, "Rollout")?;
+            build_service_mutation_output(&payload, &status_payload, &service_name, "Rollout")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -5313,7 +5341,7 @@ impl AgentDeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_agent_mutation_output(payload, &status_payload, &apartment_name, "Deploy")
+        build_agent_mutation_output(&payload, &status_payload, &apartment_name, "Deploy")
     }
 }
 define_live_mutation_args! {
@@ -5348,7 +5376,12 @@ impl AgentLeaseRenewArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "LeaseRenew")
+        build_agent_mutation_output(
+            &payload,
+            &status_payload,
+            &self.apartment_name,
+            "LeaseRenew",
+        )
     }
 }
 define_live_mutation_args! {
@@ -5376,7 +5409,7 @@ impl AgentRestartArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "Restart")
+        build_agent_mutation_output(&payload, &status_payload, &self.apartment_name, "Restart")
     }
 }
 define_torii_args! {
@@ -5442,7 +5475,7 @@ impl AgentWalletSpendArgs {
             self.timeout_secs,
         )?;
         build_wallet_spend_output(
-            payload,
+            &payload,
             &status_payload,
             &self.apartment_name,
             &self.request_id,
@@ -5483,7 +5516,7 @@ impl AgentWalletApproveArgs {
             self.timeout_secs,
         )?;
         build_agent_mutation_output(
-            payload,
+            &payload,
             &status_payload,
             &self.apartment_name,
             "WalletSpendApproved",
@@ -5528,7 +5561,7 @@ impl AgentPolicyRevokeArgs {
             self.timeout_secs,
         )?;
         build_agent_mutation_output(
-            payload,
+            &payload,
             &status_payload,
             &self.apartment_name,
             "PolicyRevoked",
@@ -5580,7 +5613,7 @@ impl AgentMessageSendArgs {
             self.timeout_secs,
         )?;
         build_message_send_output(
-            payload,
+            &payload,
             &mailbox_status_payload,
             &known_message_ids,
             &self.from_apartment,
@@ -5626,7 +5659,7 @@ impl AgentMessageAckArgs {
             self.timeout_secs,
         )?;
         build_message_ack_output(
-            payload,
+            &payload,
             &mailbox_status_before,
             &mailbox_status_payload,
             &self.message_id,
@@ -5694,7 +5727,7 @@ impl AgentArtifactAllowArgs {
             self.timeout_secs,
         )?;
         build_agent_mutation_output(
-            payload,
+            &payload,
             &status_payload,
             &self.apartment_name,
             "ArtifactAllowed",
@@ -5803,13 +5836,15 @@ impl TrainingJobStartArgs {
             &service_name,
             &self.model_name,
             &self.job_id,
-            self.worker_group_size,
-            self.target_steps,
-            self.checkpoint_interval_steps,
-            self.max_retries,
-            self.step_compute_units,
-            self.compute_budget_units,
-            self.storage_budget_bytes,
+            TrainingJobResources {
+                worker_group_size: self.worker_group_size,
+                target_steps: self.target_steps,
+                checkpoint_interval_steps: self.checkpoint_interval_steps,
+                max_retries: self.max_retries,
+                step_compute_units: self.step_compute_units,
+                compute_budget_units: self.compute_budget_units,
+                storage_budget_bytes: self.storage_budget_bytes,
+            },
             Some(authority),
             key_pair,
         )?;
@@ -6337,7 +6372,7 @@ define_torii_args! {
     " HTTP timeout for live control-plane mutation.";
     /// Arguments for `iroha soracloud model upload-register`.
     pub struct ModelUploadRegisterArgs {
-        /// Path to a `SoraUploadedModelBundleV1` JSON document with an approved SoraFS digest.
+        /// Path to a `SoraUploadedModelBundleV1` JSON document with an approved `SoraFS` digest.
         #[arg(long, value_name = "PATH")]
         bundle_file: PathBuf,
         /// Path to an `UploadedModelFinalizePayload` JSON document describing registry metadata.
@@ -6372,7 +6407,7 @@ impl ModelUploadRegisterArgs {
             resolved_service_name.as_deref(),
         )?;
         let request =
-            signed_uploaded_model_register_request(bundle, finalize, authority, key_pair)?;
+            signed_uploaded_model_register_request(bundle, &finalize, authority, key_pair)?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let (_, payload) = post_live_mutation!(
             self,
@@ -6520,15 +6555,17 @@ impl HfSharedLeaseJoinArgs {
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
-            &self.repo_id,
-            &self.revision,
-            self.storage_class.to_storage_class(),
-            self.lease_term_ms,
+            HfLeaseLookup {
+                repo_id: &self.repo_id,
+                revision: &self.revision,
+                storage_class: self.storage_class.to_storage_class(),
+                lease_term_ms: self.lease_term_ms,
+            },
             Some(account_id.as_str()),
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload, "Join")?;
+        let mut output = build_hf_mutation_output(&payload, &status_payload, "Join")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6569,10 +6606,12 @@ impl HfStatusArgs {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let (_, mut payload) = fetch_torii_soracloud_hf_status(
             torii_url,
-            &self.repo_id,
-            &self.revision,
-            self.storage_class.to_storage_class(),
-            self.lease_term_ms,
+            HfLeaseLookup {
+                repo_id: &self.repo_id,
+                revision: &self.revision,
+                storage_class: self.storage_class.to_storage_class(),
+                lease_term_ms: self.lease_term_ms,
+            },
             self.account_id.as_deref(),
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -6637,15 +6676,17 @@ impl HfLeaseLeaveArgs {
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
-            &self.repo_id,
-            &self.revision,
-            self.storage_class.to_storage_class(),
-            self.lease_term_ms,
+            HfLeaseLookup {
+                repo_id: &self.repo_id,
+                revision: &self.revision,
+                storage_class: self.storage_class.to_storage_class(),
+                lease_term_ms: self.lease_term_ms,
+            },
             Some(account_id.as_str()),
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload, "LeaseLeave")?;
+        let mut output = build_hf_mutation_output(&payload, &status_payload, "LeaseLeave")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6714,15 +6755,17 @@ impl HfLeaseRenewArgs {
         let account_id = authority.to_string();
         let (_, status_payload) = fetch_torii_soracloud_hf_status(
             torii_url,
-            &self.repo_id,
-            &self.revision,
-            self.storage_class.to_storage_class(),
-            self.lease_term_ms,
+            HfLeaseLookup {
+                repo_id: &self.repo_id,
+                revision: &self.revision,
+                storage_class: self.storage_class.to_storage_class(),
+                lease_term_ms: self.lease_term_ms,
+            },
             Some(account_id.as_str()),
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload, "LeaseRenew")?;
+        let mut output = build_hf_mutation_output(&payload, &status_payload, "LeaseRenew")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6756,7 +6799,7 @@ impl From<crate::taira::InrouCanaryMode> for MutationMode {
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct TairaInrouStageReceiptV1 {
+pub struct TairaInrouStageReceiptV1 {
     pub schema_version: u16,
     pub sorafs_retention_epoch: u64,
     pub placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
@@ -6787,7 +6830,7 @@ pub(crate) struct TairaInrouStageReceiptV1 {
 }
 /// Stable report describing one generated canonical Taira Inrou workspace.
 #[derive(Clone, Debug, JsonSerialize)]
-pub(crate) struct TairaInrouWorkspaceReceiptV1 {
+pub struct TairaInrouWorkspaceReceiptV1 {
     schema_version: u16,
     container_file: String,
     service_file: String,
@@ -6835,12 +6878,12 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(UnpublishedDeployment
         &service_name,
         &mut service,
         &mut container,
-    )?;
+    );
     let bundle_payload = canonical_taira_inrou_canary_bundle_payload()?;
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.bundle_hash = Hash::new(&bundle_payload);
-    container.bundle_path = TAIRA_INROU_CANARY_ENTRYPOINT_V1.to_owned();
-    container.entrypoint = TAIRA_INROU_CANARY_ENTRYPOINT_V1.to_owned();
+    TAIRA_INROU_CANARY_ENTRYPOINT_V1.clone_into(&mut container.bundle_path);
+    TAIRA_INROU_CANARY_ENTRYPOINT_V1.clone_into(&mut container.entrypoint);
     container.args.clear();
     container.env.clear();
     container.env.insert(
@@ -6878,14 +6921,14 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(UnpublishedDeployment
         .guest_images
         .get_mut("aarch64")
         .ok_or_else(|| eyre!("canonical Inrou template is missing its AArch64 guest image"))?;
-    aarch64.kernel_image_path = TAIRA_INROU_CANARY_KERNEL_PATH_V1.to_owned();
-    aarch64.rootfs_image_path = TAIRA_INROU_CANARY_ROOTFS_PATH_V1.to_owned();
+    TAIRA_INROU_CANARY_KERNEL_PATH_V1.clone_into(&mut aarch64.kernel_image_path);
+    TAIRA_INROU_CANARY_ROOTFS_PATH_V1.clone_into(&mut aarch64.rootfs_image_path);
     aarch64.initrd_image_path = Some(TAIRA_INROU_CANARY_INITRD_PATH_V1.to_owned());
     aarch64.published_artifact = ();
     service.service_name = service_name;
     // The unpublished workspace does not claim a deployable revision. Staging
     // replaces this sentinel with the digest of the admitted artifact graph.
-    service.service_version = "staging-placeholder".to_owned();
+    "staging-placeholder".clone_into(&mut service.service_version);
     service.rollout.canary_percent = 100;
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.replicas = NonZeroU16::new(4).expect("four replicas");
@@ -7055,7 +7098,7 @@ fn validate_taira_inrou_canary_service(service: &SoraServiceManifestV1) -> Resul
     Ok(())
 }
 
-pub(crate) fn is_taira_inrou_canary_service_version(value: &str) -> bool {
+pub fn is_taira_inrou_canary_service_version(value: &str) -> bool {
     let Some(digest) = value.strip_prefix(TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1) else {
         return false;
     };
@@ -7408,7 +7451,6 @@ fn copy_taira_stage_source_file(
             destination_path.display()
         )
     })?;
-    drop(bounded_source);
     destination.sync_all().wrap_err_with(|| {
         format!(
             "synchronize Taira guest-image staged file {}",
@@ -7870,7 +7912,7 @@ fn validate_generated_taira_inrou_workspace(output_dir: &Path) -> Result<()> {
     validate_taira_inrou_rootfs_source_bytes(rootfs_bytes)
 }
 /// Create one fresh canonical deploy-mode Taira Inrou canary workspace.
-pub(crate) fn create_taira_inrou_canary_workspace(
+pub fn create_taira_inrou_canary_workspace(
     kernel_path: &Path,
     rootfs_path: &Path,
     initrd_path: &Path,
@@ -8359,7 +8401,7 @@ where
     write_taira_stage_file(path, &bytes)
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(crate) fn stage_taira_inrou_canary_deployment(
+pub fn stage_taira_inrou_canary_deployment(
     requested_mode: crate::taira::InrouCanaryMode,
     container_path: &Path,
     service_path: &Path,
@@ -8660,7 +8702,7 @@ impl Drop for SensitiveTairaTomlTable {
 }
 
 #[cfg(unix)]
-pub(crate) fn zeroize_taira_toml_table(table: &mut toml::Table) {
+pub fn zeroize_taira_toml_table(table: &mut toml::Table) {
     table
         .iter_mut()
         .for_each(|(_, value)| zeroize_taira_toml_value(value));
@@ -9077,6 +9119,11 @@ fn require_taira_validator_config_directory_identity(
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::useless_conversion,
+    clippy::unnecessary_fallible_conversions,
+    reason = "Unix stat integer widths and signedness differ across the supported platforms."
+)]
 fn taira_file_identity_from_stat(stat: &rustix::fs::Stat) -> Result<TairaFileIdentity> {
     Ok(TairaFileIdentity {
         dev: u64::try_from(stat.st_dev)
@@ -9316,7 +9363,7 @@ fn prepare_taira_validator_config(
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
-    if u64::try_from(rendered.as_bytes().len()).unwrap_or(u64::MAX) > MAX_TOML_SOURCE_BYTES {
+    if u64::try_from(rendered.len()).unwrap_or(u64::MAX) > MAX_TOML_SOURCE_BYTES {
         return Err(eyre!(
             "rendered peer{peer_index}.toml exceeds the {MAX_TOML_SOURCE_BYTES}-byte configuration-source limit"
         ));
@@ -9381,7 +9428,7 @@ fn stage_taira_validator_config_replacement(
     require_taira_validator_config_directory_identity(directory)?;
     for _ in 0..128 {
         let mut suffix = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut suffix)
             .map_err(|_| eyre!("OS randomness failed while staging a Taira validator config"))?;
         let name = format!(
@@ -9559,7 +9606,7 @@ fn cleanup_taira_validator_config_temps(
 /// This is a first-release transition: an existing Inrou table is always an error and no
 /// idempotent or compatibility path is accepted.
 #[cfg(unix)]
-pub(crate) fn bind_taira_inrou_validator_configs(
+pub fn bind_taira_inrou_validator_configs(
     config_dir: &Path,
     receipt: &TairaInrouStageReceiptV1,
 ) -> Result<()> {
@@ -9672,7 +9719,7 @@ pub(crate) fn bind_taira_inrou_validator_configs(
 }
 
 #[cfg(not(unix))]
-pub(crate) fn bind_taira_inrou_validator_configs(
+pub fn bind_taira_inrou_validator_configs(
     _config_dir: &Path,
     _receipt: &TairaInrouStageReceiptV1,
 ) -> Result<()> {
@@ -10280,7 +10327,7 @@ fn load_verified_taira_inrou_stage_contents(
 }
 /// Immutable identity recovered by fully revalidating one retained Taira Inrou stage.
 #[derive(Clone, Debug)]
-pub(crate) struct TairaInrouStageIdentity {
+pub struct TairaInrouStageIdentity {
     pub service_name: String,
     pub service_version: String,
     pub route_host: String,
@@ -10304,7 +10351,7 @@ pub(crate) struct TairaInrouStageIdentity {
     pub placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
 }
 /// Revalidate a retained Taira Inrou stage without registering artifacts or submitting a mutation.
-pub(crate) fn load_taira_inrou_stage_identity(
+pub fn load_taira_inrou_stage_identity(
     config: &ClientConfig,
     stage_dir: &Path,
     requested_mode: crate::taira::InrouCanaryMode,
@@ -10667,7 +10714,7 @@ fn preflight_taira_inrou_mutation_target(
 
 /// One exact ledger mutation in the ordered Taira Inrou canary protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TairaInrouCanaryPreparedOperationV1 {
+pub enum TairaInrouCanaryPreparedOperationV1 {
     /// Register the canonical bundle manifest.
     BundlePin,
     /// Register the canonical guest-image manifest.
@@ -10680,7 +10727,7 @@ pub(crate) enum TairaInrouCanaryPreparedOperationV1 {
 
 /// Exact finalized-governance readiness of one Taira Inrou canary pin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TairaInrouCanaryPinReadinessV1 {
+pub enum TairaInrouCanaryPinReadinessV1 {
     /// The exact manifest is absent from the finalized pin registry.
     Missing,
     /// The exact manifest exists but has not reached governance approval.
@@ -10715,7 +10762,7 @@ impl TairaInrouCanaryPreparedOperationV1 {
 ///
 /// This closes the retained stage identity over the actual signed instruction instead of
 /// accepting a transaction merely because its metadata names the expected reset child.
-pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
+pub fn verify_taira_inrou_prepared_transaction_identity_v1(
     transaction: &SignedTransaction,
     operation: TairaInrouCanaryPreparedOperationV1,
     stage: &TairaInrouStageIdentity,
@@ -10905,7 +10952,7 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
 /// The caller must prove and durably record the preceding child as Applied before
 /// invoking this function for the next child. Nothing is submitted here.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_taira_inrou_canary_operation(
+pub fn prepare_taira_inrou_canary_operation(
     config: &ClientConfig,
     http_witness_file: Option<&Path>,
     fee_payment: FeePaymentIntent,
@@ -14129,7 +14176,7 @@ struct SoracloudTempDir {
 }
 impl SoracloudTempDir {
     fn new(prefix: &str) -> Result<Self> {
-        Self::new_with_rng(prefix, &mut OsRng)
+        Self::new_with_rng(prefix, &mut SysRng)
     }
     fn new_with_rng<R: TryCryptoRng + ?Sized>(prefix: &str, rng: &mut R) -> Result<Self> {
         for _ in 0..8 {
@@ -14146,7 +14193,7 @@ impl SoracloudTempDir {
             }
             match builder.create(&path) {
                 Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
                     return Err(error)
                         .wrap_err_with(|| format!("failed to create `{}`", path.display()));
@@ -14166,17 +14213,26 @@ impl Drop for SoracloudTempDir {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
+struct SoracloudMutationTarget<'a> {
+    torii_url: &'a str,
+    api_token: Option<&'a str>,
+    timeout_secs: u64,
+    authority: &'a AccountId,
+    key_pair: &'a KeyPair,
+}
 fn run_service_bundle_mutation(
     mode: MutationMode,
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     precondition: SoraServiceMutationPreconditionV1,
-    torii_url: &str,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-    authority: &AccountId,
-    key_pair: &KeyPair,
+    SoracloudMutationTarget {
+        torii_url,
+        api_token,
+        timeout_secs,
+        authority,
+        key_pair,
+    }: SoracloudMutationTarget<'_>,
 ) -> Result<norito::json::Value> {
     let request = signed_bundle_request(
         bundle,
@@ -14205,7 +14261,7 @@ fn run_signed_service_bundle_mutation(
     let (_, status_payload) =
         fetch_torii_soracloud_status(torii_url, Some(&service_name), api_token, timeout_secs)?;
     build_service_mutation_output(
-        payload,
+        &payload,
         &status_payload,
         &service_name,
         match mode {
@@ -14789,7 +14845,7 @@ fn sorafs_pin_manifest_readiness(
 /// A globally applied registration transaction is deliberately insufficient: only a
 /// finalized record whose digest, root CID, status epoch, and `approved_epoch` all match
 /// the retained stage is returned as [`TairaInrouCanaryPinReadinessV1::Approved`].
-pub(crate) fn taira_inrou_canary_pin_readiness_v1(
+pub fn taira_inrou_canary_pin_readiness_v1(
     config: &ClientConfig,
     stage_dir: &Path,
     torii_url: &str,
@@ -14880,6 +14936,7 @@ fn register_sorafs_pin_manifest_and_wait(
     }
     wait_for_sorafs_pin_manifest(client, expected, description, timeout_secs)
 }
+#[derive(Clone, Copy)]
 struct SorafsManifestBuildLabels<'a> {
     writer: &'a str,
     metadata: &'a str,
@@ -14976,7 +15033,7 @@ impl FromStr for InrouOperatorPreseedTargetArg {
     }
 }
 
-pub(crate) fn parse_inrou_placement_target_identity(
+pub fn parse_inrou_placement_target_identity(
     value: &str,
 ) -> std::result::Result<SoraInrouPlacementTargetV1, String> {
     let mut fields = value.split(',');
@@ -15030,7 +15087,7 @@ fn bind_exact_inrou_placement_targets(
     qualified_targets: &BTreeSet<SoraInrouPlacementTargetV1>,
 ) -> Result<()> {
     if service.placement_targets.is_empty() {
-        service.placement_targets = qualified_targets.clone();
+        service.placement_targets.clone_from(qualified_targets);
         return Ok(());
     }
     if &service.placement_targets != qualified_targets {
@@ -15054,7 +15111,14 @@ struct InrouOperatorPreseedSession {
     stderr_eof: bool,
     timeout: Duration,
     receipt: OperatorPreseedSessionReceiptV1,
-    _stage: SoracloudTempDir,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The temporary-directory owner keeps staged artifacts alive for the session."
+        )
+    )]
+    stage: SoracloudTempDir,
 }
 
 fn inrou_preseed_phase_deadline(timeout: Duration, phase: &str) -> Result<Instant> {
@@ -15115,7 +15179,7 @@ fn drain_inrou_preseed_pipe(
                 output.extend_from_slice(&buffer[..count]);
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => {
                 return Err(error)
                     .wrap_err_with(|| format!("failed to read Inrou operator-preseed {label}"));
@@ -15197,8 +15261,7 @@ fn terminate_inrou_preseed_child(child: &mut Child, timeout: Duration, phase: &s
         .and_then(|deadline| wait_for_inrou_preseed_child_exit(child, deadline));
     match (signal_error, wait_result) {
         (None, Ok(())) => Ok(()),
-        (Some(error), Ok(())) => Err(error),
-        (None, Err(error)) => Err(error),
+        (Some(error), Ok(())) | (None, Err(error)) => Err(error),
         (Some(signal_error), Err(wait_error)) => Err(eyre!(
             "{wait_error:#}; process-group termination also failed: {signal_error:#}"
         )),
@@ -15466,7 +15529,7 @@ fn sha256_file(path: &Path, label: &str, max_bytes: u64) -> Result<String> {
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let read = file
             .read(&mut buffer)
@@ -16286,44 +16349,41 @@ fn start_inrou_operator_preseed_session(
             staged_helper.display()
         )
     })?;
-    let mut stdin = match child.stdin.take() {
-        Some(stdin) => Some(stdin),
-        None => {
-            let error = eyre!("Inrou preseed helper stdin pipe was not created");
-            return Err(inrou_preseed_error_after_cleanup(
-                child,
-                timeout,
-                "startup cleanup",
-                error,
-            ));
-        }
+    let mut stdin = if let Some(stdin) = child.stdin.take() {
+        Some(stdin)
+    } else {
+        let error = eyre!("Inrou preseed helper stdin pipe was not created");
+        return Err(inrou_preseed_error_after_cleanup(
+            child,
+            timeout,
+            "startup cleanup",
+            error,
+        ));
     };
-    let mut stdout = match child.stdout.take() {
-        Some(stdout) => Some(stdout),
-        None => {
-            drop(stdin.take());
-            let error = eyre!("Inrou preseed helper stdout pipe was not created");
-            return Err(inrou_preseed_error_after_cleanup(
-                child,
-                timeout,
-                "startup cleanup",
-                error,
-            ));
-        }
+    let mut stdout = if let Some(stdout) = child.stdout.take() {
+        Some(stdout)
+    } else {
+        drop(stdin.take());
+        let error = eyre!("Inrou preseed helper stdout pipe was not created");
+        return Err(inrou_preseed_error_after_cleanup(
+            child,
+            timeout,
+            "startup cleanup",
+            error,
+        ));
     };
-    let mut stderr = match child.stderr.take() {
-        Some(stderr) => Some(stderr),
-        None => {
-            drop(stdin.take());
-            drop(stdout.take());
-            let error = eyre!("Inrou preseed helper stderr pipe was not created");
-            return Err(inrou_preseed_error_after_cleanup(
-                child,
-                timeout,
-                "startup cleanup",
-                error,
-            ));
-        }
+    let mut stderr = if let Some(stderr) = child.stderr.take() {
+        Some(stderr)
+    } else {
+        drop(stdin.take());
+        drop(stdout.take());
+        let error = eyre!("Inrou preseed helper stderr pipe was not created");
+        return Err(inrou_preseed_error_after_cleanup(
+            child,
+            timeout,
+            "startup cleanup",
+            error,
+        ));
     };
     let nonblocking_result = make_inrou_preseed_pipe_nonblocking(
         stdout
@@ -16479,7 +16539,7 @@ fn start_inrou_operator_preseed_session(
         stderr_eof,
         timeout,
         receipt,
-        _stage: stage,
+        stage,
     }))
 }
 
@@ -16618,7 +16678,7 @@ fn prepare_built_sorafs_manifest_registration(
         .account_client()
         .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             [InstructionBox::from(instruction)],
-            requested_fee_payment.clone(),
+            requested_fee_payment,
             binding.metadata(operation)?,
         ))
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
@@ -16626,7 +16686,10 @@ fn prepare_built_sorafs_manifest_registration(
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact SoraFS pin-registration payload")?;
     let mut payload = payload;
-    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
+    if !payload
+        .fee_payment
+        .has_same_payer_and_gas_bound(&quote.intent)
+    {
         return Err(eyre!(
             "SoraFS pin-registration fee quote changed payer or gas bound"
         ));
@@ -17249,16 +17312,17 @@ fn prepare_service_artifacts(
         artifacts,
     })
 }
+type PreparedInrouGuestImageArtifacts = (
+    Vec<InrouGuestImageArtifactPublishOutput>,
+    BTreeMap<SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1>,
+    Vec<PreparedSorafsArtifact>,
+);
 fn prepare_inrou_guest_image_artifacts(
     service_workspace_dir: Option<&Path>,
     bundle: &UnpublishedDeploymentBundleV1,
     key_pair: &KeyPair,
     release_identity: SorafsReleaseIdentityV1,
-) -> Result<(
-    Vec<InrouGuestImageArtifactPublishOutput>,
-    BTreeMap<SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1>,
-    Vec<PreparedSorafsArtifact>,
-)> {
+) -> Result<PreparedInrouGuestImageArtifacts> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
         || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
     {
@@ -17372,7 +17436,7 @@ fn encode_content_cid(bytes: &[u8]) -> String {
     let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
     out.push(b'b');
     for byte in bytes {
-        acc = (acc << 8) | (*byte as u32);
+        acc = (acc << 8) | u32::from(*byte);
         bits += 8;
         while bits >= 5 {
             let index = ((acc >> (bits - 5)) & 0x1f) as usize;
@@ -17459,7 +17523,7 @@ fn build_app_infra_manifest(
 ) -> Result<SoraAppInfraManifestV1> {
     let mut services = Vec::with_capacity(bundles.len());
     for bundle in bundles {
-        services.push(build_app_infra_service_ref(bundle)?);
+        services.push(build_app_infra_service_ref(bundle));
     }
     let app_version = derive_app_infra_version(app_manifest, &services);
     let manifest = SoraAppInfraManifestV1 {
@@ -17504,9 +17568,10 @@ fn build_app_infra_static_site_binding(
         .as_ref()
         .map(|static_site| SoraAppStaticSiteBindingV1 {
             schema_version: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
-            public_url: static_site_publication
-                .map(|publication| publication.public_url.clone())
-                .unwrap_or_else(|| app_manifest.public_url.clone()),
+            public_url: static_site_publication.map_or_else(
+                || app_manifest.public_url.clone(),
+                |publication| publication.public_url.clone(),
+            ),
             content_cid: static_site_publication.map(|publication| publication.content_cid.clone()),
             manifest_digest_hex: static_site_publication
                 .map(|publication| publication.manifest_digest_hex.clone()),
@@ -17514,9 +17579,7 @@ fn build_app_infra_static_site_binding(
             api_base_path: static_site.api_base_path.clone(),
         })
 }
-fn build_app_infra_service_ref(
-    bundle: &SoraDeploymentBundleV1,
-) -> Result<SoraAppInfraServiceRefV1> {
+fn build_app_infra_service_ref(bundle: &SoraDeploymentBundleV1) -> SoraAppInfraServiceRefV1 {
     let service = &bundle.service;
     let routes = service
         .route
@@ -17539,7 +17602,7 @@ fn build_app_infra_service_ref(
         .iter()
         .map(|volume| volume.volume_name.clone())
         .collect::<Vec<_>>();
-    Ok(SoraAppInfraServiceRefV1 {
+    SoraAppInfraServiceRefV1 {
         schema_version: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
         service_name: service.service_name.clone(),
         service_version: service.service_version.clone(),
@@ -17550,7 +17613,7 @@ fn build_app_infra_service_ref(
         routes,
         lease_volumes,
         shard: app_service_shard_label(&bundle.container),
-    })
+    }
 }
 fn app_service_shard_label(container: &SoraContainerManifestV1) -> Option<String> {
     let mut entries = [
@@ -17667,8 +17730,9 @@ fn load_service_config_value(
     value_file: Option<&Path>,
 ) -> Result<norito::json::Value> {
     match (value_json, value_file) {
-        (Some(_), Some(_)) => Err(eyre!("specify exactly one of --value-json or --value-file")),
-        (None, None) => Err(eyre!("specify exactly one of --value-json or --value-file")),
+        (Some(_), Some(_)) | (None, None) => {
+            Err(eyre!("specify exactly one of --value-json or --value-file"))
+        }
         (Some(value_json), None) => {
             json::from_str(value_json).wrap_err("failed to decode --value-json")
         }
@@ -18022,6 +18086,10 @@ fn signed_hf_shared_lease_join_request(
         provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The signer receives each canonical shared-lease field and its signing identity explicitly."
+)]
 fn signed_hf_lease_leave_request(
     repo_id: &str,
     revision: &str,
@@ -18298,10 +18366,7 @@ fn signed_agent_artifact_allow_request(
         provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
-fn signed_training_job_start_request(
-    service_name: &str,
-    model_name: &str,
-    job_id: &str,
+struct TrainingJobResources {
     worker_group_size: u16,
     target_steps: u32,
     checkpoint_interval_steps: u32,
@@ -18309,6 +18374,20 @@ fn signed_training_job_start_request(
     step_compute_units: u64,
     compute_budget_units: u64,
     storage_budget_bytes: u64,
+}
+fn signed_training_job_start_request(
+    service_name: &str,
+    model_name: &str,
+    job_id: &str,
+    TrainingJobResources {
+        worker_group_size,
+        target_steps,
+        checkpoint_interval_steps,
+        max_retries,
+        step_compute_units,
+        compute_budget_units,
+        storage_budget_bytes,
+    }: TrainingJobResources,
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobStartRequest> {
@@ -18536,7 +18615,7 @@ fn signed_model_weight_rollback_request(
 }
 fn signed_uploaded_model_register_request(
     bundle: SoraUploadedModelBundleV1,
-    finalize: UploadedModelFinalizePayload,
+    finalize: &UploadedModelFinalizePayload,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedUploadedModelRegisterRequest> {
@@ -18618,7 +18697,7 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
         payload.rollout_handle.as_str(),
         payload.healthy,
         payload.promote_to_percent,
-        payload.governance_tx_hash.clone(),
+        payload.governance_tx_hash,
     )
     .wrap_err("failed to encode rollout signature payload tuple")
 }
@@ -18952,7 +19031,7 @@ fn build_soracloud_mutation_auth_headers(
         http_witness_file,
         endpoint,
         body,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
@@ -19027,7 +19106,7 @@ fn build_soracloud_read_auth_headers(
         "GET",
         endpoint,
         &[],
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn soracloud_signature_timestamp_ms_from_elapsed(elapsed: Duration) -> Result<u64> {
@@ -19136,7 +19215,7 @@ fn decode_soracloud_tx_instructions(
 }
 /// One canonical signed transaction prepared for durable, byte-identical replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PreparedSoracloudTransactionV1 {
+pub struct PreparedSoracloudTransactionV1 {
     /// Closed operation label bound by the caller's durable mutation plan.
     pub operation: String,
     /// Exact fixed-V1 Norito bytes submitted to Torii.
@@ -19154,7 +19233,7 @@ pub(crate) struct PreparedSoracloudTransactionV1 {
 /// Exact public-reset identity signed into every prepared ledger transaction.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct TairaMutationBindingV1 {
+pub struct TairaMutationBindingV1 {
     pub authorization_sha256: String,
     pub authorization_nonce: String,
     pub kind: String,
@@ -19164,6 +19243,10 @@ pub(crate) struct TairaMutationBindingV1 {
 }
 
 impl PreparedSoracloudTransactionV1 {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Preparing a durable replay artifact consumes the original signed transaction owner."
+    )]
     fn from_signed(
         operation: &str,
         binding: TairaMutationBindingV1,
@@ -19353,7 +19436,7 @@ fn soracloud_transaction_client(
 }
 
 /// Quote and sign one exact Soracloud draft without submitting it.
-pub(crate) fn prepare_soracloud_draft_transaction(
+pub fn prepare_soracloud_draft_transaction(
     config: &ClientConfig,
     requested_fee_payment: FeePaymentIntent,
     binding: TairaMutationBindingV1,
@@ -19373,14 +19456,17 @@ pub(crate) fn prepare_soracloud_draft_transaction(
         .account_client()
         .prepare_transaction(iroha::client::AccountTransactionDraft::new(
             executable,
-            requested_fee_payment.clone(),
+            requested_fee_payment,
             binding.metadata(operation)?,
         ))
         .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact Soracloud mutation fees")?;
-    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
+    if !payload
+        .fee_payment
+        .has_same_payer_and_gas_bound(&quote.intent)
+    {
         return Err(eyre!(
             "fee quote changed the selected payer, sponsor revision, or gas bound"
         ));
@@ -19398,7 +19484,7 @@ pub(crate) fn prepare_soracloud_draft_transaction(
 }
 
 /// Submit one already prepared canonical Soracloud transaction verbatim.
-pub(crate) fn submit_prepared_soracloud_transaction(
+pub fn submit_prepared_soracloud_transaction(
     config: &ClientConfig,
     torii_url: &str,
     deadline: Instant,
@@ -19422,7 +19508,7 @@ pub(crate) fn submit_prepared_soracloud_transaction(
 
 /// Read-only finality classification of one exact prepared Soracloud transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PreparedSoracloudRecoveryV1 {
+pub enum PreparedSoracloudRecoveryV1 {
     /// The exact transaction hash is not yet globally observable.
     Absent,
     /// The exact transaction is globally state-resolved `Applied` and its canonical wire is proven.
@@ -19448,7 +19534,7 @@ pub(crate) enum PreparedSoracloudRecoveryV1 {
 ///
 /// Applied classification includes the authenticated exact transaction-details route;
 /// it never requests global transaction inventory.
-pub(crate) fn recover_prepared_soracloud_transaction(
+pub fn recover_prepared_soracloud_transaction(
     config: &ClientConfig,
     torii_url: &str,
     deadline: Instant,
@@ -19885,7 +19971,7 @@ fn new_mailbox_message_from_status(
     Ok(message)
 }
 fn build_service_mutation_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     status_payload: &json::Value,
     service_name: &str,
     action_label: &str,
@@ -19899,11 +19985,11 @@ fn build_service_mutation_output(
         "action".to_owned(),
         json::Value::String(action_label.to_owned()),
     );
-    merge_submission_metadata(&mut output, &mutation_payload)?;
+    merge_submission_metadata(&mut output, mutation_payload)?;
     Ok(output)
 }
 fn build_agent_mutation_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     status_payload: &json::Value,
     apartment_name: &str,
     action_label: &str,
@@ -19918,11 +20004,11 @@ fn build_agent_mutation_output(
         "action".to_owned(),
         json::Value::String(action_label.to_owned()),
     );
-    merge_submission_metadata(&mut output, &mutation_payload)?;
+    merge_submission_metadata(&mut output, mutation_payload)?;
     Ok(output)
 }
 fn build_hf_mutation_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     status_payload: &json::Value,
     action_label: &str,
 ) -> Result<json::Value> {
@@ -19936,11 +20022,11 @@ fn build_hf_mutation_output(
         "action".to_owned(),
         json::Value::String(action_label.to_owned()),
     );
-    merge_submission_metadata(&mut output, &mutation_payload)?;
+    merge_submission_metadata(&mut output, mutation_payload)?;
     Ok(output)
 }
 fn build_wallet_spend_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     status_payload: &json::Value,
     apartment_name: &str,
     request_id: &str,
@@ -19962,7 +20048,7 @@ fn build_wallet_spend_output(
     Ok(output)
 }
 fn build_message_send_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     mailbox_status_payload: &json::Value,
     known_message_ids: &BTreeSet<String>,
     from_apartment: &str,
@@ -19988,11 +20074,11 @@ fn build_message_send_output(
         json::Value::String("MessageEnqueued".to_owned()),
     );
     root.insert("message_id".to_owned(), json::Value::String(message_id));
-    merge_submission_metadata(&mut output, &mutation_payload)?;
+    merge_submission_metadata(&mut output, mutation_payload)?;
     Ok(output)
 }
 fn build_message_ack_output(
-    mutation_payload: json::Value,
+    mutation_payload: &json::Value,
     mailbox_status_before: &json::Value,
     mailbox_status_payload: &json::Value,
     message_id: &str,
@@ -20021,7 +20107,7 @@ fn build_message_ack_output(
         "message_id".to_owned(),
         json::Value::String(message_id.to_owned()),
     );
-    merge_submission_metadata(&mut output, &mutation_payload)?;
+    merge_submission_metadata(&mut output, mutation_payload)?;
     Ok(output)
 }
 fn send_torii_soracloud_authenticated_get(
@@ -20589,12 +20675,20 @@ const fn storage_class_query_label(storage_class: StorageClass) -> &'static str 
         StorageClass::Cold => "cold",
     }
 }
-fn fetch_torii_soracloud_hf_status(
-    torii_url: &str,
-    repo_id: &str,
-    revision: &str,
+struct HfLeaseLookup<'a> {
+    repo_id: &'a str,
+    revision: &'a str,
     storage_class: StorageClass,
     lease_term_ms: u64,
+}
+fn fetch_torii_soracloud_hf_status(
+    torii_url: &str,
+    HfLeaseLookup {
+        repo_id,
+        revision,
+        storage_class,
+        lease_term_ms,
+    }: HfLeaseLookup<'_>,
     account_id: Option<&str>,
     api_token: Option<&str>,
     timeout_secs: u64,
@@ -20657,7 +20751,7 @@ fn fetch_torii_soracloud_hf_status(
         .wrap_err("failed to encode exact Soracloud HF shared-lease status V1")?;
     Ok((endpoint, payload))
 }
-fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
+fn require_torii_url(torii_url: Option<&str>) -> Result<&str> {
     torii_url
         .ok_or_else(|| eyre!("--torii-url is required for Soracloud live control-plane access"))
 }
@@ -20744,8 +20838,7 @@ fn project_sync_manifest_pair(
     validate_unpublished_deployment_source(&bundle)?;
     let entry = SyncManifestEntryOutput {
         service_name: service_name_override
-            .map(str::to_owned)
-            .unwrap_or_else(|| service.service_name.to_string()),
+            .map_or_else(|| service.service_name.to_string(), str::to_owned),
         container_manifest_path: container_path.to_string_lossy().into_owned(),
         service_manifest_path: service_path.to_string_lossy().into_owned(),
         container_manifest_hash: service.container.manifest_hash,
@@ -20869,6 +20962,10 @@ impl BundlePackFileSnapshot {
     fn is_direct_directory(self) -> bool {
         self.is_directory
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "The snapshot method shares its receiver contract with Windows, where reparse-point status depends on this snapshot."
+    )]
     const fn is_reparse_point(self) -> bool {
         false
     }
@@ -21458,7 +21555,7 @@ impl BundlePackAtomicOutput {
             ));
         }
         let parent = BundlePackParentGuard::open(output)?;
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         for _ in 0..INROU_BUNDLE_PACK_TEMP_ATTEMPTS {
             let mut suffix = [0_u8; 16];
             rng.try_fill_bytes(&mut suffix)
@@ -21508,7 +21605,7 @@ impl BundlePackAtomicOutput {
                         installed: false,
                     });
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
                     return Err(error).wrap_err_with(|| {
                         format!(
@@ -21909,8 +22006,8 @@ fn build_split_app_live_service_bundle(
         .parse()
         .wrap_err("invalid split-app live service name")?;
     container.runtime = SoraContainerRuntimeV1::Inrou;
-    container.bundle_path = "/app/server.mjs".to_owned();
-    container.entrypoint = "/app/server.mjs".to_owned();
+    "/app/server.mjs".clone_into(&mut container.bundle_path);
+    "/app/server.mjs".clone_into(&mut container.entrypoint);
     container.args.clear();
     container.inrou = Some(default_inrou_manifest());
     container
@@ -21925,7 +22022,7 @@ fn build_split_app_live_service_bundle(
     container.capabilities.allow_model_training = false;
     container.lifecycle.healthcheck_path = Some("/health".to_owned());
     service.service_name = service_name;
-    service.service_version = app_version.to_owned();
+    app_version.clone_into(&mut service.service_version);
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.route = Some(SoraRouteTargetV1 {
         host: host.to_owned(),
@@ -21958,8 +22055,8 @@ fn build_split_app_vault_service_bundle(
         .parse()
         .wrap_err("invalid split-app vault service name")?;
     container.runtime = SoraContainerRuntimeV1::Ivm;
-    container.bundle_path = "/bundles/vault-api.to".to_owned();
-    container.entrypoint = "main".to_owned();
+    "/bundles/vault-api.to".clone_into(&mut container.bundle_path);
+    "main".clone_into(&mut container.entrypoint);
     container.args = vec!["--http".to_owned(), "--port=8788".to_owned()];
     container.env.insert(
         "SORACLOUD_TEMPLATE".to_owned(),
@@ -21989,7 +22086,7 @@ fn build_split_app_vault_service_bundle(
     container.capabilities.allow_model_training = false;
     container.lifecycle.healthcheck_path = Some("/api/auth/me".to_owned());
     service.service_name = service_name;
-    service.service_version = app_version.to_owned();
+    app_version.clone_into(&mut service.service_version);
     service.execution_plane = SoraServiceExecutionPlaneV1::DeterministicService;
     service.route = Some(SoraRouteTargetV1 {
         host: host.to_owned(),
@@ -22115,15 +22212,15 @@ fn apply_init_template_defaults(
     service_name: &Name,
     service: &mut SoraServiceManifestV1,
     container: &mut UnpublishedContainerManifestV1,
-) -> Result<()> {
+) {
     let dns_label = normalized_service_label(service_name.as_ref());
     let host = format!("{dns_label}.sora");
     match template {
-        InitTemplate::Baseline => Ok(()),
+        InitTemplate::Baseline => {}
         InitTemplate::HttpService => {
             container.runtime = SoraContainerRuntimeV1::Inrou;
-            container.bundle_path = "/app/server.mjs".to_owned();
-            container.entrypoint = "/app/server.mjs".to_owned();
+            "/app/server.mjs".clone_into(&mut container.bundle_path);
+            "/app/server.mjs".clone_into(&mut container.entrypoint);
             container.args.clear();
             container.inrou = Some(default_inrou_manifest());
             container
@@ -22154,12 +22251,11 @@ fn apply_init_template_defaults(
             service.lease_volumes = default_generic_http_service_lease_volumes();
             service.handlers.clear();
             service.artifacts.clear();
-            Ok(())
         }
         InitTemplate::Site => {
             container.runtime = SoraContainerRuntimeV1::Ivm;
-            container.bundle_path = "/bundles/site-static.to".to_owned();
-            container.entrypoint = "main".to_owned();
+            "/bundles/site-static.to".clone_into(&mut container.bundle_path);
+            "main".clone_into(&mut container.entrypoint);
             container.args = vec!["--http".to_owned(), "--port=8080".to_owned()];
             container
                 .env
@@ -22194,12 +22290,11 @@ fn apply_init_template_defaults(
                 "/app/dist/index.html",
                 Some("assets"),
             )];
-            Ok(())
         }
         InitTemplate::Webapp => {
             container.runtime = SoraContainerRuntimeV1::Ivm;
-            container.bundle_path = "/bundles/webapp-api.to".to_owned();
-            container.entrypoint = "main".to_owned();
+            "/bundles/webapp-api.to".clone_into(&mut container.bundle_path);
+            "main".clone_into(&mut container.entrypoint);
             container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
             container
                 .env
@@ -22261,12 +22356,11 @@ fn apply_init_template_defaults(
                 "/journals/webapp.journal",
                 Some("update"),
             )];
-            Ok(())
         }
         InitTemplate::PiiApp => {
             container.runtime = SoraContainerRuntimeV1::Ivm;
-            container.bundle_path = "/bundles/pii-app-api.to".to_owned();
-            container.entrypoint = "main".to_owned();
+            "/bundles/pii-app-api.to".clone_into(&mut container.bundle_path);
+            "main".clone_into(&mut container.entrypoint);
             container.args = vec!["--http".to_owned(), "--port=8788".to_owned()];
             container
                 .env
@@ -22378,12 +22472,11 @@ fn apply_init_template_defaults(
                     Some("ciphertext_update"),
                 ),
             ];
-            Ok(())
         }
         InitTemplate::HayahiApp => {
             container.runtime = SoraContainerRuntimeV1::Ivm;
-            container.bundle_path = "/bundles/hayahi-app-api.to".to_owned();
-            container.entrypoint = "main".to_owned();
+            "/bundles/hayahi-app-api.to".clone_into(&mut container.bundle_path);
+            "main".clone_into(&mut container.entrypoint);
             container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
             container
                 .env
@@ -22594,7 +22687,6 @@ fn apply_init_template_defaults(
                     Some("user_preferences_put"),
                 ),
             ];
-            Ok(())
         }
     }
 }
@@ -23301,6 +23393,8 @@ fn http_service_upgrade_sh() -> String {
         .replace("{prelude}", prelude)
 }
 fn http_service_server_mjs(service_name: &str) -> String {
+    const HEALTH_ANCHOR: &str = "      service: SERVICE_NAME,\n      runtime: \"Inrou\",";
+
     let service_name_debug = format!("{service_name:?}");
     let rendered = render_template(
         include_str!("soracloud/assets/v1/http_service_server_mjs.tmpl"),
@@ -23316,7 +23410,7 @@ fn http_service_server_mjs(service_name: &str) -> String {
         "{declaration_anchor}\nconst SERVICE_VERSION = process.env.SORACLOUD_SERVICE_VERSION;\nif (typeof SERVICE_VERSION !== \"string\" || SERVICE_VERSION.trim().length === 0) {{\n  throw new Error(\"SORACLOUD_SERVICE_VERSION is required\");\n}}"
     );
     let rendered = rendered.replacen(&declaration_anchor, &declaration_replacement, 1);
-    const HEALTH_ANCHOR: &str = "      service: SERVICE_NAME,\n      runtime: \"Inrou\",";
+
     assert_eq!(
         rendered.matches(HEALTH_ANCHOR).count(),
         1,

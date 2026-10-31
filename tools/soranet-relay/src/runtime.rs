@@ -6856,7 +6856,8 @@ impl RelayRuntime {
                 trust.tls_server_name.as_str()
             });
         let (relay_hello, session) = continue_after_admission(admission, || {
-            let mut rng = StdRng::from_os_rng();
+            let mut rng = StdRng::try_from_rng(&mut rand::rngs::SysRng)
+                .expect("OS randomness is unavailable");
             let runtime_params = NoiseRuntimeParams {
                 descriptor_commit: context.descriptor_commit.as_slice(),
                 client_capabilities: client_hello.client_capabilities(),
@@ -7523,11 +7524,14 @@ impl RelayRuntime {
         certs: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
     ) -> Result<rustls::ServerConfig, RelayError> {
-        let mut tls =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(certs, key)
-                .map_err(|error| RelayError::Tls(error.to_string()))?;
+        let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|error| RelayError::Tls(error.to_string()))?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|error| RelayError::Tls(error.to_string()))?;
         // The signed hybrid handshake and the SNR1 record layer run after QUIC setup.
         // Replayable TLS 0-RTT data must never reach either protocol.
         tls.max_early_data_size = 0;

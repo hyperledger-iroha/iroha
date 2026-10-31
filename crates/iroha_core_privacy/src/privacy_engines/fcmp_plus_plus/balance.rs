@@ -18,6 +18,9 @@ use std::collections::BTreeSet;
 /// This combines native membership/SAL, the independent public commitment-conservation equation,
 /// and the ordered aggregate strict-positive output range proof. Callers admitting outputs must use
 /// this entry point; no production membership-only verifier is exposed.
+///
+/// # Errors
+/// Rejects malformed proof encodings, mismatched public inputs, failed commitment balance, or invalid membership, linking, and range proofs.
 pub fn verify_fcmp_transaction_v1(
     context_hash: [u8; 32],
     proof_wire: &[u8],
@@ -38,6 +41,9 @@ pub fn verify_fcmp_transaction_v1(
 /// The public transaction fee is intentionally absent from this equation: Iroha's canonical
 /// `FeePaymentIntent` is paid outside the confidential asset pool and is already bound through the
 /// statement's transaction-intent digest.
+///
+/// # Errors
+/// Rejects invalid input/output counts, duplicate commitments, invalid points, identity sums, or an unbalanced commitment equation.
 pub fn verify_fcmp_commitment_balance_v1(
     public_inputs: &[FcmpProofInputPublicV1],
     new_outputs: &[FcmpOutputTupleV1],

@@ -8,7 +8,7 @@ use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 
-pub(crate) fn original_source(
+pub fn original_source(
     balance: Quantity,
     amounts: &[u32],
 ) -> (CertifiedTestChain, FinalizedFastpqSource) {

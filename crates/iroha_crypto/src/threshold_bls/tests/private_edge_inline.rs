@@ -7,7 +7,7 @@ fn check<P: ThresholdBlsPurpose>(n: u16) {
     let mut rng = ChaCha20Rng::from_seed([0x37; 32]);
     let (secret, dealer) = DasRenDealerSecret::generate_with_rng(&parameters, 1, &mut rng).unwrap();
     let share = secret.private_share(&parameters, &dealer, n).unwrap();
-    let recipient = HybridKeyPair::try_generate(&mut OsRng).unwrap();
+    let recipient = HybridKeyPair::try_generate(&mut SysRng).unwrap();
     let aad = b"fixed DKG edge: network/generation/session/roster/dealer/recipient";
     // Warm platform entropy machinery, but measured calls still use the real RNG.
     seal_das_ren_private_share(&share, recipient.public(), aad).unwrap();

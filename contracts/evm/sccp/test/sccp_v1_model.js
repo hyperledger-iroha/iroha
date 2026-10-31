@@ -36,7 +36,7 @@ let ethers;
 let bls;
 try {
   ethers = runtimeRequire("ethers");
-  ({ bls12_381: bls } = runtimeRequire("@noble/curves/bls12-381"));
+  ({ bls12_381: bls } = runtimeRequire("@noble/curves/bls12-381.js"));
 } catch (error) {
   throw new Error(
     `the locked EVM runtime is not installed; run \`npm ci --ignore-scripts\` in ${RUNTIME_DIR}`,
@@ -685,8 +685,8 @@ function checkLeaf(leaf, leafIndex, messageCount, siblings, sccpRoot) {
 const FIELD_P = bls.fields.Fp.ORDER;
 const HALF_P = (FIELD_P - 1n) / 2n;
 const GROUP_ORDER = bls.fields.Fr.ORDER;
-const G1 = bls.G1.ProjectivePoint;
-const G2 = bls.G2.ProjectivePoint;
+const G1 = bls.G1.Point;
+const G2 = bls.G2.Point;
 
 function hmacSha256(key, data) {
   return crypto.createHmac("sha256", key).update(data).digest();
@@ -722,7 +722,7 @@ function testSecret(index) {
 
 /** The 48-byte compressed public key of a secret (`SkToPk`). */
 function publicKey(secret) {
-  return hexlify(G1.BASE.multiply(secret).toRawBytes(true));
+  return hexlify(G1.BASE.multiply(secret).toBytes(true));
 }
 
 function testPublicKey(index) {
@@ -781,7 +781,7 @@ function g2Eip2537(point) {
 
 /** 96-byte ZCash-compressed form of a G2 point (TON and Taira wire form). */
 function g2Compressed(point) {
-  return hexlify(point.toRawBytes(true));
+  return hexlify(point.toBytes(true));
 }
 
 /** RFC 9380 `hash_to_curve` to G2 of a message under `dst`. */
@@ -1011,7 +1011,7 @@ function reproduceFinalityFixture(fixture) {
       `${what}: hash-to-G2 point`,
     );
     assert.deepEqual(
-      { compressed: hexlify(G1.fromAffine(meta.apk).toRawBytes(true)), eip2537: g1Eip2537(meta.apk) },
+      { compressed: hexlify(G1.fromAffine(meta.apk).toBytes(true)), eip2537: g1Eip2537(meta.apk) },
       row.aggregate_public_key,
       `${what}: aggregate key`,
     );

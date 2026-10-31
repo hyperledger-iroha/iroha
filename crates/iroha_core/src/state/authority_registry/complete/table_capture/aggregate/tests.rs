@@ -109,6 +109,10 @@ fn note_reader(state: &State) {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn accounts(
     state: &State,
     limits: LeafLimits,
@@ -117,6 +121,10 @@ fn accounts(
     super::super::capture_accounts_table_once(state, limits)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn aliases(
     state: &State,
     limits: LeafLimits,
@@ -150,6 +158,9 @@ fn backing_bytes() -> usize {
 
 #[test]
 fn exact_outer_backing_is_admitted_before_first_reader_and_retained_until_final_owner() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -186,6 +197,9 @@ fn exact_outer_backing_is_admitted_before_first_reader_and_retained_until_final_
 
 #[test]
 fn empty_catalog_uses_zero_backing_and_catalog_errors_precede_pool_refusal() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -221,7 +235,7 @@ fn empty_catalog_uses_zero_backing_and_catalog_errors_precede_pool_refusal() {
             .unwrap(),
         TableCaptureError::MissingMaterializer("world.accounts")
     ));
-    let over_count = [normal_readers()[0]; super::super::MAX_TABLE_MATERIALIZERS + 1];
+    let over_count = vec![normal_readers()[0]; super::super::MAX_TABLE_MATERIALIZERS + 1];
     assert!(matches!(
         capture_tables_once(&state, FIELDS, &over_count, policy(limits()))
             .err()
@@ -250,6 +264,9 @@ impl Wake for Wakes {
 
 #[test]
 fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&budget);
@@ -296,6 +313,10 @@ fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
     );
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn rejected_second(
     state: &State,
     _: LeafLimits,
@@ -304,6 +325,14 @@ fn rejected_second(
     Err(LeafError::PayloadLimit)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "The fixture implements the production fallible callback contract"
+)]
 fn unavailable_second(
     state: &State,
     _: LeafLimits,
@@ -312,6 +341,10 @@ fn unavailable_second(
     Ok(None)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn generation_changed_second(
     state: &State,
     limits: LeafLimits,
@@ -325,6 +358,9 @@ fn generation_changed_second(
 
 #[test]
 fn partial_child_failure_identity_mismatch_and_both_generation_retries_release_all_backing() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let cases: [(Reader, Option<TableCaptureError>); 4] = [
         (
             rejected_second,
@@ -377,6 +413,10 @@ fn partial_child_failure_identity_mismatch_and_both_generation_retries_release_a
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn panic_second(
     state: &State,
     _: LeafLimits,
@@ -387,6 +427,9 @@ fn panic_second(
 
 #[test]
 fn aggregate_row_failure_and_reader_unwind_release_completed_nodes_and_outer_backing() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();

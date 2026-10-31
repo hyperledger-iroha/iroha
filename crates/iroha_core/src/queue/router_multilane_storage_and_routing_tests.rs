@@ -12,7 +12,7 @@ use iroha_config::{
     kura::FsyncMode,
     parameters::{
         actual::{
-            Crypto, Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
+            Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
             LaneRoutingPolicy, LaneRoutingRule,
         },
         defaults,
@@ -169,7 +169,7 @@ fn install_state_nexus(
     dataspace_catalog: DataSpaceCatalog,
     policy: LaneRoutingPolicy,
     autoscale_range: Option<(u32, u32)>,
-) -> Result<State> {
+) -> State {
     let kura = Kura::blank_kura_for_testing();
     let state = new_state(kura);
     let mut nexus = iroha_config::parameters::actual::Nexus {
@@ -187,7 +187,7 @@ fn install_state_nexus(
             NonZeroU32::new(max_lane_id_exclusive).expect("autoscale max lanes must be nonzero");
     }
     state.install_synthetic_routing_snapshot_for_testing(nexus);
-    Ok(state)
+    state
 }
 fn new_state(kura: Arc<Kura>) -> State {
     let query = LiveQueryStore::start_test();
@@ -248,13 +248,16 @@ fn build_tx(
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let crypto_cfg = Crypto::default();
     AcceptedTransaction::accept(
         tx,
         &network_id,
         Duration::from_secs(30),
         params,
-        &crypto_cfg,
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
     )
     .expect("transaction should be accepted")
 }
@@ -390,7 +393,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         dataspace_catalog.clone(),
         lane_catalog.clone(),
     ));
-    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)));
     seed_committed_height(&mut state, 7);
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
@@ -469,7 +472,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     Ok(())
 }
 #[test]
-fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Result<()> {
+fn multilane_router_fails_closed_when_elastic_range_contains_corruption() {
     struct CorruptionCase {
         name: &'static str,
         lane: LaneConfigMetadata,
@@ -523,8 +526,7 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         ));
-        let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))
-            .unwrap_or_else(|err| panic!("{}: install Nexus state: {err}", case.name));
+        let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)));
         seed_committed_height(&mut state, 7);
         let (authority, keypair) = gen_account_in("nexus");
         let network_id = *state.network_id_ref();
@@ -556,10 +558,9 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             case.name
         );
     }
-    Ok(())
 }
 #[test]
-fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> Result<()> {
+fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() {
     let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
     let mut lanes = base_lane_catalog.lanes().to_vec();
     lanes.push(autoscale_elastic_lane(LaneId::new(3), 7));
@@ -571,7 +572,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
         dataspace_catalog.clone(),
         lane_catalog.clone(),
     ));
-    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)));
     seed_committed_height(&mut state, 7);
     let mut nexus = state.nexus_snapshot();
     nexus.autoscale.enabled = false;
@@ -604,5 +605,4 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
         std::collections::BTreeSet::from([LaneId::new(0)]),
         "disabled autoscale must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
     );
-    Ok(())
 }

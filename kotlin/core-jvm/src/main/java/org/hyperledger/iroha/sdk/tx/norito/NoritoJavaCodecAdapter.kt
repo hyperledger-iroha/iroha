@@ -53,6 +53,16 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
     fun orderedIntentDigest(payload: TransactionPayload): org.hyperledger.iroha.sdk.core.model.OrderedIntentDigestV1 =
         adapter.orderedIntentDigest(payload)
 
+    /** Canonical ActionStatementV1 frame derived from the original ordered payload. */
+    fun actionStatementProjectionV1(originalPayload: TransactionPayload, actionIndex: Long): ByteArray =
+        adapter.actionStatementProjectionV1(originalPayload, actionIndex)
+
+    /** Derive the X509 native statement from this codec's original payload and signed action. */
+    fun materializeZkX509StatementV1(
+        request: org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1,
+        originalPayload: TransactionPayload,
+    ): ByteArray = adapter.materializeZkX509StatementV1(request, originalPayload)
+
     /** Rebind statements after changing independent intent fields, before regenerating proofs. */
     fun bindAttachmentStatements(payload: TransactionPayload): TransactionPayload = adapter.bindAttachmentStatements(payload)
 

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { sha256 } from "@noble/hashes/sha2";
-import { ed25519 } from "@noble/curves/ed25519";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";

@@ -5,71 +5,40 @@
 use super::*;
 use crate::privacy::{
     BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-    PrivacyConsensusLimitsV1, PrivacyExact12QualificationRecordV1, PrivacyOrchardPoolBootstrapV1,
-    PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1,
-    PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationLimitsV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordV1,
-    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
-    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-    PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
-    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+    PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
+    PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolIdV1,
+    PrivacyProtocolLimitsV1, PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1,
+    PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+    PrivacyZkAmsRegistryBootstrapV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
+    PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+    PrivacyZkX509TrustAnchorRecordV1,
 };
 
+use crate::transaction::signed_attachments::ActionAttachmentRefV1;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+#[path = "privacy_x509_request.rs"]
+mod x509_request;
+pub use x509_request::{
+    PrivacyZkX509RequestErrorV1, SubmitPrivacyZkX509CertificateV1,
+    ZK_X509_REQUEST_PUBLIC_INPUTS_DOMAIN_V1,
+};
 isi! {
-    /// Register one immutable proposal for explicit governed activation.
+    /// Schedule a ordinary update of the chain-wide privacy policy for a future block.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
-    #[norito_schema(name = "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1")]
-    pub struct RegisterPrivacyProtocolActivationV1 {
-        /// Exact protocol, artifacts, lifecycle, and admission limits to register.
-        pub activation: PrivacyProtocolActivationRecordV1,
-    }
-}
-impl crate::seal::Instruction for RegisterPrivacyProtocolActivationV1 {}
-impl RegisterPrivacyProtocolActivationV1 {
-    /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.privacy.register_protocol_activation.v1";
-    /// Construct an activation-registration instruction.
-    #[must_use]
-    pub fn new(activation: PrivacyProtocolActivationRecordV1) -> Self {
-        Self { activation }
-    }
-}
-isi! {
-    /// Register the one immutable Exact12 release and deployment qualification.
-    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
-    #[norito_schema(name = "iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1")]
-    pub struct RegisterPrivacyExact12QualificationV1 {
-        /// Full portable release and target-network deployment evidence.
-        pub qualification: PrivacyExact12QualificationRecordV1,
-    }
-}
-impl crate::seal::Instruction for RegisterPrivacyExact12QualificationV1 {}
-impl RegisterPrivacyExact12QualificationV1 {
-    /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.privacy.register_exact12_qualification.v1";
-    /// Construct the singleton qualification-registration instruction.
-    #[must_use]
-    pub fn new(qualification: PrivacyExact12QualificationRecordV1) -> Self {
-        Self { qualification }
-    }
-}
-isi! {
-    /// Schedule a component-wise tightening of the chain-wide privacy policy for a future block.
-    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
-    #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1")]
-    pub struct SchedulePrivacyConsensusPolicyTighteningV1 {
+    #[norito (deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1")]
+    pub struct SchedulePrivacyConsensusPolicyUpdateV1 {
         /// Exact incoming height strictly after admission; the next block is allowed.
         pub effective_at_height: u64,
-        /// Complete component-wise-lower successor limits.
+        /// Complete successor limits within canonical safety bounds.
         pub next_limits: PrivacyConsensusLimitsV1,
     }
 }
-impl crate::seal::Instruction for SchedulePrivacyConsensusPolicyTighteningV1 {}
-impl SchedulePrivacyConsensusPolicyTighteningV1 {
+impl crate::seal::Instruction for SchedulePrivacyConsensusPolicyUpdateV1 {}
+impl SchedulePrivacyConsensusPolicyUpdateV1 {
     /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_consensus_policy_tightening.v1";
+    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_consensus_policy_update.v1";
     /// Construct a chain-wide privacy-policy schedule.
     #[must_use]
     pub const fn new(effective_at_height: u64, next_limits: PrivacyConsensusLimitsV1) -> Self {
@@ -80,60 +49,34 @@ impl SchedulePrivacyConsensusPolicyTighteningV1 {
     }
 }
 isi! {
-    /// Schedule a component-wise tightening for one privacy protocol at a future block.
+    /// Schedule a ordinary update for one privacy protocol at a future block.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
-    #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1")]
-    pub struct SchedulePrivacyProtocolLimitsTighteningV1 {
-        /// Exact registered protocol whose limits will be tightened.
+    #[norito (deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1")]
+    pub struct SchedulePrivacyProtocolLimitsUpdateV1 {
+        /// Exact protocol whose optional resource policy will be updated.
         pub protocol_id: PrivacyProtocolIdV1,
         /// Exact incoming height strictly after admission; the next block is allowed.
         pub effective_at_height: u64,
         /// Complete protocol-tagged successor limits.
-        pub next_limits: PrivacyProtocolActivationLimitsV1,
+        pub next_limits: PrivacyProtocolLimitsV1,
     }
 }
-impl crate::seal::Instruction for SchedulePrivacyProtocolLimitsTighteningV1 {}
-impl SchedulePrivacyProtocolLimitsTighteningV1 {
+impl crate::seal::Instruction for SchedulePrivacyProtocolLimitsUpdateV1 {}
+impl SchedulePrivacyProtocolLimitsUpdateV1 {
     /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_protocol_limits_tightening.v1";
+    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_protocol_limits_update.v1";
     /// Construct a protocol-specific limit schedule.
     #[must_use]
     pub const fn new(
         protocol_id: PrivacyProtocolIdV1,
         effective_at_height: u64,
-        next_limits: PrivacyProtocolActivationLimitsV1,
+        next_limits: PrivacyProtocolLimitsV1,
     ) -> Self {
         Self {
             protocol_id,
             effective_at_height,
             next_limits,
-        }
-    }
-}
-isi! {
-    /// Apply a forward-only lifecycle transition to a registered privacy protocol.
-    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
-    #[norito_schema(name = "iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1")]
-    pub struct TransitionPrivacyProtocolLifecycleV1 {
-        /// Exact protocol whose lifecycle is changing.
-        pub protocol_id: PrivacyProtocolIdV1,
-        /// Complete next lifecycle state, including its effective height.
-        pub next_lifecycle: PrivacyProtocolLifecycleV1,
-    }
-}
-impl crate::seal::Instruction for TransitionPrivacyProtocolLifecycleV1 {}
-impl TransitionPrivacyProtocolLifecycleV1 {
-    /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.privacy.transition_protocol_lifecycle.v1";
-    /// Construct a lifecycle-transition instruction.
-    #[must_use]
-    pub fn new(
-        protocol_id: PrivacyProtocolIdV1,
-        next_lifecycle: PrivacyProtocolLifecycleV1,
-    ) -> Self {
-        Self {
-            protocol_id,
-            next_lifecycle,
         }
     }
 }
@@ -201,8 +144,8 @@ isi! {
     pub struct BootstrapPrivacyPgcAccountsV1 {
         /// Complete canonical pool namespace, root, epoch, and ordered accounts.
         pub bootstrap: PrivacyPgcAccountBootstrapV1,
-        /// Exact canonical native proof of account well-formedness, range, and supply.
-        pub proof: PrivacyPgcBootstrapProofBytesV1,
+        /// Reference to the original signed native proof of well-formedness, range, and supply.
+        pub proof_ref: ActionAttachmentRefV1,
     }
 }
 impl crate::seal::Instruction for BootstrapPrivacyPgcAccountsV1 {}
@@ -211,11 +154,11 @@ impl BootstrapPrivacyPgcAccountsV1 {
     pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_pgc_accounts.v1";
     /// Construct a governed Anonymous PGC account bootstrap.
     #[must_use]
-    pub fn new(
-        bootstrap: PrivacyPgcAccountBootstrapV1,
-        proof: PrivacyPgcBootstrapProofBytesV1,
-    ) -> Self {
-        Self { bootstrap, proof }
+    pub fn new(bootstrap: PrivacyPgcAccountBootstrapV1, proof_ref: ActionAttachmentRefV1) -> Self {
+        Self {
+            bootstrap,
+            proof_ref,
+        }
     }
 }
 isi! {
@@ -749,24 +692,14 @@ macro_rules! impl_privacy_decode_from_slice {
         }
     };
 }
-impl_privacy_decode_from_slice!(RegisterPrivacyProtocolActivationV1 {
-    activation: PrivacyProtocolActivationRecordV1,
-});
-impl_privacy_decode_from_slice!(RegisterPrivacyExact12QualificationV1 {
-    qualification: PrivacyExact12QualificationRecordV1,
-});
-impl_privacy_decode_from_slice!(SchedulePrivacyConsensusPolicyTighteningV1 {
+impl_privacy_decode_from_slice!(SchedulePrivacyConsensusPolicyUpdateV1 {
     effective_at_height: u64,
     next_limits: PrivacyConsensusLimitsV1,
 });
-impl_privacy_decode_from_slice!(SchedulePrivacyProtocolLimitsTighteningV1 {
+impl_privacy_decode_from_slice!(SchedulePrivacyProtocolLimitsUpdateV1 {
     protocol_id: PrivacyProtocolIdV1,
     effective_at_height: u64,
-    next_limits: PrivacyProtocolActivationLimitsV1,
-});
-impl_privacy_decode_from_slice!(TransitionPrivacyProtocolLifecycleV1 {
-    protocol_id: PrivacyProtocolIdV1,
-    next_lifecycle: PrivacyProtocolLifecycleV1,
+    next_limits: PrivacyProtocolLimitsV1,
 });
 impl_privacy_decode_from_slice!(PublishPrivacyRootV1 {
     publication: PrivacyRootPublicationV1,
@@ -779,7 +712,7 @@ impl_privacy_decode_from_slice!(BootstrapPrivacyProofManagedPoolV1 {
 });
 impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
     bootstrap: PrivacyPgcAccountBootstrapV1,
-    proof: PrivacyPgcBootstrapProofBytesV1,
+    proof_ref: ActionAttachmentRefV1,
 });
 impl_privacy_decode_from_slice!(BootstrapPrivacyZkAmsRegistryV1 {
     bootstrap: PrivacyZkAmsRegistryBootstrapV1,
@@ -850,9 +783,24 @@ impl_privacy_decode_from_slice!(RevokePrivacyZkX509CrlV1 {
     expected_current_record_digest: PrivacyZkX509CrlRecordDigestV1,
     successor: PrivacyZkX509CrlRecordV1,
 });
+impl_privacy_decode_from_slice!(SubmitPrivacyZkX509CertificateV1 {
+    statement: crate::privacy::IrohaZkX509StarkP256StatementV1,
+    proof_ref: ActionAttachmentRefV1,
+});
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,
 });
+/// Reuse the proof-free X509 request fixture for its current typed record capture.
+#[cfg(test)]
+pub(super) fn current_zk_x509_request_fixture_v1() -> SubmitPrivacyZkX509CertificateV1 {
+    tests::x509_reference_request()
+}
+/// Reuse the populated privacy proof fixture for current typed record capture.
+#[cfg(test)]
+pub(super) fn current_submit_proof_fixture_v1() -> SubmitPrivacyProofV1 {
+    SubmitPrivacyProofV1::new(tests::envelope())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,8 +814,8 @@ mod tests {
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPublicMatrixV1,
             BootleLanternPolynomialV1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
-            IrohaJindoPolynomialCommitmentStatementV1, JindoActivationLimitsV1,
-            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            IrohaJindoPolynomialCommitmentStatementV1, JindoLimitsV1,
+            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpOutputTupleV1,
             PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1,
             PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
@@ -875,16 +823,15 @@ mod tests {
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
             PrivacyPgcAccountV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
             PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
-            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
-            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
-            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
-            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
-            PrivacyX509TrustStoreDigestV1, PrivacyZkAceIdentityCommitmentV1,
-            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
-            PrivacyZkX509RecordLifecycleV1,
+            PrivacyProofV1, PrivacyProtocolLimitsV1, PrivacyRootRoleV1, PrivacyRootV1,
+            PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
+            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
+            PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyLifecycleV1,
+            PrivacyZkAmsRegistryIdV1, PrivacyZkX509RecordLifecycleV1,
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -892,12 +839,9 @@ mod tests {
     use iroha_model_base::name::Name;
     use norito::core::DecodeFromSlice;
     use std::str::FromStr as _;
-    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 29] = [
-        RegisterPrivacyProtocolActivationV1::WIRE_ID,
-        RegisterPrivacyExact12QualificationV1::WIRE_ID,
-        SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
-        SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
-        TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
+    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 27] = [
+        SchedulePrivacyConsensusPolicyUpdateV1::WIRE_ID,
+        SchedulePrivacyProtocolLimitsUpdateV1::WIRE_ID,
         PublishPrivacyRootV1::WIRE_ID,
         BootstrapPrivacyOrchardPoolV1::WIRE_ID,
         BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
@@ -922,6 +866,7 @@ mod tests {
         RotatePrivacyZkX509CrlV1::WIRE_ID,
         RevokePrivacyZkX509CrlV1::WIRE_ID,
         SubmitPrivacyProofV1::WIRE_ID,
+        SubmitPrivacyZkX509CertificateV1::WIRE_ID,
     ];
     fn digest(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -960,9 +905,9 @@ mod tests {
             }],
         })
     }
-    fn activation() -> PrivacyProtocolActivationRecordV1 {
+    fn profile() -> PrivacyCompiledProfileSnapshotV1 {
         let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
-        PrivacyProtocolActivationRecordV1 {
+        PrivacyCompiledProfileSnapshotV1 {
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
             engine_id: protocol_id.expected_engine(),
@@ -971,42 +916,26 @@ mod tests {
             verifier_digest: PrivacyVerifierDigestV1::new(digest(3)),
             statement_schema_digest: PrivacyStatementSchemaDigestV1::new(digest(4)),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(digest(5)),
-            lifecycle: PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                proposed_at_height: 100,
-            }),
-            protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-                JindoActivationLimitsV1 {
+            protocol_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                JindoLimitsV1 {
                     max_polynomial_count: 4,
                 },
             ),
-            pending_protocol_limits_tightening: None,
         }
     }
-    #[test]
-    #[ignore = "opt-in capture of the current privacy activation instruction"]
-    fn capture_current_privacy_activation_instruction_identity_frames() {
-        let row = crate::isi::generated_record_identity_tests::capture(
-            RegisterPrivacyProtocolActivationV1::new(activation()),
-        );
-        println!(
-            "PRIVACY_ACTIVATION_INSTRUCTION_CAPTURE={}",
-            norito::json::to_json(&row).expect("encode exact activation identity capture"),
-        );
-    }
-
-    fn envelope() -> PrivacyProofEnvelopeV1 {
-        let activation = activation();
+    pub(super) fn envelope() -> PrivacyProofEnvelopeV1 {
+        let profile = profile();
         let context = PrivacyStatementContextV1 {
             network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
             ),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(digest(6)),
-            parameter_id: activation.parameter_id,
-            parameter_digest: activation.parameter_digest,
-            verifier_digest: activation.verifier_digest,
-            statement_schema_digest: activation.statement_schema_digest,
-            engine_manifest_digest: activation.engine_manifest_digest,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
         };
         let mut evaluation_point = [0; 32];
         evaluation_point[0] = 7;
@@ -1036,14 +965,14 @@ mod tests {
         PrivacyProofEnvelopeV1 {
             wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
             catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
-            protocol_id: activation.protocol_id,
-            proof_system_id: activation.proof_system_id,
-            engine_id: activation.engine_id,
-            parameter_id: activation.parameter_id,
-            parameter_digest: activation.parameter_digest,
-            verifier_digest: activation.verifier_digest,
-            statement_schema_digest: activation.statement_schema_digest,
-            engine_manifest_digest: activation.engine_manifest_digest,
+            protocol_id: profile.protocol_id,
+            proof_system_id: profile.proof_system_id,
+            engine_id: profile.engine_id,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
             statement_digest,
             statement,
             proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
@@ -1337,42 +1266,22 @@ mod tests {
     }
     macro_rules! for_each_privacy_isi_fixture {
         ($check:ident) => {
-            $check!(
-                RegisterPrivacyProtocolActivationV1::WIRE_ID,
-                RegisterPrivacyProtocolActivationV1::new(activation())
-            );
-            $check!(SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID, {
+            $check!(SchedulePrivacyConsensusPolicyUpdateV1::WIRE_ID, {
                 let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
                 next_limits.max_actions_per_block = 1;
-                SchedulePrivacyConsensusPolicyTighteningV1::new(700, next_limits)
+                SchedulePrivacyConsensusPolicyUpdateV1::new(700, next_limits)
             });
-            $check!(SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID, {
-                let activation = activation();
-                let mut next_limits = activation.protocol_limits;
-                let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-                    ref mut limits,
-                ) = next_limits
+            $check!(SchedulePrivacyProtocolLimitsUpdateV1::WIRE_ID, {
+                let profile = profile();
+                let mut next_limits = profile.protocol_limits;
+                let PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(ref mut limits) =
+                    next_limits
                 else {
                     unreachable!("Jindo fixture")
                 };
                 limits.max_polynomial_count -= 1;
-                SchedulePrivacyProtocolLimitsTighteningV1::new(
-                    activation.protocol_id,
-                    700,
-                    next_limits,
-                )
+                SchedulePrivacyProtocolLimitsUpdateV1::new(profile.protocol_id, 700, next_limits)
             });
-            $check!(
-                TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
-                TransitionPrivacyProtocolLifecycleV1::new(
-                    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
-                    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                        proposed_at_height: 100,
-                        activated_at_height: 400,
-                        state_since_height: 400,
-                    }),
-                )
-            );
             $check!(
                 PublishPrivacyRootV1::WIRE_ID,
                 PublishPrivacyRootV1::new(publication())
@@ -1389,7 +1298,10 @@ mod tests {
                 BootstrapPrivacyPgcAccountsV1::WIRE_ID,
                 BootstrapPrivacyPgcAccountsV1::new(
                     pgc_bootstrap(),
-                    PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+                    ActionAttachmentRefV1 {
+                        action_index: 0,
+                        slot_index: 0
+                    },
                 )
             );
             $check!(
@@ -1552,6 +1464,10 @@ mod tests {
                 )
             });
             $check!(
+                SubmitPrivacyZkX509CertificateV1::WIRE_ID,
+                x509_reference_request()
+            );
+            $check!(
                 SubmitPrivacyProofV1::WIRE_ID,
                 SubmitPrivacyProofV1::new(envelope())
             );
@@ -1607,9 +1523,7 @@ mod tests {
             }};
         }
         for_each_privacy_isi_fixture!(check);
-        // The full qualification record has its canonical roundtrip coverage in
-        // `privacy::tests::release_manifest`; do not duplicate that large fixture here.
-        assert_eq!(fixture_count + 1, PRIVACY_ISI_WIRE_IDS_V1.len());
+        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
     }
     #[test]
     fn privacy_isi_decoders_reject_trailing_and_truncated_payloads() {
@@ -1621,9 +1535,7 @@ mod tests {
             }};
         }
         for_each_privacy_isi_fixture!(check);
-        // The full qualification record's malformed-wire coverage lives with
-        // the release/deployment manifest fixture.
-        assert_eq!(fixture_count + 1, PRIVACY_ISI_WIRE_IDS_V1.len());
+        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
         assert!(
             BootstrapPrivacyPgcAccountsV1::decode_from_slice(&pgc_bootstrap().encode()).is_err(),
             "the unreleased proofless bootstrap layout has no legacy decoder"
@@ -1671,13 +1583,70 @@ mod tests {
         );
     }
     #[test]
+    fn privacy_policy_updates_reject_retired_admission_fields() {
+        macro_rules! check {
+            ($ty:ty, $value:expr) => {{
+                let instruction: $ty = $value;
+                let canonical = norito::json::to_json(&instruction).unwrap();
+                assert_eq!(
+                    norito::json::from_json::<$ty>(&canonical).unwrap(),
+                    instruction
+                );
+                for field in ["lifecycle", "qualification", "reviewer_signature"] {
+                    let hostile = canonical.replacen('{', &format!("{{\"{field}\":null,"), 1);
+                    assert!(norito::json::from_json::<$ty>(&hostile).is_err(), "{field}");
+                }
+            }};
+        }
+        check!(
+            SchedulePrivacyConsensusPolicyUpdateV1,
+            SchedulePrivacyConsensusPolicyUpdateV1::new(
+                700,
+                PrivacyConsensusLimitsV1::taira_default()
+            )
+        );
+        let profile = profile();
+        check!(
+            SchedulePrivacyProtocolLimitsUpdateV1,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                profile.protocol_id,
+                700,
+                profile.protocol_limits
+            )
+        );
+    }
+    #[test]
+    fn retired_privacy_admission_operations_are_not_registered() {
+        for wire_id in [
+            "iroha.privacy.register_protocol_activation.v1",
+            "iroha.privacy.register_exact12_qualification.v1",
+            "iroha.privacy.transition_protocol_lifecycle.v1",
+            "iroha.privacy.schedule_consensus_policy_tightening.v1",
+            "iroha.privacy.schedule_protocol_limits_tightening.v1",
+        ] {
+            assert!(
+                !crate::isi::registry::is_instruction_wire_id_registered(wire_id),
+                "{wire_id}"
+            );
+        }
+        for wire_id in [
+            SchedulePrivacyConsensusPolicyUpdateV1::WIRE_ID,
+            SchedulePrivacyProtocolLimitsUpdateV1::WIRE_ID,
+        ] {
+            assert!(
+                crate::isi::registry::is_instruction_wire_id_registered(wire_id),
+                "{wire_id}"
+            );
+        }
+    }
+    #[test]
     fn stable_wire_ids_have_no_retired_compatibility_names() {
-        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 29);
+        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 27);
         let mut sorted_wire_ids = PRIVACY_ISI_WIRE_IDS_V1;
         sorted_wire_ids.sort_unstable();
         assert!(
             sorted_wire_ids.windows(2).all(|pair| pair[0] != pair[1]),
-            "all 29 canonical first-release privacy ISIs must have unique wire IDs"
+            "all 27 canonical first-release privacy ISIs must have unique wire IDs"
         );
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));
@@ -1688,4 +1657,6 @@ mod tests {
             assert!(!wire_id.contains("aztec"));
         }
     }
+    include!("privacy_direct_attachment_tests.rs");
+    include!("privacy_x509_attachment_tests.rs");
 }

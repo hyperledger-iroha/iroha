@@ -201,7 +201,12 @@ fn native_payment_exact_fixed_frame_and_first_excess_byte_use_real_signed_terms(
             &network.network_id(),
             Duration::from_secs(1),
             parameters.transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         );
         if allowed {
             // `ensure!` may evaluate its condition twice; consume the result first.
@@ -482,6 +487,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("rejected"),
             )?),
+            payment_finality(stores.join("rejected-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let failed = bounded(
@@ -512,6 +518,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
         let operation = gateway.account_client().native_payment(
             request.clone(),
             Arc::new(FileWorkflowStorage::open_or_create(stores.join("success"))?),
+            payment_finality(stores.join("success-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let completed = bounded(&rt, deadline, operation.submit(&options))??;
@@ -595,6 +602,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
             let success = resumed.account_client().native_payment(
                 request.clone(),
                 Arc::new(FileWorkflowStorage::open_or_create(stores.join("success"))?),
+                payment_finality(stores.join("success-finality"))?,
                 verifier(&wire, &selected)?,
             )?;
             let receipt = bounded(&rt, deadline, success.recover(&options))??
@@ -619,6 +627,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
                 Arc::new(FileWorkflowStorage::open_or_create(
                     stores.join("rejected"),
                 )?),
+                payment_finality(stores.join("rejected-finality"))?,
                 verifier(&wire, &selected)?,
             )?;
             let recovery = bounded(&rt, deadline, failure.recover(&options))??;

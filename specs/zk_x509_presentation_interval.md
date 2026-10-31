@@ -53,12 +53,13 @@ canonical API.
 
 - `canonical` sites take their verdict or their chosen window from the
   definition. In every build: statement validation, authoritative-state
-  admission and the verifier's public shape. Compiled with the prover only
-  (`cfg(any(test, feature = "privacy-release-evidence"))`, recorded under
-  `build_gates`): the native reference relation, the DER-to-bounds helper
-  `derive_zk_x509_presentation_bounds_v1`, the release fixtures, and prover
-  preflight, which calls state admission and the native relation. An ordinary
-  build contains none of those four.
+  admission, the verifier's public shape and the strict DER-to-bounds helper
+  `privacy_engines::zk_x509::presentation::derive_zk_x509_presentation_bounds_v1`.
+  The helper and native reference relation use one complete strict certificate
+  and CRL parser. The native reference relation and complete prover are also
+  available in ordinary builds; prover preflight calls state admission and
+  the native relation. Only release fixtures retain the test/evidence gate
+  recorded under `build_gates`.
 - `in-relation` sites (the DER/RFC 5280 AIR and its numeric relation slots) are
   deliberately independent formulations: one lower and one upper slot per
   certificate, a strict `nextUpdate` slot and a `thisUpdate + 300` slot. Tests
@@ -74,10 +75,19 @@ certificate validity periods are private, so only the proof binds them: a
 window past a private certificate expiry passes state admission and is
 rejected by the relation.
 
-No SDK builds an X509 statement today. A builder added with X.5 parses the
-validity fields, then calls the definition (Rust) or reproduces the shared
-vectors (other languages), and must be added to the site inventory. X.5 also
-owns shipping the DER-to-bounds helper together with the holder prover.
+No SDK builds an X509 statement today. Ordinary Rust holder preflight accepts
+the exact leaf-first certificate DER path and complete CRL DER, validates the
+closed encoding profile, and calls the canonical interval definition. Typed
+failures have one public owner, `privacy_engines::zk_x509::errors`. A successful
+bounds result does not authenticate signatures, certificate path linkage,
+governance, revocation or possession, and does not establish proof validity.
+The native reference relation performs those separate checks. Any SDK builder
+added with X.5 must use this helper or reproduce the shared vectors in its own
+language and be added to the site inventory. The ordinary native
+`zk_x509::holder` API exposes the canonical wallet ownership challenge,
+bounded owned witness construction and complete self-verifying prover.
+Statement builders, SDK bindings, paired-host transport and endpoint privacy
+policy remain X.5 work.
 
 ## Holder privacy
 
@@ -100,6 +110,11 @@ X.5 policy.
 - `cargo test -p iroha_data_model --test zk_x509_presentation_interval` —
   definition, vectors, exhaustive boundary grid, deadline, the latest-expiry
   regression, the disclosure predicate and the deferred-site boundary grid.
+- `cargo test -p iroha_core_privacy --test zk_x509_presentation_bounds` —
+  ordinary-build public API over genuinely signed two- and three-certificate
+  paths, every inclusive certificate endpoint, exclusive CRL `nextUpdate`,
+  freshness, malformed/deep/oversized DER, calendar boundaries and valid retry.
+  Run without `privacy-release-evidence`; the library dependency has no test cfg.
 - `cargo test -p iroha_core_privacy --lib presentation_interval_tests` —
   genuinely signed paths with the earliest expiry and latest `notBefore` at
   the leaf, intermediate and root; boundary equality; one-second overflow;
@@ -133,8 +148,12 @@ What the site check does and does not establish:
   `from_crl(...)` containing the block second for every block second within the
   RFC 5280 calendar; the definition additionally rejects a later second. X.6
   owns the migration and end-to-end deadline budgeting.
-- The DER-to-bounds helper and prover preflight are absent from ordinary
-  builds until X.5 ships the holder prover.
+- The ordinary DER-to-bounds helper is interval preflight only. The ordinary
+  holder API separately invokes the complete native prover and local verifier;
+  release fixtures and process diagnostics remain gated. This API alone does
+  not complete X.5/S.1. Existing parser list allocations are bounded but not
+  fallibly admitted, and matching native build/test, end-to-end paired-host and
+  physical-device qualification remain required.
 
 ## Local holder scheduling budget (X.6 component)
 
@@ -165,10 +184,28 @@ an idle chain. Its diagnostics do not expose private certificate bounds, and it
 does not choose or publish window endpoints. The existing endpoint-disclosure
 check remains the caller's separate privacy decision.
 
-TODO(X.6): this source component is not an integrated or shipping holder scheduler.
-Authenticated newest-eligible selection across merged CRL/policy/anchor events,
-same-block ordering and revocation, spacing/skipped/withheld CRLs, slow issuers,
-starvation and quiet-chain lifecycle controls remain open. The X.5 holder/native
-builder integration and E.1/X.4 measured timing and network rollover controls are
-also still required. No wire type, graph status, consensus time rule or signed
-CRL authority is changed by this local budget component.
+The ordinary `zk_x509::holder::ZkX509HolderAttemptV1` now owns the exact
+statement and witness. Preparation invokes the real engine's codec, State and
+native signed-relation preflight before extracting private certificate/CRL
+intervals. It checks the full six-term estimate. Its consuming `prove_with_rng`
+revalidates the unchanged original against newly authenticated State, trusted
+chain time and network/genesis, then checks proving, publication jitter,
+submission and clock margin before invoking the complete native prover.
+
+The self-verified proof remains opaque inside `ZkX509PendingCredentialProofV1`.
+Its consuming `release` repeats original-statement/State/time/network validation
+and checks only publication, submission and clock reserve. Completed stages are
+not charged again. Explicit local time inputs cannot move backwards. Every
+phase retains the original signed/public deadline; failed, superseded or expired
+attempts consume their owner and never return rewritten statements or fallback
+CRLs. Private timing diagnostics stay redacted. Release and subsequent consensus
+submission are distinct: intervening State/time changes still require a fresh
+check, and ordinary admission remains authoritative.
+
+TODO(X.6): authenticated State acquisition, merged-event observation, actual
+submission ownership, SDK integration, issuer spacing/withholding/slow-issuer
+and starvation controls remain open. A revoked State lookup must stop the caller
+rather than supply a cached active snapshot. This API cannot certify that a caller
+supplied its newest snapshot, infer live wall-clock freshness from a chain
+snapshot or force idle chains to produce blocks. E.1/X.4 measured timing,
+maximum-proof and network rollover controls remain separate requirements.

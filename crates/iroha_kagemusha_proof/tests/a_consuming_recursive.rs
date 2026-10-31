@@ -610,8 +610,9 @@ impl Circuit<Fp> for Single {
                 };
                 assert_eq!(self.plan.q_partition(0), Some([0_usize].as_slice()));
                 let mut verified = Vec::new();
-                let mut slots = None;
-                if !self.omit_q {
+                let slots = if self.omit_q {
+                    None
+                } else {
                     let proof =
                         self.carrier(&mut chip, &mut bytes, &mut region, &self.source.q_proofs[0])?;
                     let q = verify_q(
@@ -631,8 +632,8 @@ impl Circuit<Fp> for Single {
                         &q,
                     )?;
                     verified.push(bound.verified().clone());
-                    slots = Some(bound);
-                }
+                    Some(bound)
+                };
                 UnloadStagePlan::new(self.plan.clone(), load_objects::policy())?.constrain_stage(
                     &mut chip,
                     &mut region,

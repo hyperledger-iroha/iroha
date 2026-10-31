@@ -18,7 +18,7 @@ use core::fmt;
 
 use aes::{
     Block,
-    cipher::{BlockEncrypt, KeyInit},
+    cipher::{BlockCipherEncrypt, KeyInit},
 };
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -78,11 +78,11 @@ impl_encryptor!(aes::soft::Aes128, aes::soft::Aes192, aes::soft::Aes256);
 
 /// The hardware-autodetecting AES of the `aes` crate, compiled only with `accel`.
 ///
-/// On targets without a hardware backend `aes::Aes128` is the portable type itself,
+/// Force-software configurations alias `aes::Aes128` to the portable type itself,
 /// so the autodetecting types are wrapped to keep the trait implementations apart.
 #[cfg(feature = "accel")]
 mod accelerated {
-    use super::{Block, BlockEncrypt, Encryptor};
+    use super::{Block, BlockCipherEncrypt, Encryptor};
 
     macro_rules! wrap {
         ($($name:ident),+) => {

@@ -305,8 +305,17 @@ fn first_loadable(candidates: &[(&str, u32)]) -> Option<FontData> {
 
 /// Whether egui can parse `data`, checked in a throwaway context.
 pub(crate) fn font_loads(data: &FontData) -> bool {
-    let data = data.clone();
+    // Snapshot the owned probe bytes before entering the panic boundary. FontData's
+    // shared blob can be backed by an arbitrary AsRef implementation.
+    let bytes = data.bytes().to_vec();
+    let index = data.index;
+    let tweak = data.tweak.clone();
     std::panic::catch_unwind(move || {
+        let data = FontData {
+            index,
+            tweak,
+            ..FontData::from_owned(bytes)
+        };
         let mut fonts = FontDefinitions::empty();
         fonts.font_data.insert("probe".into(), Arc::new(data));
         fonts
@@ -317,9 +326,11 @@ pub(crate) fn font_loads(data: &FontData) -> bool {
             .insert(FontFamily::Monospace, vec!["probe".into()]);
         let context = egui::Context::default();
         context.set_fonts(fonts);
-        let _ = context.run(egui::RawInput::default(), |context| {
+        let mut output = context.run_ui(egui::RawInput::default(), |context| {
             egui::CentralPanel::default().show(context, |ui| ui.label("ｱ"));
         });
+        // Parsing is the whole probe; its throwaway context has no texture renderer.
+        output.textures_delta.clear();
     })
     .is_ok()
 }
@@ -399,5 +410,14 @@ mod tests {
     fn unparsable_font_files_are_refused_before_reaching_the_context() {
         assert!(!font_loads(&FontData::from_static(b"not a font file")));
         assert!(first_loadable(&[("/nonexistent/mochi-font.ttf", 0)]).is_none());
+    }
+
+    #[test]
+    fn owned_font_probe_preserves_the_selected_face_index() {
+        let fonts = FontDefinitions::default();
+        let mut data = fonts.font_data.values().next().unwrap().as_ref().clone();
+        assert!(font_loads(&data));
+        data.index = u32::MAX;
+        assert!(!font_loads(&data));
     }
 }

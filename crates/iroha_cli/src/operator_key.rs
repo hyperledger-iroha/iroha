@@ -15,12 +15,12 @@ mod windows;
 /// the bounded read. Windows uses the shared retained private-file owner: local-disk ancestry,
 /// the original single-link file and its protected current-user ACL remain admitted through the
 /// bounded read and canonical parse. Neither implementation repairs input permissions.
-pub(crate) fn load_operator_key_pair(path: &Path) -> Result<KeyPair> {
+pub fn load_operator_key_pair(path: &Path) -> Result<KeyPair> {
     load_private_key_file(path).wrap_err("invalid operator private-key file")
 }
 
 /// Load the dataspace owner from its explicit definition path, independently of the operator key.
-pub(crate) fn load_owner_key_pair(path: &Path) -> Result<KeyPair> {
+pub fn load_owner_key_pair(path: &Path) -> Result<KeyPair> {
     let key = load_private_key_file(path).wrap_err("invalid dataspace owner private-key file")?;
     if key.public_key().algorithm() != iroha_crypto::Algorithm::Ed25519 {
         bail!("dataspace owner key must use Ed25519");
@@ -55,7 +55,7 @@ fn load_private_key_file(path: &Path) -> Result<KeyPair> {
 /// uses only positional reads, and validates exact mode 0600, ownership, link count, length and
 /// metadata stability before parsing the same canonical key format as the file loader. The
 /// original descriptor is marked CLOEXEC so subsequent child processes cannot inherit the key.
-pub(crate) fn load_operator_key_pair_fd(fd: u32) -> Result<KeyPair> {
+pub fn load_operator_key_pair_fd(fd: u32) -> Result<KeyPair> {
     if !(3..=65535).contains(&fd) {
         bail!("operator private-key fd must be an inherited descriptor in 3..=65535");
     }
@@ -145,7 +145,7 @@ fn read_operator_key_descriptor_with(
             Ok(0) => bail!("operator private-key fd changed during bounded read"),
             Ok(count) if count <= capacity - offset => offset += count,
             Ok(_) => bail!("invalid operator private-key fd read length"),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => bail!("failed to read operator private-key fd"),
         }
     }
@@ -156,7 +156,7 @@ fn read_operator_key_descriptor_with(
         match read_at(&mut boundary[..], before.len()) {
             Ok(0) => break,
             Ok(_) => bail!("operator private-key fd changed during bounded read"),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => bail!("failed to verify operator private-key fd boundary"),
         }
     }
@@ -526,7 +526,12 @@ mod tests {
         let secret = "FD_PRIVATE_KEY_MUST_NOT_APPEAR_IN_ERROR";
         for body in [
             Vec::new(),
-            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize + 1],
+            vec![
+                b'A';
+                usize::try_from(MAX_PRIVATE_KEY_FILE_BYTES)
+                    .expect("test private-key bound fits usize")
+                    + 1
+            ],
             secret.as_bytes().to_vec(),
             format!(" {encoded}").into_bytes(),
             format!("{encoded}\r\n").into_bytes(),

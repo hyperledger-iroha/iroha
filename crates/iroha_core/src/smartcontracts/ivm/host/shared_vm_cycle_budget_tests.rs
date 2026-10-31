@@ -31,9 +31,8 @@ seiyaku CycleCallee { view fn value() authorize(anyone) -> int { return 42; } }
                 &caller,
                 &target_contract,
                 "value",
-                Json::new(()),
-                1_000_000,
-                Some(budget),
+                &(Json::new(())),
+                (1_000_000, Some(budget)),
             )
         };
         let measured = ivm::VmCycleBudget::new(NonZeroU64::new(1_000_000).unwrap());
@@ -103,7 +102,7 @@ seiyaku CycleFailure { permission AssetOps;
 ",
             1,
         );
-        grant_asset_ops_to_account(&state, &authority, caller.subject_id());
+        grant_asset_ops_to_account(&state, &authority, &(caller.subject_id()));
         let prologue_cycles = authenticated_test_probe_prologue().len() as u64;
         // Six additional moves restore r10..r15 from staged operands before A9.
         let completed_parent_cycles = prologue_cycles + (10..=15).count() as u64;
@@ -117,9 +116,8 @@ seiyaku CycleFailure { permission AssetOps;
                     &caller,
                     &target_contract,
                     "fail_after_write",
-                    Json::new(()),
-                    1_000_000,
-                    Some(&allowance),
+                    &(Json::new(())),
+                    (1_000_000, Some(&allowance)),
                 );
             let error = result.unwrap_err();
             if limit == boundary_only_limit {

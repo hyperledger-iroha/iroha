@@ -536,6 +536,14 @@ struct SyncFault {
 }
 
 impl SyncFault {
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "Test failure injection uses the original attempt state and returns the injected I/O error"
+        )
+    )]
     fn before_sync(&mut self) -> Result<()> {
         #[cfg(test)]
         if let Some(remaining) = &mut self.remaining {
@@ -564,7 +572,7 @@ struct RootBinding {
 /// No filesystem mutation occurs while preparing this owner. The caller must retain it
 /// until publication or completed rollback; a failed resume never chooses new paths.
 #[derive(Debug)]
-pub(crate) struct TieredGeometryAttempt {
+pub struct TieredGeometryAttempt {
     enabled: bool,
     cold_store_root: Option<PathBuf>,
     da_store_root: Option<PathBuf>,

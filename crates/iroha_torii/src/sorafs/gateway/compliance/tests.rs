@@ -1,4 +1,4 @@
-//! SoraFS gateway compliance persistence and policy tests.
+//! `SoraFS` gateway compliance persistence and policy tests.
 
 use super::*;
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -447,9 +447,9 @@ fn feed_transport_probe_failure_is_redacted_before_store_access() {
 }
 #[test]
 fn feed_transport_operation_diagnostics_are_redacted() {
-    let error = redact_feed_transport_operation_error(GatewayComplianceError::InvalidFeed(
-        "PRIVATE provider credential diagnostic".into(),
-    ));
+    let error = redact_feed_transport_operation_error(
+        &(GatewayComplianceError::InvalidFeed("PRIVATE provider credential diagnostic".into())),
+    );
     assert!(matches!(
         &error,
         GatewayComplianceError::FeedTransportOperationFailed
@@ -460,7 +460,7 @@ fn feed_transport_operation_diagnostics_are_redacted() {
     );
     assert!(!error.to_string().contains("PRIVATE"));
     assert!(matches!(
-        redact_feed_transport_operation_error(GatewayComplianceError::FetchTimeout),
+        redact_feed_transport_operation_error(&(GatewayComplianceError::FetchTimeout)),
         GatewayComplianceError::FetchTimeout
     ));
 }
@@ -1183,7 +1183,7 @@ fn checkpoint_rejects_duplicate_idempotency_keys() {
     let mut checkpoint = controller.checkpoint().expect("checkpoint");
     checkpoint
         .idempotency_records
-        .push(checkpoint.idempotency_records[0].clone());
+        .push(checkpoint.idempotency_records[0]);
     checkpoint.revision = checkpoint
         .revision
         .checked_add(1)
@@ -1282,7 +1282,10 @@ fn promotion_revalidates_acknowledgement_freshness() {
             .acknowledge(
                 acknowledgement_at(gateway_index, digest, true, NOW + 10),
                 NOW + 10,
-                mutation_binding(2 + gateway_index as u8),
+                mutation_binding(
+                    2 + u8::try_from(gateway_index)
+                        .expect("bounded fixture or protocol constant fits u8"),
+                ),
             )
             .expect("acknowledge");
     }
@@ -1311,7 +1314,10 @@ fn every_mutation_rejects_clock_rollback_before_state_change() {
             .acknowledge(
                 acknowledgement_at(gateway_index, first_digest, true, NOW + 10),
                 NOW + 10,
-                mutation_binding(2 + gateway_index as u8),
+                mutation_binding(
+                    2 + u8::try_from(gateway_index)
+                        .expect("bounded fixture or protocol constant fits u8"),
+                ),
             )
             .expect("acknowledge first");
     }
@@ -1702,7 +1708,10 @@ fn rollback_rejects_an_expired_last_known_good_catalog() {
             .acknowledge(
                 acknowledgement_at(gateway_index, second_digest, true, NOW + 40),
                 NOW + 40,
-                mutation_binding(13 + gateway_index as u8),
+                mutation_binding(
+                    13 + u8::try_from(gateway_index)
+                        .expect("bounded fixture or protocol constant fits u8"),
+                ),
             )
             .expect("acknowledge second");
     }

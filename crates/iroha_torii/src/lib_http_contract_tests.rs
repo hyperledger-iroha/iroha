@@ -214,7 +214,7 @@ mod matched_route_metadata_tests {
     }
     #[tokio::test]
     async fn host_selected_site_bypasses_listener_token_only_when_fallback_wins() {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique test app state");
         state.require_api_token = true;
         state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
@@ -844,7 +844,7 @@ mod response_negotiation_middleware_tests {
     }
     fn typed_norito_response() -> Response {
         utils::respond_with_format(
-            ErrorEnvelope::new("example", "typed"),
+            &(ErrorEnvelope::new("example", "typed")),
             ResponseFormat::Norito,
         )
     }
@@ -1028,7 +1028,7 @@ mod response_negotiation_middleware_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::UNAUTHORIZED,
-                        ErrorEnvelope::new("unauthorized", "authentication failed"),
+                        &(ErrorEnvelope::new("unauthorized", "authentication failed")),
                         utils::current_response_format(),
                     )
                 }),
@@ -1115,7 +1115,7 @@ mod response_negotiation_middleware_tests {
                 "/command",
                 post(|| async {
                     utils::respond_with_format(
-                        ErrorEnvelope::new("example", "typed"),
+                        &(ErrorEnvelope::new("example", "typed")),
                         utils::current_response_format(),
                     )
                 }),
@@ -1892,7 +1892,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::CONFLICT,
-                        ErrorEnvelope::new("declared_json_error", "JSON source envelope"),
+                        &(ErrorEnvelope::new("declared_json_error", "JSON source envelope")),
                         ResponseFormat::Json,
                     )
                 }),
@@ -1902,7 +1902,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::BAD_REQUEST,
-                        ErrorEnvelope::new("declared_norito_error", "Norito source envelope"),
+                        &(ErrorEnvelope::new("declared_norito_error", "Norito source envelope")),
                         ResponseFormat::Norito,
                     )
                 }),
@@ -1970,10 +1970,10 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::BAD_REQUEST,
-                        ErrorEnvelope::new(
+                        &(ErrorEnvelope::new(
                             "declared_norito_error",
                             "preserved across negotiation failure",
-                        ),
+                        )),
                         ResponseFormat::Norito,
                     )
                 }),
@@ -2042,12 +2042,12 @@ mod typed_error_contract_tests {
                 get(|| async {
                     let mut response = utils::respond_with_status_and_format(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        ErrorEnvelope::new("private_internal_marker", MARKER).with_details(
+                        &(ErrorEnvelope::new("private_internal_marker", MARKER).with_details(
                             ErrorDetails {
                                 hint: Some(MARKER.to_owned()),
                                 ..Default::default()
                             },
-                        ),
+                        )),
                         ResponseFormat::Json,
                     );
                     response.headers_mut().insert(
@@ -2062,7 +2062,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        ErrorEnvelope::new("private_internal_marker", MARKER),
+                        &(ErrorEnvelope::new("private_internal_marker", MARKER)),
                         ResponseFormat::Norito,
                     )
                 }),
@@ -2135,7 +2135,7 @@ mod typed_error_contract_tests {
             get(|| async {
                 utils::respond_with_status_and_format(
                     StatusCode::BAD_REQUEST,
-                    ErrorEnvelope::new("PRTRY:BAD", "rejected"),
+                    &(ErrorEnvelope::new("PRTRY:BAD", "rejected")),
                     ResponseFormat::Json,
                 )
             }),
@@ -2195,7 +2195,7 @@ mod typed_error_contract_tests {
                 async move {
                     utils::respond_with_status_and_format(
                         StatusCode::BAD_REQUEST,
-                        ErrorEnvelope::new(
+                        &(ErrorEnvelope::new(
                             unsafe_code,
                             "m".repeat(utils::MAX_ERROR_MESSAGE_CHARACTERS + 1),
                         )
@@ -2223,7 +2223,7 @@ mod typed_error_contract_tests {
                                 ..Default::default()
                             }),
                             ..Default::default()
-                        }),
+                        })),
                         ResponseFormat::Json,
                     )
                 }
@@ -2255,7 +2255,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::BAD_REQUEST,
-                        ErrorEnvelope::new("invalid_request", ""),
+                        &(ErrorEnvelope::new("invalid_request", "")),
                         ResponseFormat::Json,
                     )
                 }),
@@ -2265,7 +2265,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     utils::respond_with_status_and_format(
                         StatusCode::BAD_REQUEST,
-                        ErrorEnvelope::new("invalid_request", "line\nbreak"),
+                        &(ErrorEnvelope::new("invalid_request", "line\nbreak")),
                         ResponseFormat::Norito,
                     )
                 }),
@@ -2308,7 +2308,7 @@ mod typed_error_contract_tests {
                 get(move || async move {
                     utils::respond_with_status_and_format(
                         status,
-                        ErrorEnvelope::new("capacity_exhausted", "retry later"),
+                        &(ErrorEnvelope::new("capacity_exhausted", "retry later")),
                         ResponseFormat::Json,
                     )
                 }),

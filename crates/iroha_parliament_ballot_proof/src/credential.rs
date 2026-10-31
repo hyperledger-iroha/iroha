@@ -317,7 +317,7 @@ mod tests {
     use super::*;
 
     fn shake256(parts: &[&[u8]], len: usize) -> Vec<u8> {
-        let mut sponge = sha3::Shake256::default();
+        let mut sponge = shake::Shake256::default();
         for part in parts {
             sponge.update(part);
         }

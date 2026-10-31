@@ -14,14 +14,34 @@ fn as_event(fields: &[F; packet::WIDTH]) -> Option<Event> {
             4 => Space::Owner,
             _ => panic!("only original scalar register/control ports"),
         },
-        vm: fields[VM].0 as u8,
-        generation: fields[GENERATION].0 as u16,
-        index: fields[INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(fields[VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(fields[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(fields[INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: fields[WRITE] == F::ONE,
         before: bytes(packet::half(fields, BEFORE, 0)),
         after: bytes(packet::half(fields, AFTER, 0)),
-        before_private: fields[BEFORE_TAG].0 as u16,
-        after_private: fields[AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(fields[BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(fields[AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     })
 }
 pub(super) fn accepts(fixture: &ScalarFixture, substitution: Option<(usize, bool)>) -> bool {
@@ -117,8 +137,7 @@ pub(super) fn accepts(fixture: &ScalarFixture, substitution: Option<(usize, bool
         let producer = rows[i][ORDERED..SORTED].try_into().unwrap();
         private_history::append_residues(
             &mut residues,
-            &rows[i],
-            &rows[next],
+            (&rows[i], &rows[next]),
             &aux_rows[i],
             &aux_rows[next],
             &fixed[i],

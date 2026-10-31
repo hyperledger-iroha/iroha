@@ -47,7 +47,7 @@ fn sns_mutation_instruction_error(
 ) -> InstructionExecutionError {
     match err {
         crate::sns::SnsError::BadRequest(message) => InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(message.into()),
+            InvalidParameterError::SmartContract(message),
         ),
         error => error.retain_in_instruction(state),
     }
@@ -64,7 +64,7 @@ fn alias_setup_instruction_error(
             )
         }
         Err(error) => InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(error.to_string().into()),
+            InvalidParameterError::SmartContract(error.to_string()),
         ),
     }
 }
@@ -74,22 +74,21 @@ fn namespace_from_suffix_id(
     // This pure numeric namespace check has no decoder or allocation scope.
     crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(|error| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            error.to_string().into(),
+            error.to_string(),
         ))
     })
 }
-fn ensure_configured_policy_payment_asset(
+fn ensure_original_policy_payment_asset(
     state_transaction: &mut StateTransaction<'_, '_>,
     namespace: crate::sns::SnsNamespace,
 ) -> Result<(), InstructionExecutionError> {
+    let payment_asset = crate::executor::root_fees::execution_custody_policy(state_transaction)?
+        .fee_asset_id
+        .canonical_address();
     crate::sns::ensure_namespace_policy_payment_asset_matches_configured(
         state_transaction.world(),
         namespace,
-        &state_transaction
-            .nexus
-            .fees
-            .fee_asset_id
-            .canonical_address(),
+        &payment_asset,
     )
     .map_err(|error| sns_mutation_instruction_error(error, state_transaction))
 }
@@ -106,7 +105,7 @@ fn account_controller_for(
 }
 fn charge_sns_quote(
     quote: &crate::sns::LeaseQuote,
-    payer: AccountId,
+    payer: &AccountId,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<LeasePayment, Error> {
@@ -195,8 +194,7 @@ fn ensure_active_alias_record(
                 selector.normalized_label()
             )
             .into(),
-        )
-        .into());
+        ));
     }
     Ok((selector, record))
 }
@@ -243,8 +241,7 @@ fn ensure_alias_lifecycle_authority(
         "authority must own or hold exact management permission for the alias target"
             .to_owned()
             .into(),
-    )
-    .into())
+    ))
 }
 impl Execute for EnsureAlias {
     #[metrics(+"ensure_alias")]
@@ -295,19 +292,18 @@ impl Execute for EnsureAlias {
                     "alias.state.conflict: classifier returned a non-executable conflict"
                         .to_owned()
                         .into(),
-                )
-                .into());
+                ));
             }
         }
         let target = intent.target();
         let namespace = namespace_from_suffix_id(crate::alias_setup::target_suffix_id(&target))?;
-        ensure_configured_policy_payment_asset(state_transaction, namespace)?;
+        ensure_original_policy_payment_asset(state_transaction, namespace)?;
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
             .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let owner = crate::alias_setup::alias_intent_owner(&intent).clone();
         let quote = crate::sns::quote_resolved_name_registration(
             state_transaction.world(),
-            selector,
+            &(selector),
             &owner,
             acquisition.term_years,
             acquisition.pricing_class_hint,
@@ -324,7 +320,7 @@ impl Execute for EnsureAlias {
         let controllers = vec![account_controller_for(&owner)?];
         let metadata = crate::alias_setup::alias_registration_metadata(&target)
             .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
-        let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
+        let payment = charge_sns_quote(&quote, &(authority.clone()), authority, state_transaction)?;
         crate::sns::register_resolved_name(
             state_transaction,
             RegisterNameInput {
@@ -365,15 +361,14 @@ impl Execute for RenewAliasLease {
                     record.expires_at_ms
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         let namespace = namespace_from_suffix_id(selector.suffix_id)?;
-        ensure_configured_policy_payment_asset(state_transaction, namespace)?;
+        ensure_original_policy_payment_asset(state_transaction, namespace)?;
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let quote = crate::sns::quote_resolved_name_renewal(
             state_transaction.world(),
-            selector.clone(),
+            &(selector.clone()),
             expected_current_expiry_ms,
             target_expiry_ms,
             now_ms,
@@ -386,13 +381,13 @@ impl Execute for RenewAliasLease {
             now_ms,
         )
         .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
-        let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
+        let payment = charge_sns_quote(&quote, &(authority.clone()), authority, state_transaction)?;
         crate::sns::renew_resolved_name(
             state_transaction,
-            selector,
+            &(selector),
             expected_current_expiry_ms,
             target_expiry_ms,
-            payment,
+            &payment,
         )
         .map(|_| ())
         .map_err(|error| alias_lease_instruction_error(error, state_transaction))
@@ -404,20 +399,16 @@ fn validate_auto_renew_config(
 ) -> Result<(), Error> {
     crate::alias_setup::validate_alias_auto_renew_ranges(config).map_err(|error| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            error.to_string().into(),
+            error.to_string(),
         ))
     })?;
     if config.term_years < policy.min_term_years || config.term_years > policy.max_term_years {
         return Err(InstructionExecutionError::InvalidParameter(
-            InvalidParameterError::SmartContract(
-                format!(
-                    "auto-renew term {} is outside policy range {}..={}",
-                    config.term_years, policy.min_term_years, policy.max_term_years
-                )
-                .into(),
-            ),
-        )
-        .into());
+            InvalidParameterError::SmartContract(format!(
+                "auto-renew term {} is outside policy range {}..={}",
+                config.term_years, policy.min_term_years, policy.max_term_years
+            )),
+        ));
     }
     if config.policy_version != policy.policy_version {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -426,8 +417,7 @@ fn validate_auto_renew_config(
                 config.policy_version, policy.policy_version
             )
             .into(),
-        )
-        .into());
+        ));
     }
     let payment_asset = if let Ok(asset_id) = AssetId::parse_literal(&policy.payment_asset_id) {
         asset_id.definition().clone()
@@ -445,8 +435,7 @@ fn validate_auto_renew_config(
                 config.payment_asset
             )
             .into(),
-        )
-        .into());
+        ));
     }
     Ok(())
 }
@@ -468,8 +457,7 @@ impl Execute for ConfigureAliasAutoRenew {
                 "only the exact alias resource owner may configure auto-renew"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         let current = crate::sns::alias_auto_renew_state(state_transaction.world(), &target)
             .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
@@ -480,8 +468,7 @@ impl Execute for ConfigureAliasAutoRenew {
                     "alias.auto_renew.revision_conflict: expected revision {expected_revision}, actual revision is {current_revision}"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         // The exact live lease owner and revision have been checked. A stale
         // persisted owner must not prevent explicit replacement or disable;
@@ -495,8 +482,7 @@ impl Execute for ConfigureAliasAutoRenew {
                 "alias.auto_renew.owner_conflict: persisted owner differs from the lease owner"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         if let Some(config) = config.as_ref() {
             let policy = crate::sns::policy_by_id(state_transaction.world(), selector.suffix_id)
@@ -555,8 +541,7 @@ impl Execute for RebindAccountAlias {
                     "alias.binding.conflict: expected target `{expected_target_account}`, actual target is `{actual}`"
                 )
                 .into(),
-            )
-            .into());
+            ));
         }
         state_transaction.world.account(&new_target_account)?;
         if state_transaction
@@ -569,15 +554,14 @@ impl Execute for RebindAccountAlias {
                 "alias.primary.conflict: clear or replace the primary alias before rebinding"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         if expected_target_account == new_target_account {
             return Ok(());
         }
         state_transaction
             .world
-            .insert_account_alias_binding(numeric_alias.clone(), new_target_account.clone());
+            .insert_account_alias_binding(&(numeric_alias.clone()), &(new_target_account.clone()));
         super::domain::isi::upsert_account_rekey_record(
             state_transaction,
             &numeric_alias,
@@ -607,8 +591,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                 "alias.primary.conflict: current primary alias differs from compare-and-set expectation"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         for alias in expected_alias.iter().chain(new_alias.iter()) {
             let target = iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(alias.clone());
@@ -620,8 +603,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                 "only the account may compare-and-set an empty primary alias"
                     .to_owned()
                     .into(),
-            )
-            .into());
+            ));
         }
         let new_numeric = new_alias
             .as_ref()
@@ -643,8 +625,7 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
                     "alias.binding.conflict: new primary alias is bound to another account"
                         .to_owned()
                         .into(),
-                )
-                .into());
+                ));
             }
         }
         if current == new_numeric {
@@ -775,17 +756,27 @@ mod tests {
     }
     fn configure_test_fee_asset(state: &State, asset: &AssetDefinitionId) {
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = asset.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -816,8 +807,10 @@ mod tests {
                 payment_asset_definition_id.clone(),
                 account.clone(),
             ))
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Quantity::zero())
+            .map_or_else(
+                |_| Quantity::zero(),
+                |asset| asset.value().clone().into_inner(),
+            )
     }
     fn resolved_account_alias(
         alias: &AccountAlias,
@@ -1271,6 +1264,22 @@ mod tests {
         let mut config = TestChainConfig::new(world, 0);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.fees.fee_asset_id = payment_asset.clone();
+        let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+            nexus
+                .fees
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical signed fixture fee policy"),
+        );
+        if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )) {
+            *slot = fee_parameter;
+        } else {
+            config.genesis_parameters.push(fee_parameter);
+        }
         config.nexus = Some(nexus);
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
@@ -1422,6 +1431,227 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("policy update block commits");
+    }
+    #[test]
+    fn alias_payment_uses_original_fee_policy_despite_recipe_and_pending_sibling_changes() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        assert_ne!(different, fixture.payment_asset);
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        {
+            let mut transaction = block.transaction();
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("the actual original policy matches the registered namespace");
+            transaction.nexus.fees.fee_asset_id = different.clone();
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("the local genesis-authoring recipe is not runtime authority");
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            pending.fee_asset_id = different.clone();
+            // Deliberately bypass normal currency-immutability admission in this test:
+            // even a mismatched current projection cannot replace the original owner.
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(
+                transaction
+                    .world
+                    .parameters()
+                    .root_fees()
+                    .unwrap()
+                    .fee_asset_id,
+                different
+            );
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("pending parameters cannot replace predecessor custody");
+            transaction.apply();
+        }
+        {
+            let mut sibling = block.transaction();
+            assert_eq!(
+                sibling.world.parameters().root_fees().unwrap().fee_asset_id,
+                different
+            );
+            sibling.nexus.fees.fee_asset_id = different;
+            ensure_original_policy_payment_asset(&mut sibling, crate::sns::SnsNamespace::Domain)
+                .expect("an applied sibling cannot replace predecessor custody");
+        }
+    }
+    #[test]
+    fn alias_payment_rejects_fake_genesis_custody_and_matching_local_recipe() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        // A height-one header over genuine committed genesis is ordinary custody.
+        {
+            let mut block =
+                fixture
+                    .state
+                    .block(BlockHeader::new(1.try_into().unwrap(), None, None, 0, 0));
+            let mut transaction = block.transaction();
+            assert!(!crate::executor::is_initial_genesis_context(&transaction));
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            pending.fee_asset_id = different.clone();
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            transaction.nexus.fees.fee_asset_id = different.clone();
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("a fabricated genesis header cannot select current monetary state");
+        }
+        // Conversely, an incompatible original policy cannot be repaired by a matching recipe.
+        configure_test_fee_asset(&fixture.state, &different);
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        let mut transaction = block.transaction();
+        transaction.nexus.fees.fee_asset_id = fixture.payment_asset;
+        let error = ensure_original_policy_payment_asset(
+            &mut transaction,
+            crate::sns::SnsNamespace::Domain,
+        )
+        .expect_err("only the actual original fee policy may authorize the namespace asset");
+        let message = error.to_string();
+        assert!(message.contains("SNS policy payment asset"), "{message}");
+        assert!(
+            message.contains(&different.canonical_address()),
+            "{message}"
+        );
+    }
+
+    /// An actual renewal cannot repair original monetary mismatch from current/local recipes.
+    #[test]
+    fn renew_alias_rejects_original_fee_mismatch_before_balance_or_expiry_changes() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(1_000_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        assert_ne!(different, fixture.payment_asset);
+        // Inject malformed retained monetary state for this negative test. The actual signed
+        // genesis/history remains present; production forbids changing its currency after H1.
+        configure_test_fee_asset(&fixture.state, &different);
+        let payer_before = asset_balance(&fixture.state, &fixture.payment_asset, &fixture.owner);
+        let collector_before =
+            asset_balance(&fixture.state, &fixture.payment_asset, &fixture.collector);
+        let current_expiry = {
+            let view = fixture.state.view();
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms
+        };
+        {
+            let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+            let hash = Hash::prehashed([0xD8; Hash::LENGTH]);
+            let mut transaction = block.transaction_for_fastpq_testing(hash);
+            transaction.nexus.fees.fee_asset_id = fixture.payment_asset.clone();
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            assert_eq!(pending.fee_asset_id, different);
+            pending.fee_asset_id = fixture.payment_asset.clone();
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            let target_expiry = current_expiry.checked_add(AUTO_RENEW_YEAR_MS).unwrap();
+            let quote = crate::sns::quote_resolved_name_renewal(
+                transaction.world(),
+                &fixture.selector,
+                current_expiry,
+                target_expiry,
+                transaction.block_unix_timestamp_ms(),
+            )
+            .expect("namespace policy and expiry admit the requested renewal");
+            assert_eq!(quote.payment_asset_definition_id, fixture.payment_asset);
+            assert_eq!(quote.collector_account, fixture.collector);
+            assert!(quote.charge_amount <= payer_before);
+            let renewal = RenewAliasLease::new(
+                fixture.target.clone(),
+                current_expiry,
+                target_expiry,
+                exact_alias_quote_guard(&transaction, fixture.selector.suffix_id, &quote),
+            );
+            let error = renewal
+                .execute(&fixture.owner, &mut transaction)
+                .expect_err("matching local/current fee recipes cannot replace original custody");
+            let message = error.to_string();
+            assert!(message.contains("SNS policy payment asset"), "{message}");
+            assert!(
+                message.contains(&different.canonical_address()),
+                "{message}"
+            );
+            assert_eq!(
+                asset_balance_in_world(transaction.world(), &fixture.payment_asset, &fixture.owner),
+                payer_before,
+                "original fee mismatch must precede payer debit"
+            );
+            assert_eq!(
+                asset_balance_in_world(
+                    transaction.world(),
+                    &fixture.payment_asset,
+                    &fixture.collector,
+                ),
+                collector_before,
+                "original fee mismatch must precede collector credit"
+            );
+            assert_eq!(
+                crate::sns::record_by_selector(transaction.world(), &fixture.selector)
+                    .unwrap()
+                    .unwrap()
+                    .expires_at_ms,
+                current_expiry,
+                "original fee mismatch must precede lease expiry mutation"
+            );
+            assert_eq!(
+                transaction.pending_transfer_transcript_count_for_testing(),
+                0
+            );
+            assert_eq!(transaction.last_tx_gas_used, 0);
+        }
+        let view = fixture.state.view();
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.owner),
+            payer_before
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.collector),
+            collector_before
+        );
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            current_expiry
+        );
+        assert_eq!(
+            view.world().parameters().root_fees().unwrap().fee_asset_id,
+            different
+        );
     }
     #[test]
     fn alias_auto_renew_fixture_retains_genesis_identity_and_initial_accounting() {
@@ -2146,7 +2376,7 @@ mod tests {
         seed_test_call_hash(&mut transaction, 0xC1);
         let quote = crate::sns::quote_resolved_name_registration(
             transaction.world(),
-            selector.clone(),
+            &(selector.clone()),
             &authority,
             1,
             None,
@@ -2430,7 +2660,7 @@ mod tests {
             let view = state.view();
             let quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                first_selector.clone(),
+                &(first_selector.clone()),
                 &authority,
                 1,
                 None,
@@ -2585,6 +2815,18 @@ mod tests {
             [payment_definition],
         );
         seed_default_namespace_policies(&mut world);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -2631,7 +2873,7 @@ mod tests {
                     .expect("resolved parent selector");
             let parent_quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                parent_selector,
+                &(parent_selector),
                 &authority,
                 1,
                 None,
@@ -2642,7 +2884,7 @@ mod tests {
                 .expect("resolved alias selector");
             let quote = crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &target_account,
                 1,
                 None,
@@ -3146,6 +3388,18 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -3258,6 +3512,18 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+        // Component account registration owns its policy before the first snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -3561,17 +3827,27 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = payment_asset_definition_id.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -3668,17 +3944,27 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         {
-            let mut fees = state.nexus_snapshot().fees;
+            let mut fees = state
+                .world
+                .parameters
+                .view()
+                .root_fees()
+                .expect("original fixture fee policy")
+                .clone();
             fees.fee_asset_id = payment_asset_definition_id.clone();
             {
-                let mut parameters = state.world.parameters.block();
-                parameters
-                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded parameter fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
                         fees.clone()
                             .into_custom_parameter()
                             .expect("explicit fixture policy"),
-                    ))
-                    .expect("valid fixture monetary projection");
+                    ),
+                    state.world.sccp_committee_generations.allocation_budget(),
+                )
+                .expect("valid fixture monetary projection");
                 parameters.commit();
             }
         }
@@ -4007,7 +4293,7 @@ mod tests {
         assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
         let quote = crate::sns::quote_resolved_name_registration(
             &world.view(),
-            selector.clone(),
+            &(selector.clone()),
             &wallet,
             1,
             None,
@@ -4106,6 +4392,22 @@ mod tests {
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
+        let fee_parameter = iroha_data_model::parameter::Parameter::Custom(
+            nexus
+                .fees
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical signed fixture fee policy"),
+        );
+        if let Some(slot) = config.genesis_parameters.iter_mut().find(|parameter| matches!(
+            parameter,
+            iroha_data_model::parameter::Parameter::Custom(value)
+                if value.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
+        )) {
+            *slot = fee_parameter;
+        } else {
+            config.genesis_parameters.push(fee_parameter);
+        }
         config.nexus = Some(nexus);
         let mut chain = CertifiedTestChain::start(config).unwrap();
         {
@@ -4293,7 +4595,7 @@ mod tests {
             .unwrap();
             crate::sns::quote_resolved_name_registration(
                 view.world(),
-                selector,
+                &(selector),
                 &second_wallet,
                 1,
                 None,

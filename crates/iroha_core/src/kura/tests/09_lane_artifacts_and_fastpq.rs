@@ -368,7 +368,7 @@ fn pipeline_sidecar_enqueue_coalesces_writer_notifications() {
         fingerprint: [0u8; 32],
         key_count: 0,
     };
-    let first = PipelineRecoverySidecar::new(1, first_hash, snapshot.clone(), Vec::new());
+    let first = PipelineRecoverySidecar::new(1, first_hash, snapshot, Vec::new());
     let second = PipelineRecoverySidecar::new(2, second_hash, snapshot, Vec::new());
     assert_eq!(
         kura.enqueue_pipeline_metadata(first),
@@ -398,7 +398,7 @@ fn pipeline_sidecar_enqueue_rejects_queue_overflow() {
         fingerprint: [0u8; 32],
         key_count: 0,
     };
-    let first = PipelineRecoverySidecar::new(1, first_hash, snapshot.clone(), Vec::new());
+    let first = PipelineRecoverySidecar::new(1, first_hash, snapshot, Vec::new());
     let second = PipelineRecoverySidecar::new(2, second_hash, snapshot, Vec::new());
     assert_eq!(
         kura.enqueue_pipeline_metadata(first),

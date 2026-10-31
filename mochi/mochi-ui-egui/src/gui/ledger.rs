@@ -4,10 +4,12 @@ use super::{
     Desktop, Message,
     widgets::{self, icon},
 };
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, RichText, Sense, Ui};
+use iroha_data_model::block::SignedBlock;
 use mochi_core::{BlockSummary, StateQueryKind};
 use std::{
     collections::VecDeque,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,16 +24,23 @@ pub(crate) struct BlockRow {
     pub(crate) created_ms: u64,
     pub(crate) genesis: bool,
     pub(crate) bytes: usize,
+    /// The decoded block for drill-down, while it fits [`BLOCK_BODY_BUDGET`].
+    pub(crate) body: Option<Arc<SignedBlock>>,
 }
 
 /// Blocks kept for the explorer; older rows remain available from canonical history.
 pub(crate) const BLOCK_FEED_LIMIT: usize = 200;
+
+/// Received bytes of the newest decoded blocks kept for drill-down; older rows read theirs
+/// again from the observed validator when opened.
+pub(crate) const BLOCK_BODY_BUDGET: usize = 32 * 1024 * 1024;
 
 /// Record a streamed block newest-first, ignoring reconnect replays of a shown block.
 /// Returns the recorded height.
 pub(crate) fn record_block(
     feed: &mut VecDeque<BlockRow>,
     summary: &BlockSummary,
+    body: Option<Arc<SignedBlock>>,
     raw_len: usize,
 ) -> Option<u64> {
     if feed
@@ -49,6 +58,7 @@ pub(crate) fn record_block(
         created_ms: summary.creation_time_ms,
         genesis: summary.is_genesis,
         bytes: raw_len,
+        body,
     };
     let position = feed
         .iter()
@@ -56,6 +66,15 @@ pub(crate) fn record_block(
         .unwrap_or(feed.len());
     feed.insert(position, row);
     feed.truncate(BLOCK_FEED_LIMIT);
+    // Newest first, bodies stay until their total passes the budget, so the newest always does.
+    let mut kept = 0_usize;
+    for row in feed.iter_mut().filter(|row| row.body.is_some()) {
+        if kept > BLOCK_BODY_BUDGET {
+            row.body = None;
+        } else {
+            kept = kept.saturating_add(row.bytes);
+        }
+    }
     Some(summary.height)
 }
 
@@ -88,7 +107,7 @@ pub(crate) fn activity_kind(entry: &str) -> ActivityKind {
     }
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| {
@@ -98,6 +117,10 @@ fn now_ms() -> u64 {
 
 impl Desktop {
     pub(super) fn blocks(&mut self, ui: &mut Ui) {
+        if self.block_view.is_some() {
+            self.block_page(ui);
+            return;
+        }
         let palette = widgets::palette(ui);
         let live = self.blocks.is_some();
         widgets::page_header(
@@ -112,6 +135,10 @@ impl Desktop {
                 }
             },
         );
+        if !self.blocks_feed.is_empty() {
+            self.chain_pulse(ui, 60);
+            ui.add_space(12.0);
+        }
         widgets::card(ui, |ui| {
             if self.blocks_feed.is_empty() {
                 widgets::empty_state(
@@ -127,9 +154,10 @@ impl Desktop {
                 return;
             }
             let now = now_ms();
+            let mut opened = None;
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 egui::Grid::new("blocks")
-                    .num_columns(7)
+                    .num_columns(8)
                     .spacing([22.0, 10.0])
                     .striped(true)
                     .show(ui, |ui| {
@@ -141,46 +169,90 @@ impl Desktop {
                             "Signatures",
                             "Size",
                             "Hash",
+                            "",
                         ] {
                             ui.label(widgets::eyebrow(palette, title));
                         }
                         ui.end_row();
+                        // Any cell but the hash, whose copy control keeps its own click, opens it.
+                        let cell = |ui: &mut Ui, text: RichText| {
+                            ui.add(
+                                egui::Label::new(text)
+                                    .selectable(false)
+                                    .sense(Sense::click()),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        };
                         for row in &self.blocks_feed {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!("#{}", row.height))
-                                        .strong()
-                                        .size(15.0)
-                                        .color(palette.sky),
-                                );
-                                if row.genesis {
-                                    widgets::pill(ui, "genesis", palette.fuji, palette.fuji_soft);
-                                }
-                            });
-                            ui.label(
+                            let mut open = ui
+                                .horizontal(|ui| {
+                                    let link = ui
+                                        .add(egui::Link::new(
+                                            RichText::new(format!("#{}", row.height))
+                                                .strong()
+                                                .size(15.0)
+                                                .color(palette.sky),
+                                        ))
+                                        .on_hover_text(format!("Open block #{}", row.height));
+                                    if row.genesis {
+                                        widgets::pill(
+                                            ui,
+                                            "genesis",
+                                            palette.fuji,
+                                            palette.fuji_soft,
+                                        );
+                                    }
+                                    link.clicked()
+                                })
+                                .inner;
+                            open |= cell(
+                                ui,
                                 RichText::new(widgets::time_ago(row.created_ms, now))
                                     .color(palette.muted),
                             );
-                            ui.label(row.transactions.to_string());
-                            ui.label(RichText::new(row.rejected.to_string()).color(
-                                if row.rejected > 0 {
-                                    palette.aka
-                                } else {
-                                    palette.muted
-                                },
-                            ));
-                            ui.label(row.signatures.to_string());
-                            ui.label(
+                            open |= cell(ui, RichText::new(row.transactions.to_string()));
+                            open |= cell(
+                                ui,
+                                RichText::new(row.rejected.to_string()).color(
+                                    if row.rejected > 0 {
+                                        palette.aka
+                                    } else {
+                                        palette.muted
+                                    },
+                                ),
+                            );
+                            open |= cell(ui, RichText::new(row.signatures.to_string()));
+                            open |= cell(
+                                ui,
                                 RichText::new(format!("{} B", row.bytes)).color(palette.muted),
                             );
                             ui.horizontal(|ui| {
                                 widgets::short_mono(ui, &row.hash, 8);
                                 widgets::copy_button(ui, &row.hash, "block hash");
                             });
+                            open |= ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Details ›").color(palette.sakura),
+                                    )
+                                    .frame(false),
+                                )
+                                .clicked();
                             ui.end_row();
+                            if open {
+                                opened = Some(row.height);
+                            }
                         }
                     });
             });
+            widgets::hint(
+                ui,
+                "Open a block for its header, transactions with their results, signatures and canonical payloads.",
+            );
+            if let Some(height) = opened {
+                self.open_block(height);
+            }
         });
     }
 
@@ -379,7 +451,7 @@ impl Desktop {
                     ui,
                     icon::STATE,
                     "Pick a collection and press Query",
-                    "Results are paged 50 at a time; each entry includes copyable JSON and Norito bytes.",
+                    "Results are paged 50 at a time; each entry includes copyable JSON.",
                 );
             });
             return;
@@ -387,11 +459,15 @@ impl Desktop {
         if page.kind != self.query {
             return;
         }
+        // Explorer feeds never count their matches; a continuation alone says more exist.
+        let more = match (page.remaining, page.cursor.is_some()) {
+            (0, true) => "more on the next page".to_owned(),
+            (remaining, _) => format!("{remaining} remaining"),
+        };
         ui.label(
             RichText::new(format!(
-                "{} records on this page · {} remaining",
-                page.entries.len(),
-                page.remaining
+                "{} records on this page · {more}",
+                page.entries.len()
             ))
             .color(palette.muted),
         );
@@ -465,22 +541,65 @@ mod tests {
     #[test]
     fn block_feed_is_newest_first_bounded_and_ignores_replays() {
         let mut feed = VecDeque::new();
-        assert_eq!(record_block(&mut feed, &summary(1, "aa"), 512), Some(1));
-        assert_eq!(record_block(&mut feed, &summary(3, "cc"), 512), Some(3));
-        assert_eq!(record_block(&mut feed, &summary(2, "bb"), 512), Some(2));
-        assert_eq!(record_block(&mut feed, &summary(3, "cc"), 512), None);
+        assert_eq!(
+            record_block(&mut feed, &summary(1, "aa"), None, 512),
+            Some(1)
+        );
+        assert_eq!(
+            record_block(&mut feed, &summary(3, "cc"), None, 512),
+            Some(3)
+        );
+        assert_eq!(
+            record_block(&mut feed, &summary(2, "bb"), None, 512),
+            Some(2)
+        );
+        assert_eq!(record_block(&mut feed, &summary(3, "cc"), None, 512), None);
         assert_eq!(
             feed.iter().map(|row| row.height).collect::<Vec<_>>(),
             [3, 2, 1]
         );
         assert!(feed.back().unwrap().genesis);
         for height in 10..(10 + BLOCK_FEED_LIMIT as u64 + 5) {
-            record_block(&mut feed, &summary(height, &height.to_string()), 512);
+            record_block(&mut feed, &summary(height, &height.to_string()), None, 512);
         }
         assert_eq!(feed.len(), BLOCK_FEED_LIMIT);
         assert_eq!(
             feed.front().unwrap().height,
             10 + BLOCK_FEED_LIMIT as u64 + 4
+        );
+    }
+
+    #[test]
+    fn decoded_bodies_stay_for_the_newest_blocks_within_their_budget() {
+        let body = Arc::new(mochi_core::block_detail::sample_block(
+            Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            Vec::new(),
+        ));
+        let half = BLOCK_BODY_BUDGET / 2 + 1;
+        let mut feed = VecDeque::new();
+        for height in 1..=3 {
+            let hash = height.to_string();
+            record_block(&mut feed, &summary(height, &hash), Some(body.clone()), half);
+        }
+        let kept = |feed: &VecDeque<BlockRow>| {
+            feed.iter()
+                .map(|row| (row.height, row.body.is_some()))
+                .collect::<Vec<_>>()
+        };
+        // The second body passes the budget; older ones are read again when opened.
+        assert_eq!(kept(&feed), [(3, true), (2, true), (1, false)]);
+        record_block(&mut feed, &summary(4, "4"), Some(body.clone()), half);
+        assert_eq!(kept(&feed), [(4, true), (3, true), (2, false), (1, false)]);
+        record_block(
+            &mut feed,
+            &summary(5, "5"),
+            Some(body),
+            2 * BLOCK_BODY_BUDGET,
+        );
+        assert_eq!(
+            kept(&feed)[..2],
+            [(5, true), (4, false)],
+            "the newest body stays even beyond the budget"
         );
     }
 

@@ -29,6 +29,11 @@ pub struct AmxRelay {
     /// Maximum authenticated destination proof reads in one observation.
     #[config(default = "defaults::MAX_FINALITY_PROOF_READS")]
     pub max_finality_proof_reads: usize,
+    /// Ordinary carrier custody reservations per destination, including their full bounded
+    /// native checkpoint extent. Two additional slots always admit one authority handoff
+    /// group. Full ordinary custody defers new carriers while admitted work can progress.
+    #[config(default = "defaults::PENDING_FINALITY_WALKS")]
+    pub max_pending_finality_walks: usize,
     /// Explicit destinations; no route means no relay signing or fee spending.
     #[config(default)]
     pub routes: WithOrigin<Vec<AmxRelayRoute>>,
@@ -90,6 +95,14 @@ impl AmxRelay {
             invalid(
                 emitter,
                 "amx_relay.max_finality_proof_reads is outside its nonzero local bound",
+            );
+        }
+        if !(defaults::MIN_PENDING_FINALITY_WALKS..=defaults::MAX_PENDING_FINALITY_WALKS)
+            .contains(&self.max_pending_finality_walks)
+        {
+            invalid(
+                emitter,
+                "amx_relay.max_pending_finality_walks is outside its nonzero ordinary-carrier bound",
             );
         }
         let (routes, origin) = self.routes.into_tuple();
@@ -199,6 +212,7 @@ impl AmxRelay {
             poll_interval: Duration::from_millis(self.poll_interval_ms),
             max_source_heights_per_pass: self.max_source_heights_per_pass,
             max_finality_proof_reads: self.max_finality_proof_reads,
+            max_pending_finality_walks: self.max_pending_finality_walks,
             routes: parsed,
         }
     }
@@ -240,9 +254,28 @@ mod tests {
         assert!(actual.routes.is_empty());
         assert!(!actual.journal_dir.as_os_str().is_empty());
         assert_eq!(
+            actual.max_pending_finality_walks,
+            defaults::PENDING_FINALITY_WALKS
+        );
+        assert_eq!(
             actual.poll_interval,
             Duration::from_millis(defaults::POLL_INTERVAL_MS)
         );
+    }
+
+    #[test]
+    fn amx_relay_pending_capacity_accepts_ordinary_limits_beside_reserved_handoff_slots() {
+        for maximum in [
+            defaults::MIN_PENDING_FINALITY_WALKS,
+            defaults::MAX_PENDING_FINALITY_WALKS,
+        ] {
+            let mut value = settings();
+            value.max_pending_finality_walks = maximum;
+            let mut errors = Emitter::new();
+            let actual = value.parse(&mut errors);
+            errors.into_result().unwrap();
+            assert_eq!(actual.max_pending_finality_walks, maximum);
+        }
     }
 
     #[test]
@@ -251,6 +284,10 @@ mod tests {
             |settings: &mut AmxRelay| settings.poll_interval_ms = 0,
             |settings: &mut AmxRelay| settings.max_source_heights_per_pass = 0,
             |settings: &mut AmxRelay| settings.max_finality_proof_reads = usize::MAX,
+            |settings: &mut AmxRelay| settings.max_pending_finality_walks = 0,
+            |settings: &mut AmxRelay| {
+                settings.max_pending_finality_walks = defaults::MAX_PENDING_FINALITY_WALKS + 1;
+            },
             |settings: &mut AmxRelay| settings.journal_dir = WithOrigin::inline(PathBuf::new()),
             |settings: &mut AmxRelay| settings.routes = WithOrigin::inline(vec![route(), route()]),
         ] {

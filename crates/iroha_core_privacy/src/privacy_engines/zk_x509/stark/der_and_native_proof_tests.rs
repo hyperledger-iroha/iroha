@@ -15,15 +15,18 @@ fn assert_projection_rejected(proof: &ZkX509SegmentedStarkProofV1) {
 }
 #[derive(Debug)]
 struct MaxValueRng;
-impl RngCore for MaxValueRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::MAX
+impl rand::TryRng for MaxValueRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::MAX)
     }
-    fn next_u64(&mut self) -> u64 {
-        u64::MAX
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::MAX)
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0xFF);
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        Ok({
+            destination.fill(0xFF);
+        })
     }
 }
 #[test]
@@ -218,7 +221,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
         "the exact DER quotient must exercise multiple FRI chunks"
     );
     assert!(
-        expected_quotient <= (expected_chunk_capacity + 1) * COMPOSITION_DEGREE_CHUNKS - 1,
+        expected_quotient < (expected_chunk_capacity + 1) * COMPOSITION_DEGREE_CHUNKS,
         "all six authenticated chunks must cover the exact DER quotient"
     );
     let mut invalid = der_layout();
@@ -308,7 +311,7 @@ fn interpolated_masked_degree_seven_quotient_attains_registered_bound() {
         "the exact quotient must exercise more than one composition chunk"
     );
     assert!(
-        measured_degree <= (fri_input_degree + 1) * COMPOSITION_DEGREE_CHUNKS - 1,
+        measured_degree < (fri_input_degree + 1) * COMPOSITION_DEGREE_CHUNKS,
         "the registered chunks must cover the exact quotient bound"
     );
 }
@@ -484,8 +487,8 @@ fn verifier_owned_segment_registration_is_exact_and_full_profile_stays_closed() 
 #[test]
 fn full_main_complete_relation_proof_budget_fits_before_witness_or_entropy() {
     assert_eq!(validate_zk_x509_main_proof_budget_v1(), Ok(()));
-    assert_eq!(136 * 5811 * 8, 6_322_368);
-    assert!(136 * 5811 * 8 < super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
+    assert_eq!(136 * 5831 * 8, 6_344_128);
+    assert!(136 * 5831 * 8 < super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 }
 
 /// Count the current direct-opening owners without trusting width-only sums.
@@ -568,7 +571,7 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
     let (registrations, columns) =
         full_main_opening_partition_for_test_v1(&layout).expect("complete MAIN partition");
     assert_eq!(registrations, [36, 4, 9]);
-    assert_eq!(columns, [4_000, 668, 1_143]);
+    assert_eq!(columns, [4_000, 684, 1_147]);
     let retained_scalar_bus_columns = layout
         .registered_segments
         .iter()
@@ -584,22 +587,22 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
             .map(|group| group.base_width + group.aux_width)
             .sum::<usize>()
     );
-    assert_eq!(columns.iter().sum::<usize>(), 5_811);
+    assert_eq!(columns.iter().sum::<usize>(), 5_831);
 
     let shared = layout.as_shared().unwrap();
     assert_eq!(shared.trace_commitment_count_v1(), 1);
     assert_eq!(
         aggregate::maximum_encoded_proof_with_deep_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared)
             .unwrap(),
-        7_908_768
+        7_931_808
     );
     assert_eq!(
         aggregate::exact_deep_opening_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared).unwrap(),
-        372_096
+        373_376
     );
     assert_eq!(
         usize::from(ZK_X509_FRI_QUERY_COUNT_V1) * columns.iter().sum::<usize>() * 8,
-        6_322_368
+        6_344_128
     );
 }
 
@@ -928,13 +931,14 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
 #[test]
 fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
-    let digest = der_public_digest_v1(&shape).expect("DER public digest");
+    let digest = der_public_digest_v1(shape).expect("DER public digest");
     // Independent SHA3-384 of the exact catalog/protocol/profile frame and
-    // ordered DER descriptors plus the constant public registration label.
+    // ordered DER descriptors plus the constant public registration label, using
+    // the canonical 32-byte native BLAKE3 catalog commitment.
     // The MAIN profile label includes family 1 and public nonce [0x5a; 32].
     assert_eq!(
         hex::encode(digest.to_bytes()),
-        "156c6dd358a46edb4840d5e4b66c529ff7f0a21af94e6eb267d76b94316b1bc5942bbf024b414971be062659f1b4bcb9"
+        "3e6c7479e5095dd5ccf078478f4d75b9de0b098ffa3248e9f163e9495a96c320b0152f6afa652cd521704f2d4af99a0e"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],
@@ -1024,11 +1028,10 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     assert!(decode_der_segmented_proof_envelope_v1(&rejected_draft_magic).is_err());
     // A valid envelope cannot make an invalid inner aggregate proof
     // verifier-visible as a different wire format.
-    assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &encoded).is_err());
+    assert!(verify_zk_x509_der_segmented_stark_v1(shape, &encoded).is_err());
 }
 #[test]
 fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
-    let _guard = proof_guard();
     fn native_row(
         document_count: usize,
         parser_rows: usize,
@@ -1060,6 +1063,7 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         }
         row
     }
+    let _guard = proof_guard();
     let trace_log2 = 5;
     let lde_log2 = trace_log2 + BLOWUP_LOG2;
     let trace_size = 1_usize << trace_log2;
@@ -1101,8 +1105,9 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         layout.trace_log2 = trace_log2;
         layout.lde_log2 = lde_log2;
         let full_lde = fixed_lde_columns_v1(&columns, layout).expect("full fixed LDE");
-        for index in 0..lde_size {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
+        let query_points =
+            (0..lde_size).map(|index| F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128)));
+        for (index, x) in query_points.enumerate() {
             let sampled = der_fixed_row_at_point_for_shape_v1(
                 document_count,
                 parser_rows,
@@ -1142,8 +1147,9 @@ fn der_sampled_fixed_rows_match_reduced_full_lde_for_every_column_family() {
         layout.trace_log2 = trace_log2;
         layout.lde_log2 = lde_log2;
         let full_lde = fixed_lde_columns_v1(&columns, layout).expect("edge full fixed LDE");
-        for index in 0..lde_size {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
+        let query_points =
+            (0..lde_size).map(|index| F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128)));
+        for (index, x) in query_points.enumerate() {
             let sampled = der_fixed_row_at_point_for_shape_v1(
                 document_count,
                 parser_rows,
@@ -1199,7 +1205,7 @@ fn malformed_der_wires_reject_before_sampled_fixed_evaluation() {
         malformed_inner[..malformed_inner.len() - 1].to_vec(),
         malformed_inner,
     ] {
-        assert!(verify_zk_x509_der_segmented_stark_v1(&shape, &malformed).is_err());
+        assert!(verify_zk_x509_der_segmented_stark_v1(shape, &malformed).is_err());
     }
     assert_eq!(
         DER_FIXED_OPENING_EVALUATIONS_V1.load(std::sync::atomic::Ordering::SeqCst),
@@ -1329,7 +1335,7 @@ fn der_opened_row_evaluator_binds_both_rows_fixed_schedule_claims_and_lane_mixes
             &trace_groups[0].aux_next,
             &fixed_current,
             &fixed_next,
-            challenges,
+            &challenges,
             public,
             claims,
             &alphas[lane],
@@ -1519,11 +1525,8 @@ fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
         assert_eq!(decoded.key_openings, expected);
         assert_ne!(decoded.key_openings, values);
         assert_eq!(
-            encode_zk_x509_main_proof_envelope_v1(
-                &decoded.key_openings,
-                decoded.aggregate_proof
-            )
-            .unwrap(),
+            encode_zk_x509_main_proof_envelope_v1(&decoded.key_openings, decoded.aggregate_proof)
+                .unwrap(),
             swapped
         );
     }
@@ -1591,8 +1594,7 @@ fn main_claim_free_partition_is_exact_and_rejects_retired_terminal_frames() {
     for lane in 0..4 {
         let record = 8 + 12 + lane * 16;
         let mut exposed = retired.clone();
-        exposed[record + 8..record + 16]
-            .copy_from_slice(&[2_u64, 3, 5, 7][lane].to_be_bytes());
+        exposed[record + 8..record + 16].copy_from_slice(&[2_u64, 3, 5, 7][lane].to_be_bytes());
         assert!(decode_zk_x509_main_proof_envelope_v1(&exposed).is_err());
         let wrong_lane = u16::try_from((lane + 1) % 4).expect("four governed lanes fit u16");
         exposed[record + 4..record + 6].copy_from_slice(&wrong_lane.to_be_bytes());

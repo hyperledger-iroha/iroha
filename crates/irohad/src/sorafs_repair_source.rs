@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::SorafsRepairSource;
 use iroha_core::{query::repair_source::authorize_repair_source_v1, state::State};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, Signature};
 use iroha_data_model::{account::AccountId, sorafs::repair_source::RepairSourceRequestV1};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use reqwest::Url;
 use sorafs_manifest::EndpointKind;
 use sorafs_node::{
@@ -191,7 +191,9 @@ impl NativeRepairSourceV1 {
         let body = norito::encode_canonical(request).map_err(|_| rejected())?;
         let timestamp = now_ms()?;
         let mut entropy = [0; 32];
-        OsRng.try_fill_bytes(&mut entropy).map_err(|_| rejected())?;
+        SysRng
+            .try_fill_bytes(&mut entropy)
+            .map_err(|_| rejected())?;
         let nonce = hex::encode(entropy);
         let uri = url.path().parse().map_err(|_| rejected())?;
         let message = iroha_torii::canonical_network_request_signature_message(

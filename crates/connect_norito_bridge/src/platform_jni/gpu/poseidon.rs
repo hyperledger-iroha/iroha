@@ -2,13 +2,13 @@
 
 use super::super::{catch_unwind_to_java, throw_java_illegal_argument, throw_java_illegal_state};
 use jni::{
-    JNIEnv,
+    Env,
     objects::{JClass, JLongArray},
     sys::{JNI_FALSE, JNI_TRUE, jboolean},
 };
 
 fn run<T: Copy + Default>(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     input: &JLongArray<'_>,
     out: &JLongArray<'_>,
     width: usize,
@@ -73,7 +73,7 @@ fn run<T: Copy + Default>(
     }
     JNI_TRUE
 }
-fn resource_error(env: &mut JNIEnv<'_>, error: ivm::AccelerationOutputError) {
+fn resource_error(env: &mut Env<'_>, error: ivm::AccelerationOutputError) {
     match error {
         ivm::AccelerationOutputError::InvalidLayout => {
             throw_java_illegal_argument(env, "Poseidon native allocation layout is invalid".into())
@@ -87,36 +87,40 @@ fn resource_error(env: &mut JNIEnv<'_>, error: ivm::AccelerationOutputError) {
 /// Arguments must be valid handles from the canonical Kotlin bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_nativePoseidon2(
-    mut env: JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: JClass<'_>,
     inputs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    run(
-        &mut env,
-        &inputs,
-        &out,
-        2,
-        |row| (row[0] as u64, row[1] as u64),
-        ivm::poseidon2_many_into,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        run(
+            &mut env,
+            &inputs,
+            &out,
+            2,
+            |row| (row[0] as u64, row[1] as u64),
+            ivm::poseidon2_many_into,
+        )
+    })
 }
 /// Compute six-word Poseidon rows with automatic qualified CPU/GPU selection.
 /// # Safety
 /// Arguments must be valid handles from the canonical Kotlin bridge.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_nativePoseidon6(
-    mut env: JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: JClass<'_>,
     inputs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    run(
-        &mut env,
-        &inputs,
-        &out,
-        6,
-        |row| std::array::from_fn(|index| row[index] as u64),
-        ivm::poseidon6_many_into,
-    )
+    crate::platform_jni::with_java_env(env, |mut env| {
+        run(
+            &mut env,
+            &inputs,
+            &out,
+            6,
+            |row| std::array::from_fn(|index| row[index] as u64),
+            ivm::poseidon6_many_into,
+        )
+    })
 }

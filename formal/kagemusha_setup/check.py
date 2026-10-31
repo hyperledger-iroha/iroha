@@ -29,8 +29,9 @@ def main():
          'scope': 'Diagnostic controls only'},
         indent=2, sort_keys=True)+'\n')
     record = {'success': False, 'C12_closed': False, 'current_setup_qualified': False,
-              'planned_toy_k6_proofs': 14, 'planned_adapted_toy_k6_proofs': 2, 'native_proofs': 0, 'large_proofs': 0}
+              'planned_toy_k6_proofs': 14, 'planned_adapted_toy_k6_proofs': 6, 'native_proofs': 0, 'large_proofs': 0}
     proof_classes = []
+    observation_error = None
     try:
         algebra = custody.validate_algebra()
         (output/'algebra.json').write_text(json.dumps(algebra, indent=2, sort_keys=True)+'\n')
@@ -42,7 +43,8 @@ def main():
                    ('test_proof', 'ProofControls'), ('test_bounded', 'ProducerTests'),
                    ('test_requests', 'OwnerTests'), ('test_generic', 'GenericKnownLog'),
                    ('test_compact_source', 'CompactSourceControls'),
-                   ('test_load_a1_case', 'ConstructorControls')]
+                   ('test_file_custody', 'FileCustodyTests'),
+                   ('test_reference_custody', 'ReferenceCustodyTests')]
         for name, class_name in modules:
             module = importlib.import_module(__package__+'.'+name)
             if name in ('test_seam', 'test_proof', 'test_bounded', 'test_requests', 'test_generic',
@@ -59,8 +61,8 @@ def main():
         shape_names = unittest.defaultTestLoader.getTestCaseNames(shape_class)
         selected.extend('test_requests.RequestShapeTests.'+name for name in shape_names)
         suites.append(unittest.defaultTestLoader.loadTestsFromTestCase(shape_class))
-        custody.require(len(selected) == 109 and len(set(selected)) == 109,
-                        'exact 109 maintained controls')
+        custody.require(len(selected) == 116 and len(set(selected)) == 116,
+                        'exact 116 maintained controls')
         result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
         record.update(tests=result.testsRun, failures=len(result.failures),
                       errors=len(result.errors), skipped=len(result.skipped), selected=selected)
@@ -70,26 +72,33 @@ def main():
         custody.require(custody.observed_generated_data() == generated_before,
                         'generated DATA changed during controls')
         record['source_pins_unchanged'] = True
-        record['success'] = (result.wasSuccessful() and result.testsRun == 109
+        record['success'] = (result.wasSuccessful() and result.testsRun == 116
                              and not result.skipped and
                              sum(c.verified_toy_proofs for c in proof_classes) == 14 and
                              sum(getattr(c, 'verified_adapted_toy_proofs', 0)
-                                 for c in proof_classes) == 2)
+                                 for c in proof_classes) == 6)
         record['scope'] = ('Source-map ideal raw-RO setup, bounded k0/k2/k6 parameter ownership, and fourteen k6 fixed-Poseidon algebra cases; '
-                           'Two further k6 proofs use an explicit test-only x1=0 adapter and are not fixed-Poseidon evidence. '
+                           'Six further k6 proofs use explicit test-only x1=0, total-role-zero and identity-G adapters and are not fixed-Poseidon evidence. '
                            'Common proof coins within a curve are counterfactual diagnostics. '
-                           'Sequential adaptive request/replay and fourteen closed A1 intake controls are diagnostic only. '
+                           'Sequential request/replay, live setup closure and bounded file/reference custody controls are diagnostic only. '
                            'Seven current compact-source algebra controls require explicit small public rows; no native source synthesis is inferred. '
                            'No adaptive privacy theorem, concrete hash, current authority or C12 claim.')
-        return 0 if record['success'] else 1
     except BaseException as error:
+        record['success'] = False
         record['exception'] = type(error).__name__+': '+str(error)
         raise
     finally:
         record['generated_data_before'] = generated_before
-        record['generated_data_after'] = custody.observed_generated_data()
+        record['generated_data_after'] = None
+        try:
+            record['generated_data_after'] = custody.observed_generated_data()
+        except BaseException as error:
+            # Preserve a pending primary exception while retaining this refusal.
+            observation_error = error
+            record['generated_data_after_error'] = type(error).__name__+': '+str(error)
         record['generated_data_unchanged'] = (
-            record['generated_data_after'] == generated_before)
+            observation_error is None and record['generated_data_after'] == generated_before)
+        record['success'] = record['success'] and record['generated_data_unchanged']
         record['generated_data_qualified'] = False
         record['verified_toy_k6_proofs'] = sum(c.verified_toy_proofs for c in proof_classes)
         record['verified_adapted_toy_k6_proofs'] = sum(
@@ -97,6 +106,9 @@ def main():
         record['elapsed_seconds'] = time.monotonic()-start
         record['manifest_sha256'] = custody.sha(manifest_raw)
         (output/'result.json').write_text(json.dumps(record, indent=2, sort_keys=True)+'\n')
+    if observation_error is not None:
+        raise observation_error
+    return 0 if record['success'] else 1
 
 
 if __name__ == '__main__':

@@ -171,6 +171,10 @@ impl Run for EndorseArgs {
 /// The assignment is derived from the election attempt and the configured
 /// account, so a member can only excuse themselves.
 #[derive(clap::Args, Debug)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names define the explicit public command-line flags."
+)]
 pub struct RecordAbsenceArgs {
     /// Canonical lowercase identifier of the Parliament attempt.
     #[arg(long, value_parser = parse_governance_attempt_id)]

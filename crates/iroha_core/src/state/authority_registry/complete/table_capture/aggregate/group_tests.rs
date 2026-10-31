@@ -128,6 +128,10 @@ fn state() -> State {
     state
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn accounts(
     state: &State,
     limits: LeafLimits,
@@ -136,6 +140,10 @@ fn accounts(
     FIRST_RESERVED.set(state.ivm_execution_budget().reserved_bytes());
     super::super::capture_accounts_table_once(state, limits)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn aliases(
     state: &State,
     limits: LeafLimits,
@@ -160,6 +168,9 @@ fn readers(last: Reader) -> [TableMaterializer; 3] {
 
 #[test]
 fn exact_group_captures_two_slots_with_inseparable_frontier_surface_and_roots() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -231,6 +242,9 @@ fn exact_group_captures_two_slots_with_inseparable_frontier_surface_and_roots() 
 
 #[test]
 fn exact_group_descriptor_rejects_missing_duplicate_displaced_and_single_routes() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let group = TableMaterializer::TransactionMembership;
     assert_eq!(
         require_exact_table_materializers(GROUP_ONLY, &[group]).unwrap(),
@@ -317,6 +331,9 @@ fn exact_group_descriptor_rejects_missing_duplicate_displaced_and_single_routes(
 
 #[test]
 fn grouped_output_count_and_original_pool_are_admitted_before_any_reader() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -353,6 +370,9 @@ fn grouped_output_count_and_original_pool_are_admitted_before_any_reader() {
 
 #[test]
 fn busy_source_work_and_pair_row_refusals_reclaim_preceding_native_nodes() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -388,6 +408,10 @@ fn busy_source_work_and_pair_row_refusals_reclaim_preceding_native_nodes() {
     assert!(state.transactions.try_membership_observation().is_ok());
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn rejected(
     state: &State,
     limits: LeafLimits,
@@ -395,6 +419,10 @@ fn rejected(
     drop(aliases(state, limits)?);
     Err(LeafError::PayloadLimit)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn mismatched(
     state: &State,
     limits: LeafLimits,
@@ -402,6 +430,10 @@ fn mismatched(
     drop(aliases(state, limits)?);
     super::super::capture_accounts_table_once(state, limits)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn changed_generation(
     state: &State,
     limits: LeafLimits,
@@ -414,6 +446,9 @@ fn changed_generation(
 
 #[test]
 fn post_group_error_identity_and_generation_retry_drop_pair_and_companion() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let cases: [(Reader, Option<TableCaptureError>); 3] = [
         (
             rejected,

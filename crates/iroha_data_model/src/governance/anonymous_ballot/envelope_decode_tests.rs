@@ -40,10 +40,10 @@ fn fields(payload: &[u8]) -> Vec<&[u8]> {
 fn push_field(output: &mut Vec<u8>, bytes: &[u8]) {
     let mut length = bytes.len();
     while length >= 128 {
-        output.push((length as u8 & 0x7f) | 0x80);
+        output.push(u8::try_from(length & 0x7f).expect("seven-bit prefix chunk") | 0x80);
         length >>= 7;
     }
-    output.push(length as u8);
+    output.push(u8::try_from(length).expect("remaining prefix fits seven bits"));
     output.extend_from_slice(bytes);
 }
 

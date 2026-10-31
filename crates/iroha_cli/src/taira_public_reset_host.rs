@@ -21,10 +21,10 @@ pub(super) use native_edge::{
 mod phases;
 
 #[path = "taira_validator_config_retirement.rs"]
-pub(crate) mod config_retirement;
+pub mod config_retirement;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
-pub(crate) mod maintenance;
+pub mod maintenance;
 #[path = "taira_public_reset_stopped_runtime.rs"]
 pub(super) mod stopped_runtime;
 
@@ -365,10 +365,10 @@ fn require_retained_restart_wave_before_frontier<T>(
 fn classify_inrou_restart_recovery_outcome(result: Result<()>) -> Result<RecoveryOutcome> {
     match result {
         Ok(()) => Ok(RecoveryOutcome::Applied),
-        Err(error) => match error.downcast_ref::<PermanentInrouRestartProofError>() {
-            Some(permanent) => Ok(RecoveryOutcome::Rejected(permanent.class.to_owned())),
-            None => Err(error),
-        },
+        Err(error) => error
+            .downcast_ref::<PermanentInrouRestartProofError>()
+            .map(|permanent| permanent.class.to_owned())
+            .map_or_else(|| Err(error), |class| Ok(RecoveryOutcome::Rejected(class))),
     }
 }
 
@@ -730,12 +730,13 @@ impl HostAction {
 
     fn timeout_secs(self, inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
         Ok(match self {
-            Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
-                inventory.timeouts.install_secs
-            }
-            Self::UnitProbe => inventory.timeouts.canary_secs,
+            Self::Preflight
+            | Self::Upload
+            | Self::Stage
+            | Self::InrouStageUpload
+            | Self::Install => inventory.timeouts.install_secs,
+            Self::UnitProbe | Self::MutationReserve => inventory.timeouts.canary_secs,
             Self::Stop => inventory.timeouts.stop_secs,
-            Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
             Self::Preseed => inventory.timeouts.preseed_secs,
             Self::Start => validator_start_timeout_secs(inventory, host_slug)?,
@@ -745,7 +746,6 @@ impl HostAction {
             }
             Self::Cleanup => inventory.timeouts.cleanup_secs,
             Self::Rollback => inventory.timeouts.rollback_secs,
-            Self::MutationReserve => inventory.timeouts.canary_secs,
         })
     }
 }
@@ -775,8 +775,8 @@ fn validator_start_timeout_secs(inventory: &InventoryV1, host_slug: &str) -> Res
 
 #[derive(Clone)]
 enum HostTarget {
-    Validator(ValidatorV1),
-    Edge(EdgeV1),
+    Validator(Box<ValidatorV1>),
+    Edge(Box<EdgeV1>),
 }
 
 impl HostTarget {
@@ -951,31 +951,31 @@ fn dispatch_locked_host_request(
             read_existing_host_receipt(&receipt_dir, &receipt_name, admitted, action)?
         {
             match action {
-                HostAction::Upload => verify_upload_body(&admitted, body, None)?,
+                HostAction::Upload => verify_upload_body(admitted, body, None)?,
                 HostAction::InrouStageUpload => {
-                    verify_inrou_stage_upload_body(&admitted, body, false)?
+                    verify_inrou_stage_upload_body(admitted, body, false)?
                 }
                 _ => {}
             }
             if action == HostAction::Cleanup {
-                verify_completed_cleanup_plan(&admitted, Some(&receipt))?;
+                verify_completed_cleanup_plan(admitted, Some(&receipt))?;
             }
             match progress_decision {
                 HostProgressDecision::Advance if action != HostAction::Cleanup => {
-                    revalidate_cached_action_postcondition(&admitted, action)?;
+                    revalidate_cached_action_postcondition(admitted, action)?;
                 }
                 HostProgressDecision::Replay if action != HostAction::Cleanup => {
                     if action == HostAction::Rollback {
-                        revalidate_cached_action_postcondition(&admitted, HostAction::Rollback)?;
+                        revalidate_cached_action_postcondition(admitted, HostAction::Rollback)?;
                     } else {
-                        revalidate_current_target_postcondition(&admitted, &progress)?;
+                        revalidate_current_target_postcondition(admitted, &progress)?;
                     }
                 }
                 HostProgressDecision::Advance | HostProgressDecision::Replay => {}
                 HostProgressDecision::AbsentNoOp => unreachable!("handled before receipt replay"),
             }
             if progress_decision == HostProgressDecision::Advance {
-                advance_host_progress(&admitted, action, &mut progress)?;
+                advance_host_progress(admitted, action, &mut progress)?;
             }
             receipt.idempotent = true;
             return Ok(receipt);
@@ -1768,7 +1768,7 @@ fn validate_prepared_mutation_envelope_context(
         .get("operation")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("prepared mutation operation omits its label"))?;
-    let (expected_tag, expected_operation) = prepared_operation_identity(&kind)?;
+    let (expected_tag, expected_operation) = prepared_operation_identity(kind)?;
     if operation_kind != expected_tag || operation_label != expected_operation {
         return Err(eyre!(
             "prepared mutation operation tag or label does not match its child kind"
@@ -1939,7 +1939,7 @@ fn validate_prepared_mutation_envelope_context(
                     .as_ref()
                     .expect("prepared onboarding uses a write binding")
                     .onboarding_binding(&prepared.receipt)?,
-                &expected_fee_payment,
+                expected_fee_payment,
             )
             .wrap_err("prepared onboarding transaction authentication failed")?;
         }
@@ -1975,8 +1975,8 @@ fn validate_prepared_mutation_envelope_context(
                     .as_ref()
                     .expect("prepared faucet uses a write binding")
                     .faucet_binding(&prepared.claim)?,
-                &expected_fee_payment,
-                &expected_faucet_policy,
+                expected_fee_payment,
+                expected_faucet_policy,
             )
             .wrap_err("prepared faucet transaction authentication failed")?;
         }
@@ -2259,7 +2259,7 @@ fn validate_prepared_mutation_envelope_context(
             inrou_stage
                 .as_ref()
                 .expect("prepared Inrou stage identity was validated above"),
-            &idempotency_key,
+            idempotency_key,
         )
         .wrap_err("prepared Inrou transaction executable authentication failed")?;
     } else {
@@ -2569,10 +2569,10 @@ fn validate_prepared_mutation_applied_evidence(
         }
         if service_applied {
             validate_applied_inrou_service_identity(object, &admitted.inventory)?;
-            if !object
+            if object
                 .get("observed_at_unix_ms")
                 .and_then(norito::json::Value::as_u64)
-                .is_some_and(|timestamp| timestamp > 0)
+                .is_none_or(|timestamp| timestamp == 0)
             {
                 return Err(eyre!(
                     "prepared Inrou Applied evidence omits its observation timestamp"
@@ -2843,9 +2843,9 @@ fn validate_prepared_mutation_envelope_for_identity(
     lifetime_check: PreparedMutationLifetimeCheck,
 ) -> Result<(String, String, String)> {
     let mut request = admitted.request.clone();
-    request.mutation_kind = kind.to_owned();
-    request.mutation_phase = phase.to_owned();
-    request.mutation_idempotency_key = idempotency_key.to_owned();
+    kind.clone_into(&mut request.mutation_kind);
+    phase.clone_into(&mut request.mutation_phase);
+    idempotency_key.clone_into(&mut request.mutation_idempotency_key);
     let borrowed = HostAdmission {
         request,
         request_sha256: admitted.request_sha256.clone(),
@@ -2944,7 +2944,7 @@ pub(super) fn validate_core_state_marker(
     let state = expected[9];
     if actual != expected
         || !matches!(state, "submitted" | "applied")
-        || (state == "applied") != !evidence.is_empty()
+        || (state == "applied") == evidence.is_empty()
         || (!evidence.is_empty()
             && require_lower_sha256(evidence, "prepared mutation evidence digest").is_err())
     {
@@ -2962,11 +2962,17 @@ fn prepared_mutation_receipt(
     prepared: Option<&PreparedMutationV1>,
 ) -> HostReceiptV1 {
     let mut receipt = host_recovery_receipt(admitted, HostAction::MutationReserve, state, detail);
-    receipt.mutation_state = state.to_owned();
+    state.clone_into(&mut receipt.mutation_state);
     if let Some(prepared) = prepared {
-        receipt.mutation_prepared_base64 = prepared.prepared_base64.clone();
-        receipt.mutation_prepared_sha256 = prepared.prepared_sha256.clone();
-        receipt.mutation_transaction_hash = prepared.transaction_hash.clone();
+        receipt
+            .mutation_prepared_base64
+            .clone_from(&prepared.prepared_base64);
+        receipt
+            .mutation_prepared_sha256
+            .clone_from(&prepared.prepared_sha256);
+        receipt
+            .mutation_transaction_hash
+            .clone_from(&prepared.transaction_hash);
     }
     receipt
 }
@@ -3404,9 +3410,12 @@ fn admit_host_request(
     let trusted_key_bytes = BASE64
         .decode(&request.trusted_key_base64)
         .wrap_err("host request trusted-key base64 is invalid")?;
-    if inventory_bytes.len() > super::MAX_JSON_BYTES as usize
-        || authorization_bytes.len() > super::MAX_JSON_BYTES as usize
-        || trusted_key_bytes.len() > super::MAX_JSON_BYTES as usize
+    if inventory_bytes.len()
+        > usize::try_from(super::MAX_JSON_BYTES).expect("bounded input limit fits usize")
+        || authorization_bytes.len()
+            > usize::try_from(super::MAX_JSON_BYTES).expect("bounded input limit fits usize")
+        || trusted_key_bytes.len()
+            > usize::try_from(super::MAX_JSON_BYTES).expect("bounded input limit fits usize")
         || sha256_hex(&trusted_key_bytes) != request.trusted_key_sha256
     {
         return Err(eyre!(
@@ -3430,10 +3439,10 @@ fn admit_host_request(
         .iter()
         .find(|validator| validator.slug == request.host_slug)
         .cloned()
-        .map(HostTarget::Validator)
+        .map(|value| HostTarget::Validator(Box::new(value)))
         .or_else(|| {
             (inventory.edge.slug == request.host_slug)
-                .then(|| HostTarget::Edge(inventory.edge.clone()))
+                .then(|| HostTarget::Edge(Box::new(inventory.edge.clone())))
         })
         .ok_or_else(|| eyre!("host request slug is not in the signed inventory"))?;
     let host = match &target {
@@ -3793,13 +3802,13 @@ fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Opt
         }
     }
     if fields.len() != 6
-        || !matches!(
+        || !(matches!(
             (
                 fields.get("ActiveState").copied(),
                 fields.get("SubState").copied()
             ),
             (Some("inactive"), Some("dead"))
-        ) && !(allow_failed
+        ) || allow_failed
             && fields.get("ActiveState") == Some(&"failed")
             && fields.get("SubState") == Some(&"failed"))
         || fields.get("MainPID") != Some(&"0")
@@ -3911,8 +3920,7 @@ fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     let path = path
         .to_str()
         .and_then(|path| path.strip_suffix(" (deleted)"))
-        .map(Path::new)
-        .unwrap_or(path);
+        .map_or(path, Path::new);
     roots.iter().any(|root| path.starts_with(root))
 }
 
@@ -5368,14 +5376,14 @@ fn prepare_host_progress(
             return Err(eyre!("absent rollback target cannot prepare a mutation"));
         }
     }
-    if action != HostAction::Rollback && host_action_touches_live_state(&key) {
-        if !progress
+    if action != HostAction::Rollback
+        && host_action_touches_live_state(&key)
+        && !progress
             .touched_hosts
             .iter()
             .any(|slug| slug == &key.host_slug)
-        {
-            progress.touched_hosts.push(key.host_slug.clone());
-        }
+    {
+        progress.touched_hosts.push(key.host_slug.clone());
     }
     progress.prepared_action = Some(key);
     if action == HostAction::Rollback {
@@ -5931,7 +5939,7 @@ fn host_recovery_receipt(
     detail: &str,
 ) -> HostReceiptV1 {
     let mut receipt = host_receipt(admitted, action, true, 0, 0, detail);
-    receipt.status = status.to_owned();
+    status.clone_into(&mut receipt.status);
     receipt
 }
 
@@ -6117,7 +6125,7 @@ fn verify_upload_body(
     let artifact = artifact(admitted.target.artifacts(), &admitted.request.artifact_role)?;
     let mut digest = Sha256::new();
     let mut copied = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     let staging = destination.map(|destination| {
         destination.with_file_name(format!(
             ".{}.{}.next",
@@ -6419,7 +6427,7 @@ fn verify_inrou_stage_upload_body(
         }
         ensure_generated_directory(&staging, admitted, "inrou_stage", 0o700)?;
     }
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     for expected in &manifest.files {
         ensure_action_deadline(admitted)?;
         let destination = write_new.then(|| staging.join(&expected.path));
@@ -7231,13 +7239,13 @@ fn ensure_state_move_intent(
         return Ok(intent);
     }
     let metadata = state.metadata()?;
-    if let HostTarget::Validator(validator) = &admitted.target {
-        if !validator.is_vacant() {
-            validator
-                .admitted_release()?
-                .service_state
-                .validate_state_identity(metadata.dev(), metadata.ino())?;
-        }
+    if let HostTarget::Validator(validator) = &admitted.target
+        && !validator.is_vacant()
+    {
+        validator
+            .admitted_release()?
+            .service_state
+            .validate_state_identity(metadata.dev(), metadata.ino())?;
     }
     let intent = StateMoveIntentV1 {
         schema: STATE_MOVE_INTENT_SCHEMA_V1.to_owned(),
@@ -7270,13 +7278,13 @@ fn load_state_move_intent(rollback: &Path, admitted: &HostAdmission) -> Result<S
     {
         return Err(eyre!("validator state-move intent is not this exact reset"));
     }
-    if let HostTarget::Validator(validator) = &admitted.target {
-        if !validator.is_vacant() {
-            validator
-                .admitted_release()?
-                .service_state
-                .validate_state_identity(intent.prior_device, intent.prior_inode)?;
-        }
+    if let HostTarget::Validator(validator) = &admitted.target
+        && !validator.is_vacant()
+    {
+        validator
+            .admitted_release()?
+            .service_state
+            .validate_state_identity(intent.prior_device, intent.prior_inode)?;
     }
     Ok(intent)
 }
@@ -7355,11 +7363,10 @@ fn verify_fresh_state(admitted: &HostAdmission) -> Result<()> {
     let state = Path::new(admitted.target.state_root());
     require_root_directory(state, true, "fresh validator state root")?;
     verify_generated_marker(state, admitted, "fresh_state")?;
-    let expected = BTreeSet::from_iter(
-        std::iter::once(OsString::from(".public-reset-generated-v1.json"))
-            .chain(std::iter::once(OsString::from(first_boot::TOKEN)))
-            .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from)),
-    );
+    let expected = std::iter::once(OsString::from(".public-reset-generated-v1.json"))
+        .chain(std::iter::once(OsString::from(first_boot::TOKEN)))
+        .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from))
+        .collect::<BTreeSet<_>>();
     let actual = fs::read_dir(state)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<BTreeSet<_>>>()?;
@@ -7388,10 +7395,9 @@ fn verify_populated_fresh_state_for_quarantine(
 ) -> Result<()> {
     require_root_directory(state, true, "populated fresh validator state")?;
     verify_generated_marker(state, admitted, "fresh_state")?;
-    let expected = BTreeSet::from_iter(
-        std::iter::once(OsString::from(".public-reset-generated-v1.json"))
-            .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from)),
-    );
+    let expected = std::iter::once(OsString::from(".public-reset-generated-v1.json"))
+        .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from))
+        .collect::<BTreeSet<_>>();
     let mut actual = fs::read_dir(state)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<BTreeSet<_>>>()?;
@@ -8347,11 +8353,12 @@ fn run_durable_manager_operation(
     target_unit: &str,
 ) -> Result<()> {
     let (intent, created) = ensure_manager_intent(admitted, label, verb, target_unit)?;
-    let mut submission_attempted = false;
-    if created {
+    let mut submission_attempted = if created {
         submit_durable_manager_operation(admitted, &intent)?;
-        submission_attempted = true;
-    }
+        true
+    } else {
+        false
+    };
     loop {
         if admitted.action_deadline <= Instant::now() {
             return Err(LocalMutationRecoveryPending {
@@ -8556,8 +8563,9 @@ fn restart_unit(admitted: &HostAdmission, validator: &ValidatorV1) -> Result<()>
     let active = beacon::active_binding(admitted, validator)?;
     let unit_sha256 = active
         .as_ref()
-        .map(|binding| binding.unit_sha256.as_str())
-        .unwrap_or(&validator.systemd_unit_sha256);
+        .map_or(validator.systemd_unit_sha256.as_str(), |binding| {
+            binding.unit_sha256.as_str()
+        });
     attest_loaded_systemd_unit(validator, unit_sha256, admitted.action_deadline)?;
     let receipt_dir = ensure_host_receipt_dir(admitted)?;
     let (intent, _) = read_private_json::<HostIntentV1>(
@@ -9357,7 +9365,7 @@ fn partition_cleanup_reclaim_limit(
         .map_err(|_| eyre!("cleanup target index is not representable"))?;
     let base = max_reclaim_bytes_per_host / target_count;
     let remainder = max_reclaim_bytes_per_host % target_count;
-    let extra = if target_index < remainder { 1 } else { 0 };
+    let extra = u64::from(target_index < remainder);
     base.checked_add(extra)
         .ok_or_else(|| eyre!("cleanup target reclaim partition overflow"))
 }
@@ -9492,7 +9500,7 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
                 continue;
             }
             let path = entry.path();
-            let protected = cleanup_protects_prior_release(admitted, &path)?;
+            let protected = cleanup_protects_prior_release(admitted, &path);
             if path == current_release || protected {
                 continue;
             }
@@ -9600,8 +9608,8 @@ fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Re
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn cleanup_protects_prior_release(admitted: &HostAdmission, path: &Path) -> Result<bool> {
-    Ok(occupied::protects_prior_artifact(&admitted.target, path))
+fn cleanup_protects_prior_release(admitted: &HostAdmission, path: &Path) -> bool {
+    occupied::protects_prior_artifact(&admitted.target, path)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -9610,7 +9618,7 @@ fn require_cleanup_release_not_prior(
     _kind: &str,
     path: &Path,
 ) -> Result<()> {
-    if cleanup_protects_prior_release(admitted, path)? {
+    if cleanup_protects_prior_release(admitted, path) {
         return Err(eyre!(
             "cleanup must preserve the exact admitted prior release"
         ));
@@ -11139,7 +11147,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
         let inherited_descriptors = spec
             .inherited_files
             .iter()
-            .map(|file| file.as_raw_fd())
+            .map(rustix::fd::AsRawFd::as_raw_fd)
             .collect::<Vec<_>>();
         unsafe {
             command.pre_exec(move || {
@@ -11155,26 +11163,23 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     let mut child = command
         .spawn()
         .wrap_err_with(|| format!("failed to spawn `{}`", spec.program.display()))?;
-    let mut stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            terminate_owned_child(&mut child)?;
-            return Err(eyre!("child stdout pipe missing"));
-        }
+    let mut stdout = if let Some(stdout) = child.stdout.take() {
+        stdout
+    } else {
+        terminate_owned_child(&mut child)?;
+        return Err(eyre!("child stdout pipe missing"));
     };
-    let mut stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            terminate_owned_child(&mut child)?;
-            return Err(eyre!("child stderr pipe missing"));
-        }
+    let mut stderr = if let Some(stderr) = child.stderr.take() {
+        stderr
+    } else {
+        terminate_owned_child(&mut child)?;
+        return Err(eyre!("child stderr pipe missing"));
     };
-    let stdin = match child.stdin.take() {
-        Some(stdin) => stdin,
-        None => {
-            terminate_owned_child(&mut child)?;
-            return Err(eyre!("child stdin pipe missing"));
-        }
+    let stdin = if let Some(stdin) = child.stdin.take() {
+        stdin
+    } else {
+        terminate_owned_child(&mut child)?;
+        return Err(eyre!("child stdin pipe missing"));
     };
     for (descriptor, label) in [
         (stdin.as_fd(), "stdin"),
@@ -11198,7 +11203,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     }
     let mut stdin = Some(stdin);
     let mut prefix_offset = 0_usize;
-    let mut file_buffer = [0_u8; 64 * 1024];
+    let mut file_buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     let mut file_range = 0..0;
     let mut stdin_complete = false;
     let mut stdin_aborted = false;
@@ -11617,7 +11622,7 @@ fn drain_nonblocking_with_read_budget(
                 output.extend_from_slice(&buffer[..count]);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
     }
@@ -11635,20 +11640,20 @@ fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
 /// A child report is authoritative only after the producing process exits successfully.
 /// Error messages can contain runtime inputs or server response bodies, so retain only
 /// the fixed CLI error kind and process metadata when reporting a failed child.
-fn parse_prepared_child_report(output: ProcessOutput, label: &str) -> Result<norito::json::Value> {
+fn parse_prepared_child_report(output: &ProcessOutput, label: &str) -> Result<norito::json::Value> {
     if !output.status.success() {
         return Err(prepared_child_process_error(
-            &output,
+            output,
             label,
-            prepared_child_error_kind(&output),
+            prepared_child_error_kind(output),
         ));
     }
     if output.stdout.len() > MAX_PROCESS_OUTPUT {
-        return Err(prepared_child_process_error(&output, label, "protocol"));
+        return Err(prepared_child_process_error(output, label, "protocol"));
     }
     // Do not attach the JSON parser error: its text may quote untrusted output.
     json::from_slice(&output.stdout)
-        .map_err(|_| prepared_child_process_error(&output, label, "protocol"))
+        .map_err(|_| prepared_child_process_error(output, label, "protocol"))
 }
 
 fn prepared_child_error_kind(output: &ProcessOutput) -> &'static str {
@@ -12040,10 +12045,10 @@ fn wait_for_validator_mesh(
                     break;
                 }
                 check_authorization()?;
-                unit_health[index] = match probe_unit(index, remaining.as_secs().min(5)) {
-                    Ok(health) => ValidatorUnitProbeObservation::Health(health),
-                    Err(_) => ValidatorUnitProbeObservation::Unavailable,
-                };
+                unit_health[index] = probe_unit(index, remaining.as_secs().min(5))
+                    .map_or(ValidatorUnitProbeObservation::Unavailable, |health| {
+                        ValidatorUnitProbeObservation::Health(health)
+                    });
                 if unit_health[index]
                     == ValidatorUnitProbeObservation::Health(ValidatorUnitHealth::Failed)
                 {
@@ -12411,7 +12416,7 @@ fn rename_private_noreplace(source: &Path, destination: &Path) -> Result<()> {
 
 fn hash_reader(reader: &mut impl Read) -> Result<String> {
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = reader.read(&mut buffer).wrap_err("failed to hash bytes")?;
         if count == 0 {
@@ -12670,7 +12675,7 @@ impl RuntimeCustody {
         &self,
         admitted: &AdmittedReset,
         deadline: Instant,
-    ) -> Result<(Vec<u8>, Vec<(File, u64)>)> {
+    ) -> Result<StageUploadStream> {
         self.revalidate(admitted, deadline, false)?;
         let stage = self.inrou()?;
         if stage.snapshot_stage_files.is_empty()
@@ -12728,8 +12733,8 @@ impl RuntimeCustody {
     }
 
     fn recover(
-        client_config_path: PathBuf,
-        validator_config_paths: Vec<PathBuf>,
+        client_config_path: &Path,
+        validator_config_paths: &[PathBuf],
         validator_operator_key_path: Option<PathBuf>,
         admitted: &AdmittedReset,
         journal_dir: &Path,
@@ -12740,7 +12745,7 @@ impl RuntimeCustody {
             ));
         }
         let client_config =
-            pin_owner_private_file(&client_config_path, "Taira recovery client config")?;
+            pin_owner_private_file(client_config_path, "Taira recovery client config")?;
         let client_hash = hash_pinned_input(&client_config, "Taira recovery client config", None)?;
         if client_hash != admitted.authorization.claims.runtime_client_config_sha256 {
             return Err(eyre!(
@@ -13023,7 +13028,7 @@ pub(super) fn hash_pinned_input(
     file.rewind()
         .wrap_err("failed to rewind pinned runtime input")?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         ensure_local_deadline(deadline)?;
         let count = file
@@ -13308,15 +13313,7 @@ pub(super) fn validator_config_closure_sha256(
     Ok(hex::encode(digest.finalize()))
 }
 
-pub(super) fn pin_stage_tree(
-    root: &Path,
-    deadline: Option<Instant>,
-) -> Result<(
-    String,
-    u64,
-    Vec<(String, super::PinnedInput)>,
-    BTreeMap<String, String>,
-)> {
+pub(super) fn pin_stage_tree(root: &Path, deadline: Option<Instant>) -> Result<PinnedStageTree> {
     validate_owner_private_dir(root, "retained Inrou stage")?;
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
@@ -13629,8 +13626,8 @@ impl<'a> OpenSshTransport<'a, RealProcessRunner> {
     pub(super) fn new(
         admitted: &'a AdmittedReset,
         journal_dir: &Path,
-        ssh_identity: PathBuf,
-        known_hosts: PathBuf,
+        ssh_identity: &Path,
+        known_hosts: &Path,
         runtime: RuntimeCanaryInputs,
     ) -> Result<Self> {
         if ssh_identity != admitted.ssh_identity.path || known_hosts != admitted.known_hosts.path {
@@ -13662,8 +13659,8 @@ impl<'a> RecoverySshTransport<'a> {
     pub(super) fn new(
         admitted: &'a AdmittedReset,
         journal_dir: &Path,
-        runtime_client_config: PathBuf,
-        validator_client_configs: Vec<PathBuf>,
+        runtime_client_config: &Path,
+        validator_client_configs: &[PathBuf],
         validator_operator_key: Option<PathBuf>,
     ) -> Result<Self> {
         validate_owner_private_dir(journal_dir, "public-reset journal directory")?;
@@ -14081,6 +14078,21 @@ impl ResetTransport for RecoverySshTransport<'_> {
     }
 }
 
+type StageUploadStream = (Vec<u8>, Vec<(File, u64)>);
+type PinnedStageTree = (
+    String,
+    u64,
+    Vec<(String, super::PinnedInput)>,
+    BTreeMap<String, String>,
+);
+
+#[derive(Clone, Copy)]
+struct HostDispatchTarget<'a> {
+    slug: &'a str,
+    endpoint: &'a EndpointV1,
+    _service_root: &'a str,
+}
+
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     fn wait_for_validator_mesh(
         &mut self,
@@ -14128,9 +14140,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             )?;
         }
         self.dispatch(
-            &validator.slug,
-            &validator.endpoint,
-            &validator.service_root,
+            HostDispatchTarget {
+                slug: &validator.slug,
+                endpoint: &validator.endpoint,
+                _service_root: &validator.service_root,
+            },
             action,
             None,
             false,
@@ -14157,9 +14171,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             )?;
         }
         self.dispatch(
-            &edge.slug,
-            &edge.endpoint,
-            &edge.service_root,
+            HostDispatchTarget {
+                slug: &edge.slug,
+                endpoint: &edge.endpoint,
+                _service_root: &edge.service_root,
+            },
             action,
             None,
             false,
@@ -14180,9 +14196,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         self.closure.revalidate_host(slug, artifacts)?;
         for artifact in artifacts {
             self.dispatch(
-                slug,
-                endpoint,
-                service_root,
+                HostDispatchTarget {
+                    slug,
+                    endpoint,
+                    _service_root: service_root,
+                },
                 HostAction::Upload,
                 Some(artifact),
                 false,
@@ -14195,15 +14213,19 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
 
     fn dispatch(
         &mut self,
-        slug: &str,
-        endpoint: &EndpointV1,
-        _service_root: &str,
+        target: HostDispatchTarget<'_>,
         action: HostAction,
         upload: Option<&ArtifactV1>,
         recovery_only: bool,
         mutation: Option<MutationReservationIdentity<'_>>,
         timeout_secs: u64,
     ) -> Result<HostReceiptV1> {
+        let HostDispatchTarget {
+            slug,
+            endpoint,
+            _service_root,
+        } = target;
+
         let timeout_ms = timeout_secs
             .checked_mul(1_000)
             .ok_or_else(|| eyre!("host action timeout overflow"))?;
@@ -14415,6 +14437,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         Ok(receipt)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The transport contract passes the complete prepared-mutation binding and custody evidence explicitly"
+    )]
     fn coordinate_shared_prepared_mutation(
         &mut self,
         operation: &str,
@@ -14438,9 +14464,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let endpoint = owner.endpoint.clone();
         let service_root = owner.service_root.clone();
         let receipt = self.dispatch(
-            &slug,
-            &endpoint,
-            &service_root,
+            HostDispatchTarget {
+                slug: &slug,
+                endpoint: &endpoint,
+                _service_root: &service_root,
+            },
             HostAction::MutationReserve,
             None,
             recovery_only,
@@ -14628,16 +14656,16 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &prepared,
             true,
         )?;
-        if let PreparedMutationOutcome::Applied { evidence, .. } = &outcome {
-            if prepared.state != "applied" {
-                self.mark_shared_prepared_applied(
-                    &mutation.phase,
-                    &mutation.kind,
-                    &prepared,
-                    evidence,
-                    deadline,
-                )?;
-            }
+        if let PreparedMutationOutcome::Applied { evidence, .. } = &outcome
+            && prepared.state != "applied"
+        {
+            self.mark_shared_prepared_applied(
+                &mutation.phase,
+                &mutation.kind,
+                &prepared,
+                evidence,
+                deadline,
+            )?;
         }
         Ok(outcome)
     }
@@ -14671,7 +14699,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_prepared_child_report(process, "exact prepared Inrou child")?;
+        let value = parse_prepared_child_report(&(process), "exact prepared Inrou child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))
@@ -14850,7 +14878,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     &observations,
                 ));
             }
-            let observed = observer.observe(&clients, inventory.chain_discriminant, deadline)?;
+            let observation = observer.observe(&clients, inventory.chain_discriminant, deadline)?;
             revalidate_pinned(
                 self.runtime
                     .validator_operator_key
@@ -14862,7 +14890,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 &self.runtime.client_config,
                 "convergence runtime client config",
             )?;
-            match observed {
+            match observation {
                 HeightObservationV1::Verified(evidence) => {
                     let checkpoint = (
                         evidence.committed_height().get(),
@@ -16166,10 +16194,10 @@ fn validate_prepared_inrou_report(
     }
     if service_applied {
         validate_applied_inrou_service_identity(object, &admitted.inventory)?;
-        if !object
+        if object
             .get("observed_at_unix_ms")
             .and_then(norito::json::Value::as_u64)
-            .is_some_and(|timestamp| timestamp > 0)
+            .is_none_or(|timestamp| timestamp == 0)
         {
             return Err(eyre!(
                 "prepared Inrou service report omits its observation timestamp"
@@ -16883,10 +16911,10 @@ fn validate_exact_inrou_check_report_with_scope(
     validate_prepared_report_common_arrays(object, true, "Inrou check report")?;
     let evidence = validate_applied_inrou_service_identity(object, &admitted.inventory)?;
     if fresh
-        && !object
+        && object
             .get("observed_at_unix_ms")
             .and_then(norito::json::Value::as_u64)
-            .is_some_and(|timestamp| timestamp > 0)
+            .is_none_or(|timestamp| timestamp == 0)
     {
         return Err(eyre!(
             "fresh Inrou check report omits its observation timestamp"
@@ -16980,6 +17008,10 @@ fn require_successor_checkpoint(
     Ok(())
 }
 
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "Receipt names require the exact lowercase protocol suffix"
+)]
 fn validate_receipt_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 128
@@ -17789,9 +17821,8 @@ pub(super) mod tests {
                 Ok(())
             },
         )
-        .and_then(|()| {
+        .map(|()| {
             onboarding_calls += 1;
-            Ok(())
         });
         assert!(
             result
@@ -17825,9 +17856,8 @@ pub(super) mod tests {
                 Ok(())
             },
         )
-        .and_then(|()| {
+        .map(|()| {
             onboarding_calls += 1;
-            Ok(())
         });
         assert_eq!(
             result
@@ -17963,7 +17993,7 @@ pub(super) mod tests {
                     },
                     _ => unreachable!(),
                 };
-                parse_prepared_child_report(output, "exact prepared write child")?;
+                parse_prepared_child_report(&(output), "exact prepared write child")?;
                 panic!("no failed fixture may authorize an outcome")
             })
             .expect_err("unknown outcome after Submitted must remain pending");
@@ -18011,11 +18041,11 @@ pub(super) mod tests {
         ] {
             for label in ["exact prepared write child", "exact prepared Inrou child"] {
                 let error = parse_prepared_child_report(
-                    ProcessOutput {
+                    &(ProcessOutput {
                         status: ExitStatus::from_raw(raw_status),
                         stdout: stdout.clone(),
                         stderr: b"child-secret-must-not-escape".to_vec(),
-                    },
+                    }),
                     label,
                 )
                 .expect_err("a failed producer cannot authorize its Applied report")
@@ -18054,11 +18084,11 @@ pub(super) mod tests {
             let stderr = rendered.output.into_bytes();
             let stderr_len = stderr.len();
             let error = parse_prepared_child_report(
-                ProcessOutput {
+                &(ProcessOutput {
                     status: ExitStatus::from_raw(exit_code << 8),
                     stdout: Vec::new(),
                     stderr,
-                },
+                }),
                 "exact prepared write child",
             )
             .expect_err("stderr-only CLI error")
@@ -18084,11 +18114,11 @@ pub(super) mod tests {
             b"startup banner\nprivate malformed error",
         ] {
             let error = parse_prepared_child_report(
-                ProcessOutput {
+                &(ProcessOutput {
                     status: ExitStatus::from_raw(1 << 8),
                     stdout: Vec::new(),
                     stderr: stderr.to_vec(),
-                },
+                }),
                 "exact prepared Inrou child",
             )
             .expect_err("untrusted stderr is not an error classification")
@@ -18110,11 +18140,11 @@ pub(super) mod tests {
         ] {
             let stdout_len = stdout.len();
             let error = parse_prepared_child_report(
-                ProcessOutput {
+                &(ProcessOutput {
                     status: ExitStatus::from_raw(0),
                     stdout,
                     stderr: b"private stderr".to_vec(),
-                },
+                }),
                 "exact prepared write child",
             )
             .expect_err("empty, malformed or oversized output is a protocol failure")
@@ -18156,11 +18186,11 @@ pub(super) mod tests {
                     object.insert("applied_block_height".to_owned(), 7_u64.into());
                 }
                 let parsed = parse_prepared_child_report(
-                    ProcessOutput {
+                    &(ProcessOutput {
                         status: ExitStatus::from_raw(0),
                         stdout: json::to_vec(&report).expect("typed prepared report"),
                         stderr: Vec::new(),
-                    },
+                    }),
                     label,
                 )
                 .expect("typed outcomes remain available to exact envelope validation");
@@ -18210,7 +18240,8 @@ pub(super) mod tests {
         }
         assert!(validator_start_timeout_secs(&inventory, "taira-edge").is_err());
         for (index, validator) in inventory.validators.iter_mut().enumerate() {
-            validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+            validator.endpoint.host_identity_sha256 =
+                hex::encode([u8::try_from(index).expect("fixture value fits u8") + 1; 32]);
         }
         for validator in &inventory.validators {
             assert_eq!(
@@ -19429,7 +19460,7 @@ pub(super) mod tests {
             claims,
             signature_hex: "11".repeat(64),
         };
-        let target = HostTarget::Validator(inventory.validators[0].clone());
+        let target = HostTarget::Validator(Box::new(inventory.validators[0].clone()));
         HostAdmission {
             request: HostRequestV1 {
                 schema: HOST_REQUEST_SCHEMA_V1.to_owned(),
@@ -19586,10 +19617,10 @@ pub(super) mod tests {
             .iter()
             .find(|validator| validator.slug == slug)
             .cloned()
-            .map(HostTarget::Validator)
+            .map(|value| HostTarget::Validator(Box::new(value)))
             .or_else(|| {
                 (admitted.inventory.edge.slug == slug)
-                    .then(|| HostTarget::Edge(admitted.inventory.edge.clone()))
+                    .then(|| HostTarget::Edge(Box::new(admitted.inventory.edge.clone())))
             })
             .expect("fixture target");
         admitted.request.host_slug = slug.to_owned();
@@ -20336,11 +20367,11 @@ pub(super) mod tests {
         for (name, byte) in [("first", b'a'), ("second", b'b')] {
             let path = directory.path().join(name);
             let mut file = File::create(&path).expect("create harmless streamed fixture");
-            let chunk = [byte; 64 * 1024];
+            let chunk = vec![byte; 64 * 1024].into_boxed_slice();
             for _ in 0..512 {
                 file.write_all(&chunk)
                     .expect("write harmless streamed fixture");
-                expected.update(chunk);
+                expected.update(&chunk);
             }
             drop(file);
             files.push((
@@ -20357,7 +20388,7 @@ pub(super) mod tests {
             args: vec![
                 "-I".into(),
                 "-c".into(),
-                r#"
+                r"
 import hashlib, sys
 sys.stdout.buffer.write(b'o' * 131072)
 sys.stdout.buffer.flush()
@@ -20373,7 +20404,7 @@ while True:
     count += len(chunk)
 sys.stdout.buffer.write((h.hexdigest() + ' ' + str(count) + '\n').encode())
 sys.stdout.buffer.flush()
-"#
+"
                 .into(),
             ],
             stdin_prefix: prefix,
@@ -20384,11 +20415,12 @@ sys.stdout.buffer.flush()
         })
         .expect("readiness-driven 64MiB exact stream with both output pipes backpressured");
         assert!(output.status.success());
-        let mut expected_stdout = vec![b'o'; 131072];
-        expected_stdout
-            .extend_from_slice(format!("{:x} {expected_len}\n", expected.finalize()).as_bytes());
+        let mut expected_stdout = vec![b'o'; 131_072];
+        expected_stdout.extend_from_slice(
+            format!("{} {expected_len}\n", hex::encode(expected.finalize())).as_bytes(),
+        );
         assert_eq!(output.stdout, expected_stdout);
-        assert_eq!(output.stderr, vec![b'e'; 131072]);
+        assert_eq!(output.stderr, vec![b'e'; 131_072]);
     }
 
     #[test]
@@ -20437,13 +20469,13 @@ sys.stdout.buffer.flush()
             args: vec![
                 "-I".into(),
                 "-c".into(),
-                r#"
+                r"
 import os, sys, time
 if os.fork():
     os._exit(0)
 os.write(int(sys.argv[1]), b'descendant-ready')
 time.sleep(30)
-"#
+"
                 .into(),
                 descriptor.to_string().into(),
             ],
@@ -20700,7 +20732,7 @@ time.sleep(30)
             args: vec![
                 "-I".into(),
                 "-c".into(),
-                r#"
+                r"
 import os, sys
 os.close(0)
 sys.stdout.buffer.write(b'fixture-stdout-must-not-enter-errors')
@@ -20709,7 +20741,7 @@ sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))
 sys.stderr.buffer.write(b'\nfixture-remote-rejection\n')
 sys.stderr.buffer.flush()
 os._exit(23)
-"#
+"
                 .into(),
                 "fixture-argument-must-not-enter-errors".into(),
             ],
@@ -20757,12 +20789,12 @@ os._exit(23)
             args: vec![
                 "-I".into(),
                 "-c".into(),
-                r#"
+                r"
 import os, sys, time
 os.close(0)
 os.write(int(sys.argv[1]), str(os.getpid()).encode('ascii'))
 time.sleep(30)
-"#
+"
                 .into(),
                 descriptor.to_string().into(),
             ],
@@ -22138,7 +22170,7 @@ time.sleep(30)
             .expect("selected response hash") = "e".repeat(64).into();
         let restarted_evidence = validate_exact_inrou_check_report(&restarted, &admitted, true)
             .expect("exact restarted evidence");
-        let _ = validate_inrou_restart_transition(
+        validate_inrou_restart_transition(
             &baselines[0],
             &baselines[0],
             &restarted_evidence,
@@ -23698,7 +23730,8 @@ time.sleep(30)
             let mut inventory = admitted.inventory.clone();
             for (index, validator) in inventory.validators.iter_mut().enumerate() {
                 if mask & (1 << index) == 0 {
-                    validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+                    validator.endpoint.host_identity_sha256 =
+                        hex::encode([u8::try_from(index).expect("fixture value fits u8") + 1; 32]);
                 }
             }
             assert!(
@@ -23966,6 +23999,13 @@ time.sleep(30)
 
     #[test]
     fn vacant_namespace_open_and_read_errors_fail_closed_without_marking() {
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            }
+        }
+
         let roots = [Path::new("/var/lib/taira/validator-1")];
         let mut seen = BTreeSet::new();
         let error = inspect_process_namespace_evidence(
@@ -23981,12 +24021,7 @@ time.sleep(30)
                 .contains("inspect vacant target process namespace")
         );
         assert!(seen.is_empty());
-        struct FailedRead;
-        impl Read for FailedRead {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::ErrorKind::PermissionDenied.into())
-            }
-        }
+
         assert!(
             inspect_process_namespace_evidence(
                 &roots,
@@ -24278,7 +24313,7 @@ time.sleep(30)
     #[test]
     fn guest_edge_execution_refuses_before_linux_custody_or_process_checks() {
         let mut admitted = progress_admission();
-        admitted.target = HostTarget::Edge(admitted.inventory.edge.clone());
+        admitted.target = HostTarget::Edge(Box::new(admitted.inventory.edge.clone()));
         let checks: [fn(&HostAdmission) -> Result<()>; 10] = [
             host_preflight,
             require_vacant_host_precondition,
@@ -24401,7 +24436,7 @@ time.sleep(30)
         let original_name = root.file_name().unwrap().to_str().unwrap().to_owned();
         assert!(occupied::protects_prior_artifact(&admitted.target, &root));
         assert!(
-            cleanup_protects_prior_release(&admitted, &root).unwrap(),
+            cleanup_protects_prior_release(&admitted, &root),
             "discovery protects the independently admitted prior release"
         );
         assert!(require_cleanup_release_not_prior(&admitted, "release", &root).is_err());
@@ -24509,7 +24544,7 @@ time.sleep(30)
             .join("guard")
             .to_string_lossy()
             .into_owned();
-        admitted.target = HostTarget::Edge(edge);
+        admitted.target = HostTarget::Edge(Box::new(edge));
         for action in [
             HostAction::Upload,
             HostAction::EdgeStage,
@@ -24836,7 +24871,7 @@ time.sleep(30)
             if vacant {
                 edge.initial_state = super::super::EdgeInitialStateV1::Vacant;
             }
-            admitted.target = HostTarget::Edge(edge);
+            admitted.target = HostTarget::Edge(Box::new(edge));
             let checks: [fn(&HostAdmission) -> Result<()>; 2] =
                 [rollback_host, verify_rollback_postcondition];
             for check in checks {
@@ -24887,6 +24922,8 @@ time.sleep(30)
         }
         impl ProcessRunner for ProbeRunner {
             fn run(&mut self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+                use std::os::unix::fs::FileExt as _;
+
                 assert_eq!(spec.program, Path::new(SSH));
                 assert!(
                     spec.inherited_files.is_empty(),
@@ -24915,7 +24952,7 @@ time.sleep(30)
                 let fixture_read_path = identity.to_path_buf();
                 #[cfg(not(target_os = "linux"))]
                 let fixture_read_path = Path::new("/dev/fd").join(identity.file_name().unwrap());
-                use std::os::unix::fs::FileExt as _;
+
                 let mut fixture_bytes = [0_u8; b"SSH-FIXTURE-ONLY".len()];
                 File::open(fixture_read_path)
                     .expect("live parent-held fixture")

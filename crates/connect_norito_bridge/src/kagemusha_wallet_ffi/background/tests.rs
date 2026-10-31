@@ -17,13 +17,25 @@ struct ScriptWallet {
     resume: Option<Box<dyn FnMut() -> Result<Response> + Send>>,
 }
 impl Wallet for ScriptWallet {
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+        self.base.deferred_receipt()
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        self.base.deferred_wake_hint()
+    }
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+        self.base.drain_plan()
+    }
+    fn maintenance(&mut self) -> Result<maintenance::View> {
+        Ok(maintenance::View::Released)
+    }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         self.base.snapshot()
     }
-    fn setup(&mut self, input: setup::Setup) -> Result<Response> {
+    fn setup(&mut self, _exchange_id: u64, input: setup::Setup) -> Result<Response> {
         match self.setup.as_mut() {
             Some(run) => run(input),
-            None => self.base.setup(input),
+            None => self.base.setup(_exchange_id, input),
         }
     }
     fn execute(&mut self, input: state::OperationRequestV1) -> Result<Response> {
@@ -34,6 +46,9 @@ impl Wallet for ScriptWallet {
     }
     fn retry(&mut self, id: &[u8; 32]) -> Result<Response> {
         self.base.retry(id)
+    }
+    fn has_pending_operation(&mut self) -> Result<bool> {
+        self.base.has_pending_operation()
     }
     fn resume(&mut self) -> Result<Response> {
         match self.resume.as_mut() {
@@ -85,6 +100,16 @@ fn wait(owner: &Owner, predicate: impl Fn(&Control) -> bool) {
         "worker did not reach expected boundary"
     );
 }
+/// Coalesce entry-retry and Payment-release events for an already parked worker.
+/// This is only a test ordering seam; the actual external resume still owns its priority.
+fn resume_parked(id: u64, owner: &Arc<Owner>) -> Result<Response> {
+    let payment = owner
+        .background
+        .payment(&owner.scheduler, state::FoldCallClassV1::Payment);
+    let result = resume(id);
+    drop(payment);
+    result
+}
 fn caught_up() -> Result<Response> {
     Ok(Response {
         kind: 7,
@@ -99,7 +124,11 @@ fn parked_worker_does_not_retain_owner_and_close_joins_before_custody_drop() {
     assert_eq!(owner.background.status().unwrap().detail, 0);
     activity(id, true, false).unwrap();
     wait(&owner, |state| state.backlog.is_some() && !state.running);
-    let status = setup(id, setup::Setup::BackgroundStatus).unwrap();
+    let status = test_setup(
+        &exchange::Invocation::setup(id, 0, 18).unwrap(),
+        setup::Setup::BackgroundStatus,
+    )
+    .unwrap();
     assert_eq!((status.kind, status.detail, status.sequence), (29, 13, 0));
     assert_eq!(
         Arc::strong_count(&owner),
@@ -109,7 +138,146 @@ fn parked_worker_does_not_retain_owner_and_close_joins_before_custody_drop() {
     close(id).unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(owner.wallet.lock().unwrap().is_none());
-    assert!(owner.background.join.lock().unwrap().is_none());
+    assert!(matches!(
+        *owner.background.join.lock().unwrap(),
+        WorkerJoin::Joined
+    ));
+    owner.background.join().unwrap();
+}
+
+fn local_join_owner() -> (Mutex<Registry>, Arc<Owner>, Arc<AtomicUsize>) {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let owner = Arc::new(Owner {
+        background: Background::default(),
+        exchanges: Mutex::new(exchange::Tokens::default()),
+        closing: Arc::new(closing::CloseState::default()),
+        scheduler: state::Scheduler::new(),
+        wallet: Mutex::new(Some(Box::new(TestWallet {
+            calls: Arc::new(AtomicUsize::new(0)),
+            drops: Arc::clone(&drops),
+            expected_request: None,
+        }))),
+    });
+    let mut registry = Registry::default();
+    registry.owners.insert(1, Arc::clone(&owner));
+    (Mutex::new(registry), owner, drops)
+}
+
+#[test]
+fn worker_join_panic_keeps_exact_custody_on_every_close_retry() {
+    let (registry, owner, drops) = local_join_owner();
+    owner
+        .background
+        .start_with(&owner, |_| {
+            thread::Builder::new().spawn(|| panic!("injected worker join failure"))
+        })
+        .unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            closing::close_with(&registry, 1).unwrap_err().status,
+            INTERNAL
+        );
+        assert!(matches!(
+            *owner.background.join.lock().unwrap(),
+            WorkerJoin::Failed(Failure {
+                status: INTERNAL,
+                ..
+            })
+        ));
+        assert!(
+            registry
+                .lock()
+                .unwrap()
+                .owners
+                .get(&1)
+                .is_some_and(|actual| Arc::ptr_eq(actual, &owner))
+        );
+        assert!(owner.wallet.lock().unwrap().is_some());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(owner.closing.require_open().unwrap_err().status, CLOSED);
+        assert_eq!(
+            owner
+                .background
+                .start_with(&owner, |_| panic!("must not restart a failed worker"))
+                .unwrap_err()
+                .status,
+            CLOSED
+        );
+    }
+}
+
+#[test]
+fn concurrent_join_callers_observe_the_same_worker_failure() {
+    let (_registry, owner, drops) = local_join_owner();
+    let (entered_send, entered) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    owner
+        .background
+        .start_with(&owner, |_| {
+            thread::Builder::new().spawn(move || {
+                entered_send.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(5)).unwrap();
+                panic!("injected failure after join ownership moved");
+            })
+        })
+        .unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (result_send, result) = mpsc::channel();
+    let first = {
+        let owner = Arc::clone(&owner);
+        let result_send = result_send.clone();
+        thread::spawn(move || result_send.send(owner.background.join()).unwrap())
+    };
+    let joining = owner.background.join.lock().unwrap();
+    let (joining, timeout) = owner
+        .background
+        .join_ready
+        .wait_timeout_while(joining, Duration::from_secs(5), |state| {
+            !matches!(state, WorkerJoin::Joining)
+        })
+        .unwrap();
+    assert!(!timeout.timed_out() || matches!(*joining, WorkerJoin::Joining));
+    assert!(matches!(*joining, WorkerJoin::Joining));
+    drop(joining);
+    let second = {
+        let owner = Arc::clone(&owner);
+        thread::spawn(move || result_send.send(owner.background.join()).unwrap())
+    };
+    assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err()
+                .status,
+            INTERNAL
+        );
+    }
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(owner.background.join().unwrap_err().status, INTERNAL);
+    assert!(owner.wallet.lock().unwrap().is_some());
+}
+
+#[test]
+fn never_started_worker_closes_without_inventing_a_join_failure() {
+    let (registry, owner, drops) = local_join_owner();
+    assert!(matches!(
+        *owner.background.join.lock().unwrap(),
+        WorkerJoin::NeverStarted
+    ));
+    closing::close_with(&registry, 1).unwrap();
+    owner.background.join().unwrap();
+    assert!(matches!(
+        *owner.background.join.lock().unwrap(),
+        WorkerJoin::Joined
+    ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(owner.wallet.lock().unwrap().is_none());
+    assert!(registry.lock().unwrap().owners.is_empty());
 }
 
 #[test]
@@ -157,7 +325,12 @@ fn payment_priority_resumes_after_expected_cancellation_without_sticky_error() {
     });
     activity(id, true, false).unwrap();
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
-    let payment = thread::spawn(move || resume(id));
+    // This worker seam checks the production priority reservation itself; source-selected
+    // resume preflight is covered separately and must acquire the wallet without priority.
+    let payment_owner = Arc::clone(&owner);
+    let payment = thread::spawn(move || {
+        with_wallet_owner(payment_owner, Priority::Payment, |wallet| wallet.resume())
+    });
     // Payment reservation precedes its wait on the wallet and survives cancellation.
     wait(&owner, |state| state.payments == 1);
     release.send(()).unwrap();
@@ -232,7 +405,7 @@ fn pending_idle_turn_parks_until_a_payment_guard_wakes_folding() {
 
         // The public Native resume path owns the real payment guard and mutex;
         // its release must wake the parked worker without another activity call.
-        assert_eq!(resume(id).unwrap().kind, 1);
+        assert_eq!(resume_parked(id, &owner).unwrap().kind, 1);
         wait(&owner, |state| {
             state.backlog == Some(0) && !state.running && !state.wake
         });
@@ -256,15 +429,23 @@ fn actual_uncertain_fold_error_stays_latched_until_observed_and_woken() {
     });
     activity(id, true, false).unwrap();
     wait(&owner, |state| state.error.is_some() && !state.running);
-    resume(id).unwrap();
+    resume_parked(id, &owner).unwrap();
     activity(id, true, false).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let error = setup(id, setup::Setup::BackgroundStatus).unwrap_err();
+    let error = test_setup(
+        &exchange::Invocation::setup(id, 0, 18).unwrap(),
+        setup::Setup::BackgroundStatus,
+    )
+    .unwrap_err();
     assert_eq!(
         (error.status, error.reason, error.platform_code),
         (uncertain.status, uncertain.reason, uncertain.platform_code)
     );
-    resume(id).unwrap();
+    activity(id, true, false).unwrap();
+    owner.background.notify();
+    assert_eq!(owner.background.status().unwrap_err(), uncertain);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    resume_parked(id, &owner).unwrap();
     wait(&owner, |state| {
         state.backlog == Some(0) && !state.running && !state.wake
     });
@@ -278,7 +459,7 @@ fn failed_spawn_preserves_custody_and_allows_a_fresh_activity_attempt() {
     let (id, owner, drops) = scripted(caught_up);
     let error = owner
         .background
-        .activity_with(&owner, true, |_| {
+        .start_with(&owner, |_| {
             Err(std::io::Error::other("injected spawn refusal"))
         })
         .unwrap_err();
@@ -292,7 +473,7 @@ fn failed_spawn_preserves_custody_and_allows_a_fresh_activity_attempt() {
 }
 
 #[test]
-fn terminal_error_is_preserved_until_observed_then_explicit_wake_can_retry() {
+fn terminal_error_is_preserved_until_observed_then_explicit_retry_can_run() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
     let (id, owner, _) = scripted(move || {
@@ -305,15 +486,24 @@ fn terminal_error_is_preserved_until_observed_then_explicit_wake_can_retry() {
     activity(id, true, false).unwrap();
     wait(&owner, |state| state.error.is_some());
     activity(id, true, false).unwrap();
-    resume(id).unwrap();
+    resume_parked(id, &owner).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        setup(id, setup::Setup::BackgroundStatus)
-            .unwrap_err()
-            .status,
+        test_setup(
+            &exchange::Invocation::setup(id, 0, 18).unwrap(),
+            setup::Setup::BackgroundStatus
+        )
+        .unwrap_err()
+        .status,
         PROOF_REJECTED
     );
     activity(id, true, false).unwrap();
+    assert_eq!(
+        owner.background.status().unwrap_err().status,
+        PROOF_REJECTED
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    resume_parked(id, &owner).unwrap();
     wait(&owner, |state| {
         state.backlog.is_some() && !state.running && state.error.is_none()
     });
@@ -359,7 +549,11 @@ fn the_worker_keeps_the_backlog_of_each_fold_result_and_takes_no_snapshot() {
         turns.load(Ordering::SeqCst) == 2 && !state.running && !state.wake
     });
     assert_eq!(owner.background.inner.lock().backlog, Some(2));
-    let status = setup(id, setup::Setup::BackgroundStatus).unwrap();
+    let status = test_setup(
+        &exchange::Invocation::setup(id, 0, 18).unwrap(),
+        setup::Setup::BackgroundStatus,
+    )
+    .unwrap();
     assert_eq!((status.kind, status.detail, status.sequence), (29, 13, 2));
     // The non-zero backlog lets an activity update wake the worker; a folded head wakes the
     // turn after it.
@@ -377,7 +571,7 @@ fn the_worker_keeps_the_backlog_of_each_fold_result_and_takes_no_snapshot() {
 }
 
 #[test]
-fn activity_wakes_the_worker_only_for_eligibility_backlog_or_an_error() {
+fn every_activity_update_notifies_without_clearing_an_observed_error() {
     let turns = Arc::new(AtomicUsize::new(0));
     let counted = turns.clone();
     let (id, owner, _) = scripted(move || {
@@ -397,12 +591,13 @@ fn activity_wakes_the_worker_only_for_eligibility_backlog_or_an_error() {
         activity(id, foreground, charging).unwrap();
         std::mem::take(&mut owner.background.inner.lock().wake)
     };
-    // Caught up: repeated foreground and charging updates start no turn.
-    assert!(!woke(true, false));
-    assert!(!woke(false, true));
-    assert!(!woke(true, true));
-    // Leaving activity applies at once without a wake; becoming eligible again wakes.
-    assert!(!woke(false, false));
+    // All complete activity pairs notify discovery, including charging changes with
+    // zero fold backlog. The held payment prevents any additional fold turn.
+    assert!(woke(true, false));
+    assert!(woke(false, true));
+    assert!(woke(true, true));
+    // Leaving activity applies immediately and also notifies non-fold maintenance.
+    assert!(woke(false, false));
     assert!(!owner.background.inner.lock().enabled);
     assert!(woke(true, false));
     // An unknown or non-zero backlog wakes on every update.
@@ -411,14 +606,22 @@ fn activity_wakes_the_worker_only_for_eligibility_backlog_or_an_error() {
     owner.background.inner.lock().backlog = Some(3);
     assert!(woke(false, true));
     owner.background.inner.lock().backlog = Some(0);
-    assert!(!woke(true, false));
-    // A pending error wakes, which clears an observed one for the retry.
-    owner.background.inner.lock().error = Some((Failure::code(PROOF_REJECTED), true));
     assert!(woke(true, false));
-    assert!(owner.background.inner.lock().error.is_none());
+    // Activity and Payment release preserve the exact already-observed error.
+    let failure = Failure::unavailable(UNCERTAIN, advance::KagemushaWalletUnavailableV1::Io(5));
+    owner.background.inner.lock().error = Some((failure, true));
+    assert!(woke(true, false));
+    assert_eq!(owner.background.inner.lock().error, Some((failure, true)));
     assert_eq!(turns.load(Ordering::SeqCst), 1);
-    // The payment wake stays unconditional.
     drop(payment);
+    assert_eq!(owner.background.inner.lock().error, Some((failure, true)));
+    assert!(
+        owner.background.inner.lock().wake,
+        "Payment release still notifies"
+    );
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    owner.background.retry(&owner).unwrap();
+    assert!(owner.background.inner.lock().error.is_none());
     wait(&owner, |state| {
         turns.load(Ordering::SeqCst) == 2 && !state.running && !state.wake
     });
@@ -426,7 +629,7 @@ fn activity_wakes_the_worker_only_for_eligibility_backlog_or_an_error() {
 }
 
 #[test]
-fn a_failed_turn_forgets_the_backlog_so_activity_retries_after_the_error_is_observed() {
+fn a_failed_turn_forgets_backlog_but_only_explicit_retry_clears_the_observed_error() {
     let turns = Arc::new(AtomicUsize::new(0));
     let counted = turns.clone();
     let (id, owner, _) = scripted(move || {
@@ -441,17 +644,27 @@ fn a_failed_turn_forgets_the_backlog_so_activity_retries_after_the_error_is_obse
         state.backlog == Some(0) && !state.running && !state.wake
     });
     // A payment wakes the worker unconditionally; that turn fails.
-    resume(id).unwrap();
+    resume_parked(id, &owner).unwrap();
     wait(&owner, |state| state.error.is_some() && !state.running);
     assert_eq!(owner.background.inner.lock().backlog, None);
     assert_eq!(
-        setup(id, setup::Setup::BackgroundStatus)
-            .unwrap_err()
-            .status,
+        test_setup(
+            &exchange::Invocation::setup(id, 0, 18).unwrap(),
+            setup::Setup::BackgroundStatus
+        )
+        .unwrap_err()
+        .status,
         PROOF_REJECTED
     );
-    // No cached zero backlog is left to swallow the update: activity alone retries.
+    // No cached zero backlog swallows the notification, but activity cannot erase
+    // the observed failure. The next external resume is the explicit retry boundary.
     activity(id, true, false).unwrap();
+    assert_eq!(
+        owner.background.status().unwrap_err().status,
+        PROOF_REJECTED
+    );
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    resume_parked(id, &owner).unwrap();
     wait(&owner, |state| {
         state.backlog == Some(0) && !state.running && state.error.is_none()
     });
@@ -530,7 +743,17 @@ fn collection_dispatch_does_not_reserve_payment_priority_against_itself() {
                         })
                     }
                     setup::Setup::Bootstrap => {
-                        assert_eq!(payments, 1, "money setup still reserves priority");
+                        assert_eq!(
+                            payments, 0,
+                            "Native authenticates Bootstrap status before priority"
+                        );
+                        Ok(Response {
+                            kind: 1,
+                            ..Response::default()
+                        })
+                    }
+                    setup::Setup::Request { .. } => {
+                        assert_eq!(payments, 1, "fresh Request still reserves priority");
                         Ok(Response {
                             kind: 1,
                             ..Response::default()
@@ -546,8 +769,8 @@ fn collection_dispatch_does_not_reserve_payment_priority_against_itself() {
     let owner = owner(id).unwrap();
     *selected.lock().unwrap() = Arc::downgrade(&owner);
     assert_eq!(
-        setup(
-            id,
+        test_setup(
+            &test_invocation(id).unwrap(),
             setup::Setup::CollectRetained {
                 sequence: u128::MAX
             }
@@ -556,7 +779,25 @@ fn collection_dispatch_does_not_reserve_payment_priority_against_itself() {
         .sequence,
         u128::MAX
     );
-    assert_eq!(setup(id, setup::Setup::Bootstrap).unwrap().kind, 1);
+    assert_eq!(
+        test_setup(&test_invocation(id).unwrap(), setup::Setup::Bootstrap)
+            .unwrap()
+            .kind,
+        1
+    );
+    assert_eq!(
+        test_setup(
+            &test_invocation(id).unwrap(),
+            setup::Setup::Request {
+                id: [1; 32],
+                amount: 1,
+                fee: None
+            }
+        )
+        .unwrap()
+        .kind,
+        1
+    );
     close(id).unwrap();
 }
 
@@ -623,6 +864,39 @@ fn started(entered: &mpsc::Receiver<()>) {
 }
 
 #[test]
+fn retained_bootstrap_observation_does_not_preempt_an_active_fold() {
+    let (id, owner, entered, release) = unlocked_owner(None);
+    activity(id, true, false).unwrap();
+    started(&entered);
+    assert_eq!(
+        test_setup(&test_invocation(id).unwrap(), setup::Setup::Bootstrap)
+            .unwrap()
+            .kind,
+        12
+    );
+    {
+        let control = owner.background.inner.lock();
+        assert!(
+            control.running,
+            "Native retained Bootstrap observation leaves proof running"
+        );
+        assert_eq!(control.payments, 0);
+        assert_eq!(control.fold.counts().sub_proofs, 0);
+    }
+    release.store(true, Ordering::SeqCst);
+    wait(&owner, |control| {
+        control.fold.counts().sub_proofs == 1 && !control.running && !control.wake
+    });
+    close(id).unwrap();
+    let metrics = owner.background.fold_metrics();
+    assert_eq!(
+        metrics.records()[0].outcome,
+        state::FoldOutcomeV1::Checkpoint
+    );
+    assert_eq!(metrics.counts().cancelled_by_payment, 0);
+}
+
+#[test]
 fn ingests_and_status_reads_during_an_unlocked_proof_never_cancel_it() {
     use setup::Setup as S;
     let (id, owner, entered, release) = unlocked_owner(None);
@@ -667,7 +941,12 @@ fn ingests_and_status_reads_during_an_unlocked_proof_never_cancel_it() {
     const READ_REPEATS: usize = 32;
     let ingests = inputs.len() + 5 + 2 * READ_REPEATS;
     for input in inputs {
-        assert_eq!(setup(id, input).unwrap().kind, 12);
+        assert_eq!(
+            test_setup(&test_invocation(id).unwrap(), input)
+                .unwrap()
+                .kind,
+            12
+        );
     }
     assert_eq!(request_status(id, &[1; 32]).unwrap().kind, 11);
     assert_eq!(
@@ -696,18 +975,32 @@ fn ingests_and_status_reads_during_an_unlocked_proof_never_cancel_it() {
     // reviews must leave the useful sub-proof running until its durable checkpoint.
     for input in [
         review::Input::Send {
+            request_id: [1; 32],
+            expectation: state::ReviewExpectationV1::Fresh,
             request: vec![1],
             destination_account: vec![2],
         },
         review::Input::Unload {
+            request_id: [1; 32],
+            expectation: state::ReviewExpectationV1::Fresh,
             amount: 1,
             charge: None,
             beneficiary: None,
         },
     ] {
-        assert_eq!(review::review(id, input).unwrap_err().status, INVALID);
+        assert_eq!(
+            test_review(&test_invocation(id).unwrap(), input)
+                .unwrap_err()
+                .status,
+            INVALID
+        );
     }
-    assert_eq!(review::discard_review(id, 1).unwrap_err().status, INVALID);
+    assert_eq!(
+        review::discard_review(&test_invocation(id).unwrap(), 1)
+            .unwrap_err()
+            .status,
+        INVALID
+    );
     {
         let state = owner.background.inner.lock();
         assert!(state.running, "the sub-proof is still proving");
@@ -739,7 +1032,11 @@ fn ingests_and_status_reads_during_an_unlocked_proof_never_cancel_it() {
 fn explicit_fold_proves_without_the_owner_lock() {
     let (id, owner, entered, release) = unlocked_owner(None);
     owner.scheduler.set_activity(true, false);
-    let folding = thread::spawn(move || fold(id));
+    // This test isolates the actual proof/owner-lock stage. The adjacent test covers
+    // the external fold wrapper, whose discovery receipt probe can legitimately overlap
+    // the proof and add an unrelated Ingest to this exact telemetry assertion.
+    let fold_owner = Arc::clone(&owner);
+    let folding = thread::spawn(move || run(|| explicit_fold(&fold_owner)));
     started(&entered);
     // The owner is free while the explicit call proves.
     assert_eq!(request_status(id, &[1; 32]).unwrap().kind, 11);
@@ -845,7 +1142,10 @@ fn a_payment_taken_under_the_owner_lock_cancels_the_unlocked_proof_without_deadl
     let (done_tx, done) = mpsc::channel();
     let caller = thread::spawn(move || {
         done_tx
-            .send(setup(id, setup::Setup::LedgerStatus).map(|r| r.kind))
+            .send(
+                test_setup(&test_invocation(id).unwrap(), setup::Setup::LedgerStatus)
+                    .map(|r| r.kind),
+            )
             .unwrap();
     });
     let result = done
@@ -912,7 +1212,12 @@ fn fold_telemetry_counts_payment_activity_and_close_cancellations() {
         epoch: 1,
         original: vec![7],
     };
-    assert_eq!(setup(id, boundary).unwrap().kind, 12);
+    assert_eq!(
+        test_setup(&test_invocation(id).unwrap(), boundary)
+            .unwrap()
+            .kind,
+        12
+    );
     assert_eq!(counts().sub_proofs, 1);
     activity(id, false, false).unwrap();
     wait(&owner, |state| {
@@ -933,7 +1238,7 @@ fn fold_telemetry_counts_payment_activity_and_close_cancellations() {
         [
             (
                 state::FoldOutcomeV1::Cancelled(state::FoldCancelCauseV1::Payment),
-                0
+                1 // The selected recovery inspected custody before taking payment priority.
             ),
             (
                 state::FoldOutcomeV1::Cancelled(state::FoldCancelCauseV1::Activity),
@@ -1032,13 +1337,16 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
         S::CreditProjection {
             id: [1; 32],
             anchor: Vec::new(),
-            newer: Vec::new(),
         },
         S::BoundCredited {
             send_request: [1; 32],
             original: vec![1],
-            query: true,
         },
+        S::ObserveCredited {
+            send_request: [1; 32],
+            original: vec![1],
+        },
+        S::ResumeDeferredReceipt,
         S::BeginTime,
         S::CancelTime { token: 1 },
         S::FinishTime {
@@ -1049,8 +1357,8 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
     ] {
         assert_eq!(setup_priority(&input), Priority::Ingest);
     }
+    assert_eq!(setup_priority(&S::Bootstrap), Priority::None);
     for input in [
-        S::Bootstrap,
         S::Activation,
         S::CloseLoads { id: [1; 32] },
         S::Request {
@@ -1064,12 +1372,6 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
             schedule: vec![1],
             certificates: vec![1],
         },
-        S::Credited(vec![1]),
-        S::BoundCredited {
-            send_request: [1; 32],
-            original: vec![1],
-            query: false,
-        },
         S::ReviewCustodyDeletion,
         S::ConfirmCustodyDeletion { token: 1 },
         S::ResumeCustodyDeletion,
@@ -1077,4 +1379,108 @@ fn setup_inputs_preempt_only_when_they_prove_sign_or_delete_custody() {
     ] {
         assert_eq!(setup_priority(&input), Priority::Payment);
     }
+}
+
+/// The first `proving` fold turns prove outside the owner lock until `release` or a cancelling
+/// signal, then settle their checkpoint under the owner through the scheduler's own
+/// publication identity, counting it in `published`. Later turns are caught up.
+fn publishing(
+    scheduler: state::Scheduler,
+    proving: u32,
+    entered: mpsc::Sender<()>,
+    release: Arc<AtomicBool>,
+    published: Arc<AtomicUsize>,
+) -> FoldScript {
+    let mut turns = 0_u32;
+    Box::new(move || {
+        turns += 1;
+        if turns > proving {
+            return caught_up().map(ControlFlow::Break);
+        }
+        let (scheduler, entered) = (scheduler.clone(), entered.clone());
+        let (release, published) = (Arc::clone(&release), Arc::clone(&published));
+        let proof: FoldProof = Box::new(move || -> Result<FoldPublication> {
+            let publication = scheduler.proved_sub_proof_for_test(0, |token| {
+                entered.send(()).unwrap();
+                while !release.load(Ordering::SeqCst) {
+                    token.check()?;
+                    thread::yield_now();
+                }
+                Ok(())
+            })?;
+            Ok(Box::new(move |_: &mut dyn Wallet| {
+                let Some(publication) = publication else {
+                    return Ok(Response {
+                        kind: 6,
+                        ..Response::default()
+                    });
+                };
+                publication.checkpoint();
+                published.fetch_add(1, Ordering::SeqCst);
+                Ok(Response {
+                    kind: 8,
+                    backlog: Some(1),
+                    ..Response::default()
+                })
+            }))
+        });
+        Ok(ControlFlow::Continue(proof))
+    })
+}
+
+#[test]
+fn a_payment_lets_a_starved_fold_publish_its_running_sub_proof_under_the_owner() {
+    let scheduler = state::Scheduler::new();
+    let (entered_tx, entered) = mpsc::channel();
+    let release = Arc::new(AtomicBool::new(false));
+    let published = Arc::new(AtomicUsize::new(0));
+    let id = install(
+        Box::new(ScriptWallet {
+            resume: None,
+            base: TestWallet {
+                calls: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                expected_request: None,
+            },
+            fold: publishing(
+                scheduler.clone(),
+                state::FOLD_FAIRNESS_CANCELLATIONS + 1,
+                entered_tx,
+                Arc::clone(&release),
+                Arc::clone(&published),
+            ),
+            setup: None,
+        }),
+        scheduler,
+    )
+    .unwrap();
+    let owner = owner(id).unwrap();
+    activity(id, true, false).unwrap();
+    // Payment priority cancels the first sub-proofs, as before bounded fairness.
+    for _ in 0..state::FOLD_FAIRNESS_CANCELLATIONS {
+        started(&entered);
+        assert_eq!(resume(id).unwrap().kind, 2);
+    }
+    // The next one keeps proving while a payment waits for it without the owner.
+    started(&entered);
+    let payment = thread::spawn(move || resume(id));
+    wait(&owner, |state| state.payments == 1);
+    thread::sleep(Duration::from_millis(50));
+    assert!(
+        !payment.is_finished(),
+        "the payment lets the sub-proof finish"
+    );
+    assert!(owner.background.inner.lock().running);
+    assert_eq!(published.load(Ordering::SeqCst), 0);
+    release.store(true, Ordering::SeqCst);
+    assert_eq!(payment.join().unwrap().unwrap().kind, 2);
+    assert_eq!(
+        published.load(Ordering::SeqCst),
+        1,
+        "the worker published under the owner before the payment took it"
+    );
+    wait(&owner, |state| {
+        state.backlog == Some(0) && !state.running && !state.wake
+    });
+    close(id).unwrap();
 }

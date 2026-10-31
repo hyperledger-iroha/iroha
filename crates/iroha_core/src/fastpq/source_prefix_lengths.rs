@@ -18,18 +18,18 @@ use norito::core::{DecodeFlagsGuard, SequencePayloadLength, header_flags};
 
 /// Explicit inclusive sizing limits; no production defaults or E ownership.
 #[derive(Clone, Copy)]
-pub(crate) struct PrefixLengthLimits {
+pub struct PrefixLengthLimits {
     /// Maximum original deltas in this single occurrence.
     pub(crate) max_deltas: usize,
     /// Maximum complete canonical original transcript frame, including paths.
-    pub(crate) max_input_frame_bytes: usize,
+    pub(crate) input_frame_ceiling_bytes: usize,
     /// Maximum complete canonical quantity public-statement frame.
-    pub(crate) max_public_statement_frame_bytes: usize,
+    pub(crate) public_statement_ceiling_bytes: usize,
 }
 
 /// Sizes of the supplied prefix, without a semantic or authority certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PrefixFrameLengths {
+pub struct PrefixFrameLengths {
     /// Complete original delta count; the nonempty prefix represents one T.
     pub(crate) deltas: usize,
     /// Complete original private transcript frame I.
@@ -40,7 +40,7 @@ pub(crate) struct PrefixFrameLengths {
 
 /// A failed sizing attempt; none of these variants authorizes entry deferral.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PrefixLengthError {
+pub enum PrefixLengthError {
     /// This schema-coupled sizer has not been reviewed for another canonical layout.
     #[error("incremental source sizing requires canonical COMPACT_LEN layout")]
     UnsupportedLayout,
@@ -127,7 +127,7 @@ fn checked_row_count(deltas: usize) -> Result<u32, PrefixLengthError> {
 /// Later changes to prior public facts or private paths invalidate these counts;
 /// the adapter must preserve the measured snapshot or explicitly remeasure it.
 #[derive(Clone)]
-pub(crate) struct SourcePrefixFrameSizer {
+pub struct SourcePrefixFrameSizer {
     flags: u8,
     limits: PrefixLengthLimits,
     private_deltas: SequencePayloadLength,
@@ -240,10 +240,10 @@ impl SourcePrefixFrameSizer {
             self.input_fixed[digest_index],
             field_span(next.private_deltas.len(), self.flags)?,
         )?;
-        if input_frame_bytes > self.limits.max_input_frame_bytes {
+        if input_frame_bytes > self.limits.input_frame_ceiling_bytes {
             return Err(PrefixLengthError::Input {
                 actual: input_frame_bytes,
-                maximum: self.limits.max_input_frame_bytes,
+                maximum: self.limits.input_frame_ceiling_bytes,
             });
         }
         next.public_deltas
@@ -274,10 +274,10 @@ impl SourcePrefixFrameSizer {
             )?,
             field_span(transcript_sequence, self.flags)?,
         )?;
-        if public_statement_frame_bytes > self.limits.max_public_statement_frame_bytes {
+        if public_statement_frame_bytes > self.limits.public_statement_ceiling_bytes {
             return Err(PrefixLengthError::Public {
                 actual: public_statement_frame_bytes,
-                maximum: self.limits.max_public_statement_frame_bytes,
+                maximum: self.limits.public_statement_ceiling_bytes,
             });
         }
         let result = PrefixFrameLengths {
@@ -297,11 +297,11 @@ impl SourcePrefixFrameSizer {
 }
 
 #[path = "source_prefix_lengths/entry.rs"]
-pub(crate) mod entry;
+pub mod entry;
 
 #[cfg(test)]
 #[path = "source_prefix_lengths/checked.rs"]
-pub(crate) mod checked;
+pub mod checked;
 
 #[cfg(test)]
 #[path = "source_prefix_lengths/tests.rs"]

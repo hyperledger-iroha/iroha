@@ -10,28 +10,64 @@ source build, PATH discovery or project-local secret export is involved.
 ## Desktop tour
 
 - **Home** offers Quickstart: one click creates and starts a four-validator
-  localnet under the first unused `local`, `local-2`, … name. With an environment
-  selected it shows each validator's Torii URL, the developer account's balances,
-  the latest blocks and quick actions.
+  localnet under the first unused `local`, `local-2`, … name, with a funded
+  developer account and no storage-service provisioning; the header counts the
+  elapsed time while validators start. With an environment selected it shows each
+  validator's Torii URL, the chain pulse, the developer account's balances, the
+  latest blocks and quick actions; clicking a latest block opens it in **Blocks**.
+  While the network is ready, each validator card
+  also shows that validator's newest block height and hash, read every two seconds
+  from its own Explorer. A card is flagged `N blocks behind` while its validator
+  stays below a height an earlier read already saw, `hash differs` when it holds
+  a different block at a height others share, and `no response` when it does not
+  answer; the Validators heading reads `in sync` or `N out of sync`. A
+  validator one block short while a commit spreads is not flagged. The chain
+  pulse rolls the block height and shows the mean time between blocks,
+  transactions per second and rejected transactions over animated bars of the
+  newest blocks; hover a bar for its block.
 - The header switches, creates and attaches environments and holds Start, Stop,
   Refresh and Reset. The status strip shows phase, running validators, block
   height, chain, network, dataspace and the observed Torii URL; click a value to copy.
 - **Accounts** lists registered accounts with their holdings. Quick actions mint,
-  send, burn or create a funded account. A new account's key pair is generated in
-  memory, revealed only on request and dropped with the environment. Every quick
-  action becomes the same signed preview as the composer and is submitted only by
-  an explicit click.
-- **Blocks** and **Activity** follow the observed validator's canonical streams.
-  Idle chains create no blocks, so balances refresh only after committed blocks
-  or submissions.
+  send, burn, create a token or create a funded account; tokens, balances and
+  recipients are picked by name. Only a definition's owner mints it, and genesis
+  owns XOR, so Mint lists the developer's own tokens first and says before review
+  when a mint would be rejected. New token leases `<label>.universal` from the name
+  service for one year unless the developer already holds it, registers the token
+  there and mints its first supply in one transaction; the review shows the exact
+  lease price. A new account's key pair is generated in memory, revealed only on
+  request and dropped with the environment. Every quick action becomes the same
+  signed preview as the composer and is submitted only by an explicit click. A
+  preview asks the observed validator for a fee quote, signs the quoted limits and
+  lists each fee component; if no quote is available, nothing is signed. The review
+  card then shows how the network settled the transaction: applied with its block,
+  or rejected or expired with the validators' reason. An unconfirmed outcome keeps
+  the original hash for lookup.
+- **Blocks** and **Activity** follow the observed validator's canonical streams;
+  **Blocks** adds a wider chain pulse once blocks stream in. Idle chains create
+  no blocks, so balances refresh only after committed blocks or submissions.
+  Opening a block shows its header and commitments, validator signatures and
+  commit certificate, every transaction with its instructions, metadata, fee
+  intent and applied or rejected result, trigger runs, and the complete block as
+  copyable Norito JSON and `SignedBlockWire` hex. Previous and Next walk the
+  chain. Decoded bodies of the newest streamed blocks stay in memory up to
+  32 MiB; any other block is read again from the observed validator's canonical
+  block stream.
 - **Endpoints** lists Torii, health, status, metrics, OpenAPI and MCP URLs for each
   validator, the network identity and copyable `kagami` and `curl` commands. It
   never shows generated keys, API tokens or private configuration paths.
 - **Contracts** accepts a `.ko`, `.to`, `Musubi.toml` or package directory dropped
-  anywhere on the window. **Transactions**, **State**, **Packages** and **Logs**
-  cover the remaining workflows.
+  anywhere on the window. After a deployment applies, the call card is filled in
+  with the contract alias, its declared initialization entrypoint and an argument
+  template naming each parameter. View reads without signing; Call signs one
+  bounded call under the fee cap shown beside it. Deploying the same input again
+  recovers its journal; the Resume card also lists the environment's saved
+  deployments, so a changed or missing input still resumes without typing a path.
+  **Transactions**, **State**, **Packages** and **Logs** cover the remaining
+  workflows.
 - The theme follows the operating system and can be toggled in the header. The
   mascot's face follows the selected network's phase; poke it for a squish.
+  Sakura petals fall when a localnet starts or a deployment applies.
   Brand assets and their provenance live in [assets](assets/README.md).
 
 ## Ownership
@@ -73,7 +109,11 @@ pagination, canonical block/event streams, bounded logs, balance/block summaries
 structured and JSON transaction drafts, signed previews and deployment receipts.
 Exact deployment and fee review appears over every desktop view. Switching views
 during preparation cannot hide the review, and only its explicit confirmation
-approves dispatch; cancellation or closing Mochi leaves approval withheld.
+approves dispatch; cancellation or closing Mochi leaves approval withheld. The one
+exception is opt-in: with automatic approval enabled on the Contracts card, a
+deployment whose quoted fees total at most the cap in one fee asset dispatches
+without the dialog, and Activity records the approval. Larger or mixed-asset fees
+still ask, and the setting lasts only until Mochi closes.
 Deployment results identify the original localnet or private dataspace on which
 the contract applied. Parent receipts appear separately as historical evidence;
 an unavailable parent observation does not undo a verified local deployment. A failed automatic
@@ -84,15 +124,23 @@ retain their existing clearing behavior.
 Deployment results also show artifact-derived initialization guidance when the
 contract declares `hajimari`/`始まり`. It stays separate from the Applied receipt:
 the hook requires an explicit call, and recovered guidance does not assert its
-current state.
+current state. The call card is filled in for that call. Arguments follow the
+verified entrypoint schema's JSON forms: integers, decimals and quantities are
+strings such as `"5"`, booleans are `true`/`false`.
 
 The Packages view exposes explicit Publish, Resume publication and Recover package files
 actions through `DeveloperWorkspace::publish_package` and the shared Musubi engine.
-Publish can start the default environment; recovery requires its existing selected context
+For local publication, select a storage-enabled environment created in the same workspace
+with `kagami localnet up registry --with-storage`. Recovery requires its existing selected context
 and original operation ID. Original namespace custody and generation-bound operation/cache
 paths are shared with Kagami. The view retains canonical exit status, output and diagnostics
 even when the subsequent workspace observation fails. These source paths still require
 combined native three-provider publication and cold-package qualification.
+
+Balances, accounts and the State view read Torii's collection endpoints
+(`/v1/accounts`, `/v1/assets/definitions`, `/v1/domains`, `/v1/explorer/assets`),
+signed by the generated client. Peers use the signed `FindPeers` query, the only
+listing that signed `/v1/query` admits.
 
 The generated client signer is also the ledger-stream authority. Node HTTP
 operator signing uses a distinct generated key validated against all four node

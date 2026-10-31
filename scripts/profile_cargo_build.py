@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
 import hashlib
@@ -20,7 +21,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlsplit
 
 
@@ -117,7 +118,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Profile a locked Cargo build with a stable source/toolchain input "
-            "fingerprint. The target directory must be outside the repository."
+            "fingerprint. The target directory must be outside the repository. "
+            "Use --local as the first option for persistent-checkout diagnostics; "
+            "--local --help describes that separate mode."
         )
     )
     parser.add_argument(
@@ -1869,12 +1872,137 @@ def tracked_and_untracked_paths(
     return paths
 
 
+def git_index_entries(
+    root: Path, environment: dict[str, str], git: str, safe_cwd: Path
+) -> tuple[tuple[str, str, str, int], ...]:
+    """Read exact index modes, object identities and stages without submodule traversal."""
+
+    raw = subprocess.check_output(
+        [*_closed_git_command(git, root), "ls-files", "--stage", "-z"],
+        cwd=safe_cwd, env=environment,
+    )
+    if raw and not raw.endswith(b"\0"):
+        raise ValueError("unterminated Git index inventory")
+    entries = []
+    seen = set()
+    for value in raw.split(b"\0")[:-1]:
+        try:
+            header, encoded_path = value.split(b"\t", 1)
+            mode, oid, stage_text = header.decode("ascii").split(" ")
+            stage = int(stage_text)
+            relative = encoded_path.decode("utf-8", "surrogateescape")
+        except (ValueError, UnicodeError) as error:
+            raise ValueError("malformed Git index inventory") from error
+        _bounded_relative_path(relative)
+        if (not Path(relative).parts or str(Path(relative)) != relative
+                or mode not in ("100644", "100755", "120000", "160000")
+                or stage_text not in ("0", "1", "2", "3")
+                or not _valid_git_oid(oid)
+                or (relative, stage) in seen):
+            raise ValueError(f"invalid or duplicate Git index entry: {relative}")
+        seen.add((relative, stage))
+        entries.append((relative, mode, oid, stage))
+        if len(entries) > _MAX_TREE_RECORDS:
+            raise ValueError("Git index inventory contains too many paths")
+    return tuple(sorted(entries))
+
+
+def _valid_git_oid(value: str) -> bool:
+    return (isinstance(value, str) and len(value) in (40, 64)
+            and all(character in "0123456789abcdef" for character in value)
+            and any(character != "0" for character in value))
+
+
+@contextmanager
+def _uninitialized_gitlink_record(root_fd: int, relative: str, oid: str):
+    """Hold and revalidate every path component of one absent or empty gitlink."""
+
+    descriptors = [os.dup(root_fd)]
+    directories = []
+    missing = None
+    try:
+        parts = Path(relative).parts
+        for offset, component in enumerate(parts):
+            parent = descriptors[-1]
+            parent_metadata = os.fstat(parent)
+            try:
+                metadata = _lstat_at(parent, component)
+            except FileNotFoundError:
+                missing = (parent, component, parent_metadata)
+                state = "missing"
+                break
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError(f"local gitlink is not missing or an empty directory: {relative}")
+            child = _open_child_directory_at(parent, component, metadata, display=relative)
+            descriptors.append(child)
+            directories.append((parent, component, child, metadata))
+            if offset == len(parts) - 1:
+                if _directory_names_fd(child):
+                    raise ValueError(f"populated local gitlink is unsupported: {relative}")
+                state = "empty"
+        # Gitlinks own no source bytes. Their synthetic digest binds the indexed
+        # commit and the exact absent/empty state, without inventing file contents.
+        payload = b"iroha-local-uninitialized-gitlink-v1\0" + oid.encode("ascii") + b"\0" + state.encode("ascii")
+        yield {"bytes": 0, "executable": False, "kind": "gitlink",
+               "path": relative.replace(os.sep, "/"), "sha256": sha256_bytes(payload)}
+        if missing is not None:
+            parent, component, before = missing
+            try:
+                _lstat_at(parent, component)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError(f"missing local gitlink appeared while read: {relative}")
+            if not _stat_unchanged(before, os.fstat(parent)):
+                raise ValueError(f"missing local gitlink parent changed while read: {relative}")
+        elif _directory_names_fd(descriptors[-1]):
+            raise ValueError(f"local gitlink gained entries while read: {relative}")
+        for parent, component, child, before in reversed(directories):
+            if (not _stat_unchanged(before, os.fstat(child))
+                    or not _stat_unchanged(before, _lstat_at(parent, component))):
+                raise ValueError(f"local gitlink directory changed while read: {relative}")
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def _source_fingerprint_fd(
     root_fd: int,
     root_display: Path,
     paths: Iterable[str],
     *,
     reject_hardlinks: bool = False,
+    gitlinks: Mapping[str, str] | None = None,
+) -> SourceFingerprint:
+    if not gitlinks:
+        return _source_fingerprint_entries_fd(
+            root_fd, root_display, paths, reject_hardlinks=reject_hardlinks
+        )
+    selected = list(paths)
+    if not set(gitlinks).issubset(selected):
+        raise ValueError("local gitlink mapping contains an unselected source path")
+    with ExitStack() as witnesses:
+        records = {}
+        for relative, oid in sorted(gitlinks.items()):
+            _bounded_relative_path(relative)
+            if not Path(relative).parts or str(Path(relative)) != relative or not _valid_git_oid(oid):
+                raise ValueError(f"invalid local gitlink object identity: {relative}")
+            records[relative] = witnesses.enter_context(
+                _uninitialized_gitlink_record(root_fd, relative, oid)
+            )
+        return _source_fingerprint_entries_fd(
+            root_fd, root_display, selected,
+            reject_hardlinks=reject_hardlinks, gitlink_records=records,
+        )
+
+
+def _source_fingerprint_entries_fd(
+    root_fd: int,
+    root_display: Path,
+    paths: Iterable[str],
+    *,
+    reject_hardlinks: bool = False,
+    gitlink_records: Mapping[str, dict[str, Any]] | None = None,
 ) -> SourceFingerprint:
     digest = hashlib.sha256()
     file_count = 0
@@ -1884,6 +2012,11 @@ def _source_fingerprint_fd(
         _bounded_relative_path(relative)
         if file_count + deleted_count >= _MAX_TREE_RECORDS:
             raise ValueError("source snapshot contains too many paths")
+        if gitlink_records is not None and relative in gitlink_records:
+            digest.update(canonical_json_bytes(gitlink_records[relative]))
+            digest.update(b"\n")
+            file_count += 1
+            continue
         try:
             parent_fd, name = _open_relative_parent_fd(root_fd, relative)
         except (FileNotFoundError, NotADirectoryError):
@@ -1966,6 +2099,7 @@ def source_fingerprint(
     *,
     expected_identity: tuple[int, int] | None = None,
     reject_hardlinks: bool = False,
+    gitlinks: Mapping[str, str] | None = None,
 ) -> SourceFingerprint:
     """Hash source paths through one descriptor-anchored repository root."""
 
@@ -1976,7 +2110,7 @@ def source_fingerprint(
         if expected_identity is not None and identity != expected_identity:
             raise ValueError(f"source root identity changed: {root}")
         result = _source_fingerprint_fd(
-            descriptor, root, paths, reject_hardlinks=reject_hardlinks
+            descriptor, root, paths, reject_hardlinks=reject_hardlinks, gitlinks=gitlinks
         )
         if not _path_still_names(root, identity):
             raise ValueError(f"source root was replaced while read: {root}")
@@ -2757,6 +2891,11 @@ def verify_compiler_measurement(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the requested Cargo profile and write its report."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["--local"]:
+        import profile_cargo_local
+
+        return profile_cargo_local.run(arguments[1:], sys.modules[__name__])
     args = parse_args(argv)
     root = args.root.resolve()
     state: PrivateState | None = None
@@ -2826,6 +2965,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             tool_invocation_path(git_tool),
             state.home,
         )
+        if any(entry[1] == "160000" for entry in git_index_entries(
+            root, discovery_environment, tool_invocation_path(git_tool), state.home
+        )):
+            raise ValueError("isolated source snapshots do not support Git submodules")
         source_paths = tracked_and_untracked_paths(
             root,
             discovery_environment,

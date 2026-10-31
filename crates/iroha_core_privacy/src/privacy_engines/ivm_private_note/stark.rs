@@ -51,7 +51,7 @@ use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1,
     PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1, PrivacyProtocolIdV1,
 };
-use rand::TryRngCore;
+use rand::TryRng;
 const TYPE_SHA_ROUND: usize = 0;
 const TYPE_SHA_END: usize = 1;
 const TYPE_NODE_SELECT: usize = 2;
@@ -569,27 +569,27 @@ impl<'a> PrivateNoteStarkRelationV1<'a> {
     }
 
     /// Native trace logarithm shared by both profiles.
-    pub(crate) const fn trace_log2_v1(self) -> u8 {
+    pub(crate) const fn trace_log2_v1() -> u8 {
         PRIVATE_NOTE_TRACE_LOG2_V1
     }
 
     /// Exact base-trace width shared by both profiles.
-    pub(crate) const fn base_width_v1(self) -> usize {
+    pub(crate) const fn base_width_v1() -> usize {
         PRIVATE_NOTE_BASE_WIDTH_V1
     }
 
     /// Exact profile-only auxiliary width.
-    pub(crate) const fn profile_aux_width_v1(self) -> usize {
+    pub(crate) const fn profile_aux_width_v1() -> usize {
         PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1
     }
 
     /// Exact profile-only fixed width.
-    pub(crate) const fn profile_fixed_width_v1(self) -> usize {
+    pub(crate) const fn profile_fixed_width_v1() -> usize {
         PRIVATE_NOTE_PROFILE_FIXED_WIDTH_V1
     }
 
     /// Exact profile-only constraint count.
-    pub(crate) const fn profile_constraint_count_v1(self) -> usize {
+    pub(crate) const fn profile_constraint_count_v1() -> usize {
         PRIVATE_NOTE_PROFILE_CONSTRAINT_COUNT_V1
     }
 
@@ -622,7 +622,6 @@ impl<'a> PrivateNoteStarkRelationV1<'a> {
 
     /// Evaluate the extension-domain relation residues.
     pub(crate) fn constraint_residues_v1(
-        self,
         current_base: &[F],
         next_base: &[F],
         current_aux: &[F],
@@ -723,19 +722,19 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
         private_note_public_input_digest_v1(self.statement, binding_digest)
     }
     fn trace_log2_v1(&self) -> u8 {
-        self.relation_v1().trace_log2_v1()
+        PrivateNoteStarkRelationV1::trace_log2_v1()
     }
     fn base_width_v1(&self) -> usize {
-        self.relation_v1().base_width_v1()
+        PrivateNoteStarkRelationV1::base_width_v1()
     }
     fn profile_aux_width_v1(&self) -> usize {
-        self.relation_v1().profile_aux_width_v1()
+        PrivateNoteStarkRelationV1::profile_aux_width_v1()
     }
     fn profile_fixed_width_v1(&self) -> usize {
-        self.relation_v1().profile_fixed_width_v1()
+        PrivateNoteStarkRelationV1::profile_fixed_width_v1()
     }
     fn profile_constraint_count_v1(&self) -> usize {
-        self.relation_v1().profile_constraint_count_v1()
+        PrivateNoteStarkRelationV1::profile_constraint_count_v1()
     }
     fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
         self.relation_v1().copy_schedule_v1()
@@ -762,15 +761,15 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-        self.relation_v1().constraint_residues_v1(
+        let (current_base, next_base) = base_rows;
+        PrivateNoteStarkRelationV1::constraint_residues_v1(
             current_base,
             next_base,
             current_aux,
@@ -792,7 +791,7 @@ pub(super) fn compile_private_note_prover_columns_v1(
 /// The witness is compiled and checked by the native interpreter before the shared proof driver
 /// sees any columns. The proof driver then checks the same relation algebraically on the native and
 /// extension domains. This relation adapter independently verifies its opaque candidate before returning bytes.
-pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
+pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRng>(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
@@ -834,7 +833,8 @@ mod tests {
         PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
         PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     fn consensus_material(
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
@@ -936,35 +936,35 @@ mod tests {
                 }
             }
         }
-        fn mismatch_error(self) -> Option<PrivacyNativeConsensusBindingValidationErrorV1> {
+        fn mismatch_error(self) -> PrivacyNativeConsensusBindingValidationErrorV1 {
             match self {
                 Self::NetworkId => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch
                 }
                 Self::GenesisHash => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch
                 }
                 Self::ActionIndex => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch
                 }
-                Self::TransactionIntentDigest => Some(
-                    PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
-                ),
+                Self::TransactionIntentDigest => {
+                    PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch
+                }
                 Self::ParameterId => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch
                 }
                 Self::ParameterDigest => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch
                 }
                 Self::VerifierDigest => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch)
+                    PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch
                 }
-                Self::StatementSchemaDigest => Some(
-                    PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
-                ),
-                Self::EngineManifestDigest => Some(
-                    PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
-                ),
+                Self::StatementSchemaDigest => {
+                    PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch
+                }
+                Self::EngineManifestDigest => {
+                    PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch
+                }
             }
         }
     }
@@ -1060,7 +1060,8 @@ mod tests {
         for axis in CONSENSUS_BINDING_AXES_V1 {
             let mut binding_only = binding;
             axis.mutate_binding(&mut binding_only);
-            if let Some(expected_error) = axis.mismatch_error() {
+            let expected_error = axis.mismatch_error();
+            {
                 assert_eq!(
                     binding_only.validate_against_context(&value.statement.context, &limits),
                     Err(expected_error),
@@ -1183,7 +1184,7 @@ mod tests {
     fn full_domain_stark_roundtrip_and_adversarial_wires_fail_closed() {
         let value = fixture();
         let (binding, limits) = consensus_material(&value.statement);
-        let mut rng = StdRng::from_seed([0xA9; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA9; 32]);
         let proof = super::super::prove_ivm_private_note_v1_with_rng(
             &value.statement,
             &binding,
@@ -1343,7 +1344,7 @@ mod tests {
             &limits,
             value.profile,
         );
-        let mut rng = StdRng::from_seed([0xB7; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xB7; 32]);
         let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base_columns, &mut rng)
             .expect("three-output seam candidate")
             .verify_into_bytes_v1(&adapter)

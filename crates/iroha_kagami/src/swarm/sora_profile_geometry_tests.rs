@@ -8,7 +8,10 @@ fn source_config() -> toml::Table {
         .expect("shared parsed-admission config fixture")
 }
 
-fn execution_policy(config: &actual::Root) -> [u8; 32] {
+fn execution_policy(
+    config: &actual::Root,
+    authored_fees: &iroha_data_model::block::consensus::RootFeePolicy,
+) -> [u8; 32] {
     let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
         &config.nexus.lane_catalog,
         &config.nexus.governance,
@@ -16,6 +19,7 @@ fn execution_policy(config: &actual::Root) -> [u8; 32] {
     );
     let nexus = actual::nexus_consensus_policy_digest_with_runtime_policies(
         &config.nexus,
+        Some(authored_fees),
         None,
         Some(manifests.baseline_consensus_policy_digest()),
     )
@@ -23,7 +27,6 @@ fn execution_policy(config: &actual::Root) -> [u8; 32] {
     actual::execution_policy_digest_v1(
         &config.pipeline,
         &config.oracle,
-        &config.crypto,
         &config.fraud_monitoring,
         &config.gov,
         &config.content,
@@ -69,7 +72,10 @@ fn swarm_runtime_projection_preserves_explicit_default_geometry() {
         before.nexus.configured_dataspace_catalog
     );
     assert_eq!(after.nexus.routing_policy, before.nexus.routing_policy);
-    assert_eq!(execution_policy(&after), execution_policy(&before));
+    assert_eq!(
+        execution_policy(&after, &after.nexus.fees),
+        execution_policy(&before, &before.nexus.fees)
+    );
 }
 
 #[test]
@@ -82,7 +88,10 @@ fn swarm_runtime_projection_installs_bundled_geometry_only_when_omitted() {
     let (after, requires_sora) = effective_runtime_config(before, &table);
     assert!(requires_sora);
     assert_eq!(after.nexus.lane_catalog.lane_count().get(), 3);
-    assert_eq!(execution_policy(&after), execution_policy(&expected));
+    assert_eq!(
+        execution_policy(&after, &after.nexus.fees),
+        execution_policy(&expected, &expected.nexus.fees)
+    );
 }
 
 #[test]
@@ -94,5 +103,8 @@ fn swarm_runtime_projection_leaves_standard_config_unprofiled() {
     let (after, requires_sora) = effective_runtime_config(before.clone(), &table);
     assert!(!requires_sora);
     assert_eq!(after.nexus.lane_catalog.lane_count().get(), 1);
-    assert_eq!(execution_policy(&after), execution_policy(&before));
+    assert_eq!(
+        execution_policy(&after, &after.nexus.fees),
+        execution_policy(&before, &before.nexus.fees)
+    );
 }

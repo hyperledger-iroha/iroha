@@ -60,6 +60,7 @@ struct ValidationFeePayoutTerms {
     xor_scale: u32,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct OpaqueDeferredRuntimeOrigin<'a> {
     runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
     code_bytes: &'a [u8],
@@ -548,7 +549,7 @@ pub(crate) fn enforce_ivm_proved_completed_axt_admission(
     }
     let error = reject_ivm_proved_completed_axt_effects(completed_envelopes)
         .expect_err("non-zero completed AXT count must fail closed under active policy");
-    let rejection = admission_rejection(error);
+    let rejection = admission_rejection(&(error));
     match rejection {
         TransactionRejectionReason::Validation(fail) => Err(fail),
         _ => unreachable!("validation-fee admission rejection must be a validation failure"),
@@ -637,7 +638,10 @@ fn fee_attempt_rejection(
     state: &mut StateTransaction<'_, '_>,
     error: ExecutionAttemptError<ValidationFeeAdmissionError>,
 ) -> TransactionRejectionReason {
-    transaction_attempt_rejection(state, error.map_rejection(admission_rejection))
+    transaction_attempt_rejection(
+        state,
+        error.map_rejection(|error| admission_rejection(&error)),
+    )
 }
 
 pub(crate) fn active_policy(
@@ -696,7 +700,7 @@ fn validated_policy_registry(
 ) -> Result<Option<ValidationFeePolicyRegistryV1>, ExecutionAttemptError<TransactionRejectionReason>>
 {
     validated_policy_registry_in_world(&state_transaction.world)
-        .map_err(|error| error.map_rejection(admission_rejection))
+        .map_err(|error| error.map_rejection(|error| admission_rejection(&error)))
 }
 
 fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
@@ -812,15 +816,15 @@ fn active_policy_from_validated_registry(
     };
     let policy = entry.policy.clone();
     if let Some(reason) = policy.policy_invariant_error() {
-        return Err(
-            (admission_rejection(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason)))
-                .into(),
-        );
+        return Err((admission_rejection(
+            &(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason)),
+        ))
+        .into());
     }
     validate_policy_network_id(&policy, &state_transaction.network_id)
-        .map_err(admission_rejection)?;
+        .map_err(|error| admission_rejection(&error))?;
     validate_treasury_payout_contract_subject(&policy, state_transaction)
-        .map_err(|error| error.map_rejection(admission_rejection))?;
+        .map_err(|error| error.map_rejection(|error| admission_rejection(&error)))?;
     Ok(Some(policy))
 }
 
@@ -1279,7 +1283,7 @@ fn validate_policy_network_id(
 
 /// Wrap a retained policy rejection only at the transaction admission boundary.
 pub(crate) fn admission_rejection(
-    error: ValidationFeeAdmissionError,
+    error: &ValidationFeeAdmissionError,
 ) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
         "validation-fee admission rejected transaction: {error}"
@@ -1326,9 +1330,34 @@ fn direct_conversion_transfer(
             },
         )
 }
+#[cfg(test)]
 fn validate_treasury_payout_effect_plan(
     groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     ordered: &[(AccountId, InstructionBox)],
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    terms: &ValidationFeePayoutTerms,
+) -> Result<bool, ValidationFeeAdmissionError> {
+    validate_treasury_payout_effect_views(
+        groups.iter().flat_map(|(authority, instructions)| {
+            instructions
+                .iter()
+                .map(move |instruction| (authority, instruction))
+        }),
+        groups.len(),
+        ordered
+            .iter()
+            .map(|(authority, instruction)| (authority, instruction)),
+        binding,
+        terms,
+    )
+}
+
+// The host lends its original queue. Only the three payout references are retained
+// on the stack; no instruction, authority or authorization graph is cloned.
+fn validate_treasury_payout_effect_views<'a>(
+    groups: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    group_count: usize,
+    mut ordered: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     terms: &ValidationFeePayoutTerms,
 ) -> Result<bool, ValidationFeeAdmissionError> {
@@ -1337,32 +1366,37 @@ fn validate_treasury_payout_effect_plan(
     if binding.invariant_error().is_some() {
         return Err(mismatch("invalid enacted conversion policy"));
     }
-    let (Some(pool_effects), Some(wrapper_effects)) = (
-        groups.get(&binding.pool_vault_account_id),
-        groups.get(&binding.treasury_account_id),
+    let (Some(first), Some(second), Some(third), None) = (
+        ordered.next(),
+        ordered.next(),
+        ordered.next(),
+        ordered.next(),
     ) else {
         return Err(mismatch(
-            "conversion effects must retain the governed pool and wrapper subjects",
+            "conversion must use exactly three ordered effects",
         ));
     };
-    if groups.len() != 2
-        || pool_effects.len() != 2
-        || wrapper_effects.len() != 1
-        || ordered.len() != 3
-        || ordered[0].0 != binding.pool_vault_account_id
-        || ordered[1].0 != binding.pool_vault_account_id
-        || ordered[2].0 != binding.treasury_account_id
-        || pool_effects[0] != ordered[0].1
-        || pool_effects[1] != ordered[1].1
-        || wrapper_effects[0] != ordered[2].1
+    let mut pool = groups
+        .clone()
+        .filter(|(authority, _)| *authority == &binding.pool_vault_account_id);
+    let mut wrapper = groups.filter(|(authority, _)| *authority == &binding.treasury_account_id);
+    if group_count != 2
+        || first.0 != &binding.pool_vault_account_id
+        || second.0 != &binding.pool_vault_account_id
+        || third.0 != &binding.treasury_account_id
+        || pool.next().map(|(_, instruction)| instruction) != Some(first.1)
+        || pool.next().map(|(_, instruction)| instruction) != Some(second.1)
+        || pool.next().is_some()
+        || wrapper.next().map(|(_, instruction)| instruction) != Some(third.1)
+        || wrapper.next().is_some()
     {
         return Err(mismatch(
             "conversion must preserve two nested pool effects followed by the wrapper reservation",
         ));
     }
-    let sbd = direct_conversion_transfer(&ordered[0].1)?;
-    let output = direct_conversion_transfer(&ordered[1].1)?;
-    let reserve = direct_conversion_transfer(&ordered[2].1)?;
+    let sbd = direct_conversion_transfer(first.1)?;
+    let output = direct_conversion_transfer(second.1)?;
+    let reserve = direct_conversion_transfer(third.1)?;
     if sbd.source.definition != binding.ds_asset_id
         || sbd.source.account != binding.treasury_account_id
         || sbd.destination != binding.pool_vault_account_id
@@ -1403,10 +1437,40 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     stx: &mut StateTransaction<'_, '_>,
     origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
+    enforce_opaque_deferred_instruction_views(
+        groups.iter().flat_map(|(authority, instructions)| {
+            instructions
+                .iter()
+                .map(move |instruction| (authority, instruction))
+        }),
+        groups.len(),
+        ordered
+            .iter()
+            .map(|(authority, instruction)| (authority, instruction)),
+        stx,
+        origin,
+    )
+}
+/// Validate borrowed effects without copying host-owned attachment requests.
+pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(
+    groups: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    group_count: usize,
+    ordered: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    stx: &mut StateTransaction<'_, '_>,
+    origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
+) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
     // Committee and monetary staking authority are independent of native fee
     // accounting. Resolve deferred approvals against this execution overlay first.
-    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)
-        .map_err(|error| transaction_attempt_rejection(stx, error))?;
+    crate::deferred_authority::reject_opaque_instruction_authority(
+        groups.clone().map(|(_, instruction)| instruction),
+        stx,
+    )
+    .map_err(|error| {
+        transaction_attempt_rejection(
+            stx,
+            error.map_rejection(TransactionRejectionReason::Validation),
+        )
+    })?;
     let registry = validated_policy_registry(stx)
         .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let _ = active_policy_from_validated_registry(registry.as_ref(), stx)
@@ -1419,16 +1483,16 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         // at the common asset mutation boundary, including contract-driven legs.
         return Ok(OpaqueDeferredValidationOutcome::Apply);
     };
-    if ordered.is_empty() && groups.is_empty() {
+    if ordered.clone().next().is_none() && group_count == 0 {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
     let binding = &lifecycle.binding;
     let scale = validation_fee_payout_xor_scale(stx, binding)
         .map_err(|error| fee_attempt_rejection(stx, error))?;
     let rewards_error = |error: iroha_data_model::isi::error::InstructionExecutionError| {
-        admission_rejection(ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            error.to_string(),
-        ))
+        admission_rejection(
+            &(ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())),
+        )
     };
     let Some(offer) =
         crate::validation_fee_rewards::conversion_offer(stx, binding).map_err(rewards_error)?
@@ -1440,19 +1504,26 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             u128::from(offer.sbd_minor),
             u32::from(lifecycle.ds_scale),
         )
-        .map_err(admission_rejection)?,
+        .map_err(|error| admission_rejection(&error))?,
         min_xor_out: quantity_from_minor_units_u128(offer.min_xor_minor, scale)
-            .map_err(admission_rejection)?,
+            .map_err(|error| admission_rejection(&error))?,
         xor_scale: scale,
     };
-    if !validate_treasury_payout_effect_plan(groups, ordered, binding, &terms)
-        .map_err(admission_rejection)?
+    if !validate_treasury_payout_effect_views(groups, group_count, ordered.clone(), binding, &terms)
+        .map_err(|error| admission_rejection(&error))?
     {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
-    let output = direct_conversion_transfer(&ordered[1].1).map_err(admission_rejection)?;
-    let output_minor =
-        quantity_to_minor_units_u128(&output.object, scale).map_err(admission_rejection)?;
+    let output = direct_conversion_transfer(
+        ordered
+            .clone()
+            .nth(1)
+            .expect("validated three-effect plan")
+            .1,
+    )
+    .map_err(|error| admission_rejection(&error))?;
+    let output_minor = quantity_to_minor_units_u128(&output.object, scale)
+        .map_err(|error| admission_rejection(&error))?;
     crate::validation_fee_rewards::reserve_conversion(stx, binding, &offer, output_minor)
         .map_err(rewards_error)?;
     stx.world.retail_fee_exempt_payments.push((

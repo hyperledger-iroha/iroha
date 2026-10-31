@@ -208,6 +208,10 @@ pub enum Op {
 
 /// A worker's completion.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 pub enum Completion {
     /// Write `seq` became durable, or failed and comes back to be retried.
     Persisted {
@@ -857,9 +861,21 @@ pub(in crate::sumeragi) fn assemble_startup_history(
         .saturating_sub(demotion_window.saturating_add(1))
         .max(genesis_height + 1);
     let mut recent_headers = Vec::new();
-    for height in first..=t {
-        let entry = startup_entry(blocks, height)?;
-        recent_headers.push(entry.manifest.header);
+    if cfg!(all(test, sumeragi_core_mutation = "HC494")) {
+        for height in first..=t {
+            let entry = startup_entry(blocks, height)?;
+            recent_headers.push(entry.manifest.header);
+        }
+    } else if let Some(header) = &tip.header {
+        // The tip entry was already authenticated above. Descending reads let the native
+        // availability owner continue its original ancestry walk with constant custody.
+        // Init still receives the exact same ascending window and original certificates.
+        recent_headers.push(header.clone());
+        for height in (first..t).rev() {
+            let entry = startup_entry(blocks, height)?;
+            recent_headers.push(entry.manifest.header);
+        }
+        recent_headers.reverse();
     }
     Ok(StartupHistory {
         tip,
@@ -1001,6 +1017,10 @@ pub struct DriverStart {
     pub crypto: SharedCrypto,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Input {
     Done(Completion),
     Transactions,
@@ -1017,6 +1037,10 @@ struct DriverInputs {
 }
 
 impl DriverInputs {
+    #[expect(
+        clippy::result_large_err,
+        reason = "A failed send returns the original owned message without allocating."
+    )]
     fn send(&self, input: Input) -> Result<(), mpsc::SendError<Input>> {
         self.sender.send(input)?;
         self.wake.notify();
@@ -1372,10 +1396,8 @@ impl DriverHandle {
         if self.shared.node_gate.is_closed() {
             return false;
         }
-        match WireMessage::decode(frame, self.shared.frame_limit) {
-            Ok(msg) => self.deliver_message(from.clone(), msg),
-            Err(_) => false,
-        }
+        WireMessage::decode(frame, self.shared.frame_limit)
+            .is_ok_and(|msg| self.deliver_message(from.clone(), msg))
     }
 
     /// Deliver a decoded message (in-process transports and tests).
@@ -1543,6 +1565,10 @@ impl DriverJoiner {
         Ok(Self { workers, thread })
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The original joining thread owns its receiver through worker joins and retirement."
+    )]
     fn join_workers(
         receive: mpsc::Receiver<Vec<JoinHandle<()>>>,
         mut retirement: Option<RetirementJob>,
@@ -1735,10 +1761,10 @@ impl RunningDriver {
                 drop(join_original_workers(workers));
             }
         }
-        if let Some(thread) = self.joining.take() {
-            if !on_worker {
-                discard_join_result(thread.join());
-            }
+        if let Some(thread) = self.joining.take()
+            && !on_worker
+        {
+            discard_join_result(thread.join());
         }
     }
 }

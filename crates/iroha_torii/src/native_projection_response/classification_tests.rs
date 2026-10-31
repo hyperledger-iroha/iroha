@@ -127,8 +127,7 @@ fn current_root_tip_preserves_actual_second_root_read_refusal() {
     ));
     let error = outer
         .with(|| current_root_tip(&view, 2, scope, limits(), unavailable))
-        .err()
-        .expect("actual root JSON decoding must refuse the original zero allocation scope");
+        .expect_err("actual root JSON decoding must refuse the original zero allocation scope");
     assert_eq!(status(error), StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -154,8 +153,7 @@ fn current_tip_invalid_or_insufficient_source_policy_is_terminal() {
         },
     ] {
         let error = current_global_tip(&view, 2, limits, unavailable)
-            .err()
-            .expect("the unchanged source policy cannot supply this cut");
+            .expect_err("the unchanged source policy cannot supply this cut");
         assert_ne!(status(error), StatusCode::TOO_MANY_REQUESTS);
     }
 }

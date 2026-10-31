@@ -12,6 +12,7 @@ mod engine;
 pub mod memory;
 pub mod specs;
 
+pub(crate) use engine::conjunctive_height_range;
 pub use engine::{Limits, Prepared, RowPage, prepare};
 pub use specs::CollectionSpec;
 

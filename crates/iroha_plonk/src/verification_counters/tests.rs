@@ -3,7 +3,7 @@
 
 use iroha_pasta::{CancellationToken, Ep, Eq, Fq, PastaCurve, poseidon::PoseidonField};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::*;
 use crate::{

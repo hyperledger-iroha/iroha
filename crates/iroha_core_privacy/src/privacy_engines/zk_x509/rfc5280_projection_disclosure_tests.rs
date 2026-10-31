@@ -6,8 +6,10 @@ fn projection_disclosure_fixed_schedule_preserves_oid_indices_and_fixed_column_c
         let indices = (0..4)
             .filter(|index| mask & (1 << index) != 0)
             .collect::<Vec<_>>();
-        let mut shape = ZkX509Rfc5280StarkShapeV1::default();
-        shape.disclosed_attribute_count = indices.len() as u8;
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: u8::try_from(indices.len()).expect("fixture value fits u8"),
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
         shape.disclosed_attribute_indices[..indices.len()].copy_from_slice(&indices);
         let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
         let mut counts = [0; 4];
@@ -89,9 +91,10 @@ fn projection_disclosure_actual_material_authenticates_subject_oid_value_and_big
             queries[slot][1] += output_source_node_query_gate_v1(&row, &fixed).0;
             if row[BASE_SERIAL_BYTE_QUERY_ACTIVE] == F::ONE {
                 assert_eq!(
-                    trace.documents[0].bytes[row[BASE_ADDRESS].0 as usize]
-                        .value
-                        .value,
+                    trace.documents[0].bytes
+                        [usize::try_from(row[BASE_ADDRESS].0).expect("fixture value fits usize")]
+                    .value
+                    .value,
                     row[BASE_SERIAL_BYTE_QUERY_VALUE]
                 );
             }
@@ -129,7 +132,7 @@ fn projection_disclosure_actual_material_authenticates_subject_oid_value_and_big
                     0,
                     usize::from(source.value.node)
                 ),
-                source.bytes.len() as u16 + 1
+                u16::try_from(source.bytes.len()).expect("fixture value fits u16") + 1
             );
         }
     }
@@ -153,7 +156,7 @@ fn projection_disclosure_lengths_one_255_256_padding_and_phase_metadata_are_cons
         oid.content_end = 25;
         value.start = 25;
         value.content_start = 29;
-        value.content_end = 29 + size as u16;
+        value.content_end = 29 + u16::try_from(size).expect("fixture value fits u16");
         let source = projection_disclosure::Source {
             subject: &subject,
             oid: &oid,

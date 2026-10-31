@@ -9,7 +9,7 @@ fn plan_v1() -> (AggregateProofLayoutV1, MainShaUnionPlanV1) {
 }
 
 #[test]
-fn union_plan_uses_exact_existing_roles_streams_and_five_native_endpoints() {
+fn union_plan_uses_exact_existing_roles_streams_and_six_native_endpoints() {
     let (layout, plan) = plan_v1();
     let rfc = layout
         .registered_segment(SegmentAdapterIdV1::Rfc5280, 0)
@@ -37,7 +37,10 @@ fn union_plan_uses_exact_existing_roles_streams_and_five_native_endpoints() {
     let mut distinct = std::collections::BTreeSet::new();
     for segment in 0..4 {
         let sha = layout
-            .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+            .registered_segment(
+                SegmentAdapterIdV1::Sha256CallBus,
+                u16::try_from(segment).expect("fixture value fits u16"),
+            )
             .unwrap();
         for lane in 0..4 {
             assert_eq!(
@@ -61,6 +64,38 @@ fn union_plan_uses_exact_existing_roles_streams_and_five_native_endpoints() {
         );
     }
     assert_eq!(distinct.len(), 64);
+    let projection = layout
+        .registered_segment(SegmentAdapterIdV1::Projection, 0)
+        .unwrap();
+    assert_eq!(projection.segment.trace_log2, 15);
+    assert_eq!(projection.column_chunks, 1);
+    assert_eq!(
+        layout
+            .trace_groups
+            .iter()
+            .map(|g| g.column_chunks)
+            .sum::<usize>(),
+        80
+    );
+    for lane in 0..4 {
+        assert_eq!(plan.projection[lane].group, projection.trace_group);
+        assert_eq!(
+            plan.projection[lane].column,
+            projection.aux_start + 32 + lane
+        );
+        for segment in 0..4 {
+            let sha = layout
+                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .unwrap();
+            assert_eq!(sha.column_chunks, 2);
+            assert_eq!(plan.sha_projection[segment][lane].group, sha.trace_group);
+            assert_eq!(
+                plan.sha_projection[segment][lane].column,
+                sha.aux_start + 78 + lane
+            );
+        }
+    }
+    assert_eq!(plan.points[5], F::ONE);
     assert_eq!(plan.points[4], root.pow((NATIVE_ROWS_V1 - 1) as u128));
     assert!(
         plan.points
@@ -98,7 +133,7 @@ fn each_union_equation_binds_every_source_and_accepts_zero_products() {
                     .collect::<Vec<_>>(),
                 plan.points[segment],
             )
-        } else {
+        } else if equation < 20 {
             let lane = equation - 16;
             (
                 (0..4)
@@ -108,6 +143,15 @@ fn each_union_equation_binds_every_source_and_accepts_zero_products() {
                     .map(|index| plan.bridges[index][lane])
                     .collect::<Vec<_>>(),
                 plan.points[4],
+            )
+        } else {
+            let lane = equation - 20;
+            (
+                vec![plan.projection[lane]],
+                (0..4)
+                    .map(|segment| plan.sha_projection[segment][lane])
+                    .collect::<Vec<_>>(),
+                plan.points[5],
             )
         };
         let inverse = z.sub(E::from_base(point)).inv().unwrap();
@@ -186,20 +230,24 @@ fn union_transcript_binds_every_endpoint_and_ordered_source_coordinate() {
     assert_eq!(expected.len(), UNION_QUOTIENTS_V1);
     assert_eq!(expected.capacity(), UNION_QUOTIENTS_V1);
     assert_eq!(expected, plan.derive_alphas_v1(&mut fresh()).unwrap());
-    for index in 0..5 {
+    for index in 0..6 {
         let mut changed = plan.clone();
         changed.points[index] = changed.points[index].add(F::ONE);
         assert_ne!(expected, changed.derive_alphas_v1(&mut fresh()).unwrap());
     }
-    for index in 0..96 {
+    for index in 0..116 {
         for coordinate in 0..2 {
             let mut changed = plan.clone();
             let target = if index < 16 {
                 &mut changed.bridges[index / 4][index % 4]
             } else if index < 32 {
                 &mut changed.consumers[(index - 16) / 4][index % 4]
-            } else {
+            } else if index < 96 {
                 &mut changed.streams[(index - 32) / 16][((index - 32) / 4) % 4][index % 4]
+            } else if index < 100 {
+                &mut changed.projection[index - 96]
+            } else {
+                &mut changed.sha_projection[(index - 100) / 4][index % 4]
             };
             if coordinate == 0 {
                 target.group += 1;
@@ -219,7 +267,7 @@ fn one_public_inverse_table_matches_every_shifted_endpoint_directly() {
     for log in 3..=8 {
         let rows = 1_usize << log;
         let root = goldilocks_primitive_root_v1(log).unwrap();
-        let points = [0, 1, rows / 2, rows - 2, rows - 1];
+        let points = [0, 1, rows / 2, rows - 2, rows - 1, 2];
         for ordinal in 0..8 {
             let full_root = goldilocks_primitive_root_v1(log + 3).unwrap();
             let shift = F(7).mul(full_root.pow(ordinal));
@@ -238,18 +286,18 @@ fn one_public_inverse_table_matches_every_shifted_endpoint_directly() {
                 }
                 x = x.mul(root);
             }
-            assert!(table.at_v1(5, 0).is_err());
+            assert!(table.at_v1(6, 0).is_err());
             assert!(table.at_v1(0, rows).is_err());
         }
     }
     let root = goldilocks_primitive_root_v1(3).unwrap();
     for shift in [F::ZERO, F::ONE, root, F(u64::MAX)] {
         assert!(
-            ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, root, shift, [0; 5]).is_err()
+            ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, root, shift, [0; 6]).is_err()
         );
     }
-    assert!(ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, root, F(7), [8; 5]).is_err());
-    assert!(ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, F::ONE, F(7), [0; 5]).is_err());
+    assert!(ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, root, F(7), [8; 6]).is_err());
+    assert!(ShaUnionEndpointDenominatorsV1::from_public_coset_v1(8, F::ONE, F(7), [0; 6]).is_err());
 }
 
 #[test]
@@ -262,7 +310,7 @@ fn actual_stripe_inverse_plan_is_canonical_and_bounded() {
     );
     for row in [0, 1, 137, 480_287, 521_951, NATIVE_ROWS_V1 - 1] {
         let x = stripe.shift.mul(stripe.root.pow(row as u128));
-        for endpoint in 0..5 {
+        for endpoint in 0..6 {
             assert_eq!(
                 table.at_v1(endpoint, row).unwrap(),
                 x.sub(stripe.root.pow(table.endpoint_rows[endpoint] as u128))
@@ -290,11 +338,12 @@ fn centered_registration_contributions_recompose_and_cancel_each_private_center(
     let rows = 8;
     let root = goldilocks_primitive_root_v1(3).unwrap();
     let table =
-        ShaUnionEndpointDenominatorsV1::from_public_coset_v1(rows, root, F(7), [0, 1, 2, 3, 7])
+        ShaUnionEndpointDenominatorsV1::from_public_coset_v1(rows, root, F(7), [0, 1, 2, 3, 7, 0])
             .unwrap();
     let centers: [[F; 4]; 4] =
         core::array::from_fn(|s| core::array::from_fn(|l| F(3 + (s * 4 + l) as u64)));
-    let alphas: [E; 20] = core::array::from_fn(|i| E::canonical([i as u64 + 1, 2, 3, 4]).unwrap());
+    let alphas: [E; UNION_QUOTIENTS_V1] =
+        core::array::from_fn(|i| E::canonical([i as u64 + 1, 2, 3, 4]).unwrap());
     let rfc = layout
         .registered_segment(SegmentAdapterIdV1::Rfc5280, 0)
         .unwrap();
@@ -307,7 +356,10 @@ fn centered_registration_contributions_recompose_and_cancel_each_private_center(
         let mut expected = E::ZERO;
         for segment in 0..4 {
             let sha = layout
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .registered_segment(
+                    SegmentAdapterIdV1::Sha256CallBus,
+                    u16::try_from(segment).expect("fixture value fits u16"),
+                )
                 .unwrap();
             let sha_aux = vec![vec![F(23 + segment as u64); rows]; sha.segment.aux_width];
             let actual = plan
@@ -439,7 +491,7 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
                     n,
                     root,
                     stripe.shift,
-                    [n - 1; 5],
+                    [n - 1; 6],
                 )
                 .unwrap();
                 let mut products = [vec![F::ONE; n], vec![F::ONE; n]];
@@ -449,22 +501,24 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
                     .enumerate()
                 {
                     let evaluated = stripe.evaluate_v1(source).unwrap();
-                    for row in 0..n {
+                    for (row, product) in products[index / 4].iter_mut().enumerate() {
                         let x = stripe.shift.mul(root.pow(row as u128));
                         let expected = source
                             .iter()
                             .rev()
                             .fold(F::ZERO, |value, c| value.mul(x).add(*c));
                         assert_eq!(evaluated[row], expected);
-                        products[index / 4][row] = products[index / 4][row].mul(evaluated[row]);
+                        *product = product.mul(evaluated[row]);
                     }
                 }
-                for row in 0..n {
+                for (row, (source_product, target_product)) in
+                    products[0].iter().zip(&products[1]).enumerate()
+                {
                     let at = ordinal + 8 * row;
                     values[at] = values[at].add(
                         alphas[lane].mul_base(
-                            products[1][row]
-                                .sub(products[0][row])
+                            target_product
+                                .sub(*source_product)
                                 .mul(denominator.at_v1(4, row).unwrap()),
                         ),
                     );
@@ -486,8 +540,12 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
             composition_coefficient_chunks_v1(&recovered, dense.len() - 1, &layout).unwrap();
         let cap = layout.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap();
         let mut accumulator = vec![vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES];
-        add_main_composition_coefficient_chunks_v1(&mut accumulator, &[chunks.clone()], cap)
-            .unwrap();
+        add_main_composition_coefficient_chunks_v1(
+            &mut accumulator,
+            std::slice::from_ref(&chunks),
+            cap,
+        )
+        .unwrap();
         assert_eq!(accumulator[0][0].as_slice(), &recovered[..]);
         assert_eq!(&accumulator[0][0][..dense.len()], dense.as_slice());
         assert!(
@@ -529,28 +587,267 @@ fn quartic_replay_degree_work_and_scoped_residency_fit_unchanged_limits() {
     assert_eq!(MainShaUnionPlanV1::COEFFICIENT_COUNT_V1, 526_104);
     assert_eq!(MainShaUnionPlanV1::UNION_DEGREE_V1, 2_104_411);
     const { assert!(MainShaUnionPlanV1::UNION_DEGREE_V1 < 2_155_224) };
-    assert_eq!(4 * 8, 32); // original columns generated and IFFT'd once
-    assert_eq!(4 * 8 * 8, 256); // lanes, stripes, original columns
-    assert_eq!(32 * (n / 2) * 19, 159_383_552);
-    assert_eq!(256 * (n / 2) * 19, 1_275_068_416);
+    assert_eq!(4 * 8 + 4 * 5, 52); //48 log19 and4 log15 original IFFTs
+    assert_eq!(4 * (8 + 5) * 8, 416); // all eight joins, actual columns only
+    assert_eq!(48 * (n / 2) * 19 + 4 * ((1 << 15) / 2) * 15, 240_058_368);
+    assert_eq!(416 * (n / 2) * 19, 2_071_986_176);
     assert_eq!(((1_usize << 22) / 2) * 22, 46_137_344);
     // Four RFC stripes plus eight stripes for each SHA registration, then
     // eight global stripes for each of four streamed compression lanes.
-    assert_eq!(4 + 4 * 8 + 4 * 8, 68);
+    assert_eq!(4 + 4 * 8 + 8 * 8, 100);
     assert_eq!(
-        16 * (1_usize << 21) + 4 * 4 * (1_usize << 22) + 4 * (1_usize << 22),
-        117_440_512
+        16 * (1_usize << 21) + 4 * 4 * (1_usize << 22) + 8 * (1_usize << 22),
+        134_217_728
     );
     assert_eq!(MainShaUnionPlanV1::private_owner_charge_v1(), 268_444_160);
-    let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
-        &AggregateProofLayoutV1::for_full_profile_v1().unwrap(),
-        288_345_698,
-    )
-    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
     assert!(
-        policy
-            .reserve_additional_v1(MainShaUnionPlanV1::private_owner_charge_v1())
+        joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::ShaUnion)
             .is_ok()
     );
-    assert_eq!(MainShaUnionPlanV1::public_owner_charge_v1(), 6_416);
+    let policy =
+        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+            .unwrap();
+    // This reproduces the old double charge that rejected the measured fixture
+    // after all49 registrations: union work is now inside the arithmetic phase.
+    assert!(matches!(
+        policy.reserve_additional_v1(MainShaUnionPlanV1::private_owner_charge_v1()),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
+    assert_eq!(MainShaUnionPlanV1::public_owner_charge_v1(), 7_528);
+}
+
+#[test]
+fn mixed_native_degree_projection_join_preserves_original_masks_and_rejects_false_endpoint() {
+    fn multiply(left: &[F], right: &[F]) -> Vec<F> {
+        let mut product = vec![F::ZERO; left.len() + right.len() - 1];
+        for (i, a) in left.iter().enumerate() {
+            for (j, b) in right.iter().enumerate() {
+                product[i + j] = product[i + j].add(a.mul(*b));
+            }
+        }
+        product
+    }
+    for log in 4..=6 {
+        let rows = 1_usize << log;
+        let smaller = rows / 4;
+        let root = goldilocks_primitive_root_v1(log).unwrap();
+        let full_root = goldilocks_primitive_root_v1(log + 3).unwrap();
+        // Four SHA originals and one shorter Projection original. Masks vanish
+        // at their OWN native domains; no compression or mask cancellation is used.
+        let constants = [F(2), F(3), F(5), F(7), F(210)];
+        let sources: Vec<_> = (0..5)
+            .map(|index| {
+                let native = if index < 4 { rows } else { smaller };
+                let mut values = vec![F::ZERO; native + 3];
+                values[0] = constants[index];
+                for degree in 0..3 {
+                    let mask = F((19 * index + degree + 1) as u64);
+                    values[degree] = values[degree].sub(mask);
+                    values[native + degree] = values[native + degree].add(mask);
+                }
+                assert_eq!(
+                    values.iter().copied().fold(F::ZERO, F::add),
+                    constants[index]
+                );
+                values
+            })
+            .collect();
+        let mut numerator = vec![F::ONE];
+        for source in &sources[..4] {
+            numerator = multiply(&numerator, source);
+        }
+        for value in &mut numerator {
+            *value = F::ZERO.sub(*value);
+        }
+        for (index, value) in sources[4].iter().copied().enumerate() {
+            numerator[index] = numerator[index].add(value);
+        }
+        let mut quotient = vec![F::ZERO; numerator.len() - 1];
+        for degree in (1..numerator.len()).rev() {
+            quotient[degree - 1] =
+                numerator[degree].add(quotient.get(degree).copied().unwrap_or(F::ZERO));
+        }
+        assert_eq!(numerator[0].add(quotient[0]), F::ZERO);
+        let mut evaluated = vec![E::ZERO; rows * 8];
+        for ordinal in 0..8 {
+            let stripe = main_quotient_stripes::MainQuotientStripeV1 {
+                rows,
+                count: 8,
+                ordinal,
+                next_stride: 1,
+                root,
+                shift: F(7).mul(full_root.pow(ordinal as u128)),
+            };
+            let table = ShaUnionEndpointDenominatorsV1::from_public_coset_v1(
+                rows,
+                root,
+                stripe.shift,
+                [0; 6],
+            )
+            .unwrap();
+            let mut source_product = vec![F::ONE; rows];
+            for source in &sources[..4] {
+                let values = stripe.evaluate_v1(source).unwrap();
+                for (product, value) in source_product.iter_mut().zip(values.iter()) {
+                    *product = product.mul(*value);
+                }
+            }
+            let projection = stripe.evaluate_v1(&sources[4]).unwrap();
+            for row in 0..rows {
+                evaluated[ordinal + 8 * row] = E::from_base(
+                    projection[row]
+                        .sub(source_product[row])
+                        .mul(table.at_v1(5, row).unwrap()),
+                );
+            }
+        }
+        let coefficients = fp4_coset_coefficients_v1(&evaluated, log + 3).unwrap();
+        assert_eq!(
+            &coefficients[..quotient.len()],
+            quotient
+                .iter()
+                .copied()
+                .map(E::from_base)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+        assert!(coefficients[quotient.len()..].iter().all(|v| *v == E::ZERO));
+        // A changed terminal introduces a nonzero remainder. On the coset this
+        // rational function cannot masquerade as the declared polynomial degree.
+        for (index, value) in evaluated.iter_mut().enumerate() {
+            let point = F(7).mul(full_root.pow(index as u128));
+            *value = value.add(E::from_base(point.sub(F::ONE).inv().unwrap()));
+        }
+        let bad = fp4_coset_coefficients_v1(&evaluated, log + 3).unwrap();
+        assert!(bad[quotient.len()..].iter().any(|v| *v != E::ZERO));
+    }
+}
+
+#[test]
+fn projection_union_batch_keeps_and_erases_every_private_allocation() {
+    use super::super::super::super::private_table::{
+        PrivateTableV1, inspection, zeroize_field_rows_v1,
+    };
+    let (_, observed) = inspection::observe_v1(|| {
+        let mut owner =
+            PrivateTableV1::new(vec![vec![F(7); 4]; 8], zeroize_field_rows_v1::<Vec<F>>);
+        assert!(prepare_union_batch_v1(&mut owner, 4).is_err());
+        assert!(owner.iter().flatten().all(|value| *value == F(7)));
+        let active = prepare_union_batch_v1(&mut owner, 5).unwrap();
+        assert_eq!(active.len(), 5);
+        assert!(active.iter().flatten().all(|value| *value == F::ZERO));
+        for column in active {
+            column.fill(F(9));
+        }
+        assert_eq!(owner.len(), 8);
+        assert!(owner[5..].iter().flatten().all(|value| *value == F::ZERO));
+        // The actual production helper retains the three inactive allocations;
+        // the clearing owner's real Drop now observes all eight live vectors.
+    });
+    assert_eq!(observed.len(), 2);
+    assert_eq!(observed[0].cells, 32);
+    assert_eq!(observed[0].nonzero_before, 32);
+    assert_eq!(observed[0].nonzero_after, 0);
+    assert_eq!(observed[1].cells, 32);
+    assert_eq!(observed[1].nonzero_before, 20);
+    assert_eq!(observed[1].nonzero_after, 0);
+    let mut short = vec![vec![F(3); 4]; 5];
+    assert!(prepare_union_batch_v1(&mut short, 5).is_err());
+    assert!(short.iter().flatten().all(|value| *value == F(3)));
+}
+
+#[test]
+fn union_construction_refuses_unadmitted_accumulator_shape_before_source_replay() {
+    let (layout, plan) = plan_v1();
+    let policy = main_bounded_transform::MainBoundedTransformPolicyV1::cpu_v1();
+    let alphas = [E::ONE; UNION_QUOTIENTS_V1];
+    let mut oversized_lane = Vec::with_capacity(COMPOSITION_DEGREE_CHUNKS + 1);
+    oversized_lane.resize_with(COMPOSITION_DEGREE_CHUNKS, Vec::new);
+    for mut accumulator in [
+        Vec::new(),
+        vec![vec![]],
+        vec![oversized_lane],
+        vec![vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS + 1]],
+    ] {
+        let mut source_calls = 0;
+        assert_eq!(
+            plan.accumulate_with_v1(&layout, &alphas, policy, &mut accumulator, |_, _| {
+                source_calls += 1;
+                Err(ZkX509StarkErrorV1::InternalInvariant)
+            }),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        );
+        assert_eq!(source_calls, 0);
+    }
+}
+
+#[test]
+#[ignore = "full-shape SHA union construction, 416 native FFTs and one log22 Fp4 inverse"]
+fn measured_maximum_assembly_constructs_full_sha_union_with_exact_known_coefficients() {
+    let (layout, plan) = plan_v1();
+    let policy =
+        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+            .unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    let mut accumulator = ZeroizingExtensionLanesV1::new(
+        vec![
+            (0..COMPOSITION_DEGREE_CHUNKS)
+                .map(|_| Vec::with_capacity(cap))
+                .collect(),
+        ],
+        zeroize_extension_lanes_v1,
+    );
+    let mut alphas = [E::ONE; UNION_QUOTIENTS_V1];
+    alphas[20] = E::canonical([2, 3, 5, 7]).unwrap();
+    let mask = F(11);
+    let mut replay_calls = 0;
+    let start = std::time::Instant::now();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(20)
+        .build()
+        .unwrap()
+        .install(|| {
+            plan.accumulate_with_v1(&layout, &alphas, policy, &mut accumulator, |column, _| {
+                replay_calls += 1;
+                let native_rows = 1 << layout.trace_groups[column.group].native_trace_log2;
+                let mut original = zeroed_main_trace_column_v1(native_rows + MASK_DEGREE + 1)?;
+                original.0[0] = F::ONE;
+                if column == plan.projection[0] {
+                    // Native values remain1; an independent original mask
+                    // adds11*(X^32768-1). The resulting endpoint quotient is
+                    // exactly11*(1+X+...+X^32767), with no other contribution.
+                    original.0[0] = F::ONE.sub(mask);
+                    original.0[native_rows] = mask;
+                }
+                Ok(vec![original])
+            })
+            .unwrap();
+        });
+    assert_eq!(replay_calls, 52);
+    let expected = alphas[20].mul_base(mask);
+    assert!(accumulator[0][0].len() >= 1 << 15);
+    for (chunk_index, chunk) in accumulator[0].iter().enumerate() {
+        for (degree, actual) in chunk.iter().enumerate() {
+            assert_eq!(
+                *actual,
+                if chunk_index == 0 && degree < 1 << 15 {
+                    expected
+                } else {
+                    E::ZERO
+                },
+                "chunk {chunk_index}, coefficient {degree}"
+            );
+        }
+    }
+    eprintln!(
+        "full_sha_union_construction assembly=215244730 native_forward=416 original_replays={replay_calls} log22_inverse=1 elapsed_seconds={:.6}",
+        start.elapsed().as_secs_f64()
+    );
 }

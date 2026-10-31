@@ -1,18 +1,33 @@
 # Native SDK bridge
 
-`connect_norito_bridge` exposes the current ABI-30 C and JNI bridge to the SDKs.
+`connect_norito_bridge` exposes the current ABI-33 C and JNI bridge to the SDKs.
 The ordinary Rust target emits `cdylib`, `staticlib`, and `rlib` outputs; Rust
 consumers and tests retain the `rlib` interface.
+
+JNI entrypoints use `jni` 0.22's FFI-safe `EnvUnowned` and borrow `Env` only
+inside the native-call scope. Pending Java exceptions retain their original cause;
+unexpected Rust panics become Java runtime exceptions. Rust worker upcalls retain
+only a global Java object, use a bounded local frame, and detach their scoped
+thread attachment before returning to background work.
 
 Detached scaffold inspection exposes a single `SetAssetFiLinkV1` as
 `asset_fi_link_set`, retaining all twelve instruction fields. The reference
 digest is raw 32-byte lowercase hex, without typed-Hash parity or normalization;
 all four revisions retain the complete u64 range and controller remains an
-explicit canonical address or null. FI attestations, off-ramp instructions and
-mixed or Batch executables are not admitted as owner FI-link consent. Swift
+explicit canonical address or null. FI attestations and mixed or Batch
+executables are not admitted as owner FI-link consent. Swift
 and Kotlin expose a distinct typed case. Applications must still compare the
 complete instruction and envelope with their independently admitted wallet,
 FI, UID/controller and fee context before permitting an owner signature.
+
+A single direct `TransferToLinkedFiV1` has a separate `asset_fi_link_transfer`
+inspection with exactly five signed fields: `asset_definition_id`, `account_id`,
+`amount`, `expected_link_revision` and `expected_policy_revision`. Swift and
+Kotlin preserve the decimal amount as text and both complete u64 revisions.
+This inspection contains no FI destination or reference evidence. Applications
+must authenticate the current native relationship before signing and join the
+retained original to certified historical execution before reporting completion.
+The typed inspector alone does not enable defunding or waterfall execution.
 
 The Apple owner is `scripts/build_norito_xcframework.sh`. It builds five
 `staticlib` slices using the source-sealed `apple-release` Cargo profile and
@@ -21,9 +36,10 @@ pass does not reapply O3 to the broad data-model modules. Dependencies retain
 the release profile's crypto O3 and data-model O1 settings. The build preserves
 symbols and the existing unwind behavior.
 
-Every slice retains authenticated PQClean normalization and complete-archive C
-link checks. The native host check exercises ABI identity, SHA3/SHAKE, ML-DSA,
-and ML-KEM. Static XCFramework layout, headers, exports, and authenticated ZIP
+Every slice retains authenticated RustCrypto Cargo provenance, rejects duplicate
+or retired PQClean archive members, and passes complete-archive C link checks.
+The native host check exercises ABI identity, every ML-DSA/ML-KEM parameter set,
+and tamper rejection. Static XCFramework layout, headers, exports, and authenticated ZIP
 limits remain enforced by their existing owners. SwiftPM is the sole supported
 Swift delivery path; qualify the packaged archive and an ordinary Release SDK
 consumer. Profile selection alone is
@@ -54,7 +70,7 @@ retains an initialized owner until promotion succeeds. No foreign digest, proof
 verdict or replacement payment key can open a wallet.
 
 Typed setup and lifecycle calls cover Bootstrap, the open Request, the payer companion,
-Credited archival, direct time exchanges, Load, Send, Receive, policy refresh, Unload and
+durable Credited intake and guarded deferred Archive, direct time exchanges, Load, Send, Receive, policy refresh, Unload and
 Retiring. Request and payer-companion setup outputs are canonical object frames; peer
 transports carry `KagemushaWalletEnvelopeV1` frames. Typed native `envelope`/`original`
 helpers wrap or extract Request, Payment and Credited with exact scheme/kind and full-frame
@@ -70,7 +86,7 @@ unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.
 
 Observation selector 4 takes an empty identity and returns diagnostic UTF-8 JSON
-(`iroha.kagemusha.fold-metrics.v2`) in DATA kind 12 with zero sequence/detail. Its
+(`iroha.kagemusha.fold-metrics.v3`) in DATA kind 12 with zero sequence/detail. Its
 131,072-byte limit is specific to this selector; financial DATA limits do not change.
 The open, non-closing handle is still required. The call reads only the bounded
 background log, acquires no custody and does not cancel or schedule proofs. Unknown
@@ -135,6 +151,9 @@ clears the retained suffix while counters preserve visible loss. Poisoned log
 locks recover their observation state. JSON allocation belongs only to selector4,
 never the return path of a monetary operation.
 
+Fold `ordinal` is the head's durable sub-proof count when the turn began and `stages`
+the head's whole schedule with Ω, or null for a turn that ended before reading it;
+together they say how far a head's fold has come.
 Fold `micros` retains its eight enclosing phases. Each row also has `verification`
 counter deltas (including verification/generator memo hits) and nested `engineMicros`
 for `key_import`, `key_rebuild`, `witness`, `prove`, `self_verify` and `commit`.
@@ -180,6 +199,34 @@ receipt or Payment stays deliverable, and the holder retries after freeing space
 device verdict. An unanswered memory probe evaluates storage only. Retained outcomes and resumed
 selections never depend on current capacity.
 
+Recovery polls inspect source-selected Pending custody without payment priority, so a
+wallet with nothing selected keeps its active fold and retained fold workspace. An observed
+Pending selection takes the existing payment priority, then Native rechecks custody before
+resuming its frozen operation. Inspection errors remain errors; an absent selection retains
+the existing no-operation result. Core's deferred receipt queue retains exact originals
+before verification and separates receipt rejection from unfinished verification. Its
+bridge intake selects exact Send/receipt custody before verification. ABI33 requires a separate
+exchange identity on mutation/review routes: synchronous begin precedes worker or UI queueing,
+end fences new calls, and already accepted calls retain the exact owner through response delivery.
+The Native scheduler owns exchange occupancy and Archive admission. Queue selector56 observes a
+receipt,57 retries one retained verification, and58 performs bounded recovery/reconciliation or
+one guarded drain. Direct Archive selectors3/41 and nonretaining delivery54 are retired;44 is
+anchor-only observation. A fresh mutation waits for the source-selected Archive covering fold
+without wallet or Payment ownership. Expected maintenance returns typed DATA, never a success
+alias. The existing worker discovers retained work on open, independently of activity.
+Each bounded pass recovers selected Pending, verifies one receipt, performs one eligible
+fold sub-proof and attempts one exact guarded Archive. Authenticated pre-Bootstrap Enrollment
+parks without granting fresh-work readiness. Intake, exchange release, activity and publication
+notify this same worker; a relative timer rechecks the oldest receipt's Native wall age without
+turning elapsed sleep into admission authority. Operational failures remain visible until
+observed and explicitly retried; internal notifications do not clear them. Compilation, SDK
+execution and physical-device qualification of this source remain open.
+
+Wallet close keeps the exact owner registered until its worker has joined successfully.
+A worker panic remains a failed join on every retry, including concurrent join callers;
+consuming the thread handle does not establish successful cleanup. Closing fences activity
+and keeps custody owned when joining fails.
+
 Issuer refusals carry the closed `u16` codes 1–12 of the design's refusal table. Core and the
 SDKs relay a code unchanged; `connect_norito_kagemusha_wallet_enrollment_refusal_v1` (JNI
 `KagemushaWalletNativeV1.enrollmentRefusal`) returns its holder class (1 Phone, 2 App,
@@ -188,3 +235,16 @@ platform-inapplicable codes as protocol errors. Closing the handle only releases
 before an immutable digest selection, and nothing is returned until both are durable; a missing
 selected original is refused. Recovery may complete a missing selection for a present valid
 original. This local mechanism does not establish protection against complete filesystem rollback.
+
+### X.509 ownership-signing preparation
+
+`connect_norito_zk_x509_prepare_ownership_signing_v1` and its Kotlin JNI adapter accept
+one bounded canonical Norito `PrivacyStatementV1::IrohaZkX509StarkP256V1` and
+return the ordinary native holder's exact public signing message and SHA-256
+digest. A P-256/SHA-256 message signer signs the message; a prehash signer signs
+the digest. Signing the digest with a message signer hashes twice and fails
+ownership verification. Normalize the signature to low-s fixed 64-byte `r || s`
+for the witness constructor. The subject signing key stays with the caller.
+Both C output buffers use `iroha_privacy_free_buffer`; failure publishes neither.
+This signing preparation does not authenticate governance State or provide
+proving, paired-host transport, transaction submission, or release qualification.

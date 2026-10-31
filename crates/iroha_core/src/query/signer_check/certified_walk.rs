@@ -25,7 +25,7 @@ const LIMITS: NativeFinalityLimits = NativeFinalityLimits {
 
 /// Retain one finite cumulative decoder owner around the complete purpose operation.
 /// Nested callers retain every narrower original allowance; no frame replenishes it.
-pub(crate) fn with_native_check_read_limits<T>(consume: impl FnOnce() -> T) -> T {
+pub fn with_native_check_read_limits<T>(consume: impl FnOnce() -> T) -> T {
     norito::core::with_decode_limits_scope(
         LIMITS
             .decode_limits()
@@ -64,7 +64,7 @@ impl SourceAllowance {
 /// Purpose owners retain [`with_native_check_read_limits`] around construction, every
 /// iterator step and their complete proof relations. Source allowances belong to this reader
 /// and cannot be refreshed by starting another interval on it.
-pub(crate) struct SignerCertifiedWalkV1<'view, 'state> {
+pub struct SignerCertifiedWalkV1<'view, 'state> {
     view: &'view StateView<'state>,
     chain: CertifiedChain<'view, StateView<'state>>,
     allowance: RefCell<SourceAllowance>,
@@ -139,7 +139,7 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
 }
 
 /// Actual certified receipt with its original borrowed source; no caller-facing constructor.
-pub(crate) struct SignerCertifiedBlockV1<'view, 'state> {
+pub struct SignerCertifiedBlockV1<'view, 'state> {
     view: &'view StateView<'state>,
     block: CertifiedBlock,
 }

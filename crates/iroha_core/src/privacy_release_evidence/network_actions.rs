@@ -94,18 +94,16 @@ pub struct PrivacyReleaseVegaNetworkActionV1 {
     /// Exact active issuer record validators must register before submission.
     pub issuer_record: PrivacyVegaIssuerRecordV1,
 }
-/// Four independently proved PQ-MASP actions consuming the same genesis note.
+/// Three independently proved PQ-MASP actions consuming the same genesis note.
 ///
-/// Each transaction has a distinct canonical intent and proof. The first is a valid pre-activation
-/// probe; the second is expected to apply after activation; the remaining two carry the same stable
-/// nullifier as protocol replay probes rather than duplicate transaction-hash probes. Keeping the
-/// fourth transaction fresh lets a restart gate prove that both the successor frontier and
-/// consumed-nullifier set were recovered by the restarted peer.
+/// Each transaction has a distinct canonical intent and proof. The first is expected to apply
+/// after the pool bootstrap; the remaining two carry the same stable nullifier as protocol replay
+/// probes rather than duplicate transaction-hash probes. Keeping the third transaction fresh lets
+/// a restart check prove that both the successor frontier and consumed-nullifier set were
+/// recovered by the restarted peer.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleasePqMaspNetworkActionsV1 {
-    /// Valid ordinary production transaction submitted before activation.
-    pub preactivation_transaction: SignedTransaction,
-    /// Ordinary production transaction expected to apply after activation.
+    /// Ordinary production transaction expected to apply after the pool bootstrap.
     pub canonical_transaction: SignedTransaction,
     /// Independently proved and signed stable-nullifier replay transaction.
     pub replay_transaction: SignedTransaction,
@@ -113,8 +111,6 @@ pub struct PrivacyReleasePqMaspNetworkActionsV1 {
     pub post_restart_replay_transaction: SignedTransaction,
     /// Immutable proof-managed bootstrap authenticating the consumed note.
     pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
-    /// Exact statement carried by the pre-activation transaction.
-    pub preactivation_statement: PqMaspStarkStatementV1,
     /// Exact canonical statement carried by the applying transaction.
     pub canonical_statement: PqMaspStarkStatementV1,
     /// Exact replay statement carrying the same stable nullifier.
@@ -208,7 +204,7 @@ fn orchard_statement_v1(
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
     expiry_height: u64,
-) -> Result<OrchardHalo2ActionsStatementV1, PrivacyReleaseEvidenceErrorClassV1> {
+) -> OrchardHalo2ActionsStatementV1 {
     let value_balance = match draft.value_balance.cmp(&0) {
         core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
         core::cmp::Ordering::Less => PrivacyValueBalanceV1 {
@@ -220,7 +216,7 @@ fn orchard_statement_v1(
             amount: u128::from(draft.value_balance.unsigned_abs()),
         },
     };
-    Ok(OrchardHalo2ActionsStatementV1 {
+    OrchardHalo2ActionsStatementV1 {
         context,
         asset_definition_id,
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
@@ -242,7 +238,7 @@ fn orchard_statement_v1(
             .collect(),
         value_balance,
         expiry_height,
-    })
+    }
 }
 fn jindo_field_v1(value: u64) -> PrivacyJindoFieldElementV1 {
     let mut encoding = [0_u8; 32];
@@ -321,7 +317,7 @@ pub fn build_privacy_release_jindo_network_action_v1(
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"jindo-proof", 0));
     let signed = build_signed_privacy_action_with_rng_v1(
-        context,
+        &context,
         witness,
         transaction_context.genesis_hash,
         private_key,
@@ -376,7 +372,7 @@ pub fn build_privacy_release_vega_network_action_v1(
     };
     let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"vega-proof", 0));
     let signed = build_signed_vega_privacy_action_with_rng_v1(
-        context,
+        &context,
         fixture.public_input,
         witness,
         &fixture.device_signing_key,
@@ -406,7 +402,7 @@ pub fn build_privacy_release_vega_network_action_v1(
 /// Returns an error if the compiled profile or pool fixture cannot be constructed, native bundle
 /// proving or authorization fails, or the envelope and transaction intent bindings disagree.
 pub fn build_privacy_release_orchard_network_action_v1(
-    transaction_context: PrivacyReleaseTransactionContextV1,
+    transaction_context: &PrivacyReleaseTransactionContextV1,
     pool_id: PrivacyPoolIdV1,
     asset_definition_id: AssetDefinitionId,
     reserve_account: AccountId,
@@ -425,7 +421,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         Scope::External,
         u32::from(wallet_seed),
         change_value,
-        [wallet_seed; 512],
+        &[wallet_seed; 512],
     );
     let mut prover_rng = EvidenceRng09::new(network_seed_v1(fixture_seed, b"orchard-prepare", 0));
     let prepared = prepare_orchard_bundle_v1_with_rng(
@@ -437,12 +433,12 @@ pub fn build_privacy_release_orchard_network_action_v1(
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let mut statement = orchard_statement_v1(
-        statement_context_v1(&transaction_context, profile),
+        statement_context_v1(transaction_context, profile),
         prepared.public_draft(),
         asset_definition_id.clone(),
         pool_id,
         expiry_height,
-    )?;
+    );
     let draft_envelope = PrivacyProofEnvelopeV1::bind_v1(
         PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone()),
         PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -451,7 +447,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     if !profile.matches_envelope_v1(&draft_envelope) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let intent = transaction_payload_v1(&transaction_context, draft_envelope)?
+    let intent = transaction_payload_v1(transaction_context, draft_envelope)?
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     if intent.is_zero() {
@@ -465,7 +461,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         &limits,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let proved = authorize_orchard_bundle_v1(prepared, consensus_binding, &limits)
+    let proved = authorize_orchard_bundle_v1(prepared, &consensus_binding, &limits)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     if proved.public.anchor != *statement.anchor.as_bytes()
         || proved.public.actions.len() != statement.actions.len()
@@ -483,7 +479,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     if !profile.matches_envelope_v1(&envelope) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let payload = transaction_payload_v1(&transaction_context, envelope)?;
+    let payload = transaction_payload_v1(transaction_context, envelope)?;
     if payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
@@ -568,7 +564,7 @@ fn build_pq_masp_transaction_v1(
     }
     Ok((signed_payload_v1(payload, intent, private_key)?, statement))
 }
-/// Build four network-bound PQ-MASP actions with distinct intents and proofs
+/// Build three network-bound PQ-MASP actions with distinct intents and proofs
 /// but the same stable nullifier.
 ///
 /// This helper exists only in the non-default release-evidence feature. The
@@ -579,17 +575,13 @@ fn build_pq_masp_transaction_v1(
 /// Returns an error if the contexts disagree on network, authority, or genesis, fixture construction
 /// or proving fails, or the resulting transactions violate the required replay and epoch bindings.
 pub fn build_privacy_release_pq_masp_network_actions_v1(
-    preactivation_context: PrivacyReleaseTransactionContextV1,
-    canonical_context: PrivacyReleaseTransactionContextV1,
-    replay_context: PrivacyReleaseTransactionContextV1,
-    post_restart_replay_context: PrivacyReleaseTransactionContextV1,
+    canonical_context: &PrivacyReleaseTransactionContextV1,
+    replay_context: &PrivacyReleaseTransactionContextV1,
+    post_restart_replay_context: &PrivacyReleaseTransactionContextV1,
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
-    if preactivation_context.network_id != canonical_context.network_id
-        || preactivation_context.authority != canonical_context.authority
-        || preactivation_context.genesis_hash != canonical_context.genesis_hash
-        || canonical_context.network_id != replay_context.network_id
+    if canonical_context.network_id != replay_context.network_id
         || canonical_context.authority != replay_context.authority
         || canonical_context.genesis_hash != replay_context.genesis_hash
         || canonical_context.network_id != post_restart_replay_context.network_id
@@ -622,16 +614,8 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
     bootstrap
         .validate()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let (preactivation_transaction, preactivation_statement) = build_pq_masp_transaction_v1(
-        &preactivation_context,
-        fixture.statement.clone(),
-        &fixture.witness,
-        fixture.authorization_secret_key.as_slice(),
-        network_seed_v1(fixture_seed, b"pq-masp-proof", 0),
-        private_key,
-    )?;
     let (canonical_transaction, canonical_statement) = build_pq_masp_transaction_v1(
-        &canonical_context,
+        canonical_context,
         fixture.statement.clone(),
         &fixture.witness,
         fixture.authorization_secret_key.as_slice(),
@@ -639,7 +623,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         private_key,
     )?;
     let (replay_transaction, replay_statement) = build_pq_masp_transaction_v1(
-        &replay_context,
+        replay_context,
         successor_replay_statement.clone(),
         &successor_replay_witness,
         fixture.authorization_secret_key.as_slice(),
@@ -648,7 +632,7 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
     )?;
     let (post_restart_replay_transaction, post_restart_replay_statement) =
         build_pq_masp_transaction_v1(
-            &post_restart_replay_context,
+            post_restart_replay_context,
             successor_replay_statement,
             &successor_replay_witness,
             fixture.authorization_secret_key.as_slice(),
@@ -660,13 +644,11 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         .checked_add(1)
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let transaction_hashes = [
-        preactivation_transaction.hash(),
         canonical_transaction.hash(),
         replay_transaction.hash(),
         post_restart_replay_transaction.hash(),
     ];
     let transaction_intents = [
-        preactivation_statement.context.transaction_intent_digest,
         canonical_statement.context.transaction_intent_digest,
         replay_statement.context.transaction_intent_digest,
         post_restart_replay_statement
@@ -681,7 +663,6 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
             .iter()
             .enumerate()
             .any(|(index, intent)| transaction_intents[..index].contains(intent))
-        || preactivation_statement.nullifiers != canonical_statement.nullifiers
         || canonical_statement.nullifiers != replay_statement.nullifiers
         || replay_statement.nullifiers != post_restart_replay_statement.nullifiers
         || replay_statement.nullifiers.is_empty()
@@ -696,14 +677,63 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     Ok(PrivacyReleasePqMaspNetworkActionsV1 {
-        preactivation_transaction,
         canonical_transaction,
         replay_transaction,
         post_restart_replay_transaction,
         bootstrap,
-        preactivation_statement,
         canonical_statement,
         replay_statement,
         post_restart_replay_statement,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {
+        PrivacyReleaseTransactionContextV1 {
+            network_id: super::super::release_network_id_from_genesis_hash([0xA7; 32]),
+            authority: AccountId::new(key_pair.public_key().clone()),
+            creation_time: Duration::from_secs(1_800_000_000),
+            time_to_live: Some(Duration::from_secs(3_600)),
+            nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            metadata: Metadata::default(),
+            genesis_hash: [0xA7; 32],
+        }
+    }
+
+    #[test]
+    fn pq_masp_replay_context_substitutions_reject_before_proving() {
+        let keys = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519).unwrap();
+        let other_keys = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519).unwrap();
+        let canonical = context(&keys);
+        for slot in 0..2 {
+            for field in 0..3 {
+                let mut contexts = [canonical.clone(), canonical.clone()];
+                match field {
+                    0 => {
+                        contexts[slot].network_id =
+                            super::super::release_network_id_from_genesis_hash([0xB8; 32])
+                    }
+                    1 => contexts[slot].authority = AccountId::new(other_keys.public_key().clone()),
+                    2 => contexts[slot].genesis_hash = [0xB8; 32],
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    build_privacy_release_pq_masp_network_actions_v1(
+                        &canonical,
+                        &contexts[0],
+                        &contexts[1],
+                        [0x41; 32],
+                        keys.private_key(),
+                    )
+                    .expect_err("substituted network, authority or genesis must reject"),
+                    PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+                );
+            }
+        }
+    }
 }

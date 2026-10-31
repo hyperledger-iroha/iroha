@@ -32,7 +32,7 @@ use super::fastpq_quantity_write_plan::{QuantityWriteKey, QuantityWritePlan};
 /// The immutable definition remains inspectable. This type deliberately exposes
 /// neither `DerefMut` nor a method returning the underlying mutable definition.
 /// Only the original storage owner can construct the lease.
-pub(crate) struct AssetDefinitionMetadataMut<'a> {
+pub struct AssetDefinitionMetadataMut<'a> {
     definition: &'a mut AssetDefinition,
 }
 
@@ -138,7 +138,7 @@ impl QuantityStorageTransaction<'_, AssetDefinitionId, AssetDefinition> {
         let Some(before) = self
             .inner
             .get(key)
-            .map(|definition| definition.total_quantity())
+            .map(iroha_data_model::asset::AssetDefinition::total_quantity)
         else {
             return false;
         };
@@ -168,8 +168,8 @@ impl QuantityStorageTransaction<'_, AssetId, AssetValue> {
         plan: &mut QuantityWritePlan<QuantityWriteKey, Quantity>,
     ) -> Option<AssetValue> {
         let zero = Quantity::zero();
-        let before_quantity = self.inner.get(&key).map(AsRef::as_ref).unwrap_or(&zero);
-        let after_quantity = after.as_ref().map(AsRef::as_ref).unwrap_or(&zero);
+        let before_quantity = self.inner.get(&key).map_or(&zero, AsRef::as_ref);
+        let after_quantity = after.as_ref().map_or(&zero, AsRef::as_ref);
         let permit = plan.consume_balance(&key, before_quantity, after_quantity);
         if permit.is_err() {
             self.raw_write = true;
@@ -186,7 +186,7 @@ impl QuantityStorageTransaction<'_, AssetId, AssetValue> {
 }
 
 /// The original quantity storage transaction and a sticky raw-write observation.
-pub(crate) struct QuantityStorageTransaction<'block, K: Key, V: Value> {
+pub struct QuantityStorageTransaction<'block, K: Key, V: Value> {
     inner: Transaction<'block, K, V>,
     raw_write: bool,
 }

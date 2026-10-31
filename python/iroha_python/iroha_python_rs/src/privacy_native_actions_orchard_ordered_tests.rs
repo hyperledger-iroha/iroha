@@ -83,7 +83,7 @@ mod orchard_ordered {
                 Scope::External,
                 1,
                 17,
-                [0x73; 512],
+                &[0x73; 512],
             )],
             minimum_action_count: 1,
         }

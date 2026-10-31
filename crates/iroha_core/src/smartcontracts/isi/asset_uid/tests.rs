@@ -76,12 +76,29 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
         [],
     );
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .unwrap();
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
+        // Component custody/rekey tests require an explicit predecessor policy;
+        // this World-only fixture does not create a signed genesis or certified tip.
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .unwrap()
+            .into_parameter()
+            .unwrap(),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("explicit component account crypto policy");
         parameters.commit();
     }
     let state = State::new_for_testing(
@@ -89,6 +106,12 @@ fn fixture(first: u32, second: u32) -> (Fixture, State) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    // Complete the fixture-defined asset's real genesis registration boundary.
+    // This World-only fixture publication does not create a certified ledger tip.
+    state
+        .block(header(1, 0))
+        .commit_world_overlay_for_testing()
+        .expect("complete fixture asset incarnation before native FI execution");
     (f, state)
 }
 
@@ -132,14 +155,13 @@ impl Fixture {
         let policy = asset_uid::policy(tx.world(), &self.definition, &[7; 32])
             .unwrap()
             .unwrap();
-        asset_uid::holdings(tx.world(), &policy, &Default::default()).unwrap()
+        asset_uid::holdings(tx.world(), &policy, &std::collections::BTreeMap::default()).unwrap()
     }
     fn balance(&self, tx: &StateTransaction<'_, '_>, account: &AccountId) -> Quantity {
         tx.world
             .assets
             .get(&self.asset(account))
-            .map(|v| v.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |v| v.as_ref().clone())
     }
     fn escrow(&self, label: &str, amount: u32, expiry: u64) -> OpenConditionalEscrow {
         OpenConditionalEscrow::new(
@@ -735,7 +757,11 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
             .expect_err("payer cannot bypass controller cancellation");
         run(
             &mut tx,
-            CancelControlledAssetLockV1 { cancel, waterfall: None }.into(),
+            CancelControlledAssetLockV1 {
+                cancel,
+                waterfall: None,
+            }
+            .into(),
             Some(&context),
         )
         .expect_err("immutable refund window is not open");
@@ -768,7 +794,11 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
             .expect_err("generic expiry is not controller invocation");
         let result = run(
             &mut tx,
-            ExpireControlledAssetLockV1 { expiry, waterfall: None }.into(),
+            ExpireControlledAssetLockV1 {
+                expiry,
+                waterfall: None,
+            }
+            .into(),
             Some(&context),
         );
         assert_eq!(
@@ -787,6 +817,120 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
     }
 }
 
-mod enrollment;
-mod fi_link;
 mod controlled_waterfall;
+mod enrollment;
+mod fi_context;
+mod fi_link;
+
+#[test]
+fn sccp_uid_preflight_preserves_ordered_holdings_and_calendar_checks_without_writes() {
+    use crate::state::asset_uid::{Movement, MovementActivity};
+
+    let (f, state) = fixture(40, 10);
+    let mut block = state.block(header(2, 1_000));
+    let mut tx = block.transaction();
+    f.configure(&mut tx, 1, 55, 8);
+    let ids = [
+        f.asset(&f.owner),
+        f.asset(&f.first),
+        f.asset(&f.second),
+        f.asset(&f.payee),
+    ];
+    let before: Vec<_> = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    // The two source debits and the two sibling-wallet credits are one ordered
+    // occurrence. A self-transfer retains holdings but still consumes activity.
+    for (legs, activity, accepted) in [
+        (vec![], MovementActivity::Payment, true),
+        (
+            vec![(1, 3, 3_u32), (1, 3, 5)],
+            MovementActivity::Payment,
+            true,
+        ),
+        (vec![(1, 3, 4), (1, 3, 5)], MovementActivity::Payment, false),
+        (vec![(0, 1, 3), (0, 2, 2)], MovementActivity::Payment, true),
+        (vec![(0, 1, 3), (0, 2, 3)], MovementActivity::Payment, false),
+        (vec![(1, 2, 5), (2, 1, 4)], MovementActivity::Payment, false),
+        (vec![(1, 1, 8)], MovementActivity::Payment, true),
+        (vec![(0, 3, 1_001)], MovementActivity::Payment, false),
+        (vec![(1, 3, 9)], MovementActivity::RetainedCustody, true),
+        (vec![(1, 3, 9)], MovementActivity::LinkedFi, true),
+    ] {
+        let amounts: Vec<_> = legs
+            .iter()
+            .map(|(_, _, amount)| Quantity::from(*amount))
+            .collect();
+        let movements: Vec<_> = legs
+            .iter()
+            .zip(&amounts)
+            .map(|((from, to, _), amount)| Movement {
+                source: &ids[*from],
+                destination: &ids[*to],
+                amount,
+                activity,
+            })
+            .collect();
+        let prepared = asset_uid::prepare_movements(tx.world(), &movements, 1_000);
+        let checked = asset_uid::precheck_movements(&tx, &movements, 1_000);
+        assert_eq!(checked.is_ok(), accepted, "{legs:?}, {activity:?}");
+        assert_eq!(
+            checked.map_err(|error| error.to_string()),
+            prepared.map(drop).map_err(|error| error.to_string())
+        );
+        assert!(
+            !tx.is_execution_deferred(),
+            "ordinary UID policy refusal is deterministic"
+        );
+        let after: Vec<_> = tx
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        assert_eq!(before, after, "preflight must not install calendar usage");
+        assert_eq!(f.balance(&tx, &f.first), Quantity::from(40_u32));
+        assert_eq!(f.balance(&tx, &f.second), Quantity::from(10_u32));
+    }
+}
+
+#[test]
+fn sccp_uid_preflight_keeps_original_decode_refusal_out_of_pending_credit_results() {
+    use crate::state::asset_uid::{Movement, MovementActivity};
+    for prepare_write in [false, true] {
+        let (f, state) = fixture(40, 10);
+        let mut block = state.block(header(2, 1_000));
+        let mut tx = block.transaction();
+        f.configure(&mut tx, 1, 55, 8);
+        let source = f.asset(&f.first);
+        let destination = f.asset(&f.payee);
+        let amount = Quantity::from(1_u32);
+        let movements = [Movement {
+            source: &source,
+            destination: &destination,
+            amount: &amount,
+            activity: MovementActivity::Payment,
+        }];
+        let result =
+            norito::with_decode_limits_scope(norito::DecodeLimits::new(0, 0, 0, 0, 0), || {
+                if prepare_write {
+                    asset_uid::prepare_movements(tx.world(), &movements, 1_000).map(drop)
+                } else {
+                    asset_uid::precheck_movements(&tx, &movements, 1_000)
+                }
+            });
+        assert!(result.is_err());
+        assert!(tx.is_execution_deferred());
+        assert!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .is_some()
+        );
+        assert_eq!(f.balance(&tx, &f.first), Quantity::from(40_u32));
+        assert_eq!(f.balance(&tx, &f.payee), Quantity::zero());
+    }
+}

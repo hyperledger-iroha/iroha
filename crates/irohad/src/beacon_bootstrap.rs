@@ -33,23 +33,8 @@ use iroha_core::validator_committee_evidence::{
     VerifiedValidatorCommitteeSelectionV1, verify_validator_committee_selection_evidence_v1,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
-use iroha_data_model::{
-    NetworkId,
-    block::consensus::is_valid_committee_size,
-    consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
-    isi::{
-        InstructionBox,
-        consensus_keys::{
-            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
-            ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
-        },
-    },
-    nexus::ValidatorCommitteePreparationV1,
-    sumeragi::finality::{
-        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
-        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityJournal, NativeFinalityLimits,
-    },
-};
+use iroha_data_model::{NetworkId, consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1}, isi::{InstructionBox, consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1}}, nexus::ValidatorCommitteePreparationV1, sumeragi::finality::{NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityJournal, NativeFinalityLimits}};
+use iroha_model_base::topology::is_valid_committee_size;
 use iroha_model_base::{chain::ChainId, peer::PeerId};
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::{
@@ -1291,13 +1276,13 @@ fn lifecycle_key_from_config(
 }
 fn load_lifecycle_config(file: File, network: &iroha_data_model::NetworkId) -> Result<KeyPair> {
     use crate::taira_runtime_signer::{
-        TairaRuntimeSignerErrorV1 as KeyError, load_private_record_from_file,
+        TairaRuntimeSignerErrorV1 as KeyError, load_private_config_record_from_file,
     };
     let length = file.metadata().map_err(|_| Error::InvalidCustody)?.len();
     if length == 0 || length > iroha_config_base::toml::MAX_TOML_SOURCE_BYTES {
         return Err(Error::InvalidCustody);
     }
-    load_private_record_from_file(file, length, |bytes| {
+    load_private_config_record_from_file(file, length, |bytes| {
         lifecycle_key_from_config(bytes, network).map_err(|_| KeyError::InvalidKey)
     })
     .map_err(|_| Error::InvalidCustody)

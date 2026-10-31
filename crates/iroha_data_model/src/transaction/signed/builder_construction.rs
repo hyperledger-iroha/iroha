@@ -87,9 +87,14 @@ impl TransactionBuilder {
         builder
             .validate_payload_state()
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-        if builder.encode_payload() != bytes {
-            return Err(norito::core::Error::LengthMismatch);
-        }
+        // Compare the original bytes without allocating a second complete payload. Preserve
+        // serializer resource/I/O errors; canonical mismatch retains this reader's error class.
+        norito::codec::verify_exact_payload(&builder.payload, bytes).map_err(
+            |error| match error {
+                norito::core::Error::NonCanonicalEncoding => norito::core::Error::LengthMismatch,
+                other => other,
+            },
+        )?;
         Ok(builder)
     }
     /// Reconstruct a transaction builder from an exact canonical payload archive.

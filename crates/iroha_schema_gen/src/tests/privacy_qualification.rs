@@ -1,6 +1,9 @@
-//! Publish the complete qualification closure and its exact canonical consumer identities.
+//! Export external diagnostic evidence and exact consumer identities without runtime activation authority.
 use super::{IntoSchema, Metadata, find_missing_schema_references};
-use iroha_data_model::privacy::{PrivacyExact12QualificationRecordV1, PrivacyReleaseSdkConsumerV1};
+use iroha_data_model::privacy::{
+    PrivacyExact12DeploymentQualificationV1, PrivacyExact12QualificationRecordV1,
+    PrivacyReleaseSdkConsumerV1,
+};
 
 #[test]
 fn privacy_qualification_export_contains_the_complete_native_schema() {
@@ -43,5 +46,140 @@ fn privacy_qualification_export_preserves_all_ten_consumer_tags_and_indices() {
         assert_eq!(variant.tag, tag);
         assert_eq!(variant.discriminant, discriminant);
         assert_eq!(variant.ty, None);
+    }
+}
+
+#[test]
+fn privacy_external_diagnostics_export_has_no_retired_deployment_activation_layout() {
+    let schemas = crate::build_schemas();
+    let Metadata::Struct(deployment) = schemas
+        .get::<PrivacyExact12DeploymentQualificationV1>()
+        .unwrap()
+    else {
+        panic!("external deployment diagnostics must retain a named native record");
+    };
+    assert_eq!(
+        deployment
+            .declarations
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "version",
+            "chain_id",
+            "network_id",
+            "genesis_hash",
+            "release_manifest_digest",
+            "validator_roster_digest",
+            "endpoint_version",
+            "convergence_height",
+            "converged_state_digest",
+            "validator_canaries",
+            "validator_signatures",
+            "qualification_digest",
+        ]
+    );
+    for retired in [
+        "PrivacyDeploymentActivationV1",
+        "PrivacyProtocolActivationRecordV1",
+        "PrivacyProtocolLifecycleV1",
+        "PrivacyProtocolActivationLimitsV1",
+        "AnonymousPgcActivationLimitsV1",
+        "VeRangeActivationLimitsV1",
+        "ZkAmsActivationLimitsV1",
+        "JindoActivationLimitsV1",
+        "OrchardActivationLimitsV1",
+        "FcmpActivationLimitsV1",
+        "IvmPrivateNoteActivationLimitsV1",
+        "PqMaspActivationLimitsV1",
+        "PrivacyProtocolLimitsTighteningV1",
+        "PrivacyConsensusPolicyTighteningV1",
+    ] {
+        assert!(
+            schemas
+                .iter()
+                .all(|(_, descriptor)| !descriptor.type_name.contains(retired)),
+            "retired schema export {retired}"
+        );
+    }
+}
+
+#[test]
+fn private_settlement_extension_export_preserves_separate_baseline_layouts() {
+    use iroha_data_model::privacy::{
+        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyProtocolLimitsUpdateV1,
+        PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
+        PrivateSettlementProtocolClosureDrainV1,
+    };
+    let exported = crate::build_schemas();
+    let descriptors: std::collections::BTreeMap<_, _> = exported.iter().collect();
+    for expected in [
+        PrivacyConsensusPolicyV1::schema(),
+        PrivateSettlementPolicyV1::schema(),
+        PrivateSettlementPolicyUpdateV1::schema(),
+        PrivateSettlementProtocolClosureDrainV1::schema(),
+    ] {
+        for (id, descriptor) in expected.iter() {
+            assert_eq!(
+                descriptors.get(id).copied(),
+                Some(descriptor),
+                "{}",
+                descriptor.type_name
+            );
+        }
+        assert!(find_missing_schema_references(&expected).is_empty());
+    }
+    for (metadata, expected) in [
+        (
+            exported.get::<PrivateSettlementPolicyV1>().unwrap(),
+            vec!["current_limits", "pending_update", "protocol_closure_drain"],
+        ),
+        (
+            exported.get::<PrivateSettlementPolicyUpdateV1>().unwrap(),
+            vec!["scheduled_at_height", "effective_at_height", "next_limits"],
+        ),
+        (
+            exported
+                .get::<PrivateSettlementProtocolClosureDrainV1>()
+                .unwrap(),
+            vec![
+                "protocol_id",
+                "scheduled_at_height",
+                "effective_at_height",
+                "next_limits_hash",
+                "original_max_expiry_blocks",
+            ],
+        ),
+        (
+            exported.get::<PrivacyConsensusLimitsV1>().unwrap(),
+            vec![
+                "max_actions_per_transaction",
+                "max_actions_per_block",
+                "max_proof_bytes_per_action",
+                "max_action_bytes",
+                "max_privacy_bytes_per_transaction",
+                "max_privacy_bytes_per_block",
+                "max_statement_and_encrypted_output_bytes_per_transaction",
+                "max_nullifiers_per_action",
+                "max_commitments_per_action",
+                "retained_root_count",
+            ],
+        ),
+        (
+            exported.get::<PrivacyProtocolLimitsUpdateV1>().unwrap(),
+            vec!["scheduled_at_height", "effective_at_height", "next_limits"],
+        ),
+    ] {
+        let Metadata::Struct(record) = metadata else {
+            panic!("privacy policy must retain its named record");
+        };
+        assert_eq!(
+            record
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 }

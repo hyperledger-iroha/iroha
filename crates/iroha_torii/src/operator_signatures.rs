@@ -46,7 +46,7 @@ use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::NetworkId;
 use iroha_model_base::peer::PeerId;
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 #[cfg(test)]
 use std::num::NonZeroUsize;
 use std::{collections::HashSet, fmt, time::Duration};
@@ -226,8 +226,8 @@ impl OperatorSignatureError {
             format!("operator signature signing failed: {}", message.into()),
         )
     }
-    fn canonical_request(error: crate::Error) -> Self {
-        let (status, code) = match &error {
+    fn canonical_request(error: &crate::Error) -> Self {
+        let (status, code) = match error {
             crate::Error::Query(iroha_data_model::ValidationFail::NotPermitted(_)) => (
                 StatusCode::BAD_REQUEST,
                 "operator_signature_canonical_request_invalid",
@@ -271,7 +271,7 @@ impl IntoResponse for OperatorSignatureError {
     fn into_response(self) -> Response {
         let payload = json_object(vec![
             json_entry("code", self.code),
-            json_entry("message", self.message),
+            json_entry("message", &(self.message)),
         ]);
         let mut resp = JsonBody(payload).into_response();
         *resp.status_mut() = self.status;
@@ -372,9 +372,9 @@ impl OperatorSignatures {
     }
     /// Return the canonical Ed25519 key payloads trusted by operator policy.
     ///
-    /// PoR verdict authentication reuses this configured trust root rather than trusting keys
+    /// `PoR` verdict authentication reuses this configured trust root rather than trusting keys
     /// embedded by the submitter. Non-Ed25519 operator keys are intentionally excluded because
-    /// first-release PoR artefacts require Ed25519 signatures.
+    /// first-release `PoR` artefacts require Ed25519 signatures.
     pub(crate) fn trusted_ed25519_key_bytes(&self) -> Vec<Vec<u8>> {
         let mut keys = self
             .allowed_public_keys
@@ -510,7 +510,7 @@ impl OperatorSignatures {
         nonce: &str,
     ) -> Result<Vec<u8>, OperatorSignatureError> {
         let canonical_request = canonical_request_message(method, uri, body)
-            .map_err(OperatorSignatureError::canonical_request)?;
+            .map_err(|value| OperatorSignatureError::canonical_request(&value))?;
         let capacity = OPERATOR_SIGNATURE_DOMAIN_V1
             .len()
             .checked_add(network_id.as_bytes().len())
@@ -619,7 +619,7 @@ impl OperatorSignatures {
         target_peer_id: &PeerId,
     ) -> Result<Vec<u8>, OperatorSignatureError> {
         let canonical_request = canonical_request_message(method, uri, body)
-            .map_err(OperatorSignatureError::canonical_request)?;
+            .map_err(|value| OperatorSignatureError::canonical_request(&value))?;
         let target_peer_id = target_peer_id
             .public_key()
             .try_to_multihash_string()
@@ -733,7 +733,7 @@ pub fn signed_request_headers(
     uri: &crate::Uri,
     body: &[u8],
 ) -> Result<HeaderMap, OperatorSignatureError> {
-    signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut OsRng)
+    signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut SysRng)
 }
 fn signed_request_headers_with_rng<R: TryCryptoRng>(
     key_pair: &KeyPair,
@@ -783,7 +783,7 @@ pub fn signed_torii_proxy_request_headers(
         method,
         uri,
         body,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
@@ -825,10 +825,12 @@ fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
 fn operator_signature_nonce_with_rng<R: TryCryptoRng>(
     rng: &mut R,
 ) -> Result<String, OperatorSignatureError> {
+    const ENCODED_LEN: usize = 16;
+
     let mut nonce_bytes = [0u8; 12];
     rng.try_fill_bytes(&mut nonce_bytes)
         .map_err(|error| OperatorSignatureError::random_nonce(error.to_string()))?;
-    const ENCODED_LEN: usize = 16;
+
     let mut encoded = Vec::new();
     encoded
         .try_reserve_exact(ENCODED_LEN)
@@ -963,7 +965,7 @@ async fn enforce_operator_access_inner(
 /// Verify a canonical signed request without applying the operator allow-list.
 ///
 /// Route handlers using this middleware must bind the authenticated header key to an
-/// authoritative identity before mutating state. This is used for SoraFS provider submissions,
+/// authoritative identity before mutating state. This is used for `SoraFS` provider submissions,
 /// whose admitted advert key is dynamic and therefore cannot be copied into the static operator
 /// allow-list. Freshness, signature verification, body binding, and replay protection are still
 /// enforced here before the request reaches the handler.
@@ -1019,6 +1021,8 @@ pub async fn enforce_torii_proxy_peer_signature(
     req: Request,
     next: Next,
 ) -> Response {
+    use http_body_util::BodyExt as _;
+
     let Some(receiver_peer_id) = torii_proxy_receiver_peer_id(&app) else {
         return OperatorSignatureError::torii_proxy_receiver_unavailable().into_response();
     };
@@ -1077,7 +1081,7 @@ pub async fn enforce_torii_proxy_peer_signature(
     // A slow authenticated peer can retain the returned body after handler
     // completion. Capture the permit in the body itself so the next bridge
     // request is not admitted until this response is drained or dropped.
-    use http_body_util::BodyExt as _;
+
     let guarded_body = body.map_frame(move |frame| {
         let _permit = &proxy_memory_permit;
         frame
@@ -1092,7 +1096,7 @@ mod tests {
         OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use std::{
         sync::{Arc, Barrier},
         thread,
@@ -1102,12 +1106,13 @@ mod tests {
     struct FailingOperatorNonceRng;
     #[derive(Debug)]
     struct FailingOperatorNonceRngError;
+    impl std::error::Error for FailingOperatorNonceRngError {}
     impl fmt::Display for FailingOperatorNonceRngError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("failing operator nonce RNG")
         }
     }
-    impl TryRngCore for FailingOperatorNonceRng {
+    impl TryRng for FailingOperatorNonceRng {
         type Error = FailingOperatorNonceRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingOperatorNonceRngError)
@@ -1162,8 +1167,8 @@ mod tests {
             ..Default::default()
         };
         crate::operator_auth::OperatorAuth::new(
-            config,
-            data_dir.to_path_buf(),
+            &(config),
+            data_dir,
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid bootstrap operator-auth fixture")
@@ -2410,11 +2415,13 @@ mod tests {
     }
     #[tokio::test]
     async fn operator_middleware_requires_signature_even_when_bootstrap_token_is_valid() {
+        const BOOTSTRAP_TOKEN: &str = "bootstrap-token-for-operator-tests-01";
+
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         assert!(app.operator_signatures.is_enabled());
         assert!(!app.operator_auth.is_enabled());
         let tempdir = tempfile::tempdir().expect("operator auth tempdir");
-        const BOOTSTRAP_TOKEN: &str = "bootstrap-token-for-operator-tests-01";
+
         let operator_auth = bootstrap_token_operator_auth(BOOTSTRAP_TOKEN, tempdir.path());
         let mut headers = HeaderMap::new();
         headers.insert(

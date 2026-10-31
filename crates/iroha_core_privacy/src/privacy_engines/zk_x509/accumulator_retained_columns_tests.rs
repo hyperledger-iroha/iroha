@@ -2,7 +2,8 @@
 
 use super::super::super::private_table::inspection;
 use super::*;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn native_v1() -> Vec<Vec<F>> {
@@ -28,7 +29,7 @@ fn retained_ca_coefficients_preserve_native_values_and_replay_the_same_mask() {
     let owner = CaOriginalMaskedColumnsV1::sample_v1(
         CaColumnFamilyV1::Auxiliary,
         native_v1(),
-        &mut StdRng::seed_from_u64(73),
+        &mut ChaCha12Rng::seed_from_u64(73),
     )
     .unwrap();
     assert_eq!(owner.family_v1(), CaColumnFamilyV1::Auxiliary);
@@ -104,6 +105,7 @@ fn retained_ca_coefficients_preserve_native_values_and_replay_the_same_mask() {
 
 #[derive(Debug)]
 struct EntropyFailure;
+impl std::error::Error for EntropyFailure {}
 impl core::fmt::Display for EntropyFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("held CA test entropy failure")
@@ -113,16 +115,15 @@ struct PartialEntropy {
     remaining: usize,
     unwind: bool,
 }
-impl TryRngCore for PartialEntropy {
+impl TryRng for PartialEntropy {
     type Error = EntropyFailure;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        self.try_next_u64().map(|v| v as u32)
+        self.try_next_u64()
+            .map(|v| u32::try_from(v & u64::from(u32::MAX)).expect("masked random word"))
     }
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         if self.remaining == 0 {
-            if self.unwind {
-                panic!("deliberate CA coefficient entropy unwind");
-            }
+            assert!(!self.unwind, "deliberate CA coefficient entropy unwind");
             return Err(EntropyFailure);
         }
         self.remaining -= 1;

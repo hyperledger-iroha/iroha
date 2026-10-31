@@ -310,13 +310,10 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
                 .poll(&mut Context::from_waker(&waker))
                 .is_pending()
         );
-        let extras = if expect_error {
-            // Two authenticated extras make rollback chronology ambiguous.
-            // The writer reads/refunds both, then fails before pointer mutation.
-            Some((
-                publish_test_snapshot_generation(&store, b"extra one", &key).1,
-                publish_test_snapshot_generation(&store, b"extra two", &key).1,
-            ))
+        let extra = if expect_error {
+            // An authenticated extra larger than the remaining read pool refuses GC's
+            // payload read, so the writer fails before pointer mutation.
+            Some(publish_test_snapshot_generation(&store, &vec![b'x'; payload_len + 64], &key).1)
         } else {
             None
         };
@@ -329,12 +326,9 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
             SnapshotResourcePolicy::default(),
             &budget,
         );
-        if let Some((first, second)) = extras {
-            assert!(
-                matches!(result, Err(TryWriteError::PublicationIntegrity(ref reason)) if reason.contains("ambiguous"))
-            );
-            assert!(first.snapshot_directory.is_dir());
-            assert!(second.snapshot_directory.is_dir());
+        if let Some(extra) = extra {
+            assert!(matches!(result, Err(TryWriteError::PayloadAllocation(_))));
+            assert!(extra.snapshot_directory.is_dir());
         } else {
             result.unwrap();
         }
@@ -366,6 +360,7 @@ async fn snapshot_read_buffer_maker_retains_the_original_startup_pool() {
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: Default::default(),
     };
     let startup_pool = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let occupied = startup_pool.try_reserve_bytes(64).unwrap();
@@ -472,6 +467,7 @@ async fn snapshot_maker_first_tick_exports_recovered_state_without_new_work() {
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: Default::default(),
     };
     let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let mut maker = SnapshotMaker::from_config(&config, state, key, budget.clone()).unwrap();
@@ -536,6 +532,7 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: Default::default(),
     };
     let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let mut maker =
@@ -707,7 +704,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let kura = Kura::blank_kura_for_testing();
     // Strict decoding admits height zero. Nonzero caches require original replay
     // before a typed State can be restored.
-    let state = state_factory_with_kura(Arc::clone(&kura));
+    let state = state_factory_with_kura(&kura);
     let key = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store, &key, TEST_CHUNK_SIZE).unwrap();
     let payload_path = current_generation_artifact(&store, SNAPSHOT_FILE_NAME);

@@ -271,7 +271,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
         if signer.public_key() != self.recipient.record().validator.public_key() {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
-        let encryption = HybridKeyPair::generate(&mut rand::rngs::OsRng)?;
+        let encryption = HybridKeyPair::generate(&mut rand::rngs::SysRng)?;
         self.recipient.fill_recipient(encryption.public());
         let recipient_key = self
             .recipient
@@ -308,6 +308,10 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
 
 /// One local validator's non-cloneable, non-serializable, prepaid DKG custody state.
 /// All retained public fields and private-share slots belong to the original operation pool.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Retained checkpoints track completed phases and abort status without replacing their custody state."
+)]
 pub struct LocalGlobalThresholdBeaconDkgSeatV1 {
     session: GlobalThresholdBeaconDkgSessionV1,
     seat_index: u16,
@@ -454,10 +458,9 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
                 &source.recipient_keys,
                 &source.dealer_commitments,
             ),
-            3 => Ok((*iroha_crypto::HashOf::try_new(source)
+            3 => Ok(*iroha_crypto::HashOf::try_new(source)
                 .map_err(SessionGraphError::from)?
-                .as_ref())
-            .into()),
+                .as_ref()),
             _ => Err(GlobalThresholdBeaconError::InvalidDkgSession.into()),
         }
     }
@@ -858,7 +861,7 @@ mod tests {
                 components
                     .iter()
                     .map(|component| {
-                        Hash::new(&component.iter().flatten().copied().collect::<Vec<_>>())
+                        Hash::new(component.iter().flatten().copied().collect::<Vec<_>>())
                     })
                     .collect::<BTreeSet<_>>()
                     .len(),

@@ -41,4 +41,4 @@ iroha_fhe = { path = ".", default-features = false, features = ["bgv-test-fixtur
 # Public phase tree and resource records for the cost measurement test.
 iroha_measurement = { workspace = true }
 # Independent arbitrary-precision oracle; shares no code with the kernels.
-num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }
+num-bigint = { version = "0.5.1", default-features = false, features = ["std"] }

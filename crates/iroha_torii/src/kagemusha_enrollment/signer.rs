@@ -40,21 +40,33 @@ impl EnrollmentSigner {
         {
             return Err(Error::Selection);
         }
-        let mut original = RetainedFile::open_private(private_key_path).map_err(custody)?;
-        if original.file().metadata().map_err(custody)?.len() != 32 {
+        let mut original =
+            RetainedFile::open_private(private_key_path).map_err(|value| custody(&value))?;
+        if original
+            .file()
+            .metadata()
+            .map_err(|value| custody(&value))?
+            .len()
+            != 32
+        {
             return Err(Error::Invalid);
         }
-        let snapshot = original.snapshot().map_err(custody)?;
+        let snapshot = original.snapshot().map_err(|value| custody(&value))?;
         let mut secret = Zeroizing::new([0_u8; 32]);
         original
             .file_mut()
             .read_exact(secret.as_mut())
-            .map_err(custody)?;
+            .map_err(|value| custody(&value))?;
         let mut extra = Zeroizing::new([0_u8; 1]);
-        if original.file_mut().read(extra.as_mut()).map_err(custody)? != 0 {
+        if original
+            .file_mut()
+            .read(extra.as_mut())
+            .map_err(|value| custody(&value))?
+            != 0
+        {
             return Err(Error::Invalid);
         }
-        original.revalidate().map_err(custody)?;
+        original.revalidate().map_err(|value| custody(&value))?;
         let key = SigningKey::from_slice(secret.as_ref()).map_err(|_| Error::Invalid)?;
         let owner = Self {
             original,
@@ -72,13 +84,15 @@ impl EnrollmentSigner {
             return Err(Error::Selection);
         }
         validate_certificate(provider)?;
-        if self.key.verifying_key().to_encoded_point(false).as_bytes()
+        if self.key.verifying_key().to_sec1_point(false).as_bytes()
             != provider.certificate.body.key.as_sec1_bytes()
         {
             return Err(Error::Selection);
         }
-        self.original.revalidate().map_err(custody)?;
-        if self.original.snapshot().map_err(custody)? != self.snapshot {
+        self.original
+            .revalidate()
+            .map_err(|value| custody(&value))?;
+        if self.original.snapshot().map_err(|value| custody(&value))? != self.snapshot {
             return Err(Error::Selection);
         }
         Ok(())
@@ -94,7 +108,7 @@ impl EnrollmentSigner {
         self.revalidate(provider)?;
         // Protocol messages are the input to SHA256, not prehashed ECDSA digests.
         let signature: Signature = self.key.try_sign(message).map_err(|_| Error::Unavailable)?;
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         self.revalidate(provider)?;
         Ok(signature.to_der().as_bytes().to_vec())
     }
@@ -108,7 +122,7 @@ fn validate_certificate(provider: &KagemushaEnrollmentProvider) -> Result<()> {
         .map_err(|_| Error::Selection)
 }
 
-fn custody(error: io::Error) -> Error {
+fn custody(error: &io::Error) -> Error {
     match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => Error::Invalid,
         io::ErrorKind::PermissionDenied => Error::Selection,

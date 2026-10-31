@@ -54,7 +54,7 @@ name = "ebr_allocation_custody"
 path = "tests/ebr_allocation_custody.rs"
 
 [dev-dependencies.crossbeam-epoch]
-version = "=0.9.20"
+version = "=0.9.21"
 
 [[test]]
 name = "map_owned_generations"

@@ -2,7 +2,7 @@
 
 use super::*;
 use common::*;
-use rows::{Acceptance, Dealer, Edge, Peer, Recipient, Row};
+use rows::{Acceptance, Edge, Peer, PreparedDealer, PreparedRecipient, Row};
 use sequence::Rows;
 
 /// Actual final graph charges, admitted with their backing before decoding.
@@ -92,10 +92,10 @@ impl Ledger {
 }
 impl Drop for Ledger {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            if let Some(charges) = self.charges.take() {
-                std::mem::forget(charges);
-            }
+        if std::thread::panicking()
+            && let Some(charges) = self.charges.take()
+        {
+            std::mem::forget(charges);
         }
     }
 }
@@ -103,7 +103,7 @@ impl Drop for Ledger {
 pub(super) trait FinishRow: Row {
     fn finish(self, ledger: &mut Ledger) -> Self::Wire;
 }
-impl FinishRow for Recipient {
+impl FinishRow for PreparedRecipient {
     fn finish(self, ledger: &mut Ledger) -> Self::Wire {
         GlobalThresholdBeaconDkgRecipientKeyV1 {
             recipient_index: self.recipient_index,
@@ -114,7 +114,7 @@ impl FinishRow for Recipient {
         }
     }
 }
-impl FinishRow for Dealer {
+impl FinishRow for PreparedDealer {
     fn finish(self, ledger: &mut Ledger) -> Self::Wire {
         GlobalThresholdBeaconDkgDealerCommitmentV1 {
             dealer_index: self.dealer_index,

@@ -74,12 +74,25 @@ fn source(
     )
 }
 
+async fn checked(
+    source: &OnlinePaymentSource,
+    height: NonZeroU64,
+) -> Result<SumeragiFinalityProof, NativePaymentObservationError> {
+    let response = source.proof(height).await?;
+    let permit = Arc::new(tokio::sync::Semaphore::new(1))
+        .acquire_owned()
+        .await
+        .unwrap();
+    let (proof, ()) =
+        crate::client::run_native_worker(permit, (), move || response.decode_checked()).await?;
+    proof
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_payment_online_proof_uses_owned_async_transport_inside_runtime() {
     let expected = proof();
     let (source, transport) = source([response(&expected)]);
-    let observed = source
-        .proof(NonZeroU64::MIN)
+    let observed = checked(&source, NonZeroU64::MIN)
         .await
         .expect("native payment proof must be readable inside its async runtime");
     assert_eq!(observed, expected);
@@ -107,7 +120,7 @@ async fn native_payment_online_proof_rejects_wrong_height_media_and_noncanonical
  {
     let expected = proof();
     let (source, transport) = source([response(&expected)]);
-    assert!(source.proof(NonZeroU64::new(2).unwrap()).await.is_err());
+    assert!(checked(&source, NonZeroU64::new(2).unwrap()).await.is_err());
     assert_eq!(transport.requests.lock().unwrap().len(), 1);
 
     let mut wrong_media = response(&expected);
@@ -115,13 +128,13 @@ async fn native_payment_online_proof_rejects_wrong_height_media_and_noncanonical
         .headers_mut()
         .insert("content-type", "application/json".parse().unwrap());
     let (source, transport) = self::source([wrong_media]);
-    assert!(source.proof(NonZeroU64::MIN).await.is_err());
+    assert!(checked(&source, NonZeroU64::MIN).await.is_err());
     assert_eq!(transport.requests.lock().unwrap().len(), 1);
 
     let mut noncanonical = response(&expected);
     noncanonical.body_mut().push(0);
     let (source, transport) = self::source([noncanonical]);
-    assert!(source.proof(NonZeroU64::MIN).await.is_err());
+    assert!(checked(&source, NonZeroU64::MIN).await.is_err());
     assert_eq!(transport.requests.lock().unwrap().len(), 1);
 }
 
@@ -134,7 +147,7 @@ async fn native_payment_online_proof_backpressure_preserves_deadline_and_yields_
         .client()
         .with_request_deadline(Instant::now() + Duration::from_secs(5));
     let source = OnlinePaymentSource(client.account_client().unwrap());
-    let read = source.proof(NonZeroU64::MIN);
+    let read = checked(&source, NonZeroU64::MIN);
     let other_work = async {
         assert_eq!(
             transport.requests.lock().unwrap().len(),
@@ -162,7 +175,7 @@ async fn native_payment_online_proof_never_invents_retry_authority_or_extends_de
             None => source.0.client().clone(),
         };
         let source = OnlinePaymentSource(client.account_client().unwrap());
-        assert!(source.proof(NonZeroU64::MIN).await.is_err());
+        assert!(checked(&source, NonZeroU64::MIN).await.is_err());
         assert_eq!(
             transport.requests.lock().unwrap().len(),
             usize::from(remaining != Some(Duration::ZERO))

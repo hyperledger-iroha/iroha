@@ -19,9 +19,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "workspace_release.yml"
 PR_WORKFLOW = ROOT / ".github" / "workflows" / "pr.yml"
-PINNED_RUST = "1.93.1"
-SETUP_RUST_TOOLCHAIN_COMMIT = "166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
-RUST_CACHE_COMMIT = "e18b497796c12c097a38f9edb9d0641fb99eee32"
+PINNED_RUST = "1.99.1"
+SETUP_RUST_TOOLCHAIN_COMMIT = "ecabd13d1c56bd1345c230e542e9144811ad706f"
+RUST_CACHE_COMMIT = "d1527c8f67ef9af357290475d4af4b0fab8f12e0"
 COMPILE_UNIT_BASELINE = ROOT / "ci" / "compile_unit_baselines.json"
 COMPILE_UNIT_GUARD_COMMAND = (
     "python3 scripts/check_compile_unit_budget.py --locked --lib "
@@ -56,7 +56,7 @@ REQUIRED_NUMERIC_TEST_COMMANDS = (
 
 NEXTEST_CONFIG = ROOT / ".config" / "nextest.toml"
 NEXTEST_INSTALL_ACTION = (
-    "uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88"
+    "uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037"
 )
 RELEASE_GATE_FETCH = "cargo fetch --locked"
 RELEASE_GATE_COMMAND = (
@@ -643,7 +643,8 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
             errors.append(f"{job_name} diagnostics must not block the release workflow")
 
     build_job = _job_block(workflow, "build")
-    if re.search(r"(?m)^    (?:if|needs|continue-on-error):", build_job):
+    if (re.search(r"(?m)^    (?:if|continue-on-error):", build_job)
+            or re.findall(r"(?m)^    needs: (.+)$", build_job) != ["ci_image"]):
         errors.append("release build must be independent of diagnostic jobs")
     for marker in ("cargo nextest", "cargo test", "cargo clippy", "cargo fmt", *RETIRED_CENSUS_MARKERS):
         if marker in build_job:
@@ -693,7 +694,7 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
             "mold --run cargo llvm-cov --doc --branch --no-report",
             "cargo llvm-cov report --doctests --ignore-filename-regex "
             "'iroha_cli|iroha_torii' --lcov --output-path lcov.info",
-            "uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b",
+            "uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329",
         ),
         "clippy": (
             "python3 scripts/rust_ci.py run --workspace --checks clippy",
@@ -731,7 +732,7 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
 
         if job_name in ("doc", "clippy"):
             python_setup = (
-                "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n"
+                "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\n"
                 "        with:\n"
                 '          python-version: "3.11"\n'
             )
@@ -847,7 +848,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         affected_requirements = (
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_free_matrix) }}",
             "if: needs.rust_changes.outputs.has_binary_free_rust == 'true'",
-            "needs: rust_changes",
+            "needs: [rust_changes, ci_image]",
             "uses: actions-rust-lang/setup-rust-toolchain@"
             f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
             'cache: "false"',
@@ -872,13 +873,13 @@ def _validate_pr_parity(workflow: str) -> list[str]:
 
     for job_name, requirements in {
         "pre_build": (
-            "needs: rust_changes",
+            "needs: [rust_changes, ci_image]",
             "if: needs.rust_changes.outputs.has_binaries == 'true'",
             "REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}",
             'python3 scripts/rust_ci.py build-binaries \\ --binaries "$REQUIRED_BINARIES"',
         ),
         "rust_network": (
-            "needs: [rust_changes, pre_build]",
+            "needs: [rust_changes, pre_build, ci_image]",
             "if: needs.rust_changes.outputs.has_binary_rust == 'true'",
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
             "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
@@ -889,7 +890,8 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         ),
         **{
             name: (
-                "needs: [rust_changes, pre_build]",
+                ("needs: [rust_changes, pre_build]" if name == "pytests"
+                 else "needs: [rust_changes, pre_build, ci_image]"),
                 f"if: needs.rust_changes.outputs.run_{name} == 'true'",
             ) for name in ("consistency", "kotodama_docs", "pytests")
         },
@@ -903,7 +905,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         job = _job_block(workflow, name)
         normalized_job = _normalized(job)
         for requirement in (
-            "needs: rust_changes",
+            "needs: [rust_changes, ci_image]",
             f"if: needs.rust_changes.outputs.run_{name} == 'true'",
             f"run: bash ci/check_{name}.sh",
             f"run_{name}: ${{{{ steps.classify.outputs.run_{name} }}}}",
@@ -1516,10 +1518,10 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
-                "toolchain: 1.93.1",
+                "toolchain: 1.99.1",
                 "toolchain: stable",
             ),
-            "format must pin Rust 1.93.1",
+            "format must pin Rust 1.99.1",
         ),
         (
             lambda workflow: _replace_once(
@@ -1574,10 +1576,10 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
-                "coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b",
+                "coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329",
                 "coverallsapp/github-action@main",
             ),
-            "coverage is missing required command: uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b",
+            "coverage is missing required command: uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329",
         ),
         (
             lambda workflow: _replace_once(
@@ -1612,8 +1614,8 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once(
                 workflow,
-                "    branches: [main]\n",
-                "    branches: [main]\n    paths-ignore: ['**/*.md']\n",
+                "    branches: [main, optimizations]\n",
+                "    branches: [main, optimizations]\n    paths-ignore: ['**/*.md']\n",
             ),
             "PR workflow must classify every change before selectively skipping jobs",
         ),
@@ -1721,12 +1723,12 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "numeric_v1_architecture_parity",
-                "          toolchain: 1.93.1\n"
+                "          toolchain: 1.99.1\n"
                 f"      - uses: Swatinem/rust-cache@{RUST_CACHE_COMMIT}",
                 "          toolchain: stable\n"
                 f"      - uses: Swatinem/rust-cache@{RUST_CACHE_COMMIT}",
             ),
-            "PR numeric parity must pin Rust 1.93.1",
+            "PR numeric parity must pin Rust 1.99.1",
         ),
         (
             lambda workflow: _replace_once_in_job(
@@ -1857,7 +1859,7 @@ def test_supported_feature_workflows_pin_python_before_the_reader(job: str) -> N
     workflow = RELEASE_WORKFLOW.read_text()
     body = _job_block(workflow, job)
     assert "python-version: \"3.11\"" in body
-    assert body.index("uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065") < body.index("python3 scripts/rust_ci.py")
+    assert body.index("uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0") < body.index("python3 scripts/rust_ci.py")
     replaced = _replace_once_in_job(workflow, job, 'python-version: "3.11"', 'python-version: "3.10"')
     assert f"{job} must pin Python 3.11 for the supported feature reader" in _validate_release_workflow(replaced)
 

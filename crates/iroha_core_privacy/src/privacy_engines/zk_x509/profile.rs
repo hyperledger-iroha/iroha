@@ -4,6 +4,7 @@
 //! domain, accepted algorithm, custom EKU, trace segment, and transparent-proof
 //! parameter that can affect consensus. Changing any value changes the compiled
 //! profile digest; there is no alternate decoder or parameter negotiation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 mod readiness_certificates;
 use crate::privacy_engines::{
     aggregate_stark::{
@@ -25,13 +26,11 @@ pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v1";
 /// Source identity for the original Iroha implementation.
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Minimum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 /// Maximum admitted certificate-chain depth, including leaf and root.
 #[doc(hidden)]
 pub const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Maximum DER bytes in the private CRL witness.
 ///
 /// Unbounded parsing is deliberately excluded from a consensus circuit.
@@ -54,7 +53,6 @@ pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
 #[cfg(test)]
@@ -85,8 +83,8 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
 /// Domain for occupied CA leaves.
 pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Domain for empty CA leaves.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.empty-leaf.v1";
 /// Domain for CA internal tree nodes.
 pub(crate) const ZK_X509_CA_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.node.v1";
@@ -202,7 +200,7 @@ pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 8;
 /// the shared blow-up is eight (log three), so every MAIN prover, verifier,
 /// fixed schedule, and resource calculation uses log 22.
 pub(crate) const ZK_X509_MAIN_COMMON_LDE_LOG2_V1: u8 =
-    ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8;
+    ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0];
 /// Number of independent Fiat-Shamir query positions.
 pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 136;
 /// Number of independently mixed composition lanes.
@@ -250,7 +248,7 @@ pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
 /// `(2 + 13) * (q + 4*n_deep) = 2100` coefficients cover the complete closure.
 pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 2099;
 /// Exact maximum of the main aggregate proof before DEEP openings.
-pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 7_536_672;
+pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 7_558_432;
 /// Exact maximum of the compact-CA aggregate proof before DEEP openings.
 pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 1_446_016;
 /// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
@@ -258,7 +256,7 @@ pub(crate) const ZK_X509_CA_FRAME_BYTES_V1: u32 = 10;
 /// Exact claim-free X5M1 framing and31 original key/digest DEEP values.
 pub(crate) const ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_002;
 /// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
-pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 424_896;
+pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 426_176;
 /// Fiat-Shamir proof-of-work grinding bits.
 pub(crate) const ZK_X509_GRINDING_BITS_V1: u8 = 20;
 /// Required computational-soundness target for the released proof system.
@@ -290,14 +288,14 @@ const ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1: u8 = 10;
 const ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
 const ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1: u16 = 2099;
 const ZK_X509_SHARED_STARK_CA_FRI_ROUNDS_V1: u8 = 6;
-/// Exact maximum inner MAIN proof for the present 5,811-column opening
+/// Exact maximum inner MAIN proof for the present 5,831-column opening
 /// schedule after applying q=136, blowup eight, Fp4 openings, six composition
 /// chunks, paired FRI leaves, and 48-byte canonical multiproof hashes.
-const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 7_908_768;
-/// Exact MAIN base-field payload: 136 current-row queries times all 5,811
+const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 7_931_808;
+/// Exact MAIN base-field payload: 136 current-row queries times all 5,831
 /// columns times eight bytes; current/next DEEP values remain complete.
 #[cfg(test)]
-const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_322_368;
+const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_344_128;
 /// Exact maximum compact-CA inner proof after padding its 104 active rows to a
 /// log-12 native trace and using four composition chunks on the shared log-16 LDE.
 const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 1_498_816;
@@ -309,6 +307,7 @@ const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 1_498_816;
 /// polynomial and native domain. This checks geometry, not crypto qualification.
 // TODO: capture full native proofs/resources and independently qualify the
 // complete construction before populating the separate activation evidence.
+#[cfg(test)]
 const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
     ZK_X509_FRI_QUERY_COUNT_V1 == ZK_X509_SHARED_STARK_QUERY_COUNT_V1
         && ZK_X509_FRI_BLOWUP_FACTOR_V1 == ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1
@@ -330,26 +329,32 @@ const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
 }
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
 #[doc(hidden)]
-pub const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;
+pub const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_984;
 /// Exact encoded byte length of the deterministic first-release X5S1 KAT.
 ///
-/// This stays zero only while the one-time capture corridor is open. The production activation gate
-/// rejects a zero length or a length above the canonical X5S1 ceiling.
+/// This stays zero while the diagnostic capture corridor is open. It is never
+/// an input to consensus admission; proof-size enforcement uses the fixed ceiling.
 #[doc(hidden)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1: u32 = 0;
 /// SHA-256 of the deterministic first-release X5S1 KAT proof.
 #[doc(hidden)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1: [u8; 32] = [0; 32];
 /// SHA-256 of the authoritative native-release expectations Norito fixture.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_NORITO_SHA256_V1: [u8; 32] = [0; 32];
 /// SHA-256 of the typed-equal native-release expectations JSON projection.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: [u8; 32] = [0; 32];
 /// Frozen first-release transparent-proof envelope descriptor.
 ///
 /// Consensus activation stays fail-closed while this descriptor records the
 /// complete reduced opening schedule.  Governance and release-evidence pins cannot override the
 /// shared q=136/blowup-eight verifier or the fixed proof-byte ceiling.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+17-key-and-digest-join-descriptors+key-and-digest-alphas+20-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9412944|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable";
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+21-key-and-digest-join-descriptors+key-and-digest-alphas+24-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-canonical-frame-prefix-and-static-field-headers-with-carried-private-crl-length|sha-fixed-algebraic-width=548-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token+projection-hash-bus-reuses-exact-sha-call-family|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9435984|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use readiness_certificates::ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1;
 #[cfg(feature = "privacy-release-evidence")]
 #[doc(hidden)]
 pub use readiness_certificates::{
@@ -358,10 +363,7 @@ pub use readiness_certificates::{
     canonical_resource_environment_v1, canonical_resource_process_limits_v1,
     resource_certificate_matches_source_v1, validate_resource_certificate_payload_v1,
 };
-use readiness_certificates::{
-    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
-    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
-};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use readiness_certificates::{
     ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
@@ -369,6 +371,12 @@ use readiness_certificates::{
     ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
 };
+#[cfg(test)]
+use readiness_certificates::{
+    ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, resource_certificate_is_pinned_v1,
+    soundness_certificate_is_pinned_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
     let mut index = 0;
     while index < digest.len() {
@@ -379,6 +387,7 @@ const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
     }
     false
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn digests_differ_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     let mut index = 0;
     while index < left.len() {
@@ -389,6 +398,7 @@ const fn digests_differ_v1(left: [u8; 32], right: [u8; 32]) -> bool {
     }
     false
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn release_evidence_pins_are_complete_v1(
     kat_proof_bytes: u32,
     kat_proof_sha256: [u8; 32],
@@ -404,6 +414,7 @@ const fn release_evidence_pins_are_complete_v1(
         && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
 }
 #[derive(Clone, Copy)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZkX509ReleaseCapturePinsV1 {
     kat_proof_bytes: u32,
     kat_proof_sha256: [u8; 32],
@@ -417,6 +428,7 @@ struct ZkX509ReleaseCapturePinsV1 {
     maximum_peak_rss_bytes: u64,
     maximum_peak_address_space_bytes: u64,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     ZkX509ReleaseCapturePinsV1 {
         kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -446,6 +458,7 @@ const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePins
         && pins.maximum_peak_rss_bytes == 0
         && pins.maximum_peak_address_space_bytes == 0
 }
+#[cfg(test)]
 const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
     release_evidence_pins_are_complete_v1(
         pins.kat_proof_bytes,
@@ -502,9 +515,14 @@ pub const fn zk_x509_native_release_expectation_digests_match_v1(
         json_sha256,
     )
 }
-/// Closed checklist that must be true before activation can be compiled.
+/// Diagnostic evidence inventory; no field authorizes consensus execution.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ZkX509ReadinessV1 {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each diagnostic evidence class is reported independently"
+)]
+pub(crate) struct ZkX509ReleaseEvidenceV1 {
     /// Strict DER parser and RFC 5280 state machine are constrained.
     pub(crate) der_and_rfc5280_air: bool,
     /// SHA-256 compression and bit/range lookups are constrained.
@@ -530,7 +548,8 @@ pub(crate) struct ZkX509ReadinessV1 {
     /// Release benchmarks fix measured rows, time, and peak memory below ceilings.
     pub(crate) resource_benchmarks: bool,
 }
-impl ZkX509ReadinessV1 {
+#[cfg(test)]
+impl ZkX509ReleaseEvidenceV1 {
     /// Whether every independently auditable implementation component exists.
     pub(crate) const fn is_complete(self) -> bool {
         self.der_and_rfc5280_air
@@ -547,9 +566,10 @@ impl ZkX509ReadinessV1 {
             && self.resource_benchmarks
     }
 }
-/// Canonical production checklist derived from concrete release pins and
-/// independently validated certificate payloads.
-pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
+/// Diagnostic evidence derived from retained pins and certificate payloads.
+/// Neither this checklist nor a reviewer/resource receipt decides protocol validity.
+#[cfg(test)]
+pub(crate) fn zk_x509_release_evidence_v1() -> ZkX509ReleaseEvidenceV1 {
     let shared_stark_geometry_ready = zk_x509_shared_stark_geometry_is_release_ready_v1();
     let source_capture_pins = source_release_capture_pins_v1();
     // A proof digest by itself is not evidence that either canonical projection
@@ -574,7 +594,7 @@ pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
         && compiled_profile_digest.is_some_and(soundness_certificate_is_pinned_v1);
     let resource_benchmarks = resource_source_pins_complete
         && compiled_profile_digest.is_some_and(resource_certificate_is_pinned_v1);
-    ZkX509ReadinessV1 {
+    ZkX509ReleaseEvidenceV1 {
         der_and_rfc5280_air: true,
         sha256_air: true,
         p256_air: true,
@@ -589,7 +609,7 @@ pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
         resource_benchmarks,
     }
 }
-/// Failure in the fixed profile or activation checklist.
+/// Failure in the fixed profile or its actual cryptographic construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509ProfileErrorV1 {
     /// A trace family is empty or the maximum instance count is exceeded.
@@ -604,9 +624,9 @@ pub(crate) enum ZkX509ProfileErrorV1 {
     /// Proof cap is zero or exceeds Taira's fixed per-action ceiling.
     #[error("zk-X509 proof cap is invalid")]
     InvalidProofCap,
-    /// Consensus activation was requested before every implementation gate passed.
-    #[error("zk-X509 engine is not complete and cannot be activated")]
-    EngineIncomplete,
+    /// The joint round-by-round/Fiat–Shamir security construction is incomplete.
+    #[error("zk-X509 joint round-by-round/Fiat–Shamir security reduction is incomplete")]
+    JointSecurityReductionIncomplete,
 }
 fn fri_parameters_v1(
     native_trace_log2: u8,
@@ -746,8 +766,9 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
     .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     let main_fri = validate_fri_subproof_v1(
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
-        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8,
-        ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0],
+        u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+            .expect("fixed profile value fits u8"),
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_FRI_ROUNDS_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
@@ -781,7 +802,7 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || usize::from(ZK_X509_LDE_COLUMN_BATCH_V1)
             != super::super::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
         || ZK_X509_LDE_COLUMN_BATCH_V1 > ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1
-        || ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1 % ZK_X509_LDE_COLUMN_BATCH_V1 != 0
+        || !ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1.is_multiple_of(ZK_X509_LDE_COLUMN_BATCH_V1)
         || streaming_lde_batch_bytes > ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         || ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1 < ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
         || ZK_X509_PROVER_TARGET_SECONDS_V1 == 0
@@ -840,7 +861,10 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
             .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_FRAME_BYTES_V1))
             .and_then(|bytes| {
                 bytes.checked_add(
-                    super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 as u32,
+                    u32::try_from(
+                        super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1,
+                    )
+                    .expect("fixed profile value fits u32"),
                 )
             })
             != Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1)
@@ -850,16 +874,18 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
     }
     Ok(())
 }
-/// Enforce the compile-time activation and independent readiness gates.
-pub(crate) fn require_activation_readiness_v1(
-    readiness: ZkX509ReadinessV1,
-) -> Result<(), ZkX509ProfileErrorV1> {
-    let canonical = zk_x509_activation_readiness_v1();
-    if readiness != canonical || !canonical.is_complete() {
-        return Err(ZkX509ProfileErrorV1::EngineIncomplete);
-    }
+/// Require the actual joint security construction in addition to the fixed parameters.
+///
+/// Numerical component bounds are necessary but do not prove the joint protocol.
+/// A reviewer signature, resource receipt or caller checklist cannot supply that construction.
+pub(crate) fn require_consensus_security_v1() -> Result<(), ZkX509ProfileErrorV1> {
     validate_profile_v1()?;
-    Ok(())
+    // TODO(X.3): derive the joint round-by-round security theorem for both FRI domains,
+    // shared transcript challenges and correlated cross-domain openings, then its exact
+    // Fiat–Shamir work-security reduction. The conditional 157-bit arithmetic in the
+    // diagnostic certificate is not that proof; replace this refusal only with the
+    // completed construction and its mathematical/implementation correspondence.
+    Err(ZkX509ProfileErrorV1::JointSecurityReductionIncomplete)
 }
 #[cfg(test)]
 mod tests {
@@ -882,7 +908,7 @@ mod tests {
         }
     }
     #[test]
-    fn complete_stark_geometry_fits_cap_while_activation_requires_evidence() {
+    fn complete_stark_geometry_fits_cap_while_joint_security_construction_is_missing() {
         assert_eq!(validate_profile_v1(), Ok(()));
         assert!(zk_x509_shared_stark_geometry_is_release_ready_v1());
         assert_eq!(ZK_X509_SHARED_STARK_QUERY_COUNT_V1, 136);
@@ -900,11 +926,11 @@ mod tests {
         };
         assert_eq!(
             ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1,
-            7_908_768
+            7_931_808
         );
         assert_eq!(
             ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1,
-            6_322_368
+            6_344_128
         );
         const {
             assert!(
@@ -922,12 +948,12 @@ mod tests {
         assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1, 64);
         assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
         assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 22);
-        assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 7_536_672);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_412_944);
+        assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 7_558_432);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_435_984);
         assert_eq!(ZK_X509_MAIN_FRAME_BYTES_V1, 1_002);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            24_240
+            1_200
         );
         assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 136);
         assert_eq!(ZK_X509_MAX_CONSTRAINT_DEGREE_V1, 7);
@@ -945,7 +971,7 @@ mod tests {
                 .contains("address-space-ceiling-bytes=34359738368")
         );
         assert_eq!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
-        let readiness = zk_x509_activation_readiness_v1();
+        let readiness = zk_x509_release_evidence_v1();
         assert!(readiness.prover);
         assert!(readiness.verifier);
         assert!(!readiness.soundness_analysis);
@@ -963,12 +989,12 @@ mod tests {
             }
         }
         assert_eq!(
-            require_activation_readiness_v1(readiness),
-            Err(ZkX509ProfileErrorV1::EngineIncomplete)
+            require_consensus_security_v1(),
+            Err(ZkX509ProfileErrorV1::JointSecurityReductionIncomplete)
         );
         assert_eq!(
-            require_activation_readiness_v1(complete_readiness()),
-            Err(ZkX509ProfileErrorV1::EngineIncomplete)
+            require_consensus_security_v1(),
+            Err(ZkX509ProfileErrorV1::JointSecurityReductionIncomplete)
         );
     }
     #[test]
@@ -977,7 +1003,7 @@ mod tests {
         let norito = [0x22; 32];
         let json = [0x33; 32];
         let source_pins = source_release_capture_pins_v1();
-        let readiness = zk_x509_activation_readiness_v1();
+        let readiness = zk_x509_release_evidence_v1();
         assert!(readiness.prover);
         assert!(readiness.verifier);
         assert!(!readiness.soundness_analysis);
@@ -1243,70 +1269,16 @@ mod tests {
         }
     }
     #[test]
-    fn independent_readiness_requirements_fail_closed() {
-        let canonical = zk_x509_activation_readiness_v1();
-        assert!(!canonical.is_complete());
-        let expected = Err(ZkX509ProfileErrorV1::EngineIncomplete);
-        assert_eq!(require_activation_readiness_v1(canonical), expected);
+    fn documentary_evidence_cannot_supply_the_missing_joint_security_construction() {
+        validate_profile_v1().expect("the fixed component bounds remain enforced");
+        let observed = zk_x509_release_evidence_v1();
+        assert!(!observed.is_complete());
+        // Even an all-true diagnostic report is not an input to consensus admission.
+        assert!(complete_readiness().is_complete());
         assert_eq!(
-            require_activation_readiness_v1(complete_readiness()),
-            expected,
-            "a caller-supplied all-true checklist must equal derived readiness"
+            require_consensus_security_v1(),
+            Err(ZkX509ProfileErrorV1::JointSecurityReductionIncomplete)
         );
-        let gates = [
-            ZkX509ReadinessV1 {
-                der_and_rfc5280_air: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                sha256_air: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                p256_air: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                accumulator_air: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                output_projection_air: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                prover: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                verifier: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                known_answer_tests: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                adversarial_tests: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                differential_tests: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                soundness_analysis: false,
-                ..complete_readiness()
-            },
-            ZkX509ReadinessV1 {
-                resource_benchmarks: false,
-                ..complete_readiness()
-            },
-        ];
-        for gate in gates {
-            assert!(!gate.is_complete());
-            assert_eq!(require_activation_readiness_v1(gate), expected);
-        }
     }
     #[test]
     fn custom_eku_oids_are_fixed_uuid_oids() {
@@ -1341,8 +1313,8 @@ mod tests {
             );
         }
     }
-    const fn complete_readiness() -> ZkX509ReadinessV1 {
-        ZkX509ReadinessV1 {
+    const fn complete_readiness() -> ZkX509ReleaseEvidenceV1 {
+        ZkX509ReleaseEvidenceV1 {
             der_and_rfc5280_air: true,
             sha256_air: true,
             p256_air: true,

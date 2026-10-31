@@ -150,7 +150,7 @@ const SOURCES: [(&str, &[u8]); 4] = [
         include_bytes!("../../../scripts/taira_native_edge_completion.py"),
     ),
 ];
-const BOOTSTRAP: &str = r#"import json, os, sys, types
+const BOOTSTRAP: &str = r"import json, os, sys, types
 root, action, input_fd = sys.argv[1], sys.argv[2], int(sys.argv[3])
 runtime, runtime_fd = json.loads(sys.argv[4]), int(sys.argv[5])
 if list(sys.version_info[:3]) != runtime['version'] or sys.version_info[:2] < (3,11):
@@ -221,7 +221,7 @@ verify_runtime()
 wire = json.dumps(result, sort_keys=True, separators=(',', ':')).encode() + b'\n'
 if len(wire) > 65536: raise RuntimeError('result_bound')
 sys.stdout.buffer.write(wire)
-"#;
+";
 
 /// Files and every safe ancestor stay retained until the supervised child has been reaped.
 struct PublicPin {
@@ -792,7 +792,7 @@ impl NativeOperation {
             .checked_add(1)
             .ok_or_else(|| eyre!("native progress sequence overflow"))?;
         next.predecessor_sha256 = Some(self.progress.digest()?);
-        next.request_sha256 = admitted.request_sha256.clone();
+        next.request_sha256.clone_from(&admitted.request_sha256);
         next.status = status.into();
         next.publication_operation_id = publication;
         next.checkpoint_sha256 = checkpoint;
@@ -838,15 +838,20 @@ fn admit_previous_terminal(
         return Err(eyre!("native predecessor cleanup has not completed"));
     }
     let previous = operations.open_child(&lease.authorization_semantic_sha256)?;
-    let inventory_bytes = previous.read("inventory.json", super::super::MAX_JSON_BYTES as usize)?;
+    let inventory_bytes = previous.read(
+        "inventory.json",
+        usize::try_from(super::super::MAX_JSON_BYTES).expect("bounded input limit fits usize"),
+    )?;
     let (inventory, _chain_guard) =
         super::super::decode_inventory(&inventory_bytes, "native predecessor inventory")?;
-    let auth: AuthorizationEnvelopeV1 = json::from_slice(
-        &previous.read("authorization.json", super::super::MAX_JSON_BYTES as usize)?,
-    )?;
-    let trusted: TrustedKeyV1 = json::from_slice(
-        &previous.read("trusted-key.json", super::super::MAX_JSON_BYTES as usize)?,
-    )?;
+    let auth: AuthorizationEnvelopeV1 = json::from_slice(&previous.read(
+        "authorization.json",
+        usize::try_from(super::super::MAX_JSON_BYTES).expect("bounded input limit fits usize"),
+    )?)?;
+    let trusted: TrustedKeyV1 = json::from_slice(&previous.read(
+        "trusted-key.json",
+        usize::try_from(super::super::MAX_JSON_BYTES).expect("bounded input limit fits usize"),
+    )?)?;
     if sha256_hex(&inventory_bytes) != lease.inventory_sha256
         || authorization_semantic_sha256(&auth, &trusted)? != lease.authorization_semantic_sha256
     {
@@ -1042,7 +1047,7 @@ fn verify_prepared_upload(selected: &ArtifactV1, body: &mut impl Read) -> Result
     }
     let mut digest = Sha256::new();
     let mut remaining = selected.size;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     while remaining != 0 {
         let capacity = usize::try_from(remaining.min(buffer.len() as u64))?;
         let count = body.read(&mut buffer[..capacity])?;
@@ -1127,8 +1132,7 @@ fn cutover(
             "native publication operation drifted from durable staging"
         ));
     }
-    let mut applied_now = false;
-    if operation.progress.status == "staged" {
+    let applied_now = if operation.progress.status == "staged" {
         operation.commit(
             admitted,
             "cutover_requested",
@@ -1165,8 +1169,10 @@ fn cutover(
             .as_ref()
             .expect("successful publisher witness")
             .revalidate()?;
-        applied_now = true;
-    }
+        true
+    } else {
+        false
+    };
     if !applied_now
         && operation.progress.status == "cutover_requested"
         && !operation

@@ -271,8 +271,6 @@ impl MultisigPolicy {
             let (algorithm, payload) = key
                 .try_to_bytes()
                 .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
-            CurveId::try_from_algorithm(algorithm)
-                .map_err(|_| MultisigPolicyError::UnsupportedCurve(algorithm))?;
             let current = (algorithm.as_static_str(), payload);
             if let Some(previous) = previous {
                 match previous.cmp(&current) {
@@ -385,8 +383,7 @@ impl MultisigPolicy {
                 .public_key()
                 .try_to_bytes()
                 .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
-            let curve_id = CurveId::try_from_algorithm(algorithm)
-                .expect("multisig members validate curve support at construction");
+            let curve_id = CurveId::from_algorithm(algorithm);
             cbor_write_unsigned(&mut buffer, u64::from(curve_id.as_u8()));
             cbor_write_unsigned(&mut buffer, u64::from(CTAP2_MEMBER_KEY_WEIGHT));
             cbor_write_unsigned(&mut buffer, u64::from(member.weight()));
@@ -413,8 +410,11 @@ impl MultisigPolicy {
     ) -> Result<[u8; CTAP2_POLICY_DIGEST_LEN], MultisigPolicyError> {
         let encoded = self.try_encode_ctap2()?;
         let mut hasher =
-            Blake2bMac::<U32>::new_with_salt_and_personal(&[], &[], CTAP2_POLICY_PERSONALISATION)
+            Blake2bMac::<U32>::new_with_salt_and_personal(None, &[], CTAP2_POLICY_PERSONALISATION)
                 .expect("personalised Blake2b parameters must be valid");
+        // The canonical policy preimage includes the empty-key MAC block.
+        // Blake2b 0.11 makes unkeyed mode explicit, so retain those exact bytes.
+        Mac::update(&mut hasher, &[0u8; 128]);
         Mac::update(&mut hasher, &encoded);
         let mut output = [0u8; CTAP2_POLICY_DIGEST_LEN];
         let tag = hasher.finalize().into_bytes();
@@ -455,7 +455,7 @@ impl MultisigMember {
     ///
     /// # Errors
     ///
-    /// Rejects zero weight, malformed keys and unsupported signing curves.
+    /// Rejects zero weight and malformed keys.
     pub fn new(public_key: PublicKey, weight: u16) -> Result<Self, MultisigPolicyError> {
         Self::validate_components(&public_key, weight)?;
         Ok(Self { public_key, weight })
@@ -467,7 +467,7 @@ impl MultisigMember {
     /// keeping the same original compact backing and allocation charge.
     ///
     /// # Errors
-    /// Rejects zero weight, malformed keys and unsupported signing curves.
+    /// Rejects zero weight and malformed keys.
     pub(crate) fn validate_components(
         public_key: &PublicKey,
         weight: u16,
@@ -475,11 +475,9 @@ impl MultisigMember {
         if weight == 0 {
             return Err(MultisigPolicyError::MemberWeightZero);
         }
-        let algorithm = public_key
+        public_key
             .try_algorithm()
             .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
-        CurveId::try_from_algorithm(algorithm)
-            .map_err(|_| MultisigPolicyError::UnsupportedCurve(algorithm))?;
         Ok(())
     }
     fn zeroize_for_confidential_discard(&mut self) {
@@ -545,9 +543,6 @@ pub enum MultisigPolicyError {
     /// Member weight must be positive.
     #[error("multisig member weight must be at least 1")]
     MemberWeightZero,
-    /// Multisig member uses an unsupported signing curve.
-    #[error("multisig member uses unsupported curve: {0}")]
-    UnsupportedCurve(Algorithm),
     /// Multisig member public key is malformed.
     #[error("multisig member public key is malformed")]
     MalformedPublicKey,
@@ -778,6 +773,34 @@ mod tests {
         );
         let ok = MultisigPolicy::from_serialized(1, 1, vec![member]).expect("policy");
         assert_eq!(ok.version(), 1);
+    }
+    #[test]
+    fn multisig_policy_digest_matches_shared_council_vector() {
+        let members = [
+            (
+                "ed012068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+                1,
+            ),
+            (
+                "ed01207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+                1,
+            ),
+            (
+                "ed0120884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+                2,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, weight)| {
+            MultisigMember::new(key.parse().expect("shared fixture key"), weight).expect("member")
+        })
+        .collect();
+        let policy = MultisigPolicy::new(3, members).expect("shared council policy");
+        assert_eq!(
+            hex::encode_upper(policy.try_digest_blake2b256().expect("digest")),
+            "3CA0D464D52713DD60DDAA55B3B3F49A6EF114574864E2AADE63114C4DB06B9F",
+            "canonical address digest must retain the shared SDK vector bytes",
+        );
     }
     #[test]
     fn multisig_policy_ctap2_encoding_and_digest_are_stable() {

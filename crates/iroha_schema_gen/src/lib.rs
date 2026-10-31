@@ -65,6 +65,15 @@ macro_rules! schema_types {
             iroha_data_model::nexus::PrivateSettlementContextsProofV1,
             iroha_data_model::nexus::PrivateSettlementContextRequestV1,
             iroha_data_model::nexus::PrivateSettlementProofIntentV1,
+            // The baseline privacy policy remains exported independently of private context reads.
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1,
+            iroha_data_model::privacy::PrivateSettlementValidityLimitsV1,
+            iroha_data_model::privacy::PrivateSettlementPolicyV1,
+            iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1,
+            iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1,
+            iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
+            // The one ordinary crypto policy carried by authenticated genesis and Parameters.
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
             // Independent private roots and body-free parent anchoring.
             iroha_data_model::block::consensus::SumeragiRootScope,
             iroha_data_model::block::consensus::RootFeePolicy,
@@ -182,6 +191,12 @@ macro_rules! schema_types {
             iroha_data_model::isi::asset_fi::SetAssetFiLinkAttestationV1,
             iroha_data_model::isi::asset_fi::SetAssetFiLinkV1,
             iroha_data_model::isi::asset_fi::TransferToLinkedFiV1,
+            iroha_data_model::isi::asset_fi_context::AssertAssetFiContextV1,
+            iroha_data_model::isi::asset_fi_context::AssertAssetFiTransferReceiptV1,
+            iroha_data_model::asset::fi_context::AssetFiContextTargetV1,
+            iroha_data_model::asset::fi_context::AssetFiContextSnapshotV1,
+            iroha_data_model::query::asset_fi_context::FindAssetFiContextV1,
+            iroha_data_model::asset::fi_context::AssetFiControllerBindingV1,
             iroha_data_model::isi::escrow_control::OpenControlledAssetLockV1,
             iroha_data_model::isi::escrow_control::DrawdownControlledAssetLockV1,
             iroha_data_model::isi::escrow_control::CancelControlledAssetLockV1,
@@ -192,6 +207,12 @@ macro_rules! schema_types {
             iroha_data_model::asset::uid::AssetUidPolicyViewV1,
             iroha_data_model::asset::uid_enrollment::AssetUidEnrollmentViewV1,
             iroha_data_model::asset::fi_link::AssetFiRelationshipViewV1,
+            iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1,
+            iroha_data_model::query::asset_fi::FindAssetFiTransferReceiptV1,
+            iroha_data_model::isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1,
+            iroha_data_model::query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+            iroha_data_model::escrow::scoped::AssetEscrowScopeV1,
+            iroha_data_model::escrow::scoped::AssetEscrowScopeOriginalV1,
             // Native provider custody uses opaque framed Manifest policy/enrollment payloads.
             iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
             iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1,
@@ -322,6 +343,7 @@ mod tests {
     use iroha_schema::{MetaMap, Metadata};
     mod amx_approval;
     mod bond;
+    mod crypto_admission_policy;
     mod final_promotion;
     mod final_promotion_account_custody;
     mod musubi;

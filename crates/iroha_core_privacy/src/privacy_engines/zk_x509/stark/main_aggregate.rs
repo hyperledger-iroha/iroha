@@ -6,7 +6,6 @@
 // vocabulary; it does not define an independent extension surface.
 #[cfg(test)]
 use super::super::prover_observation::{CompletionPhaseV1, PhaseTimerV1, PhaseV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::super::sha_residue_output::ShaResidueSinkV1;
 use super::super::{
     der_stark::ZkX509DerStarkChallengesV1, rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
@@ -14,24 +13,22 @@ use super::super::{
     sha_word_stark::ZkX509ShaWordStarkChallengesV1,
 };
 use super::*;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_bounded_transform.rs"]
 mod main_bounded_transform;
 #[path = "main_ca_links.rs"]
 pub(super) mod main_ca_links;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_ca_resources.rs"]
 mod main_ca_resources;
+#[path = "main_composition_mix.rs"]
+mod main_composition_mix;
 #[cfg(test)]
 #[path = "main_composition_ownership_tests.rs"]
 mod main_composition_ownership_tests;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_fixed_coset.rs"]
 mod main_fixed_coset;
 #[cfg(test)]
 #[path = "main_fixed_replay_batch_tests.rs"]
 mod main_fixed_replay_batch_tests;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_fri_retention.rs"]
 mod main_fri_retention;
 #[path = "main_joint.rs"]
@@ -43,18 +40,14 @@ pub(super) mod main_key_joins;
 mod main_native_boundary_tests;
 #[path = "main_oods.rs"]
 mod main_oods;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_residue_fold.rs"]
 mod main_residue_fold;
 #[cfg(test)]
 pub(super) use main_oods::verify_standalone_der_oods_v1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_cache.rs"]
 mod main_quotient_cache;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_denominators.rs"]
 mod main_quotient_denominators;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_quotient_stripes.rs"]
 mod main_quotient_stripes;
 #[cfg(test)]
@@ -67,36 +60,26 @@ mod main_secret_ownership_tests;
 pub(super) mod main_sha_union;
 #[path = "main_terminal_links.rs"]
 mod main_terminal_links;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 #[derive(Clone, Copy)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) enum MainTraceColumnKindV1 {
     Base,
     Aux,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_deep_replay.rs"]
 mod main_deep_replay;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_resources.rs"]
 mod main_resources;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_retained_rfc.rs"]
 mod main_retained_rfc;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_trace_replay.rs"]
 mod main_trace_replay;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_transform.rs"]
 mod main_transform;
 #[cfg(test)]
 pub(super) use main_trace_replay::MainTraceMaskGroupV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) use main_trace_replay::MainTracePolynomialSetV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_trace_replay::MainTraceReplaySourcesV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
     group_index: usize,
@@ -136,7 +119,6 @@ fn registered_main_group_column_v1(
     }
     matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_trace_group_root_v1(
     kind: MainTraceColumnKindV1,
     commitment: &aggregate::StreamingRowCommitmentResultV1,
@@ -170,7 +152,6 @@ fn map_credential_pre_aux_error_v1(
 /// The type owns every challenge-independent child which must cross the joint credential phase. It
 /// exposes only a consuming transition accepting the opaque outer credential binding; raw challenge
 /// families and auxiliary commitment APIs are intentionally absent.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     layout: AggregateProofLayoutV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
@@ -186,7 +167,6 @@ pub struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     base_transcript_state: PrivacyOuterDigestV1,
     pre_aux: ZkX509CredentialMainPreAuxV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainAwaitingCredentialBindingV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
@@ -228,7 +208,6 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
 /// Both trace-mask sets, the joined base/aux roots, the exact terminal claims, and per-registration
 /// composition coefficients are retained together. A future composition/DEEP/FRI continuation
 /// cannot resample challenges or return to either earlier phase.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct ZkX509MainCompositionPhaseV1<'a> {
     layout: AggregateProofLayoutV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
@@ -250,7 +229,6 @@ pub struct ZkX509MainCompositionPhaseV1<'a> {
     composition_transcript_state: PrivacyOuterDigestV1,
     binding: ZkX509CredentialPreAuxBindingV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         let proof_instance = self.binding.proof_instance_v1();
@@ -336,7 +314,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 MainProjectionProverConstraintSourceV1::for_main_v1(
                     &self.layout,
                     self.statement,
-                    post_base,
+                    &post_base,
                 )?,
             ),
             MainProverConstraintProviderV1::Log16(
@@ -346,7 +324,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 &self.layout,
                 self.statement,
                 &self.assembly.io,
-                post_base,
+                &post_base,
             )?),
             MainProverConstraintProviderV1::Log19(MainLog19ProverConstraintSourceV1::for_main_v1(
                 &self.layout,
@@ -370,8 +348,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
 /// This is phase one only. The returned state cannot commit auxiliary columns
 /// until the credential layer combines its joined base root with the compact-CA
 /// root and supplies the resulting opaque 272-challenge X5B1 binding.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
+pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
     proof_instance: ZkX509ProofInstanceV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
     assembly: &'a ZkX509MainTraceAssemblyV1,
@@ -405,6 +382,11 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     let source_timer = PhaseTimerV1::start_v1(PhaseV1::BaseSources);
     let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
     let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
+    let sha_payload =
+        core::mem::size_of_val(&sha).saturating_add(super::super::allocation_payload::sum_v1(
+            sha.iter()
+                .map(ZkX509ShaBatchSegmentBaseSourceV1::retained_base_heap_bytes_v1),
+        ));
     let projection = MainProjectionTraceGroupSourceV1::for_main_v1(
         &layout,
         statement,
@@ -415,7 +397,7 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         assembly.allocated_payload_bytes_v1(),
         &[
             p256.allocated_payload_bytes_v1(),
-            core::mem::size_of_val(&sha),
+            sha_payload,
             projection.allocated_payload_bytes_v1(),
             io.allocated_payload_bytes_v1(),
         ],
@@ -443,7 +425,7 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
             assembly.allocated_payload_bytes_v1(),
             &[
                 p256.allocated_payload_bytes_v1(),
-                core::mem::size_of_val(&sha),
+                sha_payload,
                 projection.allocated_payload_bytes_v1(),
                 io.allocated_payload_bytes_v1(),
                 source.allocated_payload_bytes_v1(),
@@ -504,14 +486,13 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     phase.validate_v1()?;
     Ok((phase, pre_aux))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Consume phase one, bind all challenge-dependent children with one X5B1
     /// capability, commit all six auxiliary groups in one ordered row tree, absorb terminal
     /// claims, and sample the complete per-registration alpha schedule.
-    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRng>(
         self,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         rng: &mut R,
     ) -> Result<ZkX509MainCompositionPhaseV1<'a>, ZkX509StarkErrorV1> {
         let proof_instance = self.pre_aux.proof_instance_v1();
@@ -546,8 +527,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         let post_base = binding.main_post_base();
         #[cfg(test)]
         let source_timer = PhaseTimerV1::start_v1(PhaseV1::BoundSources);
-        projection.bind_challenges_v1(post_base)?;
-        io.bind_challenges_v1(post_base)?;
+        projection.bind_challenges_v1(&post_base)?;
+        io.bind_challenges_v1(&post_base)?;
         let log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
         )?;
@@ -592,6 +573,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             &layout,
             statement,
             assembly.rfc_base.schedule.shape,
+            assembly.crl_public_inputs,
         )?;
         let key_alphas = key_plan.derive_alphas_v1(&mut transcript)?;
         let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
@@ -616,13 +598,12 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             alphas,
             transcript,
             composition_transcript_state,
-            binding,
+            binding: *binding,
         };
         phase.validate_v1()?;
         Ok(phase)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     /// Complete the same original FRI and query path after the selected
     /// transcript has bound every local and supplemental opening.
@@ -635,7 +616,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         fri_mask_roots: Vec<PrivacyOuterDigestV1>,
         deep: aggregate::AggregateDeepProofV1,
         deep_point: E,
-        key_openings: [E; main_key_joins::OPENINGS_V1],
+        key_openings: &[E; main_key_joins::OPENINGS_V1],
         key_mixes: Vec<E>,
         mixes: Vec<Vec<FriMixV1>>,
         ca: Option<main_joint::MainCaDeepContributionV1<'_>>,
@@ -668,7 +649,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 &canonical_deep_traces,
                 &canonical_deep_compositions,
                 &self.key_plan,
-                &key_openings,
+                key_openings,
                 &key_mixes,
                 key_policy,
                 ca,
@@ -776,8 +757,12 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        trace_group.base_frontier = base_openings.commitment.frontier.clone();
-        trace_group.aux_frontier = aux_openings.commitment.frontier.clone();
+        trace_group
+            .base_frontier
+            .clone_from(&base_openings.commitment.frontier);
+        trace_group
+            .aux_frontier
+            .clone_from(&aux_openings.commitment.frontier);
         let composition_opening_indices =
             aggregate::composition_opening_indices_v1(&query_skeleton, &shared_layout)
                 .map_err(map_aggregate_error_v1)?;
@@ -921,8 +906,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             deep,
         };
         let aggregate_bytes = encode_zk_x509_segmented_stark_proof_v1(&proof, &self.layout)?;
-        let encoded = encode_zk_x509_main_proof_envelope_v1(&key_openings, &aggregate_bytes)?;
-        Ok(encoded)
+        let encoded = encode_zk_x509_main_proof_envelope_v1(key_openings, &aggregate_bytes);
+        // Release consumed replay and mask owners before completing the encoding phase.
+        drop((composition_material, fri_masks, key_mixes, mixes));
+        encoded
     }
 }
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
@@ -1012,7 +999,6 @@ impl<'a> MainTraceProviderSetV1<'a> {
 ///
 /// The variants are verifier-derived and exhaustive. No dynamic callback can supply fixed rows or a
 /// quotient value, and every challenge-dependent source borrows the already-bound X5B1 phase.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Log5(MainP256Log5ProverConstraintSourceV1<'phase>),
     P256Scalar(MainP256ScalarProverConstraintSourceV1<'phase>),
@@ -1021,7 +1007,6 @@ enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Io(MainIoProverConstraintSourceV1),
     Log19(MainLog19ProverConstraintSourceV1<'assembly, 'phase>),
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainProverConstraintProviderV1<'_, '_> {
     fn native_trace_log2_v1(&self) -> u8 {
         match self {
@@ -1192,12 +1177,10 @@ impl MainProverConstraintProviderV1<'_, '_> {
         residues.finish_v1(inverse)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainFixedPolynomialSetV1 {
     registration: RegisteredSegmentLayoutV1,
     columns: Vec<Vec<F>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     fn drop(&mut self) {
         for column in &mut self.columns {
@@ -1207,14 +1190,15 @@ impl Drop for ZeroizingMainFixedPolynomialSetV1 {
         }
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
+    transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
     mut consume: impl FnMut(&mut ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     if let MainProverConstraintProviderV1::Log19(source) = provider {
         for registration in source.source.registrations.iter().copied() {
-            let mut completed = main_log19_fixed_polynomial_set_v1(source, registration)?;
+            let mut completed =
+                main_log19_fixed_polynomial_set_v1(source, registration, transform_policy)?;
             consume(&mut completed)?;
         }
         return Ok(());
@@ -1266,14 +1250,19 @@ fn stream_main_fixed_polynomial_sets_v1(
     consume(&mut completed)
 }
 /// Construct the existing final fixed matrix directly, avoiding a second
-/// pending copy. Each public arithmetic row fills all its admitted columns once;
-/// inverse transforms still run in place within bounded eight-column batches.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+/// pending copy. Each public SHA or arithmetic row fills all its admitted columns
+/// once. All initial inverse transforms retain canonical column order and use
+/// the existing admitted inverse adapter in batches of at most eight columns.
 fn main_log19_fixed_polynomial_set_v1(
     source: &MainLog19ProverConstraintSourceV1<'_, '_>,
     registration: RegisteredSegmentLayoutV1,
+    transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
 ) -> Result<ZeroizingMainFixedPolynomialSetV1, ZkX509StarkErrorV1> {
     let index = source.source.registration_index_v1(registration)?;
+    let transform_policy = transform_policy.for_quotient_layout_v1(
+        registration.segment.base_width,
+        registration.segment.aux_width,
+    )?;
     let root = goldilocks_primitive_root_v1(registration.segment.trace_log2)
         .map_err(map_transparent_error_v1)?;
     let mut set = ZeroizingMainFixedPolynomialSetV1 {
@@ -1291,7 +1280,32 @@ fn main_log19_fixed_polynomial_set_v1(
     } else {
         None
     };
-    if let Some(binding) = arithmetic {
+    // Each producer owns its separately sized fixed row. Resource accounting
+    // reserves both current/next rows at the maximum producer width plus16 words.
+    const _: () =
+        assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    const _: () = assert!(
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
+    );
+    if (2..=5).contains(&index) {
+        // These final public columns were already retained together by the old
+        // per-column path. Construct each complete SHA row once into that same
+        // charged matrix before bounded interpolation in its original order.
+        #[cfg(test)]
+        let rows_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaFixedRows);
+        for _ in 0..registration.segment.fixed_width {
+            set.columns.push(
+                zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
+            );
+        }
+        source
+            .source
+            .sha_fixed
+            .fill_fixed_matrix_v1(index - 2, &mut set.columns)
+            .map_err(map_main_sha_source_error_v1)?;
+        #[cfg(test)]
+        rows_timer.complete_v1();
+    } else if let Some(binding) = arithmetic {
         for _ in 0..registration.segment.fixed_width {
             set.columns.push(
                 zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
@@ -1305,29 +1319,82 @@ fn main_log19_fixed_polynomial_set_v1(
             .fill_arithmetic_fixed_matrix_v1(binding, &mut set.columns)?;
         #[cfg(test)]
         rows_timer.complete_v1();
-        #[cfg(test)]
-        let inverse_timer =
-            PhaseTimerV1::start_v1(PhaseV1::CompositionArithmeticFixedInverseTransform);
-        for batch in set
-            .columns
-            .chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-        {
-            batch.par_iter_mut().try_for_each(|column| {
-                goldilocks_ifft_v1(column, root).map_err(map_transparent_error_v1)
-            })?;
-        }
-        #[cfg(test)]
-        inverse_timer.complete_v1();
     } else {
         for column in 0..registration.segment.fixed_width {
-            let mut values = source.source.native_fixed_column_v1(registration, column)?;
-            goldilocks_ifft_v1(&mut values, root).map_err(map_transparent_error_v1)?;
+            let values = source.source.native_fixed_column_v1(registration, column)?;
             set.columns.push(values.into_vec_v1());
         }
     }
+    #[cfg(test)]
+    let inverse_timer = if (2..=5).contains(&index) {
+        Some(PhaseTimerV1::start_v1(
+            PhaseV1::CompositionShaFixedInverseTransform,
+        ))
+    } else if arithmetic.is_some() {
+        Some(PhaseTimerV1::start_v1(
+            PhaseV1::CompositionArithmeticFixedInverseTransform,
+        ))
+    } else {
+        None
+    };
+    main_initial_fixed_coefficients_with_v1(
+        &mut set.columns,
+        root,
+        transform_policy,
+        |words, root, direction| {
+            fastpq_prover::goldilocks_transform::transform_goldilocks_columns_v1(
+                words,
+                root,
+                direction,
+                fastpq_prover::ExecutionMode::Auto,
+            )
+        },
+        fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1,
+    )?;
+    #[cfg(test)]
+    if let Some(timer) = inverse_timer {
+        timer.complete_v1();
+    }
     Ok(set)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+
+/// Interpolate the already owned final fixed matrix without a second matrix.
+/// Validate every column before the first transform can mutate any prefix.
+fn main_initial_fixed_coefficients_with_v1(
+    columns: &mut [Vec<F>],
+    root: F,
+    policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    mut transform: impl FnMut(
+        &mut [Vec<u64>],
+        u64,
+        fastpq_prover::goldilocks_transform::GoldilocksTransformDirectionV1,
+    ) -> Result<
+        fastpq_prover::goldilocks_transform::GoldilocksTransformBackendV1,
+        fastpq_prover::goldilocks_transform::GoldilocksTransformErrorV1,
+    >,
+    mut uncertain: impl FnMut() -> bool,
+) -> Result<(), ZkX509StarkErrorV1> {
+    main_bounded_transform::check_completion_v1(uncertain())?;
+    let rows = columns.first().map_or(0, Vec::len);
+    if rows < 2
+        || !rows.is_power_of_two()
+        || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+        || columns.iter().any(|column| column.len() != rows)
+        || F::canonical(root.0).is_none()
+        || root.pow(rows as u128) != F::ONE
+        || root.pow((rows / 2) as u128) == F::ONE
+        || columns
+            .iter()
+            .flatten()
+            .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    for batch in columns.chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        policy.inverse_with_v1(batch, root, &mut transform, &mut uncertain)?;
+    }
+    Ok(())
+}
 fn canonical_main_registration_index_v1(
     layout: &AggregateProofLayoutV1,
     registration: RegisteredSegmentLayoutV1,
@@ -1353,7 +1420,6 @@ fn canonical_main_registration_index_v1(
         .filter(|index| layout.registered_segments.get(*index) == Some(&registration))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[allow(clippy::too_many_arguments)]
 fn main_registration_trace_columns_on_coset_v1(
     layout: &AggregateProofLayoutV1,
@@ -1381,7 +1447,6 @@ fn main_registration_trace_columns_on_coset_v1(
         )
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainQuotientRowScratchV1 {
     base_current: ZeroizingMainTraceColumnV1,
     base_next: ZeroizingMainTraceColumnV1,
@@ -1390,7 +1455,6 @@ struct MainQuotientRowScratchV1 {
     fixed_current: ZeroizingMainTraceColumnV1,
     fixed_next: ZeroizingMainTraceColumnV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainQuotientRowScratchV1 {
     fn new_v1(registration: RegisteredSegmentLayoutV1) -> Self {
         Self {
@@ -1454,7 +1518,6 @@ impl MainQuotientRowScratchV1 {
     }
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_registration_composition_coefficient_chunks_v1(
     layout: &AggregateProofLayoutV1,
     provider: &MainProverConstraintProviderV1<'_, '_>,
@@ -1470,6 +1533,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
     joint_buffers: Option<&main_ca_resources::MainCaJointBufferPlanV1>,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
+    const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
     #[cfg(test)]
     let registration_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistration);
     let registration = fixed.registration;
@@ -1509,11 +1573,6 @@ fn main_registration_composition_coefficient_chunks_v1(
         registration.segment.base_width,
         registration.segment.aux_width,
     )?;
-    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
-        registration.segment.trace_log2,
-        core::mem::take(&mut fixed.columns),
-    )?
-    .with_transform_policy_v1(transform_policy)?;
     let cache_plan = match joint_buffers {
         Some(plan) => plan.quotient_cache_plan_v1(layout, registration)?,
         None => main_resources::MainProverBufferPlanV1::new_v1(layout)?
@@ -1537,7 +1596,18 @@ fn main_registration_composition_coefficient_chunks_v1(
                 transform_policy,
             )
         },
+    )?
+    .with_fixed_coefficients_v1(
+        &fixed.columns,
+        registration.segment.trace_size(),
+        first_stripe.count,
     )?;
+    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
+        registration.segment.trace_log2,
+        core::mem::take(&mut fixed.columns),
+    )?
+    .with_transform_policy_v1(transform_policy)?
+    .with_coefficient_prefix_v1(cache.fixed_coefficients_v1())?;
     #[cfg(test)]
     cache_timer.complete_v1();
     let mut quotients = (0..SECURITY_LANES)
@@ -1608,7 +1678,7 @@ fn main_registration_composition_coefficient_chunks_v1(
         // Each task owns disjoint windows of the canonical full quotient. Only
         // this stripe's interleaved entries are written, so the original IFFT
         // sees exactly its original domain ordering after every stripe.
-        const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
+
         let task_entries = stripe
             .count
             .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
@@ -1671,8 +1741,8 @@ fn main_registration_composition_coefficient_chunks_v1(
         residue_timer.complete_v1();
     }
     // Coefficients are no longer needed once all original quotient rows exist.
-    drop(cache);
     drop(fixed_coset);
+    drop(cache);
     let mut coefficient_chunks =
         ZeroizingExtensionLanesV1::new(Vec::new(), zeroize_extension_lanes_v1);
     coefficient_chunks
@@ -1698,7 +1768,6 @@ fn main_registration_composition_coefficient_chunks_v1(
     registration_timer.complete_v1();
     Ok(coefficient_chunks.into_vec())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn add_main_composition_coefficient_chunks_v1(
     accumulator: &mut [Vec<Vec<E>>],
     contribution: &[Vec<Vec<E>>],
@@ -1727,18 +1796,16 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
         for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
             let source_len = contribution[lane][chunk].len();
             let target = &mut accumulator[lane][chunk];
-            if target.len() < source_len {
-                if target.capacity() < source_len {
-                    let mut replacement = ZeroizingExtensionColumnV1(Vec::new());
-                    replacement
-                        .0
-                        .try_reserve_exact(source_len)
-                        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-                    replacement.0.extend_from_slice(target);
-                    // The guard now owns the displaced initialized allocation.
-                    // Its Drop clears it before the next replacement is built.
-                    core::mem::swap(target, &mut replacement.0);
-                }
+            if target.len() < source_len && target.capacity() < source_len {
+                let mut replacement = ZeroizingExtensionColumnV1(Vec::new());
+                replacement
+                    .0
+                    .try_reserve_exact(source_len)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                replacement.0.extend_from_slice(target);
+                // The guard now owns the displaced initialized allocation.
+                // Its Drop clears it before the next replacement is built.
+                core::mem::swap(target, &mut replacement.0);
             }
         }
     }
@@ -1760,7 +1827,6 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_main_composition_coefficient_chunks_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
     shared_layout: &aggregate::AggregateProofLayoutV1,
@@ -1785,7 +1851,6 @@ fn evaluate_main_composition_coefficient_chunks_v1(
         coefficient_cap,
     )
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_main_composition_columns_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
     common_rows: usize,
@@ -1847,8 +1912,7 @@ fn evaluate_main_composition_columns_v1(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn main_composition_material_with_ca_v1<R: TryRngCore>(
+fn main_composition_material_with_ca_v1<R: TryRng>(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
@@ -1935,7 +1999,7 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
             .filter(|registration| registration.trace_group == group_index)
             .collect::<Vec<_>>();
         let mut seen_in_group = 0_usize;
-        stream_main_fixed_polynomial_sets_v1(provider, |fixed| {
+        stream_main_fixed_polynomial_sets_v1(provider, bounded_transform, |fixed| {
             if expected.get(seen_in_group).copied() != Some(fixed.registration) {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
@@ -2015,6 +2079,13 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
     #[cfg(test)]
     key_timer.complete_v1();
 
+    if let Some(ca) = ca.as_ref() {
+        ca.buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
+            ca.original,
+            None,
+        )?;
+    }
     #[cfg(test)]
     let union_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaUnion);
     sha_union_plan.accumulate_v1(
@@ -2099,7 +2170,6 @@ fn main_composition_material_with_ca_v1<R: TryRngCore>(
     ))
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fri_bases_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
@@ -2279,11 +2349,11 @@ fn main_fri_bases_from_polynomials_v1(
     )?;
     if let Some(ca) = ca {
         ca.plan.accumulate_deep_v1(
+            layout,
             ca.original,
             deep_point,
             ca.values,
             ca.mixes,
-            key_policy,
             &mut accumulators
                 .get_mut(0)
                 .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
@@ -2459,7 +2529,7 @@ pub(super) fn main_opened_composition_value_v1(
         .map_err(map_transparent_error_v1)?;
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
     let mut composition = E::ZERO;
-    for registration_index in 0..providers.layout.registered_segments.len() {
+    for (registration_index, registration_alphas) in alphas.iter().enumerate() {
         let registration = providers.layout.registered_segments[registration_index];
         let opening = registered_opened_rows_v1(&providers.layout, registration, trace_groups)
             .map_err(map_aggregate_error_v1)?;
@@ -2489,7 +2559,7 @@ pub(super) fn main_opened_composition_value_v1(
             registration.segment,
             x,
             &residues,
-            &alphas[registration_index][lane],
+            &registration_alphas[lane],
         )?);
     }
     composition =
@@ -2509,7 +2579,6 @@ pub(super) fn main_link_composition_for_test_v1(
     main_terminal_links::MainTerminalLinkPlanV1::new_v1(layout)?
         .evaluate_base_v1(groups, point, alphas)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn validate_main_fri_mixes_v1(
     layout: &AggregateProofLayoutV1,
     mixes: &[Vec<FriMixV1>],
@@ -2664,7 +2733,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
             opening.aux_next,
             fixed,
             next_fixed,
-            self.challenges,
+            &self.challenges,
             self.public,
             self.claims,
             alphas,
@@ -2726,13 +2795,10 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
             .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
         let x = F(GOLDILOCKS_GENERATOR_V1).mul(self.lde_root.pow(query_index as u128));
         let composition = quotient_value_v1(
-            self.layout,
-            self.logical_active_rows,
+            (self.layout, self.logical_active_rows),
             x,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
+            (opening.base_current, opening.base_next),
+            (opening.aux_current, opening.aux_next),
             &fixed,
             self.io_challenges,
             alphas,
@@ -2788,7 +2854,7 @@ fn p256_arithmetic_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     if identity.adapter_v1() != P256MainAdapterV1::Arithmetic
@@ -2829,7 +2895,7 @@ fn p256_binding_sink_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     if identity.adapter_v1() != P256MainAdapterV1::BindingSink
@@ -2865,7 +2931,6 @@ fn p256_binding_sink_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     }
     Ok(residues)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn p256_scalar_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
@@ -2946,7 +3011,7 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let identity = p256_main_registration_from_main_layout_v1(registration)?;
     let local_instance = identity.local_instance_v1();
@@ -2987,16 +3052,15 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_reduction_aggregate_local_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_reduction_aggregate_local_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
                 challenges.cross,
-            )?;
-
-            residues
+            )?
         }
         (SegmentAdapterIdV1::P256LowS, 0) => {
             let current: &[A; P256_LOW_S_BASE_WIDTH_V1] = opening
@@ -3018,16 +3082,15 @@ fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_low_s_aggregate_local_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_low_s_aggregate_local_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
                 challenges.cross,
-            )?;
-
-            residues
+            )?
         }
         _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
     };
@@ -3040,7 +3103,7 @@ fn p256_window_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     registration.segment.validate()?;
     p256_main_registration_from_main_layout_v1(registration)?;
@@ -3091,7 +3154,7 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_, A>,
     fixed: &[A],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     registration.segment.validate()?;
     p256_main_registration_from_main_layout_v1(registration)?;
@@ -3119,20 +3182,19 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues = super::super::p256_aggregate_adapter::evaluate_p256_value_execution_aggregate_residues_over_field_v1(
+
+            super::super::p256_aggregate_adapter::evaluate_p256_value_execution_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
                 next_aux,
                 fixed,
-                P256ValueExecutionAggregateChallengesV1 {
+                &P256ValueExecutionAggregateChallengesV1 {
                     value: challenges.value,
                     cross: challenges.cross,
                     arithmetic_copy: challenges.arithmetic_copy,
                 },
-            )?;
-
-            residues
+            )?
         }
         (SegmentAdapterIdV1::P256ValueBus, 1) => {
             let current: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
@@ -3154,18 +3216,16 @@ fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
             let fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let residues =
-                super::super::p256_value_bus::evaluate_p256_value_bus_stark_residues_over_field_v1(
-                    current,
-                    next,
-                    current_aux,
-                    next_aux,
-                    fixed,
-                    challenges.value,
-                )
-                .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
 
-            residues
+            super::super::p256_value_bus::evaluate_p256_value_bus_stark_residues_over_field_v1(
+                current,
+                next,
+                current_aux,
+                next_aux,
+                fixed,
+                challenges.value,
+            )
+            .map_err(|_| ZkX509StarkErrorV1::P256Witness)?
         }
         _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
     };
@@ -3222,7 +3282,7 @@ impl MainFp4AirEvaluatorV1 {
             SegmentAdapterIdV1::P256ValueBus
                 if matches!(
                     p256_instance_parts_v1(registration.segment.instance),
-                    Some((_, 0 | 1 | 2))
+                    Some((_, 0..=2))
                 ) =>
             {
                 p256_main_registration_from_main_layout_v1(registration)?;
@@ -3265,7 +3325,7 @@ impl DerMainFp4AirEvaluatorV1 {
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
         next_fixed: &[E],
-        context: DerMainFp4AirContextV1,
+        context: &DerMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         let residues = super::super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
             opening
@@ -3313,7 +3373,7 @@ impl RfcMainFp4AirEvaluatorV1 {
         self,
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
-        context: RfcMainFp4AirContextV1,
+        context: &RfcMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         let residues = evaluate_zk_x509_rfc5280_local_residues_v1(
             opening
@@ -3335,7 +3395,7 @@ impl RfcMainFp4AirEvaluatorV1 {
             fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            context.der,
+            &context.der,
             &context.rfc,
         )
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
@@ -3364,10 +3424,8 @@ impl ByteMemoryMainFp4AirEvaluatorV1 {
         io_constraint_residues_v1(
             self.registration.segment,
             logical_active_rows,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
+            (opening.base_current, opening.base_next),
+            (opening.aux_current, opening.aux_next),
             fixed,
             challenges,
         )
@@ -3403,7 +3461,7 @@ impl P256MainFp4AirEvaluatorV1 {
         self,
         opening: RegisteredOpenedRowsV1<'_, E>,
         fixed: &[E],
-        challenges: P256AggregateChallengesV1,
+        challenges: &P256AggregateChallengesV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         match self.registration.segment.adapter {
             SegmentAdapterIdV1::P256ScalarBitBus => p256_scalar_opened_residues_over_field_v1(
@@ -3466,7 +3524,7 @@ impl ShaMainFp4AirEvaluatorV1 {
         self,
         current: &ZkX509ShaBatchRowV1<E>,
         next: &ZkX509ShaBatchRowV1<E>,
-        context: ShaMainFp4AirContextV1,
+        context: &ShaMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         if self.registration.segment.instance != u16::from(context.segment) {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
@@ -3487,12 +3545,11 @@ impl ShaMainFp4AirEvaluatorV1 {
         Ok(residues)
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn p256_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
     fixed: &[F],
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
 ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
     let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -3567,7 +3624,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
             let alphas = self.alphas[registration_index]
                 .get(lane)
                 .ok_or(AggregateStarkErrorV1::ConstraintOpening)?;
-            let residues = p256_opened_residues_v1(registration, opening, fixed, self.challenges)
+            let residues = p256_opened_residues_v1(registration, opening, fixed, &self.challenges)
                 .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
             let local_composition =
                 accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)

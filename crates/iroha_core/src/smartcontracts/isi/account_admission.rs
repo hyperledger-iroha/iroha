@@ -13,7 +13,6 @@ use iroha_data_model::{
     account::{
         AccountAdmissionMode, AccountAdmissionPolicy,
         admission::{ImplicitAccountCreationFee, ImplicitAccountFeeDestination},
-        curve::CurveId,
     },
     asset::{AssetDefinitionId, AssetId},
     isi::error::{
@@ -74,33 +73,14 @@ fn algorithm_if_disallowed(
 }
 fn ensure_controller_allowed_for_implicit_admission(
     controller: &AccountController,
-    allowed_algorithms: &[iroha_crypto::Algorithm],
-    allowed_curve_ids: &[u8],
+    policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
 ) -> Result<(), AccountAdmissionError> {
-    if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms)? {
+    if let Some(disallowed) = first_disallowed_algorithm(controller, policy.allowed_algorithms())? {
         return Err(AccountAdmissionError::AlgorithmNotAllowed(disallowed));
-    }
-    let validate_curve = |algorithm| {
-        let Ok(curve) = CurveId::try_from_algorithm(algorithm) else {
-            return Err(AccountAdmissionError::AlgorithmNotAllowed(algorithm));
-        };
-        let curve_code: u8 = curve.into();
-        if allowed_curve_ids.contains(&curve_code) {
-            Ok(())
-        } else {
-            Err(AccountAdmissionError::AlgorithmNotAllowed(algorithm))
-        }
-    };
-    match controller {
-        AccountController::Single(signatory) => validate_curve(controller_algorithm(signatory)?)?,
-        AccountController::Multisig(policy) => {
-            for member in policy.members() {
-                validate_curve(controller_algorithm(member.public_key())?)?;
-            }
-        }
     }
     Ok(())
 }
+
 fn load_account_admission_policy(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AccountAdmissionPolicy, InstructionExecutionError> {
@@ -159,7 +139,7 @@ fn apply_implicit_creation_fee(
                 state_transaction,
                 authority,
                 created_account,
-                payer_asset_id,
+                &(payer_asset_id),
                 fee.amount.clone(),
             )?;
         }
@@ -271,19 +251,18 @@ pub(super) fn ensure_receiving_account(
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
-    if let Some((asset_def_id, amount)) = value_hint {
-        if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required {
-                return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
-                    AccountAdmissionMinInitialAmountUnsatisfied {
-                        asset_definition: asset_def_id.clone(),
-                        required: required.clone(),
-                        provided: amount.clone(),
-                    },
-                )
-                .into());
-            }
-        }
+    if let Some((asset_def_id, amount)) = value_hint
+        && let Some(required) = policy.min_initial_amount_for(asset_def_id)
+        && amount < required
+    {
+        return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
+            AccountAdmissionMinInitialAmountUnsatisfied {
+                asset_definition: asset_def_id.clone(),
+                required: required.clone(),
+                provided: amount.clone(),
+            },
+        )
+        .into());
     }
     let max_creations = policy.max_implicit_creations_per_tx();
     if state_transaction.implicit_account_creations_in_tx >= max_creations {
@@ -322,8 +301,13 @@ pub(super) fn ensure_receiving_account(
     }
     ensure_controller_allowed_for_implicit_admission(
         destination.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
+        state_transaction
+            .crypto_admission_policy()
+            .map_err(|message| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message.into(),
+                )
+            })?,
     )?;
     if let Some(fee) = policy.implicit_creation_fee() {
         apply_implicit_creation_fee(authority, destination, fee, state_transaction)?;
@@ -379,15 +363,30 @@ mod tests {
         _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
+        iroha_data_model::account::NewAccount::new(account_id).build(authority)
     }
     fn test_state(mut world: World, policy: AccountAdmissionPolicy) -> State {
         let custom = policy.into_custom_parameter();
         let mut params = Parameters::default();
-        params.custom.insert(custom.id.clone(), custom);
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
+        params.custom.insert(custom);
+        params.set_parameter(
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(
+                Algorithm::ALL.to_vec(),
+            )
+            .unwrap()
+            .into_parameter()
+            .unwrap(),
         );
+        let authored =
+            crate::state::StateParameters::try_from(params).expect("valid fixture parameters");
+        let budget = world.sccp_committee_generations.allocation_budget();
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored, budget,
+        )
+        .expect("retain complete account fixture parameters");
+        let controls = mv::cell::CellInitialization::try_reserve(budget)
+            .expect("fund complete account fixture parameter controls");
+        world.parameters = controls.initialize(retained, None);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)
@@ -399,21 +398,21 @@ mod tests {
     fn implicit_admission_controller_checks_use_checked_algorithm_access() {
         let ed25519 = fixture_keypair(0x41, Algorithm::Ed25519);
         let secp256k1 = fixture_keypair(0x42, Algorithm::Secp256k1);
-        let allowed = [Algorithm::Ed25519];
-        let allowed_curve_ids =
-            iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
+        let allowed =
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .unwrap();
         ensure_controller_allowed_for_implicit_admission(
             &AccountController::Single(ed25519.public_key().clone()),
             &allowed,
-            &allowed_curve_ids,
         )
         .expect("Ed25519 controller should be allowed");
         let err = ensure_controller_allowed_for_implicit_admission(
             &AccountController::Single(secp256k1.public_key().clone()),
             &allowed,
-            &allowed_curve_ids,
         )
-        .expect_err("Secp256k1 controller should be rejected by allowed_signing");
+        .expect_err("Secp256k1 controller should be rejected by committed policy");
         assert!(matches!(
             err,
             AccountAdmissionError::AlgorithmNotAllowed(Algorithm::Secp256k1)

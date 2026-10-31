@@ -84,6 +84,52 @@ pub struct Journal {
     lock: File,
 }
 
+/// Read-only native inventory and record access borrowed from one held journal.
+///
+/// This view exposes no path, descriptor, writer or retained custody verdict. Its methods keep
+/// the original journal's native inventory, lock and decoder boundaries. A view supplied by
+/// [`Journal::read_optional_child`] cannot leave that call.
+pub struct NativeJournalInspection<'journal> {
+    journal: &'journal Journal,
+}
+
+impl core::fmt::Debug for NativeJournalInspection<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NativeJournalInspection")
+            .finish_non_exhaustive()
+    }
+}
+
+impl NativeJournalInspection<'_> {
+    /// Audit the complete fixed namespace under the original exclusive lock.
+    /// # Errors
+    /// Preserves every refusal from [`Journal::verify_native_inventory`].
+    pub fn verify_native_inventory(&self) -> Result<()> {
+        self.journal.verify_native_inventory()
+    }
+
+    /// Read fixed records under the original journal's ordinary-result custody bracket.
+    /// # Errors
+    /// Preserves every refusal from [`Journal::read_native_scope`].
+    pub fn read_native_scope<T>(
+        &self,
+        read: impl for<'read, 'scope> FnOnce(&mut NativeJournalReadScope<'read, 'scope>) -> Result<T>,
+    ) -> Result<T> {
+        self.journal.read_native_scope(read)
+    }
+
+    /// Audit the complete inventory, then read fixed records with fresh custody fences.
+    /// # Errors
+    /// Preserves every refusal from [`Journal::read_native_inventory_scope`].
+    pub fn read_native_inventory_scope<T>(
+        &self,
+        read: impl for<'read, 'scope> FnOnce(&mut NativeJournalReadScope<'read, 'scope>) -> Result<T>,
+    ) -> Result<T> {
+        self.journal.read_native_inventory_scope(read)
+    }
+}
+
 /// Borrowed fixed-record reader inside one closed original journal inspection.
 ///
 /// No descriptor, path, writer or custody verdict is exposed. Each record retains entry/middle/exit
@@ -345,6 +391,57 @@ impl Journal {
         name: impl AsRef<std::ffi::OsStr>,
     ) -> Result<Option<Self>> {
         Self::open_optional_with_parent(|| parent.open_child_optional(name), || parent.revalidate())
+    }
+
+    /// Borrow only the native inventory and fixed-record inspection interface.
+    #[must_use]
+    pub const fn native_inspection(&self) -> NativeJournalInspection<'_> {
+        NativeJournalInspection { journal: self }
+    }
+
+    /// Open an optional child and inspect it while retaining its original parent and lock.
+    ///
+    /// Runs the same optional-child and exclusive-lock admission as [`Self::open_optional_child`].
+    /// Unix consolidates repeated ancestry walks between fresh entry and ordinary-result exit
+    /// fences; Windows retains its original per-operation walks. Every record, inventory, lock
+    /// and decoder observation remains with the corresponding read-only view method. The original
+    /// parent and successful journal remain alive through both the explicit closing fence and the
+    /// transaction exit, including callback errors. Nested fences also observe unrelated roots
+    /// already joined by the caller; their native refusal takes precedence over the callback.
+    ///
+    /// Initial child absence is passed as `None`; a missing or competing lock remains an error.
+    /// A fully restored transient ancestry change may be unobserved. This is not an atomic snapshot
+    /// or a freshness verdict that can cross calls. Keep the callback free of writes, signing,
+    /// publication and network effects. The caller owns decoder eligibility.
+    ///
+    /// # Errors
+    /// Preserves admission and callback errors after closing the original native custody.
+    pub fn read_optional_child<T>(
+        parent: &PrivateDirectory,
+        name: impl AsRef<std::ffi::OsStr>,
+        read: impl for<'journal> FnOnce(Option<NativeJournalInspection<'journal>>) -> Result<T>,
+    ) -> Result<T> {
+        let (opened, result, closed) = iroha_fs::custody_transaction(|| -> Result<_> {
+            // Observe prior joined roots before joining can consolidate this parent's entry.
+            iroha_fs::fence_custody_transaction()?;
+            parent.join_custody_transaction()?;
+            let opened = Self::open_optional_child(parent, name);
+            let result = match &opened {
+                Ok(journal) => Some(read(journal.as_ref().map(Self::native_inspection))),
+                Err(_) => None,
+            };
+            #[cfg(test)]
+            inventory_scope_tests::before_child_exit();
+            // Keep opened (and its exclusive lock) in the returned tuple, including when this
+            // fence refuses, so the outer transaction also observes the exact live descendant.
+            let closed = iroha_fs::fence_custody_transaction();
+            Ok((opened, result, closed))
+        })?;
+        closed?;
+        match opened {
+            Err(error) => Err(error),
+            Ok(_) => result.ok_or_else(|| eyre!("journal inspection lost its callback result"))?,
+        }
     }
 
     // The original parent remains held through child lock admission and every exit.

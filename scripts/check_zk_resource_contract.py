@@ -361,6 +361,7 @@ REQUIRED_CATALOGS = (
     "execution_output_policy_v1",
     "fastpq_source_policy_v1",
     "fraud_admission_policy_v1",
+    "private_settlement_validity_v1",
 )
 CATALOG_FORMS = ("policy_push", "zk_policy_put", "struct_tree")
 TEST_ATTRIBUTE = re.compile(r"#\[\s*(?:tokio\s*::\s*)?test\b")
@@ -538,6 +539,8 @@ def evaluate_rust(expression: str, refs: dict, values: dict, where: str) -> int:
 
     def resolve(match: re.Match) -> str:
         path = match.group(0)
+        if path == "u8::MAX":
+            return "255"
         target = refs.get(path, refs.get(path.rsplit("::", 1)[-1]))
         if target is None:
             raise ContractError(
@@ -4306,9 +4309,16 @@ def struct_field_tree(source: str, name: str, where: str, seen: tuple = ()) -> l
     """Dotted leaf field paths of `struct name { .. }`, in declaration order.
 
     A field whose type is another struct of the same file (also inside `Vec<..>` or
-    `Option<..>`) contributes that struct's fields below its own name.
+    `Option<..>`) contributes that struct's fields below its own name. Lifetime-only
+    generic declarations and local field types are supported; other local generic
+    shapes fail instead of hiding the nested fields behind an opaque leaf.
     """
-    definition = re.search(rf"\bstruct\s+{re.escape(name)}\s*\{{", source)
+    # Lifetimes borrow an existing payload without changing the named field tree.
+    # Accept only lifetime declarations here: type/const generics and where clauses
+    # require an explicit reader extension, never a permissive `<.*>` match.
+    lifetime = r"'[A-Za-z_][A-Za-z_0-9]*"
+    lifetimes = rf"(?:\s*<\s*{lifetime}(?:\s*,\s*{lifetime})*\s*,?\s*>)?"
+    definition = re.search(rf"\bstruct\s+{re.escape(name)}{lifetimes}\s*\{{", source)
     if definition is None:
         raise ContractError(f"{where}: struct `{name}` is not defined in the file")
     end = _block_end(source, definition.end() - 1)
@@ -4331,16 +4341,19 @@ def struct_field_tree(source: str, name: str, where: str, seen: tuple = ()) -> l
             if wrapped is None:
                 break
             inner = wrapped.group(1)
-        nested = (
-            re.fullmatch(r"[A-Z]\w*", inner)
-            and inner not in seen
-            and inner != name
-            and re.search(rf"\bstruct\s+{inner}\s*\{{", source)
+        local_type = re.match(r"([A-Z]\w*)\b", inner)
+        nested_name = local_type.group(1) if local_type else None
+        local_struct = nested_name and re.search(
+            rf"\bstruct\s+{re.escape(nested_name)}\b", source
         )
-        if nested:
+        if local_struct and not re.fullmatch(rf"{re.escape(nested_name)}{lifetimes}", inner):
+            raise ContractError(
+                f"{where}: cannot read local struct field type `{inner}` of `{name}`"
+            )
+        if local_struct and nested_name not in seen and nested_name != name:
             fields.extend(
                 f"{field.group(1)}.{leaf}"
-                for leaf in struct_field_tree(source, inner, where, (*seen, name))
+                for leaf in struct_field_tree(source, nested_name, where, (*seen, name))
             )
         else:
             fields.append(field.group(1))

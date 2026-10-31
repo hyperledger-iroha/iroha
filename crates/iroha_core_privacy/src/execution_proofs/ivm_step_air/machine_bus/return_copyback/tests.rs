@@ -129,7 +129,11 @@ impl Fixture {
             );
             packets[1] = event(
                 Space::Owner,
-                active as u16,
+                u16::from_le_bytes(
+                    u64::to_le_bytes(active)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 2,
                 u64::from(parent),
                 u64::from(parent),
@@ -138,7 +142,11 @@ impl Fixture {
             );
             packets[2] = event(
                 Space::Owner,
-                active as u16,
+                u16::from_le_bytes(
+                    u64::to_le_bytes(active)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 8,
                 start,
                 start,
@@ -147,7 +155,11 @@ impl Fixture {
             );
             packets[3] = event(
                 Space::Owner,
-                active as u16,
+                u16::from_le_bytes(
+                    u64::to_le_bytes(active)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 9,
                 end,
                 end,
@@ -158,8 +170,16 @@ impl Fixture {
         if child_enabled {
             packets[4] = event(
                 Space::Initialization,
-                active as u16,
-                cell as u32,
+                u16::from_le_bytes(
+                    u64::to_le_bytes(active)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
+                u32::from_le_bytes(
+                    u64::to_le_bytes(cell)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 u64::from(child_mask),
                 u64::from(child_mask),
                 false,
@@ -170,7 +190,11 @@ impl Fixture {
             packets[5] = event(
                 Space::Initialization,
                 parent,
-                cell as u32,
+                u32::from_le_bytes(
+                    u64::to_le_bytes(cell)[..4]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
                 u64::from(parent_mask),
                 u64::from(parent_mask | required),
                 true,
@@ -342,15 +366,40 @@ fn complete_public_schedule_has_disjoint_clocks_and_rejects_aliases_and_overflow
     assert_eq!(schedule.len(), CELLS);
     for (offset, slot) in schedule.iter().enumerate() {
         assert_eq!(slot.offset, offset);
-        assert_eq!(slot.child_clock, 100 + 2 * offset as u32);
-        assert_eq!(slot.parent_clock, 101 + 2 * offset as u32);
+        assert_eq!(
+            slot.child_clock,
+            100 + 2 * u32::try_from(offset).expect("bounded fixture value")
+        );
+        assert_eq!(
+            slot.parent_clock,
+            101 + 2 * u32::try_from(offset).expect("bounded fixture value")
+        );
         assert_eq!(slot.owner_clocks, [10, 11, 12, 13]);
     }
     assert!(schedules(7, [10, 10, 12, 13], 100).is_none());
     assert!(schedules(7, [10, 11, 12, 100], 100).is_none());
-    assert!(schedules(7, [10, 11, 12, 100 + 2 * CELLS as u32 - 1], 100).is_none());
+    assert!(
+        schedules(
+            7,
+            [
+                10,
+                11,
+                12,
+                100 + 2 * u32::try_from(CELLS).expect("bounded fixture value") - 1
+            ],
+            100
+        )
+        .is_none()
+    );
     assert!(schedules(7, [10, 11, 12, 13], u32::MAX - 100).is_none());
-    assert!(schedules(7, [10, 11, 12, 13], u32::MAX - (2 * CELLS - 1) as u32).is_some());
+    assert!(
+        schedules(
+            7,
+            [10, 11, 12, 13],
+            u32::MAX - u32::try_from(2 * CELLS - 1).expect("bounded fixture value")
+        )
+        .is_some()
+    );
 }
 
 #[test]
@@ -572,7 +621,7 @@ fn genuine_native_initialization_and_copyback_match_every_mandatory_cell() {
             .as_array()
             .unwrap();
         assert_eq!(before.len(), if root { 1 } else { 2 });
-        assert_eq!(after.len(), if root { 0 } else { 1 });
+        assert_eq!(after.len(), usize::from(!root));
         assert_eq!(failed.len(), before.len());
         let child = before.last().unwrap().as_array().unwrap();
         let missing = failed.last().unwrap().as_array().unwrap();
@@ -594,7 +643,7 @@ fn genuine_native_initialization_and_copyback_match_every_mandatory_cell() {
                 true,
                 start,
                 end,
-                if root { 0 } else { 1 },
+                u16::from(!root),
                 offset,
                 child_mask,
                 parent_mask,
@@ -616,7 +665,7 @@ fn genuine_native_initialization_and_copyback_match_every_mandatory_cell() {
                 true,
                 start,
                 end,
-                if root { 0 } else { 1 },
+                u16::from(!root),
                 offset,
                 missing_mask,
                 parent_mask,
@@ -679,7 +728,7 @@ fn genuine_native_call_runtime_return_operands_bind_protected_state_and_program_
             true,
             start,
             end,
-            if root { 0 } else { 1 },
+            u16::from(!root),
             0,
             child_mask,
             parent_mask,

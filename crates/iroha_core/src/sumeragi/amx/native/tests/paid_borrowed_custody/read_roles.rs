@@ -55,17 +55,17 @@ fn role_roots() -> Roots {
         participants,
     }
 }
-fn effective(chain: &CertifiedTestChain, account: &AccountId, target: Permission) -> bool {
+fn effective(chain: &CertifiedTestChain, account: &AccountId, target: &Permission) -> bool {
     let view = chain.state().view();
     view.world()
         .account_permissions_iter(account)
         .unwrap()
-        .any(|value| value == &target)
+        .any(|value| value == target)
         || view.world().account_roles_iter(account).any(|id| {
             view.world()
                 .roles()
                 .get(id)
-                .is_some_and(|role| role.permissions().any(|value| value == &target))
+                .is_some_and(|role| role.permissions().any(|value| value == target))
         })
 }
 fn assert_debit(
@@ -134,12 +134,12 @@ fn native_private_read_role_removal_preserves_debit_and_survives_certified_resta
     assert!(effective(
         &roots.participants[0],
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
     assert!(effective(
         &roots.participants[0],
         &account(&payer()),
-        CanManageRoles.into()
+        &CanManageRoles.into()
     ));
     let chain = &mut roots.participants[0];
     let carrier = chain.sign(&payer(), [Unregister::role(reader_role()).into()], 2_999);
@@ -157,7 +157,7 @@ fn native_private_read_role_removal_preserves_debit_and_survives_certified_resta
     assert!(!effective(
         chain,
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
     assert_debit(chain, &approval);
     assert!(
@@ -173,7 +173,7 @@ fn native_private_read_role_removal_preserves_debit_and_survives_certified_resta
         effective(
             &roots.participants[1],
             &account(&receiver()),
-            CanReadAllLedgerData.into()
+            &CanReadAllLedgerData.into()
         ),
         "the identical textual role name in another signed root is untouched"
     );
@@ -183,7 +183,7 @@ fn native_private_read_role_removal_preserves_debit_and_survives_certified_resta
     assert!(!effective(
         &restarted,
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
     assert_debit(&restarted, &approval);
     // Administrative authority is role-derived too; self-removal must not leave
@@ -198,7 +198,7 @@ fn native_private_read_role_removal_preserves_debit_and_survives_certified_resta
     assert!(!effective(
         &restarted,
         &account(&payer()),
-        CanManageRoles.into()
+        &CanManageRoles.into()
     ));
     commit(
         &mut restarted,
@@ -232,7 +232,7 @@ fn native_private_read_role_cannot_be_removed_by_reader_or_foreign_bank_manager(
     assert!(effective(
         &roots.participants[0],
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
     // The same canonical payer account exists in bank B but has no management role there.
     commit(
@@ -245,11 +245,12 @@ fn native_private_read_role_cannot_be_removed_by_reader_or_foreign_bank_manager(
     assert!(effective(
         &roots.participants[1],
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
     let original =
         roots.participants[0].sign(&payer(), [Unregister::role(reader_role()).into()], 2_099);
     let view = roots.participants[1].state().view();
+    let parameters = view.world().transaction_admission_parameters();
     let (_, clock) = TimeSource::new_mock(Duration::from_millis(2_100));
     let source_network = roots.participants[0].network_id();
     let target_network = roots.participants[1].network_id();
@@ -258,8 +259,10 @@ fn native_private_read_role_cannot_be_removed_by_reader_or_foreign_bank_manager(
         original,
         &target_network,
         Duration::from_secs(1),
-        view.world().parameters().transaction(),
-        &view.crypto(),
+        parameters.transaction(),
+        parameters
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         &clock,
     ) {
         Ok(_) => panic!(
@@ -302,6 +305,6 @@ fn native_private_read_role_cannot_be_removed_by_reader_or_foreign_bank_manager(
     assert!(effective(
         &roots.participants[0],
         &account(&receiver()),
-        CanReadAllLedgerData.into()
+        &CanReadAllLedgerData.into()
     ));
 }

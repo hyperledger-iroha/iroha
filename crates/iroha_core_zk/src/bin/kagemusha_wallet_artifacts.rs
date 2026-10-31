@@ -377,7 +377,7 @@ fn private_key(
         SigningKey::from_pkcs8_der(&original),
         "P256 private custody rejected",
     )?;
-    if key.verifying_key().to_encoded_point(false).as_bytes() != expected.as_sec1_bytes() {
+    if key.verifying_key().to_sec1_point(false).as_bytes() != expected.as_sec1_bytes() {
         return Err(invalid(
             "private custody differs from independent public role",
         ));
@@ -651,6 +651,57 @@ fn encode_carrier(path: &str, scheme: &str, manifest: &str, destination: &str) -
     Ok(())
 }
 
+/// Print the installation a wallet runtime selects, derived as the Native derives it:
+/// the scheme must match its pinned identity, and the artifact manifest must be signed
+/// by an Artifact-role certificate under that scheme.
+fn installation(
+    scheme_path: &str,
+    scheme_id: &str,
+    certificate_path: &str,
+    manifest_path: &str,
+) -> io::Result<()> {
+    let scheme_original = Original::open(scheme_path, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1, None)?;
+    let scheme = checked(
+        KagemushaWalletSchemeV1::decode_canonical(&scheme_original.bytes, &digest(scheme_id)?),
+        "scheme original differs from its identity",
+    )?;
+    let certificate_original = Original::open(
+        certificate_path,
+        KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
+        None,
+    )?;
+    let certificate = checked(
+        KagemushaWalletSignerCertificateV1::decode_canonical(&certificate_original.bytes, &scheme),
+        "artifact signer certificate rejected",
+    )?;
+    checked(
+        certificate.verify_role(&scheme, KagemushaWalletSignerRoleV1::Artifact),
+        "artifact signer certificate role rejected",
+    )?;
+    let manifest_original = Original::open(
+        manifest_path,
+        KAGEMUSHA_WALLET_ARTIFACT_MANIFEST_MAX_BYTES_V1,
+        None,
+    )?;
+    let manifest = checked(
+        KagemushaWalletArtifactManifestV1::decode_canonical(&manifest_original.bytes, &scheme),
+        "artifact manifest rejected",
+    )?;
+    checked(
+        manifest.verify(&scheme, &certificate),
+        "artifact manifest signature rejected",
+    )?;
+    scheme_original.recheck()?;
+    certificate_original.recheck()?;
+    manifest_original.recheck()?;
+    println!(
+        "INSTALLATION scheme_id={} manifest_digest={}",
+        hex::encode(scheme.scheme_id()),
+        hex::encode(manifest.manifest_digest())
+    );
+    Ok(())
+}
+
 fn main() {
     // The compiler inherits owner-only modes for temporary artifact originals.
     #[cfg(unix)]
@@ -662,7 +713,7 @@ fn main() {
                 "Direct time response: --issue-time-anchor ABSOLUTE_IMMUTABLE_PRIVATE_JSON. Signs the selected live wallet nonce with the delegated TimeAnchor key and current issuer UTC; Native still enforces same-boot response age and the subsequent Refresh."
             );
             println!(
-                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON [--reuse-candidates ABSOLUTE_IMMUTABLE_PUBLIC_JSON]\nOffline application/session preparation: --prepare-application ABSOLUTE_IMMUTABLE_PUBLIC_JSON, --finish-application ABSOLUTE_IMMUTABLE_PUBLIC_JSON, --issue-session ABSOLUTE_IMMUTABLE_PRIVATE_JSON. Preparation authenticates the pinned genesis/signed pack and emits unsigned runtime/release DATA and exact domain-separated signing bytes. Assembly verifies an independently produced Ed25519 signature. Issuance uses separate private session issuer/device keys; current short-lived JWT/DPoP originals remain owner-only. None of these commands admit hardware, register a token, or perform monetary operations.\nConstructs native wallet originals and signs protocol certificates/manifest using the selected private recovery role keys. Explicit candidate JSON selects originals_directory and bounded descriptor/verifying_key/proving_key triples, each with bytes and sha256. These are untrusted cache hints, not signed installation inputs. Selected originals are indexed, then imported only for matching current sources with complete source and commitment checks; changed fingerprints compile fresh. Finality uses direct BLS verification and needs no proof artifacts. No network actions.\nRead-only source compatibility: --inspect-sources ABSOLUTE_RAW_CARRIER SCHEME_HEX MANIFEST_HEX or --inspect-encoded-sources ABSOLUTE_ENCODED_CARRIER SCHEME_HEX MANIFEST_HEX. Checks every real source using the selected representation and prints phase timings; does not admit genesis/finality or a wallet. Encoded inspection verifies the signed raw closure and both encoded/raw identities without a decoded disk cache.\nCompiled source profiles: --export-builtin-profile ABSOLUTE_IMMUTABLE_PUBLIC_JSON independently authenticates genesis and strictly qualifies every source before exporting one native registry entry; --inspect-builtin-profile uses the same closed request to check the exact compiled graph. Neither command signs artifacts or registers runtime authority.\nLossless mobile carrier: --encode-carrier ABSOLUTE_RAW_CARRIER SCHEME_HEX MANIFEST_HEX ABSOLUTE_EXISTING_PRIVATE_OUTPUT. Checks the signed selection and all raw/stored identities; recomputes transport and financial metadata for independent runtime selection."
+                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON [--reuse-candidates ABSOLUTE_IMMUTABLE_PUBLIC_JSON]\nOffline application/session preparation: --prepare-application ABSOLUTE_IMMUTABLE_PUBLIC_JSON, --finish-application ABSOLUTE_IMMUTABLE_PUBLIC_JSON, --issue-session ABSOLUTE_IMMUTABLE_PRIVATE_JSON. Preparation authenticates the pinned genesis/signed pack and emits unsigned runtime/release DATA and exact domain-separated signing bytes. Assembly verifies an independently produced Ed25519 signature. Issuance uses separate private session issuer/device keys; current short-lived JWT/DPoP originals remain owner-only. None of these commands admit hardware, register a token, or perform monetary operations.\nConstructs native wallet originals and signs protocol certificates/manifest using the selected private recovery role keys. Explicit candidate JSON selects originals_directory and bounded descriptor/verifying_key/proving_key triples, each with bytes and sha256. These are untrusted cache hints, not signed installation inputs. Selected originals are indexed, then imported only for matching current sources with complete source and commitment checks; changed fingerprints compile fresh. Finality uses direct BLS verification and needs no proof artifacts. No network actions.\nRead-only source compatibility: --inspect-sources ABSOLUTE_RAW_CARRIER SCHEME_HEX MANIFEST_HEX or --inspect-encoded-sources ABSOLUTE_ENCODED_CARRIER SCHEME_HEX MANIFEST_HEX. Checks every real source using the selected representation and prints phase timings; does not admit genesis/finality or a wallet. Encoded inspection verifies the signed raw closure and both encoded/raw identities without a decoded disk cache.\nCompiled source profiles: --export-builtin-profile ABSOLUTE_IMMUTABLE_PUBLIC_JSON independently authenticates genesis and strictly qualifies every source before exporting one native registry entry; --inspect-builtin-profile uses the same closed request to check the exact compiled graph; --verify-builtin-sources also rebuilds every actual current source and compares it with its installed key, as each phone proof would, and prints BUILTIN_SOURCE_MISMATCH naming the Q program or route that differs. Run it against the carrier an app bundles before shipping its Native. None of these commands signs artifacts or registers runtime authority.\nInstallation identity: --print-installation ABSOLUTE_SCHEME_ORIGINAL SCHEME_HEX ABSOLUTE_ARTIFACT_CERTIFICATE_ORIGINAL ABSOLUTE_ARTIFACT_MANIFEST_ORIGINAL checks the scheme identity and the Artifact-signed manifest as the Native does, then prints the scheme id and manifest digest a profile request names.\nLossless mobile carrier: --encode-carrier ABSOLUTE_RAW_CARRIER SCHEME_HEX MANIFEST_HEX ABSOLUTE_EXISTING_PRIVATE_OUTPUT. Checks the signed selection and all raw/stored identities; recomputes transport and financial metadata for independent runtime selection."
             );
             Ok(())
         }
@@ -671,8 +722,18 @@ fn main() {
         [flag, path] if flag == "--finish-application" => application::finish(path),
         [flag, path] if flag == "--issue-session" => session::run(path),
         [flag, path] if flag == "--issue-time-anchor" => time_anchor::run(path),
-        [flag, path] if flag == "--export-builtin-profile" => builtin::run(path, true),
-        [flag, path] if flag == "--inspect-builtin-profile" => builtin::run(path, false),
+        [flag, path] if flag == "--export-builtin-profile" => {
+            builtin::run(path, builtin::Mode::Export)
+        }
+        [flag, path] if flag == "--inspect-builtin-profile" => {
+            builtin::run(path, builtin::Mode::Inspect)
+        }
+        [flag, path] if flag == "--verify-builtin-sources" => {
+            builtin::run(path, builtin::Mode::VerifySources)
+        }
+        [flag, scheme, scheme_id, certificate, manifest] if flag == "--print-installation" => {
+            installation(scheme, scheme_id, certificate, manifest)
+        }
         [flag, path, reuse_flag, reuse_path]
             if flag == "--request" && reuse_flag == "--reuse-candidates" =>
         {

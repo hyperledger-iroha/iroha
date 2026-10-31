@@ -8,14 +8,20 @@ use iroha_plonk::{
 };
 use std::{sync::Arc, time::Instant};
 
+#[derive(Clone, Copy)]
+enum StopAfterLoad {
+    Continue,
+    Fail,
+    Panic,
+}
+
 #[derive(Clone)]
 struct Arithmetic<const N: usize, const ROT: u32, const DEGREE: usize = 5, const ALL: bool = true> {
     values: Arc<Zeroizing<[u64; 3]>>,
     faults: Vec<Fault>,
     forge_source: bool,
     constant: bool,
-    fail_after_load: bool,
-    panic_after_load: bool,
+    stop_after_load: StopAfterLoad,
 }
 impl<const N: usize, const ROT: u32, const DEGREE: usize, const ALL: bool>
     Arithmetic<N, ROT, DEGREE, ALL>
@@ -26,17 +32,16 @@ impl<const N: usize, const ROT: u32, const DEGREE: usize, const ALL: bool>
             faults: vec![],
             forge_source: false,
             constant: false,
-            fail_after_load: false,
-            panic_after_load: false,
+            stop_after_load: StopAfterLoad::Continue,
         }
     }
     fn expected(&self) -> Vec<Scalar> {
         let [a, b, c] = **self.values;
         let value = if N == 4 {
-            u64::from(
-                ((a as u32).wrapping_add(b as u32).wrapping_add(c as u32) ^ a as u32)
-                    .rotate_right(ROT),
-            )
+            let [a, b, c] = [a, b, c].map(|value| {
+                u32::try_from(value & u64::from(u32::MAX)).expect("masked 32-bit word")
+            });
+            u64::from((a.wrapping_add(b).wrapping_add(c) ^ a).rotate_right(ROT))
         } else {
             (a.wrapping_add(b).wrapping_add(c) ^ a).rotate_right(ROT)
         };
@@ -78,17 +83,21 @@ impl<const N: usize, const ROT: u32, const DEGREE: usize, const ALL: bool> Circu
                 let mut a = words.load::<N>(self.values[0], self.constant)?;
                 let b = words.load::<N>(self.values[1], false)?;
                 let c = words.load::<N>(self.values[2], false)?;
-                if self.fail_after_load {
-                    return Err(Error::Synthesis);
+                match self.stop_after_load {
+                    StopAfterLoad::Continue => {}
+                    StopAfterLoad::Fail => return Err(Error::Synthesis),
+                    StopAfterLoad::Panic => panic!("test-only synthesis unwind"),
                 }
-                assert!(!self.panic_after_load, "test-only synthesis unwind");
                 if self.forge_source {
                     *a.value ^= 1;
                 }
                 let sum = words.add(&a, &b, &c)?;
                 let xor = words.xor(&sum, &a)?;
                 let out = words.rotate_right(&xor, ROT)?;
-                assert_eq!(words.offset, if ROT % 8 == 0 { 5 * N } else { 6 * N });
+                assert_eq!(
+                    words.offset,
+                    if ROT.is_multiple_of(8) { 5 * N } else { 6 * N }
+                );
                 Ok(out.cells)
             },
         )?;
@@ -100,7 +109,7 @@ impl<const N: usize, const ROT: u32, const DEGREE: usize, const ALL: bool> Circu
 }
 fn positive<const N: usize, const ROT: u32>(values: [u64; 3]) {
     let circuit = Arithmetic::<N, ROT>::new(values);
-    check(13, &circuit, vec![circuit.expected()])
+    check(13, &circuit, &[circuit.expected()])
         .expect("layout")
         .into_result()
         .expect("all constraints hold");
@@ -162,7 +171,7 @@ fn byte_words_reject_real_assignments_carries_and_nibble_aliases() {
         let mut circuit = Arithmetic::<8, 63>::new([u64::MAX; 3]);
         circuit.faults.push(Fault { row, column, value });
         assert!(
-            check(13, &circuit, vec![circuit.expected()])
+            check(13, &circuit, &[circuit.expected()])
                 .expect("layout")
                 .into_result()
                 .is_err(),
@@ -172,7 +181,7 @@ fn byte_words_reject_real_assignments_carries_and_nibble_aliases() {
     let mut circuit = Arithmetic::<8, 63>::new([42, 1, 2]);
     circuit.forge_source = true;
     assert!(
-        check(13, &circuit, vec![circuit.expected()])
+        check(13, &circuit, &[circuit.expected()])
             .expect("layout")
             .into_result()
             .is_err()
@@ -181,7 +190,7 @@ fn byte_words_reject_real_assignments_carries_and_nibble_aliases() {
     let mut public = circuit.expected();
     public[0] += Scalar::ONE;
     assert!(
-        check(13, &circuit, vec![public])
+        check(13, &circuit, &[public])
             .expect("layout")
             .into_result()
             .is_err()
@@ -261,7 +270,7 @@ fn byte_rotation_rejects_fractional_split_without_output_constraints() {
             },
         ],
     };
-    let failures = check(13, &circuit, vec![])
+    let failures = check(13, &circuit, &[])
         .expect("layout")
         .into_result()
         .expect_err("fractional split rejected");
@@ -280,7 +289,7 @@ fn byte_rotation_rejects_fractional_split_without_output_constraints() {
         }],
     };
     assert!(
-        check(13, &constant, vec![])
+        check(13, &constant, &[])
             .expect("layout")
             .into_result()
             .is_err()
@@ -290,16 +299,21 @@ fn byte_rotation_rejects_fractional_split_without_output_constraints() {
 #[test]
 fn byte_words_reject_overflow_and_clear_owned_values() {
     let unsupported = Arithmetic::<8, 2, 5, false>::new([1, 2, 3]);
-    assert!(check(12, &unsupported, vec![unsupported.expected()]).is_err());
+    assert!(check(12, &unsupported, &[unsupported.expected()]).is_err());
     let circuit = Arithmetic::<4, 7>::new([u64::from(u32::MAX) + 1, 0, 0]);
-    assert!(check(13, &circuit, vec![circuit.expected()]).is_err());
+    assert!(check(13, &circuit, &[circuit.expected()]).is_err());
     for (fail, panic) in [(false, false), (true, false), (false, true)] {
         let before = CLEARED_WORDS.with(std::cell::Cell::get);
         let mut circuit = Arithmetic::<8, 63>::new([u64::MAX; 3]);
-        circuit.fail_after_load = fail;
-        circuit.panic_after_load = panic;
+        circuit.stop_after_load = if fail {
+            StopAfterLoad::Fail
+        } else if panic {
+            StopAfterLoad::Panic
+        } else {
+            StopAfterLoad::Continue
+        };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            check(13, &circuit, vec![circuit.expected()])
+            check(13, &circuit, &[circuit.expected()])
         }));
         if panic {
             assert!(result.is_err());
@@ -332,7 +346,7 @@ fn native_metrics<const DEGREE: usize>() {
     if DEGREE > 9 {
         // The first-release native descriptor has a hard degree-nine ceiling.
         // Retain the old arithmetic shapes as checks of that rejection boundary.
-        check(12, &circuit, vec![circuit.expected()])
+        check(12, &circuit, &[circuit.expected()])
             .expect("arithmetic synthesis")
             .into_result()
             .expect("high-degree arithmetic is satisfied");

@@ -79,7 +79,7 @@ class KagemushaWalletSetupV1Test {
         assertFailsWith<KagemushaWalletExceptionV1> { enrollment.unloadClaimOriginal() }
         val projection = KagemushaWalletCallV1(47, -1, 0, 0, 0, 0, byteArrayOf(1))
         assertFailsWith<KagemushaWalletExceptionV1> { projection.unloadClaimOriginal() }
-        val activation = KagemushaWalletCallV1(62, -1, 0, 2, 0, 0, ByteArray(32) { 1 })
+        val activation = KagemushaWalletCallV1(KagemushaWalletCallV1.LEDGER_CONFIRMED, -1, 0, 2, 0, 0, ByteArray(32) { 1 })
         assertFailsWith<KagemushaWalletExceptionV1> { activation.unloadClaimOriginal() }
         assertContentEquals(bytes, result.unloadClaimOriginal())
         result.unloadClaimOriginal().fill(0)

@@ -2,7 +2,7 @@ import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import { AccountAddress } from "../src/address.js";
 import { buildCancelSmartContractCodeUploadInstruction } from "../src/instructionBuilders.js";

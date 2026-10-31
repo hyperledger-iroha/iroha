@@ -6,48 +6,48 @@
       "registration": "registerCancelAssetLockV1Tests",
       "statement_count": 19,
       "original_sha256": "43c3310fabc19e7a9d839ae15268784deb11a3713225509e11d90e38cc3b85b1",
-      "entrypoint_sha256": "38f4de4bf94c135930b0b88c1c0bc7fc8b93641c0ac4bcb089ff8152583627ca",
-      "imports_sha256": "40226c9dc10c559241ac6ecf6701e165f20230a45bd636d1468a1efaa8d5b583",
-      "prefix_sha256": "e70baef02ed08300834a4905c6fbf0762a50742c334d5c1c3e3fd5b0de309c2c",
-      "body_sha256": "848838e7257cf0cf6e790d70e19fd8c47e656d5bc6f7cc2619b69a2035578548",
+      "entrypoint_sha256": "e2d9d00ee354b82f32515f4f454a4bd76aad5d1d3f87f611bef2919485de9e56",
+      "imports_sha256": "ed775a37f7b1aea1619fe833248702a2807470934433b7047eb42a838cbfd0ce",
+      "prefix_sha256": "7846c64463834b5740d9aa73313366784f3c5f1502cbcdba49d8d306588c87eb",
+      "body_sha256": "14dcf4a3427bf47ff6a22e5d112067d049de931e50398ca91d72ba31adf804ba",
       "assertion_count": 36,
-      "assertions_sha256": "890e3468b3e5eefb9b67b2ec36d0559616177108ee70121d34b62d3dde019a16",
+      "assertions_sha256": "22cf6207c117e55a023970c282c8127ca54c0b8b11d0fb364c29dbab41a9fc6f",
       "cases": [
         {
           "name": "all eight appeal-finance CancelAssetLock fixtures are mandatory",
-          "callback_sha256": "fe1cde6b50be7c57b08c8aa7defb96854c2b34e9c47265e20d460bd3b53bff2c"
+          "callback_sha256": "b05c2d624c5e3fd2ee30dced0edf3c0f7f6f484f285ca01f2d5750280dbabcbe"
         },
         {
           "name": "bare CancelAssetLock V1 codec byte-matches and decodes the canonical fixture",
-          "callback_sha256": "77122815ece5cf564c586e86ff416755c031d9b053adc08fbb576a18cef13f3e"
+          "callback_sha256": "bc518bf7c4adda518d1ff111a8dbe2961846480b1aab71540487b8cc9a853353"
         },
         {
           "name": "bare CancelAssetLock V1 accepts the maximum canonical archive",
-          "callback_sha256": "c99d95faeca9a0a5d6ffb719f33f45e5d1ccef8b7aacc7c9bbd0a29c1c7aaef3"
+          "callback_sha256": "64943299958b12f4c320d45ce61abbfa75a80c4d88859db52f5216ecd53c4fb8"
         },
         {
           "name": "bare CancelAssetLock V1 rejects all shared negative fixtures",
-          "callback_sha256": "48bd96df2b45e34caa0df8040e799225fc49c2cb9b0487ab4e993753c328b147"
+          "callback_sha256": "e7a0c55d7e455369274d2adc28afcb41e4fb2fb02854990364bd4872ca3923f9"
         },
         {
           "name": "bare CancelAssetLock V1 encoder rejects aliases and noncanonical structures",
-          "callback_sha256": "bf4ed437e390320467fb3fc0bd4f9f3d1f376666cc51dc95fc28fa25cc898e28"
+          "callback_sha256": "23fda132d1873ee1edff9b7e7ad5b94217fbbd584d6ab90fd55a8e878c35a1d5"
         },
         {
           "name": "bare CancelAssetLock V1 decoder accepts bytes only and rejects frame substitution",
-          "callback_sha256": "7ea0562774b2fc55ecdf1c3569e59a6a757e5bcf5f2979713190d1af4775a8ab"
+          "callback_sha256": "a83b289a5244c9176352f112a2fccf66cef974564157e50f944365f79f0c5128"
         },
         {
           "name": "nested EscrowId and true trailing payload bytes are independent failures",
-          "callback_sha256": "16b5760702f5c486c19d0f3916a9980e08d977a957ca2e27e460f473a66e539b"
+          "callback_sha256": "89170cf69d5fe6066636fe616d864bc3502b11e9de91cd46e94512b0e47b5a71"
         },
         {
           "name": "bare CancelAssetLock V1 rejects oversized frames before decode",
-          "callback_sha256": "d96ffaa6c518770df33aa3e4a9a9f345d9715f12c565c69a2509d409776e3ed3"
+          "callback_sha256": "0e2b4cbcb7f55cec61d3b5d0ca7c441e28683a36288a7805d5f7321b694074aa"
         },
         {
           "name": "fixture JSON decoding is fatal for malformed UTF-8",
-          "callback_sha256": "f86ad5d0b809e414808c0740e78affc297654aad78e33feb02cf93859ebd4ed1"
+          "callback_sha256": "8dc7c5d3564711608c2a27a4256c57b252af02662ff0563023ed6058cb495ef0"
         }
       ],
       "nested_case_names": []
@@ -57,32 +57,32 @@
       "registration": "registerSorafsAppealFinanceValidationTests",
       "statement_count": 8,
       "original_sha256": "5b2ea6c67ff42aa45f0783e792ff71ad52c276fd47be81e95f8ef0337f066e10",
-      "entrypoint_sha256": "9cbe1d054912f0f653083f4438e4db56098efd82edb6f625fc3288067ea61ea5",
-      "imports_sha256": "40226c9dc10c559241ac6ecf6701e165f20230a45bd636d1468a1efaa8d5b583",
-      "prefix_sha256": "ab47f5c56505b615c6601f2ca8f16ee74711b0f8ab306c7f04d079b7aa444838",
-      "body_sha256": "86d820b6213b3aaf03163ece6084114b78f8969b4ce14bab91240144370d41f9",
+      "entrypoint_sha256": "bfa47bc9e9a3582feaa65d068c47e99a1eb5c2c34239aff957e26255b0675118",
+      "imports_sha256": "ed775a37f7b1aea1619fe833248702a2807470934433b7047eb42a838cbfd0ce",
+      "prefix_sha256": "7173a5151ec0a82adec3e63ec1d32206b8ac193c35fb20d560ccea616f529e95",
+      "body_sha256": "7e68fdf843f19460f7e449b3ec0e1ec26a86624b377123e68137da6200e76923",
       "assertion_count": 18,
-      "assertions_sha256": "e41c3279a97c2b7662268c3f445ec39b8072568c5dc8876a0f5067b30ee80b79",
+      "assertions_sha256": "9ea7cf9910d121c560910b4856b8fc3bb1e18bdcb7d7490082ce67a4e4affcd5",
       "cases": [
         {
           "name": "appeal-finance validation reports the stable canonical profile",
-          "callback_sha256": "51d170aa001f74e7b80fe3e60487fb3e3d156a52e8130f65598826c0afe7ada2"
+          "callback_sha256": "13030024e4b3922ff68910e14a062b63897bbfa11fbb5b5ddc6e0ed94db4c0cd"
         },
         {
           "name": "appeal-finance positive and negative profiles match the signed inventory fixtures",
-          "callback_sha256": "22724df6905ebf832b29ff794f83cbe0fdb75c337633c5c99a9e4d400a6c00e4"
+          "callback_sha256": "2811550e056be3e1d2ab6a3a24033fc8820379176b1bd78429f2bbc3041405a2"
         },
         {
           "name": "appeal-finance validation reports the stable missing-field profile",
-          "callback_sha256": "7e850805e591cd60ef5526228b742fb5c8edf395be6b76446a4946e35e335b55"
+          "callback_sha256": "b58afb88bd97c1481c949f1c8b8ebcd4ad23cbf7d86f8e3c8366f231e6084d2d"
         },
         {
           "name": "appeal-finance validation reports the stable zero-quantity profile",
-          "callback_sha256": "e5389963d59306650931a70fbae2054a0e286b38af3556b4ec82d1138083f8ce"
+          "callback_sha256": "2a95c62aefe0cb27333cf594099b595c982db2f39c9d4a41ac5da1d9a8c97d48"
         },
         {
           "name": "appeal-finance validation wrapper rejects unsafe boundary inputs",
-          "callback_sha256": "dd5c85ff9a558ab0897a7a3448a8b06e82127ea4d32b6e2f00d529c626aa189a"
+          "callback_sha256": "b8056b530abb112f9e4fd9842da79271bfe4bbe77aa95b166aa85b0dc6a2a457"
         }
       ],
       "nested_case_names": []
@@ -92,36 +92,36 @@
       "registration": "registerSorafsFixtureBundleValidationTests",
       "statement_count": 13,
       "original_sha256": "fcc457679af488ee9e936ae3ec3225fe398d57476b7c03c11013a62fba3659cf",
-      "entrypoint_sha256": "37c3a3e5d975f9a5cedb7599af12ce334b979951abca77a901408cf43ae9e877",
-      "imports_sha256": "91ba06268d8c1ed5ef9e67c47bec0d4ab22b53ea81839e4709077c6264985a6e",
-      "prefix_sha256": "6e1afff83692f78e9078d47dcf38ac6a8f25e75e26c093611d5d05c8661b773d",
-      "body_sha256": "ec160e1d7a505de0ebe5825f0f121c4fb0e6fcfbfc9bfabdecc0caae8e4394cf",
+      "entrypoint_sha256": "d775e0a08d26bf6b858e3760ff81ab535298969f4983e8839dfb9459d5b78fa6",
+      "imports_sha256": "eb332be0a28c4e646dd04998101bd36c6c629b94720ba1b8caa30a0e4cae2ced",
+      "prefix_sha256": "dd15a0e816f8e3b8825d8f7d85590ce198572c0336e0d8a1afb05bad717ed20e",
+      "body_sha256": "b308fa41abedbbed61d75e661cebdbd34f1e295989a40d672e0ef55eea4db306",
       "assertion_count": 18,
-      "assertions_sha256": "c4d3cffd8a54d3a56fbc96723e567d6fc27dbe3b7f7a41f1237382be7068b524",
+      "assertions_sha256": "f54c3a070dedd1e794573734a763d8bbee14d96a40716a34497108887c7efa28",
       "cases": [
         {
           "name": "fixture-bundle selectors preserve the canonical V1 order",
-          "callback_sha256": "5e878137f22dcd55dbc285dfb6fdf2ad7ece6a3537e9467200aab3a810fd082e"
+          "callback_sha256": "d642a2d65c9c5fb9734c6a8758d23865086c789a542671c3d23c38b0f47a6803"
         },
         {
           "name": "validateFixtureBundle accepts linked replication and PoR fixtures",
-          "callback_sha256": "92a46a42eaa569e55d2020c800de2771cd942d64d88ba42df9bca7888e387161"
+          "callback_sha256": "4728f524529f21f900e061705024f088b3f5b3590dae05898d248c79b60810b1"
         },
         {
           "name": "fixture-bundle wrapper matches all nine release-wide outcome goldens byte-for-byte",
-          "callback_sha256": "998951499e2e50fd3cf7de76cf506699a7805717647ca0f939dfca7d21858627"
+          "callback_sha256": "8152e20dcb710c7b94d84cb916b96fcd229d9703321ad5728e983c1de3c3f66c"
         },
         {
           "name": "validateFixtureBundle snapshots payload bytes before label access",
-          "callback_sha256": "1c2bc06e09c90a45d00a80767f2c57d98442a2b129b2a1aa5ed44f8c8b9fe20c"
+          "callback_sha256": "1826c06a6f13fb136f7ab4cad5436690aa5bb1fbd54276eecddec0b59819a6e2"
         },
         {
           "name": "validateFixtureBundle returns canonical negative outcomes",
-          "callback_sha256": "d89ea5f0716b9c4012bae98d58047b1c48c62b3c98802b14207b6c2dcebd9423"
+          "callback_sha256": "1bc3339c325fcad443d0627c6241d0fa03f03845fed655b04b6d09504c8668e5"
         },
         {
           "name": "validateFixtureBundle rejects aliases and unbounded input before native dispatch",
-          "callback_sha256": "0770a6266624350ae6a9994cb225b3446936b608409ed8d4c60807253fc86de1"
+          "callback_sha256": "475fdec2cd07f1c2a1750e1882b8e855f4597422fbfba526868c6cbff98bcda8"
         }
       ],
       "nested_case_names": [
@@ -141,76 +141,76 @@
       "registration": "registerSorafsOrderbookSubmissionTests",
       "statement_count": 24,
       "original_sha256": "0026e8a60cb5bf3baf78b32eaae4d69a7751f0fe9720abba04b4e33b257ee902",
-      "entrypoint_sha256": "4ef7de22811b4c8b93873f4ed7c6a9d35eb933a719d8bb7cc21eb03d8c053faf",
-      "imports_sha256": "57f1709746dd7dd60c275d2834f4d96fb0d5da730b4974371e98141d980b3849",
-      "prefix_sha256": "ef9e133697639a3cb30deb1472e09007e3838cf9d3e617c2b0b3fdd4ddfef0f6",
-      "body_sha256": "ea5565bdb5cff07322722cd579f56403a3d646761b5e2e3bed40eb2d864b1f96",
+      "entrypoint_sha256": "e8f164f4d21621eb553690549aa1398fab42c68819986a151ffe024ee57ddab1",
+      "imports_sha256": "5856b76611df3b71dca036aaa7a927ca1a08eb9635f2ef7d9d0e8207a205036d",
+      "prefix_sha256": "982709661c45f3b961ae8b8808e89af01f55a3552e4bac84fd40ec39d454ad20",
+      "body_sha256": "b380bf9ed727835e19aa76c9bd7817f1db41090d362d9942c75ea3ebcc63d4ff",
       "assertion_count": 64,
-      "assertions_sha256": "6a588a8ac900e8f1361a8c683d988f05891e9856a842b941800c6b3a9f4e2d8c",
+      "assertions_sha256": "4530f81fe1ddf0496319141966755f86db1fb1139c879251aa2833d45a09c1b2",
       "cases": [
         {
           "name": "orderbook submit snapshots bytes and sends one exact authenticated Norito request",
-          "callback_sha256": "4013c380462c3277b07aa771271de702a13724609d57948917050d44190e7176"
+          "callback_sha256": "78594cbd636c5e6810042055d8d059c32b343590a9c67af0da807afcb5c65020"
         },
         {
           "name": "orderbook submit binds snapshotted native callables to their native receiver",
-          "callback_sha256": "768d51dd0d86eac7c85c8e65e1f042ad68e78c0c344f057fb00857d9fd7ae6f2"
+          "callback_sha256": "3ba881e72e26a2d83ffb75bdadd4554ebdd082e71cb6e3e0e1e5ea6ece4b0a89"
         },
         {
           "name": "orderbook submit keeps its original target and transport across validation",
-          "callback_sha256": "13a2e43c861529f607c7438cdb9dc5e7ca961fd925512883b6d33e8cd500a264"
+          "callback_sha256": "064cb86ed5f6da42e3a00d6ef9a5954c0bbe99e78d006ec1763176f7e4b7afc7"
         },
         {
           "name": "orderbook submit requires https unless insecure transport is explicit and reported",
-          "callback_sha256": "02a336af5b9938f506d871bea5f84a3d9296b719f33cbacc3154e20f02d5aad5"
+          "callback_sha256": "5796c81606f6988150c446030efa6c2138268d5e489f50a2306a2191a4f8faee"
         },
         {
           "name": "orderbook submit bounds pre-dispatch validation even with a caller signal",
-          "callback_sha256": "7333d7e5482c0000d8a3133ccce86c435db20f0269e36de94c691e9fa7b59c4c"
+          "callback_sha256": "f7316ed1d83ba60c0bfb52008b858fe94be46be08840ffaf85e8befb104870f5"
         },
         {
           "name": "orderbook deadline races a custom fetch that ignores AbortSignal",
-          "callback_sha256": "0c10fdbf9f804faba4049af139a8eee9ba657afd3ac77d70b2dec76f01c64403"
+          "callback_sha256": "1449d70fddd63f9d6ed702a69df43cad30d4e3b674825f577da7f360716f7efa"
         },
         {
           "name": "orderbook submission preserves caller abort reasons before dispatch",
-          "callback_sha256": "3814e0375f2828b92d1b5769336162a809d2a723a1f66ec5c1155db06a5469cc"
+          "callback_sha256": "3946d96c45a5393aa0886e99e5078b923a8cf7f276b4e7d9d779ca0ac18a409b"
         },
         {
           "name": "orderbook submission preserves caller abort reasons after dispatch",
-          "callback_sha256": "0000781e113ef161db8a31c7571a10834c76918931532115d5a84d711834fc90"
+          "callback_sha256": "a23b75992e4097d3f9f6a466c1cf55d40fd3bbfa18007e719a33743bfef3a0d2"
         },
         {
           "name": "orderbook deadline cancels a response that arrives after ambiguity",
-          "callback_sha256": "938613157942fc55e38d0db6bfc316d0b688c2c1207faef13a0e91186233a34d"
+          "callback_sha256": "9aaa28fbd8ddd965a12f5e4f14e37c588b2e2c2ff4cae791aca00863683113c4"
         },
         {
           "name": "orderbook deadline uses captured AbortSignal intrinsics and nonthrowing cleanup",
-          "callback_sha256": "749a4baf4cb9d3833db66f76ad818011a27053244ff9c54f9e4e9158807efde4"
+          "callback_sha256": "8741288285482e527c00d97f9d559f15688736cac3c7cb1639fc1826bc424c08"
         },
         {
           "name": "orderbook submit snapshots caller-owned fixed headers before validation",
-          "callback_sha256": "edf8906cae7338c52badb542111d012ba71d5de28b69a1717fd2779b3fbff2ae"
+          "callback_sha256": "a3bdd1c55f3c505dcbd2324c4360eda647b520bc3fa160d52ec02c2012679ff5"
         },
         {
           "name": "orderbook submit snapshots caller-owned credentials and benign headers",
-          "callback_sha256": "c2600da88b4822e0ba0704b04ef5f114e7483c4c9e722aa323aee19dbb60ac7b"
+          "callback_sha256": "540bb8f0531e568fc498ac70b9e29e59523558e8b54c46cf475a705d54137d6f"
         },
         {
           "name": "orderbook submit fails before HTTP without its signer and strict native verifier",
-          "callback_sha256": "6677bfbd6b57e83933e3ab8b550815292606decd745c029054469553471bec93"
+          "callback_sha256": "fe094692418bd2e7daf953422d2f83ff0dbfff34d84f68ca6ff631b154b1b2af"
         },
         {
           "name": "orderbook submit rejects an unmarked transaction identity before HTTP",
-          "callback_sha256": "078c6661a478b108fcb60d9d8c9c4e6be97a7edd292898a80d8afccc2f53bb15"
+          "callback_sha256": "d557d47facb92443708a38036dcf7c55b505083b4e04f1f53c8ec4c947085040"
         },
         {
           "name": "orderbook submit marks every failure after dispatch as non-resubmittable ambiguity",
-          "callback_sha256": "81668e122ba40bec6b80812485ef4282e38ed0130eb17282be6c512562939674"
+          "callback_sha256": "6fea7100c1fb97b954392cf4396830b46b7afde04a760e4bc35bdb26a3ae58c6"
         },
         {
           "name": "orderbook submit rejects fixed routing and framing header overrides before HTTP",
-          "callback_sha256": "0d697ae6b5d37dd07b6717bf4ad5082136fb85a89719b91dbe7cc8fcf438150b"
+          "callback_sha256": "0352c066a049ad8409695b3a3c7b30176d18b6f3e58dc1f8ddbf69bef9f959dd"
         }
       ],
       "nested_case_names": []
@@ -220,16 +220,16 @@
       "registration": "registerSorafsOrchestratorParityTests",
       "statement_count": 30,
       "original_sha256": "785660f2a65dcf17e4b81cf6f1d2be239569c1ba004f204cb30e20b207ae0ece",
-      "entrypoint_sha256": "2a13a4898fe901f8480a7c9939343bdb01e0ce24a304a171ae92149e279a7ef2",
-      "imports_sha256": "9fbbb2a956658f27ee5721a48f696adef99ce27deb82329a9e99413ad782bde9",
-      "prefix_sha256": "f92552d2b0da5cf9cecaadaa2608c025e30488241b79fcd97bd139b05cb7f3b6",
-      "body_sha256": "ffa30b48882e3161c5c590e690864ee1a80ecc8d4b502be9ae141c8d373a032d",
+      "entrypoint_sha256": "2a715f7c9962c2acc8bb32ac8f2ab75e51f3a7ddecfa3b9c52439bed10883a02",
+      "imports_sha256": "d2557b5ce20d574d6ce40520a77660998a6d9a7e5f9536919285d7ed22ef8db6",
+      "prefix_sha256": "971a5624d3d49e0b22f81d4b83317a5eca7debcf77accae33d477774c9a3dc81",
+      "body_sha256": "8ed87ac4908da75d7fefb5d1c5bb1f02fc9a0431af853a28f5d90ed0a5546cc6",
       "assertion_count": 12,
-      "assertions_sha256": "b48463d414acdc974337d1af8e30620b352f3b68e966ba8d78a35f77e502834c",
+      "assertions_sha256": "449c32a5601f85d2fdcec68ff83ad6348cf6798f80b9edb869cd05a737abe221",
       "cases": [
         {
           "name": "SoraFS orchestrator multi-fetch is deterministic across runs",
-          "callback_sha256": "114a5e90e6d08d028c05022daa24dcca9c3b486f769f5278e3bcb9f8b8674017"
+          "callback_sha256": "ef75dcb4660e5facda92285b46cc85077730b6beb6dd28cb15c0a12b66578677"
         }
       ],
       "nested_case_names": []
@@ -239,53 +239,53 @@
       "registration": "registerSorafsPdpValidationTests",
       "statement_count": 18,
       "original_sha256": "789211be842da07e52846945b7689729b5b53adb1f035d9641513dddf8363432",
-      "entrypoint_sha256": "c230ac6176e7ac55804152da23c30796ff7ca54ed5d35b8a8f753897fa44dc25",
-      "imports_sha256": "cdf7ce697c47254eea67d57224d82c950fc9b60ecac885ae8de9bd5615106fd9",
-      "prefix_sha256": "aa1a2724bcb84bebcfe9362fd29fcd5e0f662ef6cf8937b8a6e35977191a25b7",
-      "body_sha256": "fdcb92438d2a050d1afef7f8b4ed49f23a4bd316ad55e44e70a89248f6c04720",
+      "entrypoint_sha256": "2365707260507b426a3c9f9c8a73f82713674e7f92739be0b80f33bcbd793a90",
+      "imports_sha256": "ac2b25b0f523051a20aa2bf4bd4d69dbe1c48a104a74d2d1e0f53f2ba712251d",
+      "prefix_sha256": "14eaea1123487fe70350fc5b44009221b63911d869ddc4000d9abd6d732f977e",
+      "body_sha256": "80b548759f3aa0d95ec8164e36f7e34e879ac25d54232fbff52d767912e16b8f",
       "assertion_count": 24,
-      "assertions_sha256": "2e3c223f4e9a562be0930bbfd3108a36d22f3e21231efdffc7aac177639158f7",
+      "assertions_sha256": "a03f13f052e36b879c182c094aef7f07ed43b61b304ba5109f1805b52a160aa3",
       "cases": [
         {
           "name": "validatePdpPayload accepts canonical commitment fixture",
-          "callback_sha256": "a0f03ec0369926cb874498ebf2b6f71cb5ea1a226dbe8eec338afc3093b25a19"
+          "callback_sha256": "924ae25d0962ad5e5fded8844be06f350ff95b6bede8411ba8e53e1911c81d73"
         },
         {
           "name": "validatePdpCommitmentChallenge accepts bound fixtures",
-          "callback_sha256": "3d159542ff84b3a0e3d3ca61bbbaf7ef9ca5b76478e691aa1eb9cd3a87eac83e"
+          "callback_sha256": "a46d6e52577a04539d35a37b8ca15f05c0189608341c13a2e9a412473b9d71ca"
         },
         {
           "name": "validatePdpChallengeProof accepts bound fixtures",
-          "callback_sha256": "b278a92b4a9e06632f7508396e3bb8291be7cd6475795451ba226ab2257426c5"
+          "callback_sha256": "6e8a3f2760b0ad4e29b2e0e54ce30dd5890dc388ffa7eb244b37ca27a6da80be"
         },
         {
           "name": "PDP validators reject noncanonical option aliases before native dispatch",
-          "callback_sha256": "d28bd859db0309b62ab3cdb25872e2548f7c8f6f4ff11808c4ba5068e9507efb"
+          "callback_sha256": "c0b384588ab789968c585990cea8d8e9bc89c004460092fc270f327b4d342316"
         },
         {
           "name": "validatePdpBundle accepts the canonical commitment challenge proof set",
-          "callback_sha256": "0f905f6e2bcc0f2994cff3bf5c8a8d43bb4cd24f9a70685b4287925b15532752"
+          "callback_sha256": "e1b4894b25a36024f083c58d56ad61bb9f667a15d35de256b7224de3e78e7af6"
         },
         {
           "name": "PDP wrappers match every committed negative ValidationOutcomeV1",
-          "callback_sha256": "69ada8349b2c48620fbc50610ba3f8d50ec4299bbc2459b1b8e340d70ecfd7d2"
+          "callback_sha256": "441f124808dbc949a415275f06fa10f498248066fe92743c05a0466be82e9f6d"
         },
         {
           "name": "validatePdpPayload reports malformed payloads as reference outcomes",
-          "callback_sha256": "1f197d7ac4336996a769fa17114607a20ae484435671566fa2944a08f0f735bb"
+          "callback_sha256": "f6fd3014b82933429ea337429540c61b190ae649ba237db557187e015a18f99e"
         },
         {
           "name": "validatePdpChallengeProof returns signature outcomes for invalid proof fixtures",
-          "callback_sha256": "34608224b534ef799c14d39d4c52fed6780e77a4db029dc8f3af7099b047a345"
+          "callback_sha256": "23e91a100cdcf97d03f879c8e828b1b3ed23ce35f3c4c8b3731386fb44ee491b"
         },
         {
           "name": "validatePdpPayload rejects unknown and retired kind aliases",
-          "callback_sha256": "84b188229467c3696c2374074cc3fc248a57a5431964a49cd35b9de27625d55e"
+          "callback_sha256": "0cc304fd9cd5a4cc98450c4988374200622eb48797ffc2b1c485687f2326efa2"
         }
       ],
       "nested_case_names": []
     }
   ],
-  "native_requirement_ast_sha256": "8217ff4883d87ef1642fd72ddf9a888340a06982f2306c65220c6863ab9029ac",
-  "native_eager_ast_sha256": "d173537498a26625ed400834975a20438063a3ef0506580c489899cf0466506e"
+  "native_requirement_ast_sha256": "4bd6e764da3bec46e521e91420edcc2f5207a3151794a679af10ed082608dac8",
+  "native_eager_ast_sha256": "05ffb097c9014a6ab81060726aa54119ae7f208bbf1093f189da8a13003b11d0"
 }

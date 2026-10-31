@@ -4,8 +4,8 @@ use super::*;
 use crate::AccountId;
 use iroha_crypto::KeyPair;
 use iroha_crypto::blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
+    Blake2b,
+    digest::{Digest, consts::U32},
 };
 use norito::core::DecodeFromSlice;
 fn checked_random_keypair() -> KeyPair {
@@ -25,14 +25,11 @@ fn parliament_expected_head_root_keeps_the_length_prefixed_domain_preimage() {
     );
     let predecessor: (u64, [u8; 32]) = (7, [0x51; 32]);
     let head = parliament_expected_head_root_v1(&predecessor);
-    let mut hasher = Blake2bVar::new(32).expect("32-byte head digest");
+    let mut hasher = Blake2b::<U32>::new();
     hasher.update(&u64::try_from(HEAD_DOMAIN.len()).unwrap().to_le_bytes());
     hasher.update(HEAD_DOMAIN);
     hasher.update(&predecessor.encode());
-    let mut expected = [0; 32];
-    hasher
-        .finalize_variable(&mut expected)
-        .expect("32-byte head output");
+    let expected: [u8; 32] = hasher.finalize().into();
     assert_eq!(head, expected);
     assert_ne!(head, [0; 32]);
     assert_ne!(
@@ -544,19 +541,7 @@ fn effect_sensitive_proposals_bind_the_operator_into_both_hashes() {
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("contract address");
-    let manifest = RuntimeUpgradeManifest {
-        name: "operator-bound runtime upgrade".to_owned(),
-        description: "operator binding fixture".to_owned(),
-        abi_version: 1,
-        abi_hash: crate::abi_v1_fixture::abi_v1_hash(),
-        added_syscalls: Vec::new(),
-        added_pointer_types: Vec::new(),
-        start_height: 42,
-        end_height: 99,
-        sbom_digests: Vec::new(),
-        slsa_attestation: Vec::new(),
-        provenance: Vec::new(),
-    };
+    let manifest = crate::runtime::lifecycle::test_schedule(42);
     let pairs = [
         (
             ProposalKind::DeployContract(DeployContractProposal {
@@ -593,11 +578,23 @@ fn effect_sensitive_proposals_bind_the_operator_into_both_hashes() {
         (
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
                 proposal_operator: first_operator.clone(),
-                manifest: manifest.clone(),
+                action: manifest.clone(),
+                notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+                    blocks: 1,
+                    ms: 1,
+                    approval_cushion_ms: 1,
+                },
+                proposed_ms: 0,
             }),
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
                 proposal_operator: second_operator.clone(),
-                manifest,
+                action: manifest,
+                notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+                    blocks: 1,
+                    ms: 1,
+                    approval_cushion_ms: 1,
+                },
+                proposed_ms: 0,
             }),
         ),
     ];
@@ -719,30 +716,23 @@ fn proposal_kind_json_rejects_unknown_fields_through_musubi_action() {
 }
 #[test]
 fn runtime_upgrade_proposal_roundtrip() {
-    let manifest = RuntimeUpgradeManifest {
-        name: "gov runtime upgrade".to_owned(),
-        description: "runtime proposal roundtrip".to_owned(),
-        abi_version: 1,
-        abi_hash: crate::abi_v1_fixture::abi_v1_hash(),
-        added_syscalls: Vec::new(),
-        added_pointer_types: Vec::new(),
-        start_height: 42,
-        end_height: 99,
-        sbom_digests: Vec::new(),
-        slsa_attestation: Vec::new(),
-        provenance: Vec::new(),
-    };
+    let manifest = crate::runtime::lifecycle::test_schedule(42);
     let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
         proposal_operator: checked_account_id(),
-        manifest,
+        action: manifest,
+        notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+            blocks: 1,
+            ms: 1,
+            approval_cushion_ms: 1,
+        },
+        proposed_ms: 0,
     });
     let framed = norito::to_bytes(&payload).expect("encode runtime-upgrade proposal");
     let decoded = norito::decode_from_bytes::<ProposalKind>(&framed)
         .expect("decode runtime-upgrade proposal");
     match decoded {
         ProposalKind::RuntimeUpgrade(inner) => {
-            assert_eq!(inner.manifest.abi_version, 1);
-            assert_eq!(inner.manifest.start_height, 42);
+            assert_eq!(inner.action, crate::runtime::lifecycle::test_schedule(42));
         }
         ProposalKind::DeployContract(_) => panic!("unexpected deploy-contract proposal"),
         ProposalKind::SccpRouteGovernance(_) => {
@@ -773,39 +763,41 @@ fn runtime_upgrade_proposal_roundtrip() {
 }
 #[test]
 fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
-    let proposal = |start_height, end_height| {
+    let proposal = |effective_height| {
         ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
             proposal_operator: checked_account_id(),
-            manifest: RuntimeUpgradeManifest {
-                name: "bounded runtime upgrade".to_owned(),
-                description: "exact JSON height fixture".to_owned(),
-                abi_version: 1,
-                abi_hash: crate::abi_v1_fixture::abi_v1_hash(),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height,
-                end_height,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
+            action: crate::runtime::lifecycle::test_schedule(effective_height),
+            notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+                blocks: 1,
+                ms: 1,
+                approval_cushion_ms: 1,
             },
+            proposed_ms: 0,
         })
     };
     let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
     assert_eq!(
-        proposal(maximum - 1, maximum).first_release_exact_json_u64_invariant_error(),
+        proposal(maximum).first_release_exact_json_u64_invariant_error(),
         None
     );
     assert!(
-        proposal(maximum + 1, maximum + 1)
+        proposal(maximum + 1)
             .first_release_exact_json_u64_invariant_error()
             .is_some()
     );
-    assert!(
-        proposal(maximum, maximum + 1)
-            .first_release_exact_json_u64_invariant_error()
-            .is_some()
-    );
+    let cancel = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+        proposal_operator: checked_account_id(),
+        action: crate::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(
+            crate::runtime::lifecycle::ChangeSetId([0x7c; 32]),
+        ),
+        notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+            blocks: 1,
+            ms: 1,
+            approval_cushion_ms: 1,
+        },
+        proposed_ms: 0,
+    });
+    assert_eq!(cancel.first_release_exact_json_u64_invariant_error(), None);
 }
 fn sccp_proposal(
     base_revision: u64,
@@ -934,14 +926,11 @@ fn proposal_fingerprint_matches_manual_derivation() {
     let domain_len = u64::try_from(domain.len())
         .expect("test domain fits in u64")
         .to_le_bytes();
-    let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length");
+    let mut hasher = Blake2b::<U32>::new();
     hasher.update(&domain_len);
     hasher.update(domain);
     hasher.update(&manual_bytes);
-    let mut manual_arr = [0u8; 32];
-    hasher
-        .finalize_variable(&mut manual_arr)
-        .expect("finalize Blake2bVar");
+    let manual_arr: [u8; 32] = hasher.finalize().into();
     assert_eq!(fp, manual_arr);
     assert_ne!(fp, [0; 32]);
 }
@@ -1081,7 +1070,7 @@ fn sortition_request_enforces_candidate_and_target_bounds() {
         .validate(Some(49))
         .expect("valid sortition request revalidates");
 }
-#[cfg(feature = "governance")]
+
 #[test]
 fn empty_sortition_capacity_intent_preserves_every_other_invariant() {
     let governance_attempt_id = GovernanceAttemptId::new([0x73; 32]);

@@ -1,9 +1,5 @@
 //! Parameters default values
-use iroha_crypto::Algorithm;
-use iroha_data_model::{
-    account::{AccountId, curve::CurveId},
-    asset::prelude::AssetDefinitionId,
-};
+use iroha_data_model::{account::AccountId, asset::prelude::AssetDefinitionId};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
@@ -26,19 +22,14 @@ fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
 }
 /// Cryptography configuration defaults.
 pub mod crypto {
-    use super::*;
     /// Preview toggle for OpenSSL-backed SM helpers.
     pub const ENABLE_SM_OPENSSL_PREVIEW: bool = false;
     /// Default SM intrinsic dispatch policy.
     pub const SM_INTRINSICS_POLICY: &str = "auto";
     /// Default hash algorithm identifier used when none is supplied.
     pub const DEFAULT_HASH: &str = "blake2b-256";
-    /// Default signing algorithms permitted on the network.
-    pub const ALLOWED_SIGNING: &[Algorithm] = &[Algorithm::Ed25519, Algorithm::Secp256k1];
     /// Default distinguishing identifier for SM2 signatures.
     pub const SM2_DISTID_DEFAULT: &str = "1234567812345678";
-    /// Default set of curve identifiers permitted for account controllers.
-    pub const ALLOWED_CURVE_IDS: &[u8] = &[CurveId::ED25519.as_u8(), CurveId::SECP256K1.as_u8()];
     /// Default hash algorithm identifier used when none is supplied.
     pub fn default_hash() -> String {
         DEFAULT_HASH.to_string()
@@ -51,32 +42,9 @@ pub mod crypto {
     pub fn sm_intrinsics_policy() -> String {
         SM_INTRINSICS_POLICY.to_owned()
     }
-    /// Default set of signing algorithms permitted on the network.
-    pub fn allowed_signing() -> Vec<Algorithm> {
-        ALLOWED_SIGNING.to_vec()
-    }
-    /// Default set of signing algorithms expressed as strings (for env overrides).
-    pub fn allowed_signing_env() -> Vec<String> {
-        ALLOWED_SIGNING.iter().map(Algorithm::to_string).collect()
-    }
     /// Default distinguishing identifier for SM2 signatures.
     pub fn sm2_distid_default() -> String {
         SM2_DISTID_DEFAULT.to_string()
-    }
-    /// Derive the curve capability list from the supplied signing algorithms.
-    pub fn derive_curve_ids_from_algorithms(algorithms: &[Algorithm]) -> Vec<u8> {
-        let mut ids: Vec<u8> = algorithms
-            .iter()
-            .filter_map(|algo| CurveId::try_from_algorithm(*algo).ok())
-            .map(CurveId::as_u8)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
-    }
-    /// Default set of curve identifiers permitted on the network.
-    pub fn allowed_curve_ids() -> Vec<u8> {
-        derive_curve_ids_from_algorithms(ALLOWED_SIGNING)
     }
 }
 /// Common configuration defaults shared across components.
@@ -114,8 +82,8 @@ pub mod runtime_provider_broker {
 }
 /// Fixed layout under a node's `data_dir`.
 ///
-/// When `data_dir` is set, every state path listed in [`data_dir::STATE_PATHS`] that the
-/// configuration does not set explicitly defaults to `<data_dir>/state/<relative>`, and every
+/// When `data_dir` is set, unset paths in [`data_dir::STATE_PATHS`] and enabled services in
+/// [`data_dir::ENABLED_SERVICE_STATE_PATHS`] default to `<data_dir>/state/<relative>`, and every
 /// secret file defaults to `<data_dir>/secrets/<name>`. Explicit per-path values still win.
 pub mod data_dir {
     /// Path of the loader-owned configuration source that carries the resolved absolute
@@ -128,12 +96,6 @@ pub mod data_dir {
     /// Subdirectory of `data_dir` holding owner-only secret files.
     pub const SECRETS_DIR: &str = "secrets";
     /// Derived state paths: configuration key and path relative to [`STATE_DIR`].
-    ///
-    /// TODO: the `SoraFS` provider sub-states (`sorafs.storage.pop_credentials.*`,
-    /// moderation, reputation, reserve-transparency, hedging-billing and evidence-viewer
-    /// checkpoints) and `torii.privacy_bootle_lantern_issuer.state_dir` still default to
-    /// `./storage/...`; they are only used when the embedded `SoraFS` provider or the
-    /// Bootle/Lantern issuer is enabled, which no compiled profile does.
     pub const STATE_PATHS: &[(&[&str], &str)] = &[
         (&["kura", "store_dir"], "kura"),
         (&["snapshot", "store_dir"], "snapshot"),
@@ -162,11 +124,62 @@ pub mod data_dir {
         (&["sorafs", "storage", "data_dir"], "sorafs"),
         (&["sorafs", "por", "state_dir"], "sorafs/por"),
     ];
+    /// Opt-in service state paths, completed only when the sibling `enabled` key is `true`.
+    ///
+    /// These services are disabled by default. Leaving their paths unset while disabled
+    /// preserves validation that requires inactive service policy to remain at its defaults.
+    pub const ENABLED_SERVICE_STATE_PATHS: &[(&[&str], &str)] = &[
+        (
+            &["sorafs", "storage", "pop_credentials", "issuer_state_dir"],
+            "sorafs/pop/issuer",
+        ),
+        (
+            &["sorafs", "storage", "pop_credentials", "wallet_state_dir"],
+            "sorafs/pop/wallet",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "moderation_orchestrator",
+                "checkpoint_path",
+            ],
+            "sorafs/moderation/orchestrator.norito",
+        ),
+        (
+            &["sorafs", "storage", "evidence_viewer", "checkpoint_path"],
+            "sorafs/moderation/evidence-viewer.norito",
+        ),
+        (
+            &["sorafs", "storage", "reputation_runtime", "state_dir"],
+            "sorafs/reputation",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "reserve_transparency_runtime",
+                "state_dir",
+            ],
+            "sorafs/reserve-transparency",
+        ),
+        (
+            &["sorafs", "storage", "hedging_billing_runtime", "state_dir"],
+            "sorafs/hedging-billing",
+        ),
+        (
+            &["torii", "privacy_bootle_lantern_issuer", "state_dir"],
+            "privacy_bootle_lantern_issuer",
+        ),
+    ];
     /// Validator BLS private key (`private_key_file`).
     pub const VALIDATOR_KEY: &str = "validator.key";
-    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`).
+    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`). A
+    /// node-local identity: `iroha3d` creates it when absent and not pinned
+    /// ([`crate::node_config::NodeConfigReader::local_identities`]).
     pub const TRANSPORT_KEY: &str = "transport.key";
-    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
+    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`). A
+    /// node-local identity like [`TRANSPORT_KEY`].
     pub const STREAMING_KEY: &str = "streaming.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
@@ -1304,7 +1317,6 @@ pub mod streaming {
     }
     /// Codec gating defaults.
     pub mod codec {
-        use std::path::PathBuf;
         /// Default CABAC runtime mode (`disabled`).
         pub const CABAC_MODE: &str = "disabled";
         /// Bundled entropy mode advertised by all supported builds (requires `ENABLE_RANS_BUNDLES=1`).
@@ -1317,10 +1329,12 @@ pub mod streaming {
         pub fn trellis_blocks() -> Vec<u16> {
             Vec::new()
         }
-        /// Default deterministic rANS table artefact.
-        pub fn rans_tables_path() -> PathBuf {
-            PathBuf::from("codec/rans/tables/rans_seed0.toml")
-        }
+        /// The canonical `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml`).
+        ///
+        /// It is compiled into every build, so a node needs no table file on disk unless
+        /// `streaming.codec.rans_tables_path` selects another artefact.
+        pub const CANONICAL_RANS_TABLES_TOML: &str =
+            include_str!("../../../../codec/rans/tables/rans_seed0.toml");
         /// Default entropy mode string (bundled rANS only).
         pub fn entropy_mode() -> String {
             const {
@@ -2399,15 +2413,19 @@ pub mod torii {
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(512_000_000);
     /// Maximum complete working set owned by one query, independent of aggregate concurrency.
     pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
+    /// Complete initial full-native-finality working-set ceiling, sharing the existing fanout pool.
+    pub const FINALITY_MAX_WORKING_SET_BYTES: Bytes = Bytes(384_000_000);
     /// Persistent SCCP history-node backing, independent of transient query leases.
     pub const SCCP_HISTORY_CACHE_MAX_BYTES: Bytes = Bytes(8_000_000);
-    /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
-    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
+    /// Minimum aggregate V1 query-memory pool for ingress, retained bodies and one fanout.
+    // Includes one retained maximum body while all four ingress slots still
+    // admit the fixed 8 KiB transport chunk.
+    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_100_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
     pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 9_561_666;
     /// Variable-size units retained by the conservative V1 pre-body envelope.
     pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
-    /// Divisor reserving one quarter of aggregate query memory for ingress.
+    /// Divisor reserving one quarter of aggregate query memory for ingress and retry bodies.
     pub const QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1: u64 = 4;
     /// Independently admitted signed-query ingress bodies.
     pub const QUERY_MEMORY_INGRESS_SLOTS_V1: u64 = 4;
@@ -2421,9 +2439,9 @@ pub mod torii {
     pub const TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1: u64 = 64 * 1024 * 1024;
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
-    /// Maximum time a query waits for execution capacity before Torii rejects it.
-    /// A solo proof burst can occupy all heavy-query permits for more than one
-    /// second; keep a finite queue deadline below the outer HTTP route timeout.
+    /// Capacity wait allowance; App routed reads share one absolute deadline across
+    /// body admission, authentication, execution and all larger-owner retries.
+    /// Zero retains fail-fast admission without a zero-length execution deadline.
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
@@ -2446,6 +2464,15 @@ pub mod torii {
             .checked_add(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)?;
         let working_set = desired.min(max_working_set_bytes).min(fanout_pool);
         (working_set > QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1).then_some(working_set)
+    }
+    /// Bound one initial full-native-finality reservation by its unchanged aggregate pool.
+    /// A smaller result is only a scheduling ceiling; actual native profile admission may refuse.
+    #[must_use]
+    pub fn finality_working_set_bytes(aggregate_bytes: u64, maximum_bytes: u64) -> Option<u64> {
+        let pool =
+            aggregate_bytes.checked_sub(aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)?;
+        let selected = maximum_bytes.min(pool);
+        (selected > 0).then_some(selected)
     }
     /// Derive the V1 routed-read route-body phase during configuration parsing.
     #[must_use]
@@ -2471,8 +2498,11 @@ pub mod torii {
             max_working_set_bytes,
             max_content_bytes,
         )?;
-        let ingress_slot_bytes =
-            aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 / QUERY_MEMORY_INGRESS_SLOTS_V1;
+        // A maximum routed-read body remains charged independently while its
+        // execution owner is replaced. Match Torii's partition of the ingress quarter.
+        let ingress_slot_bytes = (aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)
+            .checked_sub(fanout_phase)?
+            / QUERY_MEMORY_INGRESS_SLOTS_V1;
         ingress_slot_bytes
             .checked_sub(QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1)
             .map(|remaining| {
@@ -3420,53 +3450,8 @@ pub mod nexus {
         /// Maximum allowed replay retention window (slots) to bound in-memory state.
         pub const REPLAY_RETENTION_SLOTS_MAX: u64 = 4_096;
     }
-    /// Atomic private cross-dataspace settlement defaults.
+    /// Node-local custody defaults for atomic private settlement sidecars.
     pub mod atomic_private_settlement {
-        /// The production path is governed and disabled until explicitly activated.
-        pub const ENABLED: bool = false;
-        /// Minimum governance notice before an activation height becomes effective.
-        pub const MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 7_200;
-        /// Audited fixed-shape private-note proof profile version.
-        pub const PROOF_PROFILE_VERSION: u16 = 1;
-        /// Maximum dataspace legs admitted in one private atomic bundle.
-        pub const MAX_PARTICIPANTS: u16 = 255;
-        /// Protocol minimum dataspace legs in one private atomic bundle.
-        pub const MIN_PARTICIPANTS: u16 = 2;
-        /// Protocol maximum dataspace legs in one private atomic bundle.
-        pub const MAX_PARTICIPANTS_LIMIT: u16 = 255;
-        /// Maximum distance between admission and bundle expiry, in blocks.
-        pub const MAX_EXPIRY_BLOCKS: u64 = 7_200;
-        /// Maximum time allowed to collect auditor approvals, in blocks.
-        pub const AUDIT_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Maximum time allowed to collect all Prepare QCs, in blocks.
-        pub const PREPARE_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Maximum time allowed to collect all Commit QCs, in blocks.
-        pub const COMMIT_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Canonical padded capsule plaintext classes, in bytes.
-        ///
-        /// XChaCha20-Poly1305 adds a 16-byte authentication tag on the wire.
-        pub const CAPSULE_PADDING_CLASSES_BYTES: [u32; 4] = [4_096, 16_384, 65_536, 262_144];
-        /// Return the default padding classes as an owned configuration value.
-        #[must_use]
-        pub fn capsule_padding_classes_bytes() -> Vec<u32> {
-            CAPSULE_PADDING_CLASSES_BYTES.to_vec()
-        }
-        /// Maximum proof sidecar size admitted for one leg.
-        pub const MAX_PROOF_BYTES: u64 = 8 * 1024 * 1024;
-        /// Hard proof-size ceiling implemented by the V1 data model.
-        pub const MAX_PROOF_BYTES_LIMIT: u64 = 8 * 1024 * 1024;
-        /// Maximum encrypted audit capsule size admitted for one leg.
-        pub const MAX_CAPSULE_BYTES: u64 = 1024 * 1024;
-        /// Hard encrypted-capsule ceiling for the V1 path.
-        pub const MAX_CAPSULE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Maximum canonical sponsor-signed direct carrier transaction size.
-        /// Protocol carrier limit. The worst-case 255-leg V1 fixture is below 1 MiB.
-        pub const MAX_CARRIER_BYTES: u64 = 4 * 1024 * 1024;
-        /// Hard global-carrier ceiling for the V1 path.
-        /// V1 cannot admit a carrier larger than its Norito receipt bound.
-        pub const MAX_CARRIER_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
-        /// Minimum durable sidecar retention after admission, in blocks.
-        pub const SIDECAR_RETENTION_BLOCKS: u64 = 1_000_000;
         /// Maximum encrypted settlement records retained by one local sidecar store.
         pub const SIDECAR_MAX_RECORDS: u32 = 256;
         /// Hard record-count ceiling implemented by the V1 sidecar store.
@@ -3476,21 +3461,17 @@ pub mod nexus {
         /// Hard byte ceiling implemented by the V1 sidecar store.
         pub const SIDECAR_MAX_TOTAL_BYTES_LIMIT: u64 =
             12 * 1024 * 1024 * SIDECAR_MAX_RECORDS_LIMIT as u64;
-        /// Governed minimum online auditor threshold accepted for new policies.
-        pub const DEFAULT_MIN_AUDITOR_APPROVALS: u16 = 1;
-        /// Audit-policy schema versions accepted by default.
-        pub const PERMITTED_POLICY_VERSIONS: [u16; 1] = [1];
-        /// Return the default policy versions as an owned configuration value.
-        #[must_use]
-        pub fn permitted_policy_versions() -> Vec<u16> {
-            PERMITTED_POLICY_VERSIONS.to_vec()
-        }
     }
     /// Storage budget defaults for Nexus nodes.
     pub mod storage {
         use iroha_config_base::util::Bytes;
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
+        /// Upper bound on that headroom (64 GiB).
+        ///
+        /// The percentage protects small volumes; uncapped, it would reserve terabytes on large
+        /// disks and refuse to start nodes that have ample free space.
+        pub const AUTO_STORAGE_HEADROOM_MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
@@ -3654,41 +3635,12 @@ pub mod nexus {
         /// Slot-bound deadline for proofs/DA bundles to arrive before a transaction aborts.
         pub const WINDOW_SLOTS: u16 = 2;
     }
-    /// Public-lane staking defaults.
+    /// Public-lane validator capacity defaults. Monetary policy has no node defaults.
     pub mod staking {
-        use super::super::{NonZeroU32, Quantity};
+        use super::super::NonZeroU32;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
-        /// Minimum bonded stake required to register a validator (asset base units).
-        pub fn min_validator_stake() -> Quantity {
-            Quantity::from(1_u64)
-        }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
-        /// Maximum number of stake-share rows retained for one validator.
-        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
-        /// Maximum number of pending unbond requests retained in one stake share.
-        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
-        /// Minimum delay between scheduling and finalising unbonds.
-        pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Maximum slash ratio (basis points, `10_000` = 100%).
-        pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Escrow account that custodies bonded stake.
-        pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Canonical XOR asset used by both staking and Nexus fees.
-        pub fn stake_asset_id() -> String {
-            super::fees::fee_asset_id()
-        }
-        /// Escrow account that custodies bonded stake.
-        pub fn stake_escrow_account_id() -> String {
-            STAKE_ESCROW_ACCOUNT_ID.to_string()
-        }
-        /// Account that receives slashed stake (treasury/burn sink).
-        pub fn slash_sink_account_id() -> String {
-            SLASH_SINK_ACCOUNT_ID.to_string()
-        }
     }
     /// Universal fee schedule defaults.
     pub mod fees {
@@ -3725,7 +3677,8 @@ pub mod nexus {
                 // and could panic while constructing an otherwise fallible World.
                 fee_sink_account_id: super::super::governance::bond_escrow_account_id(),
                 sponsor_vault_custody_account_id: sponsor_vault_custody_account_id(),
-                successful_claim_fee_exempt_authorities: std::collections::BTreeSet::default(),
+                successful_claim_fee_exempt_authorities:
+                    iroha_data_model::block::consensus::RootFeeExemptions::new(),
                 base_fee: base_fee(),
                 per_byte_fee: per_byte_fee(),
                 per_instruction_fee: per_instruction_fee(),
@@ -4402,14 +4355,6 @@ pub mod governance {
     pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
-    /// Default runtime-upgrade provenance enforcement mode.
-    pub const RUNTIME_UPGRADE_PROVENANCE_MODE: &str = "optional";
-    /// Require SBOM digests for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM: bool = false;
-    /// Require SLSA attestation bytes for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA: bool = false;
-    /// Default signature threshold for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
     /// Default exact TEU balance required for alias admission.
     pub fn alias_teu_minimum() -> Quantity {
         Quantity::zero()
@@ -4935,6 +4880,13 @@ pub mod amx_relay {
     pub const MAX_SOURCE_HEIGHTS_PER_PASS: usize = 32;
     /// Maximum contiguous destination finality proofs read in one observation.
     pub const MAX_FINALITY_PROOF_READS: usize = 64;
+    /// Default ordinary carrier reservations per independently pinned destination.
+    /// Two additional slots are reserved exclusively for one authority handoff group.
+    pub const PENDING_FINALITY_WALKS: usize = 16;
+    /// At least one ordinary carrier may progress alongside the reserved handoff group.
+    pub const MIN_PENDING_FINALITY_WALKS: usize = 1;
+    /// Hard ceiling for ordinary carrier reservations per destination, excluding handoff slots.
+    pub const MAX_PENDING_FINALITY_WALKS: usize = 64;
     /// Maximum separately pinned and funded destinations.
     pub const MAX_ROUTES: usize = 32;
 }

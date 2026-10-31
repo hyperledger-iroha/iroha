@@ -10,7 +10,7 @@ use iroha_data_model::{
     transaction::signed::TransactionEntrypoint,
 };
 
-pub(crate) fn entrypoint(network_id: NetworkId) -> TransactionEntrypoint {
+pub fn entrypoint(network_id: NetworkId) -> TransactionEntrypoint {
     let envelope = AnonymousBallotEnvelopeV1 {
         network_id,
         ballot: AnonymousBallotV1 {

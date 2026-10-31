@@ -224,7 +224,7 @@ def validate(
             )
         payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 31,
+            "native_bridge_abi_version": 33,
             "privacy_production_enabled": True,
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
@@ -237,14 +237,14 @@ def validate(
                 ).hexdigest(),
                 "environment_profiles": validator.EXPECTED_ENVIRONMENT_PROFILES,
                 "cargo_build_jobs": 1,
-                "rust_toolchain_channel": "1.93.1",
-                "cargo_release": "1.93.1",
+                "rust_toolchain_channel": "1.99.1",
+                "cargo_release": "1.99.1",
                 "cargo_commit_hash": "c" * 40,
                 "cargo_binary_sha256": "d" * 64,
-                "rustc_release": "1.93.1",
+                "rustc_release": "1.99.1",
                 "rustc_commit_hash": "b" * 40,
                 "rustc_binary_sha256": "e" * 64,
-                "rustdoc_release": "1.93.1",
+                "rustdoc_release": "1.99.1",
                 "rustdoc_commit_hash": "b" * 40,
                 "rustdoc_binary_sha256": "f" * 64,
                 "python_version": "3.12.13",

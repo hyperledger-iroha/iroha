@@ -35,9 +35,7 @@ fn state_with(policy: &FraudAdmissionPolicyV1) -> State {
     let world = World::new();
     let mut staged = world.block();
     staged
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+        .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
         .unwrap();
     staged.commit();
     State::new_for_testing(
@@ -192,18 +190,21 @@ fn executor_reconciliation_cannot_replace_or_remove_fraud_policy() {
     let mut block = state.block(header(2));
     let mut transaction = block.transaction();
     let mut declared = ExecutorDataModel::default();
-    declared.parameters.insert(
-        FraudAdmissionPolicyV1::parameter_id(),
-        policy(false).into_custom_parameter(),
-    );
-    transaction.world.apply_executor_data_model(declared);
+    declared
+        .parameters
+        .insert(policy(false).into_custom_parameter());
+    transaction
+        .world
+        .apply_executor_data_model(declared)
+        .expect("executor reconciliation succeeds");
     assert_eq!(
         transaction.world.parameters.get().fraud_policy(),
         &policy(true)
     );
     transaction
         .world
-        .apply_executor_data_model(ExecutorDataModel::default());
+        .apply_executor_data_model(ExecutorDataModel::default())
+        .expect("executor reconciliation succeeds");
     assert_eq!(
         transaction.world.parameters.get().fraud_policy(),
         &policy(true)

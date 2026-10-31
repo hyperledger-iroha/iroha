@@ -99,7 +99,7 @@ impl Journal {
             path: directory.path().to_owned(),
             directory,
             lock_snapshot: FileSnapshot::private_journal(&lock)?,
-            _lock: lock,
+            lock,
         };
         value.revalidate()?;
         Ok(value)
@@ -107,12 +107,12 @@ impl Journal {
 
     pub(super) fn revalidate(&self) -> Result<()> {
         self.directory.revalidate()?;
-        let current = FileSnapshot::private_journal(&self._lock)?;
+        let current = FileSnapshot::private_journal(&self.lock)?;
         let named = self.directory.open_read("lock")?;
         require(
             current == self.lock_snapshot
                 && current == FileSnapshot::private_journal(&named)?
-                && self._lock.metadata()?.len() == 0,
+                && self.lock.metadata()?.len() == 0,
             "journal lock or its original namespace changed",
         )?;
         self.directory.revalidate()?;

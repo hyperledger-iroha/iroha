@@ -58,7 +58,9 @@ fn fixed_staging_charges_word_capacities_beyond_complete_device_allowance() {
 fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let cap =
+        usize::try_from(super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+            .expect("fixture value fits usize");
     let source_limit = cap - plan.check_before_sources_v1(0).unwrap();
     let mask_scratch = core::mem::size_of::<E>();
     let link_owner =
@@ -69,28 +71,39 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     assert_eq!(link_owner, 3 * 192 * 64 + 64 + 24 + 192 * 32);
     assert_eq!(
         source_limit,
-        596_974_144 - mask_scratch - SHARED_POWERS_ALLOWANCE_V1
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
     let key_owner = super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1();
     assert_eq!(key_owner, 8 * 1024 * 1024);
     let union_owner = super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();
-    assert_eq!(union_owner, 6_416);
+    // Three plans each retain 116 (group, column) coordinates and six
+    // points, plus the 24 quotient weights and the original framing reserve.
+    assert_eq!(union_owner, 3 * (116 * 16 + 6 * 8) + 24 + 24 * 32 + 1024);
     let limit = source_limit - link_owner - key_owner - union_owner;
     assert_eq!(
         limit,
-        596_974_144
-            - mask_scratch
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
             - link_owner
             - key_owner
             - union_owner
             - SHARED_POWERS_ALLOWANCE_V1
     );
-    assert_eq!(plan.maximum_live_buffers, 3_697_993_152 + mask_scratch);
+    assert_eq!(
+        plan.maximum_live_buffers,
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
     assert_eq!(
         policy.available,
-        308_628_446
-            - mask_scratch
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
+            - 288_345_698
             - link_owner
             - key_owner
             - union_owner
@@ -102,7 +115,7 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
             ..policy
         }
         .columns_v1(1 << 19),
-        8
+        4
     );
     assert_eq!(
         MainBoundedTransformPolicyV1::for_assembly_v1(&layout, limit)
@@ -152,9 +165,7 @@ fn partial_staging_allocation_failure_and_unwind_clear_actual_owners() {
                     column.reserve_exact(rows);
                     column.resize(rows, 9);
                     if calls == 2 {
-                        if unwind {
-                            panic!("injected fixed staging allocation unwind");
-                        }
+                        assert!(!unwind, "injected fixed staging allocation unwind");
                         return Err(ZkX509StarkErrorV1::AllocationFailure);
                     }
                     Ok(())
@@ -274,20 +285,20 @@ fn transform_errors_bad_output_and_uncertain_completion_never_publish_batch() {
 fn quotient_metadata_and_log19_device_payload_fit_only_unreserved_bytes() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
-    // Independent live-owner census: one host word matrix, rollback and shared
-    // staging matrices, worst-case page padding, the whole idle pool, all 64
+    // Independent live-owner census: one host word matrix and one shared
+    // staging matrix, worst-case page padding, the whole idle pool, all 64
     // factorized twiddle cache entries plus construction/returned owners, and
     // dispatch metadata. These are logical payloads, not a measured RSS bound.
     let words = (1_usize << 19) * 8 * 8;
     let factorized_twiddles = (64 + 2) * (4 * 256) * 8;
-    let expected = 3 * words
+    let expected = 2 * words
         + 8 * (16 * 1024 - 1)
         + 64 * 1024 * 1024
         + factorized_twiddles
         + (1 << 20)
         + 8 * core::mem::size_of::<Vec<u64>>()
         + core::mem::size_of::<Words>();
-    assert_eq!(expected, 169_492_696);
+    assert_eq!(expected, 135_938_264);
     assert_eq!(required_v1(1 << 19, 8).unwrap(), expected);
     assert_eq!(factorized_twiddles - (64 + 2) * 32 * 8, 523_776);
     for registration in &layout.registered_segments {
@@ -301,7 +312,9 @@ fn quotient_metadata_and_log19_device_payload_fit_only_unreserved_bytes() {
         )
         .unwrap();
         assert!(adjusted.available < policy.available);
-        assert_eq!(adjusted.columns_v1(1 << 19), 8);
+        assert_eq!(adjusted.columns_v1(1 << 19), 4);
+        assert!(required_v1(1 << 19, 4).unwrap() <= adjusted.available);
+        assert!(required_v1(1 << 19, 8).unwrap() > adjusted.available);
         let metadata = policy.available - adjusted.available;
         assert!(
             metadata
@@ -345,7 +358,12 @@ fn private_forward_adapter_matches_horner_and_preserves_separate_backend_counter
             let coefficients = (0..8)
                 .map(|column| {
                     (0..113)
-                        .map(|degree| F::reduce((column + 3 * degree * degree + 7) as u128))
+                        .map(|degree| {
+                            F::reduce(
+                                u128::try_from(column + 3 * degree * degree + 7)
+                                    .expect("positive fixture coefficient"),
+                            )
+                        })
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
@@ -564,6 +582,91 @@ fn private_quotient_log19_width8_required_metal_matches_full_cpu_output_with_hig
 }
 
 #[test]
+#[ignore = "isolated registered native inverse CPU/actual Metal timing; component evidence only"]
+fn native_inverse_registered_cpu_and_metal_cost_keep_original_values() {
+    use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+    );
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let admitted = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 0)
+        .unwrap()
+        .for_native_replay_v1()
+        .unwrap();
+    for native in [5, 8, 15, 16, 18, 19] {
+        let rows = 1usize << native;
+        let root = goldilocks_primitive_root_v1(native).unwrap();
+        for width in [1, 8] {
+            let original = ZeroizingBaseColumnsV1(
+                (0..width)
+                    .map(|column| {
+                        (0..rows)
+                            .map(|row| F((17 * row + 13 * column + 1) as u64))
+                            .collect()
+                    })
+                    .collect(),
+            );
+            let mut expected = ZeroizingBaseColumnsV1(original.0.clone());
+            MainBoundedTransformPolicyV1::cpu_v1()
+                .inverse_with_v1(
+                    &mut expected.0,
+                    root,
+                    |_, _, _| panic!("reference is CPU-only"),
+                    goldilocks_transform_completion_uncertain_v1,
+                )
+                .unwrap();
+            for round in 0..3 {
+                for device in if round % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let policy = MainBoundedTransformPolicyV1 {
+                        backend: if device { Some(Backend::Metal) } else { None },
+                        ..admitted
+                    };
+                    let mut actual = ZeroizingBaseColumnsV1(original.0.clone());
+                    let started = Instant::now();
+                    let mut metal_columns = 0;
+                    policy
+                        .inverse_with_v1(
+                            &mut actual.0,
+                            root,
+                            |words, root, direction| {
+                                assert!(device);
+                                let backend = transform_goldilocks_columns_v1(
+                                    words,
+                                    root,
+                                    direction,
+                                    fastpq_prover::ExecutionMode::Gpu,
+                                )?;
+                                assert_eq!(backend, Backend::Metal);
+                                metal_columns += words.len();
+                                Ok(backend)
+                            },
+                            goldilocks_transform_completion_uncertain_v1,
+                        )
+                        .unwrap();
+                    let transform_ns = started.elapsed().as_nanos();
+                    assert_eq!(metal_columns, if device { width } else { 0 });
+                    assert_eq!(&*actual, &*expected);
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let clear_ns = clear_started.elapsed().as_nanos();
+                    println!(
+                        "x509_native_inverse_cost native_log={native} width={width} workers={} round={round} device={device} transform_scratch_clear_ns={transform_ns} result_clear_ns={clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_replay_metadata_respects_every_phase_residual_without_source_discharge() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let original = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
@@ -575,7 +678,7 @@ fn native_replay_metadata_respects_every_phase_residual_without_source_discharge
     let metadata = policy.available - adjusted.available;
     assert!(metadata >= 5 * 8 * core::mem::size_of::<Vec<F>>());
     assert!(metadata < 4096);
-    assert_eq!(adjusted.columns_v1(1 << 19), 8);
+    assert_eq!(adjusted.columns_v1(1 << 19), 4);
     assert!(
         MainBoundedTransformPolicyV1 {
             available: metadata - 1,
@@ -603,12 +706,16 @@ fn native_replay_metadata_respects_every_phase_residual_without_source_discharge
             .unwrap();
         let native = quotient.for_native_replay_v1().unwrap();
         assert_eq!(quotient.available - native.available, metadata);
-        assert_eq!(native.columns_v1(1 << 19), 8);
+        assert_eq!(native.columns_v1(1 << 19), 4);
+        assert!(required_v1(1 << 19, 4).unwrap() <= native.available);
+        assert!(required_v1(1 << 19, 8).unwrap() > native.available);
     }
     assert_eq!(
         original.available,
-        308_628_446
-            - core::mem::size_of::<E>()
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
+            - 288_345_698
             - super::super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1()
             - super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
             - super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1()
@@ -621,13 +728,17 @@ fn inverse_only_adapter_matches_independent_dft_without_forward_or_diagonal() {
     let root = goldilocks_primitive_root_v1(5).unwrap();
     let inverse_root = root.inv().unwrap();
     let inverse_n = F(32).inv().unwrap();
-    let original = (0..8)
-        .map(|column| {
-            (0..32)
-                .map(|row| F((column * 101 + row * row + 3) as u64))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let original =
+        (0..8)
+            .map(|column| {
+                (0..32)
+                    .map(|row| {
+                        F(u64::try_from(column * 101 + row * row + 3)
+                            .expect("fixture value fits u64"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
     let expected = original
         .iter()
         .map(|values| {
@@ -691,6 +802,118 @@ fn inverse_only_adapter_matches_independent_dft_without_forward_or_diagonal() {
             assert!(receipt.contains("quotient_stripe_cpu_forward_columns=0"));
             assert!(receipt.contains("quotient_stripe_metal_forward_columns=0"));
             assert!(receipt.contains("fixed_coset_metal_inverse_columns=0"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "isolated registered forward CPU/shared-powers versus actual Metal median timings"]
+fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
+    use std::time::Instant;
+
+    use fastpq_prover::goldilocks_transform::{
+        available_goldilocks_transform_backend_v1, goldilocks_transform_completion_uncertain_v1,
+    };
+
+    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert_eq!(
+        available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal)
+    );
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let admitted = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+        .unwrap()
+        .for_native_replay_v1()
+        .unwrap();
+    for native in [15, 16, 18, 19] {
+        let rows = 1usize << native;
+        let root = goldilocks_primitive_root_v1(native).unwrap();
+        for width in [1, 8] {
+            let admitted_device_batch_width = admitted.columns_v1(rows).min(width);
+            assert_eq!(admitted_device_batch_width, width);
+            let original = ZeroizingBaseColumnsV1(
+                (0..width)
+                    .map(|column| {
+                        (0..rows)
+                            .map(|row| F((17 * row + 13 * column + 1) as u64))
+                            .collect()
+                    })
+                    .collect(),
+            );
+            let mut expected = ZeroizingBaseColumnsV1(original.0.clone());
+            MainBoundedTransformPolicyV1::cpu_v1()
+                .forward_with_v1(
+                    &mut expected.0,
+                    root,
+                    |_, _, _| panic!("independent reference is CPU-only"),
+                    goldilocks_transform_completion_uncertain_v1,
+                )
+                .unwrap();
+            let mut elapsed = [[0_u128; 3]; 2];
+            for round in 0..3 {
+                for device in if round % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let policy = MainBoundedTransformPolicyV1 {
+                        backend: if device { Some(Backend::Metal) } else { None },
+                        ..admitted
+                    };
+                    let mut actual = ZeroizingBaseColumnsV1(original.0.clone());
+                    let started = Instant::now();
+                    let mut metal_columns = 0;
+                    let mut actual_device_batch_width = 0;
+                    policy
+                        .forward_with_v1(
+                            &mut actual.0,
+                            root,
+                            |words, root, direction| {
+                                assert!(device);
+                                assert_eq!(direction, Direction::Forward);
+                                let backend = transform_goldilocks_columns_v1(
+                                    words,
+                                    root,
+                                    direction,
+                                    fastpq_prover::ExecutionMode::Gpu,
+                                )?;
+                                assert_eq!(backend, Backend::Metal);
+                                metal_columns += words.len();
+                                actual_device_batch_width =
+                                    actual_device_batch_width.max(words.len());
+                                Ok(backend)
+                            },
+                            goldilocks_transform_completion_uncertain_v1,
+                        )
+                        .unwrap();
+                    elapsed[usize::from(device)][round] = started.elapsed().as_nanos();
+                    assert_eq!(metal_columns, if device { width } else { 0 });
+                    assert_eq!(
+                        actual_device_batch_width,
+                        if device {
+                            admitted_device_batch_width
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(&*actual, &*expected);
+                    println!(
+                        "x509_native_forward_cost native_log={native} width={width} workers={} round={round} device={device} admitted_device_batch_width={admitted_device_batch_width} actual_device_batch_width={actual_device_batch_width} transform_scratch_clear_ns={} parity=exact",
+                        rayon::current_num_threads(),
+                        elapsed[usize::from(device)][round],
+                    );
+                }
+            }
+            for mode in &mut elapsed {
+                mode.sort_unstable();
+            }
+            println!(
+                "x509_native_forward_median native_log={native} width={width} workers={} admitted_device_batch_width={admitted_device_batch_width} cpu_ns={} metal_ns={} cpu_speedup={:.3} parity=exact",
+                rayon::current_num_threads(),
+                elapsed[0][1],
+                elapsed[1][1],
+                elapsed[1][1] as f64 / elapsed[0][1] as f64,
+            );
         }
     }
 }

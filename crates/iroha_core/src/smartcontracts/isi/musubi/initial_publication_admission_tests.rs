@@ -14,8 +14,10 @@ mod initial_publication_admission {
     use iroha_data_model::{
         account::Account,
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+        block::consensus::RootFeePolicy,
         domain::Domain,
         isi::{Log, Mint, Register, Transfer, sorafs::InitializeSorafsProviderAdmissionV1},
+        parameter::Parameter,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
@@ -101,13 +103,20 @@ mod initial_publication_admission {
             )
             .unwrap();
             let mut config = TestChainConfig::new(world, NOW * 1_000);
+            let fees = RootFeePolicy {
+                base_fee: 1_u32.into(),
+                per_instruction_fee: 1_u32.into(),
+                per_byte_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
+                fee_asset_id: asset.clone(),
+                fee_sink_account_id: account(SINK),
+                ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+            };
+            // Positive fees are original signed policy, not node-local authoring inputs.
+            config.genesis_parameters.push(Parameter::Custom(
+                fees.clone().into_custom_parameter().unwrap(),
+            ));
             let mut nexus = Nexus::default();
-            nexus.fees.base_fee = 1_u32.into();
-            nexus.fees.per_instruction_fee = 1_u32.into();
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.fee_asset_id = asset.clone();
-            nexus.fees.fee_sink_account_id = account(SINK).clone();
             // Declare both targets so cross-scope admission exercises physical route
             // rejection rather than failing on an unknown dataspace. The namespace's
             // native home check is tested separately against this same catalog.
@@ -161,6 +170,11 @@ mod initial_publication_admission {
                     .into(),
             ];
             let chain = CertifiedTestChain::start(config).unwrap();
+            assert_eq!(
+                chain.state().view().world().parameters().root_fees(),
+                Some(&fees),
+                "signed genesis retains the exact positive publication fee policy"
+            );
             let mut archive = retention_archive(PUBLISHER);
             let package = MusubiPackageIdV1::new(
                 DataSpaceId::UNIVERSAL,
@@ -220,7 +234,7 @@ mod initial_publication_admission {
                         .world()
                         .account_permissions()
                         .get(&account(seed))
-                        .is_none_or(|permissions| permissions.is_empty())
+                        .is_none_or(std::collections::BTreeSet::is_empty)
                 );
             }
             f.applied(

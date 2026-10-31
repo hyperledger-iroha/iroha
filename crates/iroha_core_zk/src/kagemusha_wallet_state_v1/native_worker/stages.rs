@@ -175,7 +175,7 @@ macro_rules! chain {
                 let key = $worker
                     .sources
                     .bind_a_cancellable($route, 0, $worker.read, Some($cancel.prover_token()))
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
                 let config = $worker.prover_config($cancel, key.binding().descriptor());
                 $cancel.check()?;
                 fold_metrics::enter(FoldPhaseV1::Prove);
@@ -200,7 +200,7 @@ macro_rules! chain {
                         $worker.read,
                         Some($cancel.prover_token()),
                     )
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
                 let config = $worker.prover_config($cancel, key.binding().descriptor());
                 $cancel.check()?;
                 fold_metrics::enter(FoldPhaseV1::Prove);
@@ -222,7 +222,7 @@ macro_rules! chain {
                         $worker.read,
                         Some($cancel.prover_token()),
                     )
-                    .map_err(artifact)?;
+                    .map_err(|error| artifact(&error))?;
                 let config = $worker.prover_config($cancel, key.binding().descriptor());
                 $cancel.check()?;
                 fold_metrics::enter(FoldPhaseV1::Prove);
@@ -395,7 +395,7 @@ macro_rules! single {
             let key = $worker
                 .sources
                 .bind_a_cancellable($route, 0, $worker.read, Some($cancel.prover_token()))
-                .map_err(artifact)?;
+                .map_err(|error| artifact(&error))?;
             $cancel.check()?;
             fold_metrics::enter(FoldPhaseV1::Prove);
             let terminal = proof(call_terminal!($form, session, key, $worker, $cancel))?;

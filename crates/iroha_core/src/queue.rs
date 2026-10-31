@@ -13,6 +13,7 @@ use sumeragi_wake::SumeragiQueueReservation;
 use sumeragi_wake::SumeragiQueueWake;
 mod forgery_ingress;
 pub use forgery_ingress::ForgeryIngressError;
+use forgery_ingress::SubmissionOrigin;
 mod resident_owner;
 use resident_owner::QueueResidentLedger;
 pub(crate) use resident_owner::QueuedTransaction;
@@ -30,9 +31,9 @@ use crate::{
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
-        LaneManifestSourceSnapshot, LaneManifestStatus,
+        LaneManifestStatus,
     },
-    interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
+    interlane::{LanePrivacyRegistry, verify_lane_privacy_proofs},
     nexus::space_directory::{
         LaneIdentityMetadataError,
         extract_authority_domains as extract_directory_authority_domains,
@@ -77,7 +78,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox,
         error::Mismatch,
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        runtime_upgrade::{AttestRuntimeSupportV1, ContainRuntimeV1},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -313,7 +314,7 @@ fn resolve_routing_plan_against_nexus_at_height(
 }
 
 /// Validate the physical route against the applied catalog and the next proposal height.
-/// Native logical lane selection is independently derived from World.sumeragi_lanes.
+/// Native logical lane selection is independently derived from `World.sumeragi_lanes`.
 fn resolve_routing_plan_for_queue_admission(
     plan: RoutingPlan,
     nexus: &Nexus,
@@ -443,7 +444,8 @@ pub struct Queue {
     /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
     /// maintained atomically with `txs` under `push_remove_lock`.
     pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
-    /// Node-wide SCCP seen triples and pairing bucket, shared by every ingress handle.
+    /// Node-wide SCCP forgery repeat cache (pairings in flight and refused signatures) and
+    /// pairing bucket, shared by every ingress handle.
     forgery_ingress: parking_lot::Mutex<Option<forgery_ingress::ForgeryIngressState>>,
     /// Authoritative cached routing plan per entrypoint hash.
     routing_plans: DashMap<EntrypointHash, RoutingPlan>,
@@ -527,11 +529,11 @@ pub struct Queue {
     /// Governance manifest registry for Nexus lanes.
     lane_manifests: parking_lot::RwLock<LaneManifestRegistryHandle>,
     /// Privacy commitments advertised by lane manifests.
-    lane_privacy_registry: parking_lot::RwLock<LanePrivacyRegistryHandle>,
+    lane_privacy_registry: parking_lot::RwLock<LanePrivacyRegistry>,
     /// Privacy registry derived from the exact manifest snapshot admission last observed,
-    /// reused only while admission observes that same snapshot.
+    /// reused only for that same snapshot and original allocation pool.
     admission_privacy_registry:
-        parking_lot::Mutex<Option<(LaneManifestRegistryHandle, LanePrivacyRegistryHandle)>>,
+        parking_lot::Mutex<Option<(LaneManifestRegistryHandle, LanePrivacyRegistry)>>,
     #[cfg(test)]
     vacant_entry_warnings: AtomicUsize,
 }
@@ -742,11 +744,13 @@ fn sponsored_charge_totals(
     }
     Ok(totals)
 }
+type RelayLeaseReservationMaps = (BTreeMap<Hash, Quantity>, BTreeMap<Hash, Quantity>);
+
 fn relay_lease_reservation_maps(
     program_id: &FeeSponsorProgramId,
     sponsor_charges: &BTreeMap<AssetDefinitionId, Quantity>,
     relay_leases: BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>,
-) -> Result<(BTreeMap<Hash, Quantity>, BTreeMap<Hash, Quantity>), Error> {
+) -> Result<RelayLeaseReservationMaps, Error> {
     let mut relay_lease_charges = BTreeMap::<Hash, Quantity>::new();
     let mut relay_lease_remaining = BTreeMap::<Hash, Quantity>::new();
     for (asset_definition_id, selection) in relay_leases {
@@ -1054,6 +1058,10 @@ pub enum Error {
         /// Exact local invariant failure.
         reason: String,
     },
+    // The first top-level envelope with an unbound wire ID or kept opaque, with the stable
+    // rejection execution would commit (`specs/live_runtime_upgrades.md` §5.2).
+    /// The committed runtime selection does not admit the transaction: {0}
+    RuntimeRejected(iroha_data_model::runtime::lifecycle::RuntimeRejectionV1),
 }
 
 impl From<RoutingResolveError> for Error {
@@ -1089,7 +1097,39 @@ pub struct Failure {
     /// Push failure reason
     pub err: Error,
 }
+/// Exact detached owners retained by the operation which owns the outer guards.
+///
+/// Each operation supplies a fresh slot for its one possible manifest publication
+/// and one possible admission-cache replacement. Concurrent publications cannot
+/// escape custody: the handles actually removed under the writers move here.
+#[derive(Default)]
+struct QueuePrivacyRetirements {
+    published: Option<(
+        LanePrivacyRegistry,
+        Option<(LaneManifestRegistryHandle, LanePrivacyRegistry)>,
+    )>,
+    admission: Option<(LaneManifestRegistryHandle, LanePrivacyRegistry)>,
+}
+
+struct PreparedQueueManifestDiagnostics {
+    manifests: LaneManifestRegistryHandle,
+    previous_missing: BTreeSet<String>,
+    current_missing: BTreeSet<String>,
+    statuses: Vec<LaneManifestStatus>,
+}
+impl PreparedQueueManifestDiagnostics {
+    fn new(current: &LaneManifestRegistry, manifests: &LaneManifestRegistryHandle) -> Self {
+        Self {
+            manifests: Arc::clone(manifests),
+            previous_missing: current.missing_aliases(),
+            current_missing: manifests.missing_aliases(),
+            statuses: manifests.statuses(),
+        }
+    }
+}
 trait QueueAdmissionStateAccess {
+    /// Original allocation pool retained by this exact committed observation.
+    fn execution_budget(&self) -> iroha_allocation::AllocationBudget;
     fn authority_exists(&mut self, authority: &AccountId) -> bool;
     /// Verification gas schedule of the committed ZK validity policy the admission view holds.
     /// It prices the proposal gas of proof-bearing native instructions.
@@ -1105,6 +1145,13 @@ trait QueueAdmissionStateAccess {
             iroha_data_model::parameter::system::TransactionNeverIncludable,
         >,
     >;
+    /// The rejection of the first top-level envelope of `transaction` the committed selection
+    /// would refuse: an unbound wire ID or an envelope kept opaque
+    /// (`specs/live_runtime_upgrades.md` §5.2).
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1140,6 +1187,8 @@ struct EagerAdmissionStateAccess<'view, 'state> {
     view: &'view StateView<'state>,
     next_block_height: u64,
     ledger_time_ms: u64,
+    /// Who submits the transaction; only the SCCP forgery ingress reads it.
+    origin: SubmissionOrigin,
 }
 impl EagerAdmissionStateAccess<'_, '_> {
     const fn new<'view, 'state>(
@@ -1151,10 +1200,18 @@ impl EagerAdmissionStateAccess<'_, '_> {
             view,
             next_block_height,
             ledger_time_ms,
+            origin: SubmissionOrigin::Remote,
         }
+    }
+    const fn with_origin(mut self, origin: SubmissionOrigin) -> Self {
+        self.origin = origin;
+        self
     }
 }
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
+    fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
+        self.view.execution_budget()
+    }
     fn authority_exists(&mut self, authority: &AccountId) -> bool {
         self.view.world().accounts().get(authority).is_some()
     }
@@ -1176,6 +1233,21 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             self.ledger_time_ms,
             self.next_block_height,
             transaction,
+        )
+    }
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+        let signed = match transaction.entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::AnonymousBallot(_) => return None,
+        };
+        crate::runtime::envelope::first_unadmitted_envelope(
+            self.view.world().runtime_selection.get(),
+            signed.instructions(),
         )
     }
     fn sccp_exempt_admission(
@@ -1243,7 +1315,9 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             ),
             Some(SccpExemptClassV1::ForgeryEvidence)
         ) {
-            return queue.admit_forgery(self.view, transaction).map(Some);
+            return queue
+                .admit_forgery(self.view, transaction, self.origin)
+                .map(Some);
         }
         crate::smartcontracts::isi::sccp::admission::classify(
             self.view.world(),
@@ -1537,31 +1611,73 @@ impl Queue {
         txs: Vec<(AcceptedTransaction<'static>, RoutingPlan)>,
         state: &State,
     ) -> Result<usize, Failure> {
-        let _lifecycle = state.lock_lane_lifecycle_work_admission();
-        let view = state.view();
-        self.sync_nexus_routing_with_view(&view);
-        let mut accepted = 0;
-        for (tx, plan) in txs {
-            if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-                return Err(Failure {
-                    tx: Box::new(tx),
-                    err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-                });
-            }
-
-            let plan = match self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    return Err(Failure {
-                        tx: Box::new(tx),
-                        err: error.into(),
-                    });
-                }
-            };
-            self.admit_in_view(tx, plan, &view)?;
-            accepted += 1;
+        if txs.is_empty() {
+            return Ok(0);
         }
-        Ok(accepted)
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                // One exact retirement record per actual input: its sync may
+                // publish once and its admission may replace the cache once.
+                // Admit backing storage before taking the lifecycle fence.
+                let mut retired = match iroha_allocation::ChargedBuffer::new(
+                    txs.len(),
+                    &state.ivm_execution_budget(),
+                ) {
+                    Ok(records) => records,
+                    Err(error) => {
+                        let original = match error {
+                            iroha_allocation::ChargedBufferError::Admission(original) => {
+                                original.into()
+                            }
+                            original @ iroha_allocation::ChargedBufferError::Allocator {
+                                ..
+                            } => iroha_allocation::AllocatorRefusal::try_from(original)
+                                .expect("matched original allocator refusal")
+                                .into(),
+                        };
+                        let (tx, _) = txs.into_iter().next().expect("nonempty batch");
+                        return Err(Failure {
+                            tx: Box::new(tx),
+                            err: Error::Deferred(original),
+                        });
+                    }
+                };
+                for _ in 0..txs.len() {
+                    retired.push_reserved(QueuePrivacyRetirements::default());
+                }
+                let _lifecycle = state.lock_lane_lifecycle_work_admission();
+                let view = state.view();
+                let mut accepted = 0;
+                for ((tx, plan), retired) in txs.into_iter().zip(retired.as_mut_slice()) {
+                    if let Err(original) = self.sync_nexus_routing_with_view(&view, retired) {
+                        return Err(Failure {
+                            tx: Box::new(tx),
+                            err: Error::Deferred(original),
+                        });
+                    }
+                    if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
+                        return Err(Failure {
+                            tx: Box::new(tx),
+                            err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
+                        });
+                    }
+
+                    let plan =
+                        match self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan) {
+                            Ok(plan) => plan,
+                            Err(error) => {
+                                return Err(Failure {
+                                    tx: Box::new(tx),
+                                    err: error.into(),
+                                });
+                            }
+                        };
+                    self.admit_in_view(tx, plan, &view, retired, SubmissionOrigin::Remote)?;
+                    accepted += 1;
+                }
+                Ok(accepted)
+            })
     }
     /// Number of locally pending signed inputs.
     pub fn active_len(&self) -> usize {
@@ -1590,12 +1706,8 @@ impl Queue {
         iroha_logger::error!(tx = %hash, stage, reason = %reason, "queue admission identity is inconsistent");
         self.publish_backpressure_state(self.active_len(), telemetry);
     }
-    fn pending_status(
-        &self,
-        tx: &CheckedTransaction<'static>,
-        state_view: &StateView<'_>,
-    ) -> Result<bool, String> {
-        Ok(!tx.is_in_blockchain(state_view) && !self.is_expired(tx.as_accepted()))
+    fn pending_status(&self, tx: &CheckedTransaction<'static>, state_view: &StateView<'_>) -> bool {
+        !tx.is_in_blockchain(state_view) && !self.is_expired(tx.as_accepted())
     }
 
     /// The signed transaction whose SCCP exemption admission classifies: the transaction of an
@@ -1694,23 +1806,31 @@ impl Queue {
     pub(crate) fn holds_entrypoint_frame(&self, frame_digest: &Hash) -> bool {
         self.pending_order.lock().holds_frame(frame_digest)
     }
-    /// Privacy registry of the exact manifest snapshot used by one admission.
-    ///
-    /// The registry is a pure function of that immutable snapshot, so it is rebuilt only when
-    /// admission observes a different snapshot handle.
+    /// Privacy projection of this manifest identity in the observed State pool.
+    /// A refusal leaves the accepted source and owner unchanged.
     fn admission_privacy_registry_for(
         &self,
         manifests: &LaneManifestRegistryHandle,
-    ) -> LanePrivacyRegistryHandle {
-        if let Some((source, registry)) = self.admission_privacy_registry.lock().as_ref()
-            && Arc::ptr_eq(source, manifests)
-        {
-            return Arc::clone(registry);
-        }
-        let registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
-        *self.admission_privacy_registry.lock() =
-            Some((Arc::clone(manifests), Arc::clone(&registry)));
-        registry
+        budget: &iroha_allocation::AllocationBudget,
+        retired: &mut QueuePrivacyRetirements,
+    ) -> Result<LanePrivacyRegistry, crate::execution_attempt::ExecutionDeferred> {
+        budget.with_deferred_refund_notifications(|_| {
+            let mut cache = self.admission_privacy_registry.lock();
+            if let Some((source, registry)) = cache.as_ref()
+                && Arc::ptr_eq(source, manifests)
+                && registry.belongs_to(budget)
+            {
+                return Ok(registry.clone());
+            }
+            assert!(
+                retired.admission.is_none(),
+                "one cache replacement per retirement slot"
+            );
+            let registry = LanePrivacyRegistry::try_from_manifest_registry(manifests, budget)?;
+            retired.admission = cache.replace((Arc::clone(manifests), registry.clone()));
+            drop(cache);
+            Ok(registry)
+        })
     }
     /// Quarantine an empty queue while startup authenticates its State.
     ///
@@ -1836,9 +1956,23 @@ impl Queue {
         })
     }
     /// Install an arbitrary manifest snapshot into an isolated Queue fixture.
+    ///
+    /// # Errors
+    /// Returns the original fixture pool's allocation refusal before changing Queue.
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn install_lane_manifests_for_testing(&self, manifests: &LaneManifestRegistryHandle) {
-        self.install_lane_manifests_unchecked_in_queue(manifests);
+    pub fn install_lane_manifests_for_testing(
+        &self,
+        manifests: &LaneManifestRegistryHandle,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
+        let mut retired = QueuePrivacyRetirements::default();
+        budget.with_deferred_refund_notifications(|_| {
+            let guard = self.lane_manifests.write();
+            let prepared = PreparedQueueManifestDiagnostics::new(&guard, manifests);
+            let privacy = LanePrivacyRegistry::try_from_manifest_registry(manifests, budget)?;
+            self.publish_lane_manifest_projection(guard, prepared, privacy, &mut retired);
+            Ok(())
+        })
     }
     /// Install an empty Queue projection after entering emergency Fast quarantine.
     ///
@@ -1848,19 +1982,24 @@ impl Queue {
     pub fn install_provisional_empty_lane_manifests_for_emergency_fast_startup(
         &self,
     ) -> std::io::Result<()> {
+        let mut retired = QueuePrivacyRetirements::default();
         if !self.emergency_fast_startup.load(Ordering::Acquire) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "provisional Queue manifests require emergency Fast quarantine",
             ));
         }
-        self.install_lane_manifests_unchecked_in_queue(&Arc::new(
-            LaneManifestRegistry::provisional_empty_for_emergency_fast_startup(),
-        ));
+        let manifests =
+            Arc::new(LaneManifestRegistry::provisional_empty_for_emergency_fast_startup());
+        let guard = self.lane_manifests.write();
+        let prepared = PreparedQueueManifestDiagnostics::new(&guard, &manifests);
+        self.publish_lane_manifest_projection(
+            guard,
+            prepared,
+            LanePrivacyRegistry::empty(),
+            &mut retired,
+        );
         Ok(())
-    }
-    fn install_lane_manifests_unchecked_in_queue(&self, manifests: &LaneManifestRegistryHandle) {
-        let _ = self.replace_lane_manifests(manifests, false, None);
     }
     /// Install an arbitrary manifest snapshot into State and Queue test fixtures.
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -1869,16 +2008,23 @@ impl Queue {
         manifests: &LaneManifestRegistryHandle,
         state: &State,
     ) {
-        state.install_lane_manifests_for_testing(manifests);
-        self.install_lane_manifests_unchecked_in_queue(manifests);
+        let mut retired = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                let guard = self.lane_manifests.write();
+                let prepared = PreparedQueueManifestDiagnostics::new(&guard, manifests);
+                let privacy = state.install_lane_manifests_for_testing(manifests);
+                self.publish_lane_manifest_projection(guard, prepared, privacy, &mut retired);
+            })
     }
     /// Validate materialized startup authority and install this Queue projection
     /// while ingress is paused. Identical State authority keeps its original handles
-    /// and generation; Queue receives the refreshed local diagnostics.
+    /// and generation; Queue receives refreshed local diagnostics and that exact owner.
     ///
     /// # Errors
-    /// Rejects a status-only, stale, or incomplete manifest before either
-    /// registry is changed. The caller supplies the authenticated replay catalog.
+    /// Rejects status-only, stale, or incomplete manifests, or returns the original
+    /// resource refusal before changing Queue. The caller supplies the replay catalog.
     pub fn install_materialized_lane_manifests_with_state(
         &self,
         manifests: &LaneManifestRegistryHandle,
@@ -1886,58 +2032,101 @@ impl Queue {
         catalog: &LaneCatalog,
         governance: &GovernanceCatalog,
     ) -> Result<(), LaneLifecycleError> {
-        state.install_materialized_lane_manifests_for_catalog(manifests, catalog, governance)?;
-        self.install_lane_manifests_unchecked_in_queue(manifests);
-        Ok(())
+        let mut retired = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                let guard = self.lane_manifests.write();
+                let prepared = PreparedQueueManifestDiagnostics::new(&guard, manifests);
+                let privacy = state.install_materialized_lane_manifests_for_catalog(
+                    manifests, catalog, governance,
+                )?;
+                self.publish_lane_manifest_projection(guard, prepared, privacy, &mut retired);
+                Ok(())
+            })
     }
+    #[cfg(test)]
     fn install_lane_manifests_if_consensus_compatible(
         &self,
         manifests: &LaneManifestRegistryHandle,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> bool {
-        self.replace_lane_manifests(manifests, true, None)
+        let mut retired = QueuePrivacyRetirements::default();
+        budget.with_deferred_refund_notifications(|_| {
+            let guard = self.lane_manifests.write();
+            if guard.consensus_policy_digest() != manifests.consensus_policy_digest() {
+                return false;
+            }
+            let prepared = PreparedQueueManifestDiagnostics::new(&guard, manifests);
+            let Ok(privacy) = LanePrivacyRegistry::try_from_manifest_registry(manifests, budget)
+            else {
+                return false;
+            };
+            self.publish_lane_manifest_projection(guard, prepared, privacy, &mut retired);
+            true
+        })
     }
     fn install_lane_manifests_with_state_if_consensus_compatible(
         &self,
         manifests: &LaneManifestRegistryHandle,
         state: &State,
     ) -> bool {
-        self.replace_lane_manifests(manifests, true, Some(state))
-    }
-    fn replace_lane_manifests(
-        &self,
-        manifests: &LaneManifestRegistryHandle,
-        require_consensus_compatibility: bool,
-        state: Option<&State>,
-    ) -> bool {
-        // Admission holds a read guard while checking manifest semantics. Keep
-        // this write guard across State authority validation so no transaction
-        // observes an unvalidated Queue policy.
-        let mut guard = self.lane_manifests.write();
-        if require_consensus_compatibility {
-            let current_digest = guard.consensus_policy_digest();
-            let candidate_digest = manifests.consensus_policy_digest();
-            if current_digest != candidate_digest {
-                iroha_logger::warn!(
-                    current_digest = %hex::encode(current_digest),
-                    candidate_digest = %hex::encode(candidate_digest),
-                    "rejecting lane-manifest hot reload with consensus-semantic drift; coordinated restart/config rollout required"
-                );
-                return false;
-            }
-        }
-        let previous_missing = guard.missing_aliases();
-        if let Some(state) = state {
-            assert!(
-                require_consensus_compatibility,
-                "State hot reload must authenticate the current manifest authority"
+        let mut retired = QueuePrivacyRetirements::default();
+        state.ivm_execution_budget().with_deferred_refund_notifications(|_| {
+        // Hold the Queue policy writer through State authentication. Prepare local
+        // snapshots before that call; never build a second graph after publication.
+        let guard = self.lane_manifests.write();
+        let current_digest = guard.consensus_policy_digest();
+        let candidate_digest = manifests.consensus_policy_digest();
+        if current_digest != candidate_digest {
+            iroha_logger::warn!(
+                current_digest = %hex::encode(current_digest),
+                candidate_digest = %hex::encode(candidate_digest),
+                "rejecting lane-manifest hot reload with consensus-semantic drift; coordinated restart/config rollout required"
             );
-            if !state.install_lane_manifests_if_consensus_compatible(manifests) {
+            return false;
+        }
+        let prepared = PreparedQueueManifestDiagnostics::new(&guard, manifests);
+        let privacy = match state.install_lane_manifests_if_consensus_compatible(manifests) {
+            Ok(privacy) => privacy,
+            Err(error) => {
+                iroha_logger::warn!(reason = %error, "refusing lane-manifest hot reload");
                 return false;
             }
-        }
-        *guard = Arc::clone(manifests);
-        drop(guard);
-        let current_missing = manifests.missing_aliases();
+        };
+        self.publish_lane_manifest_projection(guard, prepared, privacy, &mut retired);
+        true
+            })
+    }
+    fn publish_lane_manifest_projection(
+        &self,
+        mut manifest_guard: parking_lot::RwLockWriteGuard<'_, LaneManifestRegistryHandle>,
+        prepared: PreparedQueueManifestDiagnostics,
+        privacy: LanePrivacyRegistry,
+        retired: &mut QueuePrivacyRetirements,
+    ) {
+        assert!(
+            retired.published.is_none(),
+            "one publication per retirement slot"
+        );
+        let PreparedQueueManifestDiagnostics {
+            manifests,
+            previous_missing,
+            current_missing,
+            statuses,
+        } = prepared;
+        let cached = (Arc::clone(&manifests), privacy.clone());
+        let mut privacy_guard = self.lane_privacy_registry.write();
+        let mut admission_guard = self.admission_privacy_registry.lock();
+        let retired_admission = admission_guard.replace(cached);
+        let retired_privacy = core::mem::replace(&mut *privacy_guard, privacy);
+        *manifest_guard = manifests;
+        // Capture before releasing any guard or running diagnostics. The outer
+        // owner drops this slot after its lifecycle fence, also during unwind.
+        retired.published = Some((retired_privacy, retired_admission));
+        drop(admission_guard);
+        drop(privacy_guard);
+        drop(manifest_guard);
         for alias in current_missing.difference(&previous_missing) {
             iroha_logger::warn!(
                 lane = alias,
@@ -1947,43 +2136,26 @@ impl Queue {
         for alias in previous_missing.difference(&current_missing) {
             iroha_logger::info!(lane = alias, "governance manifest loaded");
         }
-        let statuses_snapshot = manifests.statuses();
-        status::update_lane_governance_from_statuses(&statuses_snapshot);
-        let mut privacy_guard = self.lane_privacy_registry.write();
-        *privacy_guard = Arc::new(LanePrivacyRegistry::from_statuses(&statuses_snapshot));
-        true
+        status::update_lane_governance_from_statuses(&statuses);
     }
     /// Snapshot of lane privacy commitments derived from manifests.
     #[must_use]
-    pub fn lane_privacy_registry(&self) -> LanePrivacyRegistryHandle {
+    pub fn lane_privacy_registry(&self) -> LanePrivacyRegistry {
         self.lane_privacy_registry.read().clone()
     }
-    /// Reconstruct refreshed manifests from the static baseline and committed runtime additions.
+    /// Reconstruct refreshed manifests from the static baseline and committed additions.
     fn refreshed_lane_manifest_registry(
         &self,
-        governance: &GovernanceCatalog,
         registry_cfg: &LaneRegistry,
-        state: Option<&State>,
-    ) -> Result<LaneManifestRegistryHandle, String> {
-        if let Some(state) = state {
-            let nexus = state.nexus_snapshot();
-            let baseline = Arc::new(LaneManifestRegistry::from_config(
-                &nexus.configured_lane_catalog,
-                &nexus.governance,
-                registry_cfg,
-            ));
-            state
-                .lane_manifests_with_committed_catalog(&baseline, &nexus)
-                .map_err(|error| error.to_string())
-        } else {
-            let lane_catalog = self.lane_catalog.read().clone();
-            let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(registry_cfg));
-            let registry = Arc::new(source_snapshot.bind(&lane_catalog, governance));
-            registry
-                .validate_active_coverage_for_catalog(&lane_catalog)
-                .map_err(|error| error.to_string())?;
-            Ok(registry)
-        }
+        state: &State,
+    ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
+        let nexus = state.nexus_snapshot();
+        let baseline = Arc::new(LaneManifestRegistry::from_config(
+            &nexus.configured_lane_catalog,
+            &nexus.governance,
+            registry_cfg,
+        ));
+        state.lane_manifests_with_committed_catalog(&baseline, &nexus)
     }
     /// Refresh local manifest diagnostics on the configured schedule.
     ///
@@ -1992,26 +2164,18 @@ impl Queue {
     pub async fn watch_lane_manifests_task(
         self: Arc<Self>,
         telemetry: Option<StateTelemetry>,
-        governance: Arc<GovernanceCatalog>,
         registry_cfg: LaneRegistry,
-        state: Option<Arc<State>>,
+        state: Arc<State>,
     ) {
-        let initial = match self.refreshed_lane_manifest_registry(
-            &governance,
-            &registry_cfg,
-            state.as_deref(),
-        ) {
+        let initial = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
             Ok(registry) => registry,
             Err(err) => {
                 iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
                 return;
             }
         };
-        let initial_applied = if let Some(state_handle) = state.as_ref() {
-            self.install_lane_manifests_with_state_if_consensus_compatible(&initial, state_handle)
-        } else {
-            self.install_lane_manifests_if_consensus_compatible(&initial)
-        };
+        let initial_applied =
+            self.install_lane_manifests_with_state_if_consensus_compatible(&initial, &state);
         if initial_applied {
             if let Some(telemetry_handle) = telemetry.as_ref() {
                 telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
@@ -2024,25 +2188,15 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let registry = match self.refreshed_lane_manifest_registry(
-                &governance,
-                &registry_cfg,
-                state.as_deref(),
-            ) {
+            let registry = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
                 Ok(registry) => registry,
                 Err(err) => {
                     iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");
                     continue;
                 }
             };
-            let applied = if let Some(state_handle) = state.as_ref() {
-                self.install_lane_manifests_with_state_if_consensus_compatible(
-                    &registry,
-                    state_handle,
-                )
-            } else {
-                self.install_lane_manifests_if_consensus_compatible(&registry)
-            };
+            let applied =
+                self.install_lane_manifests_with_state_if_consensus_compatible(&registry, &state);
             if !applied {
                 continue;
             }
@@ -2118,15 +2272,15 @@ impl Queue {
         let contains = |instruction: &InstructionBox| {
             instruction
                 .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .downcast_ref::<AttestRuntimeSupportV1>()
                 .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .downcast_ref::<ContainRuntimeV1>()
                     .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -2691,9 +2845,7 @@ impl Queue {
             LaneManifestRegistry::empty()
                 .rebind(lane_catalog.as_ref(), &GovernanceCatalog::default()),
         );
-        let lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
-            lane_manifests.as_ref(),
-        ));
+        let lane_privacy_registry = LanePrivacyRegistry::empty();
         let queue = {
             let queue = Self {
                 events_sender,
@@ -3198,23 +3350,10 @@ impl Queue {
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         let mut pending = Vec::with_capacity(tracked.len());
-        let mut pending_status_fault = None;
         for tx in tracked {
-            match self.pending_status(tx.as_ref(), state_view) {
-                Ok(true) => pending.push(tx),
-                Ok(false) => {}
-                Err(reason) => {
-                    pending_status_fault.get_or_insert_with(|| (tx.hash_as_entrypoint(), reason));
-                }
+            if self.pending_status(tx.as_ref(), state_view) {
+                pending.push(tx);
             }
-        }
-        if let Some((hash, reason)) = pending_status_fault {
-            self.mark_accepted_work_validation_fault(
-                hash,
-                "global_candidate_expiry_registry",
-                &reason,
-                None,
-            );
         }
         pending
     }
@@ -3286,15 +3425,14 @@ impl Queue {
                     },
                 );
             let class = if cfg!(all(test, sumeragi_core_mutation = "HC346")) || needs_sccp_time {
-                let committed_time_ms = match sccp_committed_time_ms {
-                    Some(original) => original,
-                    None => {
-                        let original =
-                            crate::smartcontracts::isi::sccp::hold::committed_time_ms(state_view)
-                                .ok()?;
-                        sccp_committed_time_ms = Some(original);
-                        original
-                    }
+                let committed_time_ms = if let Some(original) = sccp_committed_time_ms {
+                    original
+                } else {
+                    let original =
+                        crate::smartcontracts::isi::sccp::hold::committed_time_ms(state_view)
+                            .ok()?;
+                    sccp_committed_time_ms = Some(original);
+                    original
                 };
                 crate::smartcontracts::isi::sccp::admission::exempt_class_of_entrypoint(
                     state_view.world(),
@@ -3490,16 +3628,37 @@ impl Queue {
             Err(RoutingResolveError::StaleRoutingPlan)
         }
     }
-    fn sync_nexus_routing_with_state(&self, state: &State) -> Nexus {
+    fn sync_nexus_routing_with_state(
+        &self,
+        state: &State,
+        retired: &mut QueuePrivacyRetirements,
+    ) -> Result<Nexus, crate::execution_attempt::ExecutionDeferred> {
         let nexus = state.nexus_snapshot();
-        self.reconfigure_nexus_with_state_if_needed(&nexus, state, self.lane_compliance_engine());
-        nexus
+        if !self.nexus_routing_matches(&nexus) {
+            self.reconfigure_nexus_with_state_retaining_privacy(
+                &nexus,
+                state,
+                self.lane_compliance_engine(),
+                retired,
+            )?;
+        }
+        Ok(nexus)
     }
-    fn sync_nexus_routing_with_view(&self, state_view: &StateView<'_>) {
+    fn sync_nexus_routing_with_view(
+        &self,
+        state_view: &StateView<'_>,
+        retired: &mut QueuePrivacyRetirements,
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
         let nexus = state_view.nexus();
         if !self.nexus_routing_matches(nexus) {
-            self.reconfigure_nexus(nexus, state_view, self.lane_compliance_engine());
+            self.reconfigure_nexus_retaining_privacy(
+                nexus,
+                state_view,
+                self.lane_compliance_engine(),
+                retired,
+            )?;
         }
+        Ok(())
     }
     /// Resolve a full routing plan for an inbound gossip transaction with the current state.
     pub(crate) fn route_plan_for_gossip_with_state(
@@ -3620,57 +3779,68 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let _ = self.sync_nexus_routing_with_state(state);
-        let state_view = state.view();
-        self.sync_nexus_routing_with_view(&state_view);
-        let hash = tx.hash_as_entrypoint();
-        if let Some(tracked) = self.txs.get(&hash).map(|entry| entry.value().clone()) {
-            // The identity lookup matched the canonical hash. Byte-identical canonical frames
-            // are exactly the same entrypoint, including its exact signed identity.
-            if tracked.as_accepted().entrypoint_bytes() != tx.entrypoint_bytes() {
-                return Err(RoutingResolveError::StaleRoutingPlan);
-            }
-            let resident = {
-                let _guard = self.push_remove_lock.lock();
-                self.queued_routing_owner_locked(hash, &tracked)
-            };
-            let result = match resident {
-                Ok(true) => self.fresh_queued_routing_plan(
-                    &tracked,
-                    &state_view,
+        let mut retired_state = QueuePrivacyRetirements::default();
+        let mut retired_view = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+                self.sync_nexus_routing_with_state(state, &mut retired_state)?;
+                let state_view = state.view();
+                self.sync_nexus_routing_with_view(&state_view, &mut retired_view)?;
+                let hash = tx.hash_as_entrypoint();
+                if let Some(tracked) = self.txs.get(&hash).map(|entry| entry.value().clone()) {
+                    // The identity lookup matched the canonical hash. Byte-identical canonical frames
+                    // are exactly the same entrypoint, including its exact signed identity.
+                    if tracked.as_accepted().entrypoint_bytes() != tx.entrypoint_bytes() {
+                        return Err(RoutingResolveError::StaleRoutingPlan);
+                    }
+                    let resident = {
+                        let _guard = self.push_remove_lock.lock();
+                        self.queued_routing_owner_locked(hash, &tracked)
+                    };
+                    let result = match resident {
+                        Ok(true) => self.fresh_queued_routing_plan(
+                            &tracked,
+                            &state_view,
+                            state_view.nexus(),
+                            state_view_height_for_routing(&state_view),
+                        ),
+                        Ok(false) => return Err(RoutingResolveError::StaleRoutingPlan),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = result.as_ref()
+                        && !matches!(
+                            error,
+                            RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                                | RoutingResolveError::Deferred(_)
+                        )
+                    {
+                        self.mark_accepted_work_validation_fault(
+                            hash,
+                            "queued_route_lookup",
+                            error,
+                            None,
+                        );
+                    }
+                    if self.admission_faulted() {
+                        return Err(RoutingResolveError::StaleRoutingPlan);
+                    }
+                    return result;
+                }
+                let plan = {
+                    let router = self.router.read();
+                    match router.try_route_plan_without_state(tx)? {
+                        Some(plan) => plan,
+                        None => router.try_route_plan_with_view(tx, &state_view)?,
+                    }
+                };
+                resolve_routing_plan_for_queue_admission(
+                    plan,
                     state_view.nexus(),
                     state_view_height_for_routing(&state_view),
-                ),
-                Ok(false) => return Err(RoutingResolveError::StaleRoutingPlan),
-                Err(error) => Err(error),
-            };
-            if let Err(error) = result.as_ref()
-                && !matches!(
-                    error,
-                    RoutingResolveError::OrdinaryRouteUnavailable { .. }
-                        | RoutingResolveError::Deferred(_)
                 )
-            {
-                self.mark_accepted_work_validation_fault(hash, "queued_route_lookup", error, None);
-            }
-            if self.admission_faulted() {
-                return Err(RoutingResolveError::StaleRoutingPlan);
-            }
-            return result;
-        }
-        let plan = {
-            let router = self.router.read();
-            match router.try_route_plan_without_state(tx)? {
-                Some(plan) => plan,
-                None => router.try_route_plan_with_view(tx, &state_view)?,
-            }
-        };
-        resolve_routing_plan_for_queue_admission(
-            plan,
-            state_view.nexus(),
-            state_view_height_for_routing(&state_view),
-        )
+            })
     }
     /// Resolve the complete routing plan for an exact unsigned payload.
     ///
@@ -3685,13 +3855,22 @@ impl Queue {
         payload: &TransactionPayload,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let nexus = self.sync_nexus_routing_with_state(state);
-        let plan = self
-            .router
-            .read()
-            .try_route_plan_with_state(payload, state)?;
-        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
+        let mut retired_state = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+                let nexus = self.sync_nexus_routing_with_state(state, &mut retired_state)?;
+                let plan = self
+                    .router
+                    .read()
+                    .try_route_plan_with_state(payload, state)?;
+                resolve_routing_plan_for_queue_admission(
+                    plan,
+                    &nexus,
+                    state_height_for_routing(state),
+                )
+            })
     }
     /// Returns whether the queue currently tracks the entrypoint hash.
     ///
@@ -3771,6 +3950,7 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, Failure> {
+        let mut retired = QueuePrivacyRetirements::default();
         if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
             return Err(Failure {
                 tx: Box::new(tx),
@@ -3783,7 +3963,12 @@ impl Queue {
                 err,
             });
         }
-        self.sync_nexus_routing_with_view(state_view);
+        if let Err(original) = self.sync_nexus_routing_with_view(state_view, &mut retired) {
+            return Err(Failure {
+                tx: Box::new(tx),
+                err: Error::Deferred(original),
+            });
+        }
         let plan = match self
             .router
             .read()
@@ -3798,53 +3983,66 @@ impl Queue {
                 });
             }
         };
-        self.admit_in_view(tx, plan, state_view)
+        self.admit_in_view(tx, plan, state_view, &mut retired, SubmissionOrigin::Remote)
     }
     fn push_with_lane_internal_with_state_and_routing(
         &self,
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: Option<RoutingPlan>,
+        origin: SubmissionOrigin,
     ) -> Result<RoutingDecision, Failure> {
-        if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
-            return Err(Failure {
-                tx: Box::new(tx),
-                err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
-            });
-        }
-        let _lifecycle = state.lock_lane_lifecycle_work_admission();
-        let view = state.view();
-        if let Err(err) = self.check_startup_admission() {
-            return Err(Failure {
-                tx: Box::new(tx),
-                err,
-            });
-        }
-        self.sync_nexus_routing_with_view(&view);
-        let plan = match routing_plan {
-            Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
-            None => self
-                .router
-                .read()
-                .try_route_plan_with_view(&tx, &view)
-                .and_then(|plan| Self::resolve_view_routing_plan(plan, &view)),
-        };
-        let plan = match plan {
-            Ok(plan) => plan,
-            Err(error) => {
-                return Err(Failure {
-                    tx: Box::new(tx),
-                    err: error.into(),
-                });
-            }
-        };
-        self.admit_in_view(tx, plan, &view)
+        let mut retired = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
+                    return Err(Failure {
+                        tx: Box::new(tx),
+                        err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
+                    });
+                }
+                let _lifecycle = state.lock_lane_lifecycle_work_admission();
+                let view = state.view();
+                if let Err(err) = self.check_startup_admission() {
+                    return Err(Failure {
+                        tx: Box::new(tx),
+                        err,
+                    });
+                }
+                if let Err(original) = self.sync_nexus_routing_with_view(&view, &mut retired) {
+                    return Err(Failure {
+                        tx: Box::new(tx),
+                        err: Error::Deferred(original),
+                    });
+                }
+                let plan = match routing_plan {
+                    Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
+                    None => self
+                        .router
+                        .read()
+                        .try_route_plan_with_view(&tx, &view)
+                        .and_then(|plan| Self::resolve_view_routing_plan(plan, &view)),
+                };
+                let plan = match plan {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        return Err(Failure {
+                            tx: Box::new(tx),
+                            err: error.into(),
+                        });
+                    }
+                };
+                self.admit_in_view(tx, plan, &view, &mut retired, origin)
+            })
     }
     fn admit_in_view(
         &self,
         tx: AcceptedTransaction<'static>,
         routing_plan: RoutingPlan,
         view: &StateView<'_>,
+        retired: &mut QueuePrivacyRetirements,
+        origin: SubmissionOrigin,
     ) -> Result<RoutingDecision, Failure> {
         // Preacceptance belongs to the original signed security domain. It cannot
         // authorize another State's queue, fee reservations, indexes or gossip.
@@ -3887,11 +4085,13 @@ impl Queue {
                 checked,
             ));
         };
-        let mut access = EagerAdmissionStateAccess::new(view, height, view.query_ledger_time_ms());
+        let mut access = EagerAdmissionStateAccess::new(view, height, view.query_ledger_time_ms())
+            .with_origin(origin);
         let prepared = self.prepare_checked_for_enqueue(
             checked,
             routing_plan,
             &mut access,
+            retired,
             #[cfg(feature = "telemetry")]
             view.telemetry,
         )?;
@@ -3923,6 +4123,7 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_plan: RoutingPlan,
         state_access: &mut C,
+        retired: &mut QueuePrivacyRetirements,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
         if let Err(err) = validate_current_admission_route(&routing_plan) {
@@ -3944,6 +4145,12 @@ impl Queue {
                 },
                 checked,
             ));
+        }
+        // Honest proposers never carry an envelope the committed selection does not admit; it
+        // would only commit `definition_inactive` or `malformed_payload`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        if let Some(rejection) = state_access.first_inactive_envelope(checked.as_accepted()) {
+            return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
         }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
@@ -4059,165 +4266,172 @@ impl Queue {
             || format!("lane-{}", lane_id.as_u32()),
             |status| status.alias.clone(),
         );
-        if let Some(status) = manifest_status {
-            if status.governance.is_some()
-                && let Some(policy_rules) = status.rules()
-            {
-                let authority_rules = manifest_authority_rules.as_ref().unwrap_or(policy_rules);
-                let alias = status.alias.clone();
-                let allows_multisig_envelope_authority = match checked.as_accepted().executable() {
-                    Some(Executable::Instructions(instructions)) => {
-                        instructions_allow_multisig_envelope_authority(instructions)
+        if let Some(status) = manifest_status
+            && status.governance.is_some()
+            && let Some(policy_rules) = status.rules()
+        {
+            let authority_rules = manifest_authority_rules.as_ref().unwrap_or(policy_rules);
+            let alias = status.alias.clone();
+            let allows_multisig_envelope_authority = match checked.as_accepted().executable() {
+                Some(Executable::Instructions(instructions)) => {
+                    instructions_allow_multisig_envelope_authority(instructions)
+                }
+                Some(
+                    Executable::ContractCall(_)
+                    | Executable::IvmProved(_)
+                    | Executable::Ivm(_)
+                    | Executable::Batch(_),
+                )
+                | None => false,
+            };
+            let governance_sensitive =
+                Self::tx_requires_manifest_validator_gating(policy_rules, &checked);
+            if governance_sensitive {
+                let manifest_validators = if authority_rules.validators.is_empty() {
+                    None
+                } else {
+                    match Self::canonical_manifest_validators(&alias, authority_rules) {
+                        Ok(validators) => Some(validators),
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("malformed_validators");
+                            return Err(Self::refused(err, checked));
+                        }
                     }
-                    Some(
-                        Executable::ContractCall(_)
-                        | Executable::IvmProved(_)
-                        | Executable::Ivm(_)
-                        | Executable::Batch(_),
-                    )
-                    | None => false,
                 };
-                let governance_sensitive =
-                    Self::tx_requires_manifest_validator_gating(policy_rules, &checked);
-                if governance_sensitive {
-                    let manifest_validators = if authority_rules.validators.is_empty() {
-                        None
-                    } else {
-                        match Self::canonical_manifest_validators(&alias, authority_rules) {
-                            Ok(validators) => Some(validators),
-                            Err(err) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_admission("malformed_validators");
-                                return Err(Self::refused(err, checked));
-                            }
+                if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("missing_authority");
+                    return Err(Self::refused(
+                        Error::GovernanceNotPermitted {
+                            alias: alias.clone(),
+                            reason:
+                                "authority-free transactions cannot satisfy lane validator gating"
+                                    .to_string(),
+                        },
+                        checked,
+                    ));
+                }
+                if let Some(authority) = checked.as_ref().authority_opt()
+                    && let Some(validators) = manifest_validators.as_ref()
+                    && !allows_multisig_envelope_authority
+                {
+                    let authority_i105 = match authority.canonical_i105() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err(Self::refused(
+                                Self::enforcement_error(
+                                    &alias,
+                                    format!(
+                                        "failed to encode authority `{authority}` as i105: {err}"
+                                    ),
+                                ),
+                                checked,
+                            ));
                         }
                     };
-                    if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
+                    if !validators.contains(&authority_i105) {
+                        iroha_logger::warn!(
+                            lane = %alias,
+                            authority = %authority,
+                            "rejecting transaction not signed by governance validator"
+                        );
                         #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("missing_authority");
+                        telemetry_handle.record_manifest_admission("non_validator_authority");
                         return Err(Self::refused(
                             Error::GovernanceNotPermitted {
                                 alias: alias.clone(),
-                                reason: "authority-free transactions cannot satisfy lane validator gating"
-                                    .to_string(),
+                                reason: "authority not part of lane validator set".to_string(),
                             },
                             checked,
                         ));
                     }
-                    if let Some(authority) = checked.as_ref().authority_opt()
-                        && let Some(validators) = manifest_validators.as_ref()
-                        && !allows_multisig_envelope_authority
-                    {
-                        let authority_i105 = match authority.canonical_i105() {
-                            Ok(value) => value,
-                            Err(err) => {
-                                return Err(Self::refused(
-                                    Self::enforcement_error(
-                                        &alias,
-                                        format!(
-                                            "failed to encode authority `{authority}` as i105: {err}"
-                                        ),
-                                    ),
-                                    checked,
-                                ));
-                            }
-                        };
-                        if !validators.contains(&authority_i105) {
-                            iroha_logger::warn!(
-                                lane = %alias,
-                                authority = %authority,
-                                "rejecting transaction not signed by governance validator"
-                            );
+                }
+                let quorum_required = !allows_multisig_envelope_authority
+                    && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                    && !authority_rules.validators.is_empty();
+                let quorum_result =
+                    Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
+                if quorum_required {
+                    match quorum_result {
+                        Ok(()) => {
                             #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_admission("non_validator_authority");
-                            return Err(Self::refused(
-                                Error::GovernanceNotPermitted {
-                                    alias: alias.clone(),
-                                    reason: "authority not part of lane validator set".to_string(),
-                                },
-                                checked,
-                            ));
+                            telemetry_handle.record_manifest_quorum_enforcement("satisfied");
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_quorum_enforcement("rejected");
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("quorum_rejected");
+                            return Err(Self::refused(err, checked));
                         }
                     }
-                    let quorum_required = !allows_multisig_envelope_authority
-                        && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                        && !authority_rules.validators.is_empty();
-                    let quorum_result =
-                        Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
-                    if quorum_required {
-                        match quorum_result {
-                            Ok(()) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_quorum_enforcement("satisfied");
-                            }
-                            Err(err) => {
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_quorum_enforcement("rejected");
-                                #[cfg(feature = "telemetry")]
-                                telemetry_handle.record_manifest_admission("quorum_rejected");
-                                return Err(Self::refused(err, checked));
-                            }
-                        }
-                    } else if let Err(err) = quorum_result {
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("quorum_rejected");
-                        return Err(Self::refused(err, checked));
+                } else if let Err(err) = quorum_result {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("quorum_rejected");
+                    return Err(Self::refused(err, checked));
+                }
+            }
+            let protected_namespace_result =
+                Self::enforce_manifest_protected_namespaces(&alias, policy_rules, &checked);
+            let protected_namespace_applied = match protected_namespace_result {
+                Ok(applied) => applied,
+                Err(err) => {
+                    #[cfg(feature = "telemetry")]
+                    if !policy_rules.protected_namespaces.is_empty() {
+                        telemetry_handle.record_protected_namespace_enforcement("rejected");
                     }
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("protected_namespace_rejected");
+                    return Err(Self::refused(err, checked));
                 }
-                let protected_namespace_result =
-                    Self::enforce_manifest_protected_namespaces(&alias, policy_rules, &checked);
-                let protected_namespace_applied = match protected_namespace_result {
-                    Ok(applied) => applied,
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        if !policy_rules.protected_namespaces.is_empty() {
-                            telemetry_handle.record_protected_namespace_enforcement("rejected");
-                        }
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("protected_namespace_rejected");
-                        return Err(Self::refused(err, checked));
-                    }
-                };
-                #[cfg(feature = "telemetry")]
-                if protected_namespace_applied {
-                    telemetry_handle.record_protected_namespace_enforcement("allowed");
+            };
+            #[cfg(feature = "telemetry")]
+            if protected_namespace_applied {
+                telemetry_handle.record_protected_namespace_enforcement("allowed");
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = protected_namespace_applied;
+            let runtime_hook_result =
+                Self::enforce_runtime_upgrade_hook(&alias, policy_rules, &checked);
+            let runtime_hook_applied = match runtime_hook_result {
+                Ok(applied) => applied,
+                Err(err) => {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle
+                        .record_manifest_hook_enforcement("runtime_upgrade", "rejected");
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("runtime_hook_rejected");
+                    return Err(Self::refused(err, checked));
                 }
-                #[cfg(not(feature = "telemetry"))]
-                let _ = protected_namespace_applied;
-                let runtime_hook_result =
-                    Self::enforce_runtime_upgrade_hook(&alias, policy_rules, &checked);
-                let runtime_hook_applied = match runtime_hook_result {
-                    Ok(applied) => applied,
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle
-                            .record_manifest_hook_enforcement("runtime_upgrade", "rejected");
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("runtime_hook_rejected");
-                        return Err(Self::refused(err, checked));
-                    }
-                };
-                #[cfg(feature = "telemetry")]
-                if runtime_hook_applied {
-                    telemetry_handle.record_manifest_hook_enforcement("runtime_upgrade", "allowed");
-                }
-                #[cfg(not(feature = "telemetry"))]
-                let _ = runtime_hook_applied;
-                #[cfg(feature = "telemetry")]
-                {
-                    manifest_allowed = true;
-                }
+            };
+            #[cfg(feature = "telemetry")]
+            if runtime_hook_applied {
+                telemetry_handle.record_manifest_hook_enforcement("runtime_upgrade", "allowed");
+            }
+            #[cfg(not(feature = "telemetry"))]
+            let _ = runtime_hook_applied;
+            #[cfg(feature = "telemetry")]
+            {
+                manifest_allowed = true;
             }
         }
         // Keep proof verification on the same manifest cut used by this
         // admission. The separately published privacy handle is a cache.
-        let lane_privacy_registry_handle = self.admission_privacy_registry_for(&manifest_snapshot);
+        let lane_privacy_registry_handle = match self.admission_privacy_registry_for(
+            &manifest_snapshot,
+            &state_access.execution_budget(),
+            retired,
+        ) {
+            Ok(registry) => registry,
+            Err(original) => return Err(Self::refused(Error::Deferred(original), checked)),
+        };
         let privacy_proofs = Self::collect_lane_privacy_proofs(&checked);
         let verified_privacy_commitments = if privacy_proofs.is_empty() {
             BTreeSet::new()
         } else {
             match verify_lane_privacy_proofs(
-                lane_privacy_registry_handle.as_ref(),
+                &lane_privacy_registry_handle,
                 lane_id,
                 &privacy_proofs,
             ) {
@@ -4357,6 +4571,10 @@ impl Queue {
             pending_teu,
         })
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed enqueue returns the original admission notifications and refusal without another allocation"
+    )]
     fn enqueue_prepared_admissions(
         &self,
         prepared: Vec<PreparedQueueAdmission>,
@@ -4563,7 +4781,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_in_view(tx, &state_view)
+        let result = self.push_with_lane_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Push transaction into queue with a shared [`StateView`] snapshot.
     ///
@@ -4585,7 +4806,34 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, None)
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            None,
+            SubmissionOrigin::Remote,
+        )
+    }
+    /// Push a transaction that this node's own SCCP keeper built and signed.
+    ///
+    /// Admission is identical to [`Self::push_with_lane_with_state`] with one exception
+    /// (`specs/sccp.md` §4.9 ingress): forgery evidence skips the repeat cache and the
+    /// node-wide pairing bucket, which remote floods share, but still runs every other
+    /// check and the full pairing. Only the in-node keeper calls this; Torii, P2P gossip
+    /// and every other remote source use the throttled entrypoints.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_local_keeper_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            None,
+            SubmissionOrigin::LocalKeeper,
+        )
     }
     /// Push transaction into queue using a caller-provided full routing plan.
     ///
@@ -4597,7 +4845,12 @@ impl Queue {
         state: &State,
         routing_plan: RoutingPlan,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_plan))
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            SubmissionOrigin::Remote,
+        )
     }
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
     /// supplied [`StateView`].
@@ -4610,7 +4863,10 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
     ) -> Result<(), Failure> {
-        self.push_in_view(tx, &state_view)
+        let result = self.push_in_view(tx, &state_view);
+        // This owned admission API releases the snapshot guards before returning.
+        drop(state_view);
+        result
     }
     /// Pushes an accepted transaction into the queue with a shared [`StateView`] snapshot.
     ///
@@ -4827,34 +5083,37 @@ impl Queue {
         telemetry: Option<&StateTelemetry>,
     ) -> BackpressureState {
         let snapshot = self.pressure_snapshot_with_tracked_count(tracked_tx_count);
-        let state = if let Some(ledger) = self.resident_accounting.get() {
-            ledger
-                .faulted
-                .store(self.admission_faulted(), Ordering::Release);
-            ledger.publish_backpressure()
-        } else {
-            let state = snapshot.into_backpressure();
-            let _ = self.backpressure_tx.send_if_modified(|current| {
-                if *current == state {
-                    false
-                } else {
-                    *current = state;
-                    true
-                }
-            });
-            state
-        };
+        let state = self.resident_accounting.get().map_or_else(
+            || {
+                let state = snapshot.into_backpressure();
+                let _ = self.backpressure_tx.send_if_modified(|current| {
+                    if *current == state {
+                        false
+                    } else {
+                        *current = state;
+                        true
+                    }
+                });
+                state
+            },
+            |ledger| {
+                ledger
+                    .faulted
+                    .store(self.admission_faulted(), Ordering::Release);
+                ledger.publish_backpressure()
+            },
+        );
         #[cfg(feature = "telemetry")]
         if let Some(tel) = telemetry {
             crate::telemetry::record_state_tx_queue_backpressure(
                 tel,
-                snapshot.queued_tx_count as u64,
-                self.capacity.get() as u64,
-                snapshot.retained_bytes,
-                snapshot.max_retained_bytes.get(),
-                snapshot.saturated_by_count,
-                snapshot.saturated_by_bytes,
-                snapshot.saturated_by_age,
+                (snapshot.queued_tx_count as u64, self.capacity.get() as u64),
+                (snapshot.retained_bytes, snapshot.max_retained_bytes.get()),
+                (
+                    snapshot.saturated_by_count,
+                    snapshot.saturated_by_bytes,
+                    snapshot.saturated_by_age,
+                ),
                 snapshot.oldest_queued_tx_age_ms,
             );
         }
@@ -5015,8 +5274,8 @@ impl Queue {
         }
         self.publish_teu_backlog_metric_keys(
             telemetry,
-            [info.lane_id].into_iter(),
-            [(info.lane_id, info.dataspace_id)].into_iter(),
+            [info.lane_id],
+            [(info.lane_id, info.dataspace_id)],
         );
     }
     #[cfg(feature = "telemetry")]
@@ -5080,7 +5339,7 @@ impl Queue {
             let aggregate = self
                 .lane_teu_pending
                 .get(&lane_id)
-                .map(|entry| entry.value().clone())
+                .map(|entry| *entry.value())
                 .unwrap_or_default();
             let limits = self.nexus_limits.read().for_lane(lane_id);
             let committed = aggregate.teu.min(limits.teu_capacity);
@@ -5105,7 +5364,7 @@ impl Queue {
             let aggregate = self
                 .dataspace_teu_pending
                 .get(&(lane_id, dataspace_id))
-                .map(|entry| entry.value().clone())
+                .map(|entry| *entry.value())
                 .unwrap_or_default();
             telemetry.record_nexus_scheduler_dataspace_teu(
                 lane_id,
@@ -5320,35 +5579,51 @@ impl Queue {
     /// Align cached Nexus metadata around an explicitly supplied test router.
     #[cfg(test)]
     pub(crate) fn install_test_router_metadata_for_nexus(&self, nexus: &Nexus) {
+        let mut retired = QueuePrivacyRetirements::default();
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
-        *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
-        *self.lane_catalog.write() = Arc::clone(&lane_catalog);
-        *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
-        *self.routing_policy.write() = nexus.routing_policy.clone();
-        let registry = Arc::new(
-            self.lane_manifests
-                .read()
-                .rebind(&lane_catalog, &nexus.governance),
+        let limits = QueueLimits::from_nexus(nexus);
+        let routing_policy = nexus.routing_policy.clone();
+        let guard = self.lane_manifests.write();
+        let registry = Arc::new(guard.rebind(&lane_catalog, &nexus.governance));
+        assert!(
+            registry
+                .iter_statuses()
+                .all(|status| status.privacy_commitments.is_empty()),
+            "constructor metadata helper requires an empty privacy graph; install a funded fixture explicitly"
         );
-        self.install_lane_manifests_unchecked_in_queue(&registry);
+        let prepared = PreparedQueueManifestDiagnostics::new(&guard, &registry);
+        self.publish_lane_manifest_projection(
+            guard,
+            prepared,
+            LanePrivacyRegistry::empty(),
+            &mut retired,
+        );
+        *self.nexus_limits.write() = limits;
+        *self.lane_catalog.write() = lane_catalog;
+        *self.dataspace_catalog.write() = dataspace_catalog;
+        *self.routing_policy.write() = routing_policy;
     }
     /// Ensure the queue router and cached catalogs match the committed Nexus state.
     ///
     /// Proposal leaders use cached queue routing to build block execution contexts, while
     /// validators recompute those contexts from committed state. This guard keeps those two
     /// surfaces aligned even after startup replay or runtime Nexus updates.
+    ///
+    /// # Errors
+    /// Returns the original State pool refusal before changing accepted routing,
+    /// manifest, privacy, or admission-cache owners.
     pub fn reconfigure_nexus_with_state_if_needed(
         &self,
         nexus: &Nexus,
         state: &State,
         lane_compliance: Option<Arc<LaneComplianceEngine>>,
-    ) -> bool {
+    ) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
         if self.nexus_routing_matches(nexus) {
-            return false;
+            return Ok(false);
         }
-        self.reconfigure_nexus_with_state(nexus, state, lane_compliance);
-        true
+        self.reconfigure_nexus_with_state(nexus, state, lane_compliance)?;
+        Ok(true)
     }
     /// Returns the queue capacity limits enforced when admitting transactions.
     #[must_use]
@@ -5362,12 +5637,28 @@ impl Queue {
     }
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
     /// update. Certified plans retain their exact route; Ordinary input is rerouted from State.
+    ///
+    /// # Errors
+    /// Returns the original State pool refusal before changing accepted routing,
+    /// manifest, privacy, or admission-cache owners.
     pub fn reconfigure_nexus(
         &self,
         nexus: &Nexus,
         state_view: &StateView<'_>,
         lane_compliance: Option<Arc<LaneComplianceEngine>>,
-    ) {
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
+        let mut retired = QueuePrivacyRetirements::default();
+        self.reconfigure_nexus_retaining_privacy(nexus, state_view, lane_compliance, &mut retired)
+    }
+    fn reconfigure_nexus_retaining_privacy(
+        &self,
+        nexus: &Nexus,
+        state_view: &StateView<'_>,
+        lane_compliance: Option<Arc<LaneComplianceEngine>>,
+        retired: &mut QueuePrivacyRetirements,
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
+        let budget = state_view.execution_budget();
+        budget.with_deferred_refund_notifications(|_| {
         let routing_generation_unchanged = self.nexus_routing_matches(nexus);
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
@@ -5387,12 +5678,17 @@ impl Queue {
             );
         }
         // Publish fail-closed manifest semantics before exposing new routes.
-        self.install_lane_manifests_unchecked_in_queue(&registry);
+        let limits = QueueLimits::from_nexus(nexus);
+        let routing_policy = nexus.routing_policy.clone();
+        let guard = self.lane_manifests.write();
+        let prepared = PreparedQueueManifestDiagnostics::new(&guard, &registry);
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(&registry, &budget)?;
+        self.publish_lane_manifest_projection(guard, prepared, privacy, retired);
         *self.router.write() = Arc::clone(&router);
-        *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
+        *self.nexus_limits.write() = limits;
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
-        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_policy.write() = routing_policy;
         *self.lane_compliance.write() = lane_compliance;
         #[cfg(feature = "telemetry")]
         {
@@ -5407,15 +5703,38 @@ impl Queue {
             &dataspace_catalog,
             routing_generation_unchanged,
         );
+        Ok(())
+        })
     }
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
     /// update. Certified plans retain their exact route; Ordinary input is rerouted from State.
+    ///
+    /// # Errors
+    /// Returns the original State pool refusal before changing accepted routing,
+    /// manifest, privacy, or admission-cache owners.
     pub fn reconfigure_nexus_with_state(
         &self,
         nexus: &Nexus,
         state: &State,
         lane_compliance: Option<Arc<LaneComplianceEngine>>,
-    ) {
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
+        let mut retired = QueuePrivacyRetirements::default();
+        self.reconfigure_nexus_with_state_retaining_privacy(
+            nexus,
+            state,
+            lane_compliance,
+            &mut retired,
+        )
+    }
+    fn reconfigure_nexus_with_state_retaining_privacy(
+        &self,
+        nexus: &Nexus,
+        state: &State,
+        lane_compliance: Option<Arc<LaneComplianceEngine>>,
+        retired: &mut QueuePrivacyRetirements,
+    ) -> Result<(), crate::execution_attempt::ExecutionDeferred> {
+        let budget = state.ivm_execution_budget();
+        budget.with_deferred_refund_notifications(|_| {
         let routing_generation_unchanged = self.nexus_routing_matches(nexus);
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
@@ -5436,12 +5755,17 @@ impl Queue {
         }
         // Refresh the Queue projection before routing. Only explicit manifest
         // installation or an authenticated lifecycle may publish State policy.
-        self.install_lane_manifests_unchecked_in_queue(&registry);
+        let limits = QueueLimits::from_nexus(nexus);
+        let routing_policy = nexus.routing_policy.clone();
+        let guard = self.lane_manifests.write();
+        let prepared = PreparedQueueManifestDiagnostics::new(&guard, &registry);
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(&registry, &budget)?;
+        self.publish_lane_manifest_projection(guard, prepared, privacy, retired);
         *self.router.write() = Arc::clone(&router);
-        *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
+        *self.nexus_limits.write() = limits;
         *self.lane_catalog.write() = Arc::clone(&lane_catalog);
         *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
-        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_policy.write() = routing_policy;
         *self.lane_compliance.write() = lane_compliance;
         #[cfg(feature = "telemetry")]
         {
@@ -5456,6 +5780,8 @@ impl Queue {
             &dataspace_catalog,
             routing_generation_unchanged,
         );
+        Ok(())
+        })
     }
     /// Apply a lane lifecycle plan to the WSV and refresh queue routing/limits.
     ///
@@ -5473,7 +5799,8 @@ impl Queue {
         let lane_compliance = self.lane_compliance.read().clone();
         state.apply_lane_lifecycle(plan)?;
         let nexus = state.nexus_snapshot();
-        self.reconfigure_nexus_with_state(&nexus, state, lane_compliance);
+        self.reconfigure_nexus_with_state(&nexus, state, lane_compliance)
+            .map_err(LaneLifecycleError::ParameterDeferred)?;
         Ok(())
     }
 }
@@ -5512,7 +5839,6 @@ pub mod tests {
         account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
             AuditControls, DataSpaceCatalog, DataSpaceMetadata, JurisdictionSet, LaneCatalog,
@@ -5523,7 +5849,6 @@ pub mod tests {
         parameter::TransactionParameters,
         prelude::*,
         proof::{ProofAttachment, ProofBox},
-        runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
             SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
@@ -5868,7 +6193,8 @@ pub mod tests {
             &lane_catalog,
         )
         .expect("initialize authenticated future-created autoscale Kura");
-        let constructor_world = world_with_test_domains();
+        let constructor_world =
+            world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees());
         let mut state = State::try_new(
             constructor_world
                 .sccp_committee_generations
@@ -5882,10 +6208,6 @@ pub mod tests {
         )
         .expect("initialize authenticated future-created autoscale State");
         let mut nexus = state.nexus_snapshot();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = nonzero!(1_u32);
         nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
@@ -6092,7 +6414,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -6377,7 +6699,7 @@ pub mod tests {
             state,
             authority_id,
             authority_keypair,
-        } = nexus_routing_fixture_with_nexus(nexus.clone());
+        } = nexus_routing_fixture_with_nexus(nexus.clone(), zero_rate_routing_fees());
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: retired_lane,
@@ -6478,10 +6800,9 @@ pub mod tests {
             mut state,
             authority_id,
             authority_keypair,
-        } = nexus_routing_fixture_with_nexus(nexus.clone());
+        } = nexus_routing_fixture_with_nexus(nexus.clone(), zero_rate_routing_fees());
         nexus.routing_policy.default_lane = lane_id;
         nexus.routing_policy.default_dataspace = dataspace_id;
-        nexus.fees.base_fee = Quantity::zero();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
             Config {
@@ -6529,7 +6850,11 @@ pub mod tests {
         state
             .set_nexus(nexus.clone())
             .expect("change routing policy within the original configured catalog");
-        assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+        assert!(
+            queue
+                .reconfigure_nexus_with_state_if_needed(&nexus, &state, None)
+                .expect("original State pool admits Queue privacy projection")
+        );
         assert_eq!(
             queue
                 .routing_plans
@@ -6565,7 +6890,11 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::new(lane_id, dataspace_id)
         );
-        assert!(!queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+        assert!(
+            !queue
+                .reconfigure_nexus_with_state_if_needed(&nexus, &state, None)
+                .expect("original State pool admits Queue privacy projection")
+        );
         assert!(!queue.accepted_work_validation_faulted());
         let popped = queue
             .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
@@ -6586,9 +6915,8 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
-        nexus.fees.base_fee = Quantity::zero();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -6610,7 +6938,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("autoscale shard candidate {idx}").into(),
+                        format!("autoscale shard candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -6685,7 +7013,11 @@ pub mod tests {
         assert_eq!(expected_current.coordinator_route(), expected);
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
-        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert!(
+            queue
+                .reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None)
+                .expect("original State pool admits Queue privacy projection")
+        );
         assert_eq!(
             queue
                 .routing_plans
@@ -6746,9 +7078,8 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
-        nexus.fees.base_fee = Quantity::zero();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -6770,7 +7101,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("future autoscale shard candidate {idx}").into(),
+                        format!("future autoscale shard candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -6821,7 +7152,11 @@ pub mod tests {
         state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 6);
         let committed_nexus = state.nexus_snapshot();
-        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert!(
+            queue
+                .reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None)
+                .expect("original State pool admits Queue privacy projection")
+        );
         assert_eq!(
             queue
                 .routing_plans
@@ -6855,7 +7190,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -6891,7 +7226,6 @@ pub mod tests {
         .expect("initial autoscale lane catalog");
         {
             let nexus = state.nexus.get_mut();
-            nexus.fees.base_fee = Quantity::zero();
             nexus.lane_catalog = initial_catalog;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
@@ -6913,7 +7247,11 @@ pub mod tests {
             },
             &time_source,
         );
-        assert!(queue.reconfigure_nexus_with_state_if_needed(&initial_nexus, &state, None));
+        assert!(
+            queue
+                .reconfigure_nexus_with_state_if_needed(&initial_nexus, &state, None)
+                .expect("original State pool admits Queue privacy projection")
+        );
         let tx = (0_u32..512)
             .map(|idx| {
                 accepted_tx_with(
@@ -6922,7 +7260,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("physical scale-in candidate {idx}").into(),
+                        format!("physical scale-in candidate {idx}"),
                     ))],
                     Metadata::default(),
                 )
@@ -7013,9 +7351,7 @@ pub mod tests {
             *self.decision.write() = Err(dataspace_id);
         }
         fn current(&self) -> Result<RoutingDecision, RoutingResolveError> {
-            self.decision
-                .read()
-                .clone()
+            (*self.decision.read())
                 .map_err(|dataspace_id| RoutingResolveError::UnknownDataspace { dataspace_id })
         }
     }
@@ -7144,15 +7480,13 @@ pub mod tests {
         nexus.dataspace_catalog = dataspace_catalog;
         nexus.routing_policy.default_lane = policy_lane;
         nexus.routing_policy.default_dataspace = dataspace;
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
         queue.install_test_router_metadata_for_nexus(&nexus);
+        let world =
+            world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees());
         let state = if autoscale_lane.is_some() {
             // Deliberately model a future lane that production startup refuses.
             let state = State::new(
-                world_with_test_domains(),
+                world,
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
             );
@@ -7161,11 +7495,7 @@ pub mod tests {
             state.reseed_static_lane_incarnations_for_tests();
             state
         } else {
-            State::new_with_nexus_for_testing(
-                world_with_test_domains(),
-                nexus,
-                LiveQueryStore::start_test(),
-            )
+            State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test())
         };
         for authority in [&primary, &secondary, &outsider, &conflicting_validator] {
             register_test_authority(&state, authority);
@@ -7216,7 +7546,9 @@ pub mod tests {
                 status(conflicting_lane, "stale-conflict", conflicting_rules),
             ),
         ])));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
 
         PolicyOnlyDataspaceQueueFixture {
             queue,
@@ -7399,9 +7731,12 @@ pub mod tests {
             .expect("active authority source status");
         missing_status.manifest_path = None;
         missing_status.governance_rules = None;
-        queue.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-            statuses,
-        )));
+        queue
+            .install_lane_manifests_for_testing(
+                &Arc::new(LaneManifestRegistry::from_statuses(statuses)),
+                &state.ivm_execution_budget(),
+            )
+            .expect("original fixture pool admits privacy projection");
 
         let tx = accepted_tx_with(
             primary,
@@ -7501,6 +7836,7 @@ pub mod tests {
             CheckedTransaction::new_unchecked(tx),
             RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
             &mut state_access,
+            &mut QueuePrivacyRetirements::default(),
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         ) {
@@ -7555,7 +7891,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let validator_tx = accepted_tx_by(validator_id.clone(), &validator_keypair, &time_source);
         queue
             .push(validator_tx, state.view())
@@ -7610,7 +7948,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
         queue
             .push(other_tx, state.view())
@@ -7618,6 +7958,7 @@ pub mod tests {
     }
     #[test]
     fn manifest_hot_reload_rejects_semantic_drift_atomically() {
+        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         fn registry(path: &str, validator: AccountId, quorum: u32) -> LaneManifestRegistryHandle {
             let rules = GovernanceRules {
                 validators: vec![validator],
@@ -7645,15 +7986,17 @@ pub mod tests {
         let (alice, _) = gen_account_in("wonderland");
         let (bob, _) = gen_account_in("wonderland");
         let baseline = registry("/srv/default.manifest.json", alice.clone(), 1);
-        queue.install_lane_manifests_for_testing(&baseline);
+        queue
+            .install_lane_manifests_for_testing(&baseline, &fixture_budget)
+            .expect("original fixture pool admits privacy projection");
         let baseline_digest = baseline.consensus_policy_digest();
         let drift = registry("/srv/default.manifest.json", bob, 2);
-        assert!(!queue.install_lane_manifests_if_consensus_compatible(&drift));
+        assert!(!queue.install_lane_manifests_if_consensus_compatible(&drift, &fixture_budget));
         let retained = queue.lane_manifests.read().clone();
         assert!(Arc::ptr_eq(&retained, &baseline));
         assert_eq!(retained.consensus_policy_digest(), baseline_digest);
         let relocated = registry("/relocated/default.manifest.json", alice, 1);
-        assert!(queue.install_lane_manifests_if_consensus_compatible(&relocated));
+        assert!(queue.install_lane_manifests_if_consensus_compatible(&relocated, &fixture_budget));
         let installed = queue.lane_manifests.read().clone();
         assert!(Arc::ptr_eq(&installed, &relocated));
         assert_eq!(installed.consensus_policy_digest(), baseline_digest);
@@ -7662,6 +8005,8 @@ pub mod tests {
     fn materialized_manifest_refresh_updates_local_diagnostics_without_state_publication() {
         use iroha_config::parameters::actual::LaneRegistry;
 
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -7673,7 +8018,17 @@ pub mod tests {
         let original_directory = tempfile::tempdir().unwrap();
         let relocated_directory = tempfile::tempdir().unwrap();
         let alias = &nexus.lane_catalog.lanes()[0].alias;
-        let manifest = norito::json::to_vec(&norito::json!({ "lane": alias })).unwrap();
+        let manifest = norito::json::to_vec(&norito::json!({
+            "lane": alias,
+            "privacy_commitments": [{
+                "id": 7, "scheme": "merkle",
+                "merkle": {
+                    "root": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "max_depth": 4,
+                },
+            }],
+        }))
+        .unwrap();
         let load = |directory: &std::path::Path| {
             std::fs::write(directory.join(format!("{alias}.manifest.json")), &manifest).unwrap();
             Arc::new(LaneManifestRegistry::from_config(
@@ -7697,12 +8052,38 @@ pub mod tests {
             .unwrap();
         let generation = state.state_view_generation();
         let original_privacy = state.lane_privacy_registry.read().clone();
+        let budget = state.ivm_execution_budget();
+        assert!(!original_privacy.is_empty());
+        assert!(original_privacy.belongs_to(&budget));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &queue.lane_privacy_registry(),
+            &original_privacy
+        ));
+        let before_reload = budget.reserved_bytes();
+        let occupied = budget
+            .try_reserve_bytes(budget.limit_bytes() - before_reload)
+            .unwrap();
         assert!(
             queue.install_lane_manifests_with_state_if_consensus_compatible(&relocated, &state,)
         );
         assert_eq!(state.state_view_generation(), generation);
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &queue.lane_privacy_registry(),
+            &original_privacy
+        ));
+        let cached = queue
+            .admission_privacy_registry_for(
+                &relocated,
+                &budget,
+                &mut QueuePrivacyRetirements::default(),
+            )
+            .expect("State handoff seeds admission with the exact retained owner");
+        assert!(LanePrivacyRegistry::ptr_eq(&cached, &original_privacy));
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(occupied);
+        assert_eq!(budget.reserved_bytes(), before_reload);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-        assert!(Arc::ptr_eq(
+        assert!(LanePrivacyRegistry::ptr_eq(
             &state.lane_privacy_registry.read(),
             &original_privacy
         ));
@@ -7753,12 +8134,12 @@ pub mod tests {
         assert!(error.to_string().contains("materialized frozen source"));
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
-        assert!(Arc::ptr_eq(
+        assert!(LanePrivacyRegistry::ptr_eq(
             &*state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &queue_before));
-        assert!(Arc::ptr_eq(
+        assert!(LanePrivacyRegistry::ptr_eq(
             &*queue.lane_privacy_registry.read(),
             &queue_privacy_before
         ));
@@ -7786,7 +8167,7 @@ pub mod tests {
             .expect("equal source authority refreshes Queue without State publication");
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
-        assert!(Arc::ptr_eq(
+        assert!(LanePrivacyRegistry::ptr_eq(
             &*state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
@@ -7807,7 +8188,9 @@ pub mod tests {
         queue
             .push(tx, state.view())
             .expect("enqueue transaction before Nexus reconfiguration");
-        queue.reconfigure_nexus_with_state(&nexus, &state, None);
+        queue
+            .reconfigure_nexus_with_state(&nexus, &state, None)
+            .expect("original State pool admits Queue privacy projection");
         assert!(
             queue.txs.contains_key(&hash),
             "still-pending transaction must survive an unchanged Nexus reconfiguration"
@@ -7860,7 +8243,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -8021,7 +8406,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -8102,7 +8489,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -8192,7 +8581,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -8357,7 +8748,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -8581,7 +8974,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let instruction_contract_address =
             iroha_data_model::smart_contract::ContractAddress::derive(
@@ -8659,7 +9054,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
@@ -8736,7 +9133,9 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests_for_testing(&manifests);
+        queue
+            .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+            .expect("original fixture pool admits privacy projection");
         let tx_missing_metadata = accepted_tx_with(
             validator.clone(),
             &keypair,
@@ -9139,6 +9538,7 @@ pub mod tests {
         include!("queue/resident_owner_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
+    include!("queue/runtime_envelope_admission_tests.rs");
     include!("queue/keepalive_tests.rs");
     include!("queue/domain_admission_tests.rs");
     include!("queue/resource_contract_tests.rs");
@@ -9187,11 +9587,11 @@ pub mod tests {
             {
                 let mut stx = block.transaction();
                 stx.world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-                        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                    ))
+                    .set_parameter_for_testing(
+                        crate::sumeragi::lanes::routing::test_support::metadata(
+                            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+                        ),
+                    )
                     .expect("original signed global routing metadata");
                 install_value_route(
                     &mut stx,
@@ -9207,10 +9607,10 @@ pub mod tests {
                     .expect("installed route");
                 route.revisions.get_mut(&1).expect("revision").liability = 100 * ONE_XOR;
                 store::routes::insert(&mut stx, network, route).expect("backing liability");
-                let mut parameters = store::parameters::get(&*stx.world).clone().expect("SCCP");
+                let mut parameters = (*store::parameters::get(&*stx.world)).expect("SCCP");
                 parameters.max_exempt_transactions_per_block = 1;
                 parameters.enabled = false;
-                store::parameters::set(&mut stx, Some(parameters.clone()));
+                store::parameters::set(&mut stx, Some(parameters));
                 for (nonce, signer) in recipients.iter().enumerate() {
                     let recipient = AccountId::new(signer.public_key().clone());
                     recipients::ensure_registered(&mut stx, &recipient).expect("recipient");
@@ -9275,7 +9675,10 @@ pub mod tests {
                 state.network_id_ref(),
                 view.world().parameters().sumeragi().max_clock_drift(),
                 view.world().parameters().transaction(),
-                &state.crypto(),
+                state
+                    .transaction_admission_parameters()
+                    .require_crypto_policy()
+                    .expect("original fixture policy"),
                 &time_source,
             )
             .expect("signed queue input accepted")
@@ -9578,23 +9981,63 @@ pub mod tests {
     fn admission_privacy_registry_is_rebuilt_only_for_a_new_manifest_snapshot() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let manifests = queue.lane_manifests.read().clone();
-        let first = queue.admission_privacy_registry_for(&manifests);
-        let second = queue.admission_privacy_registry_for(&manifests);
-        assert!(Arc::ptr_eq(&first, &second));
-        let replacement = Arc::new(
-            LaneManifestRegistry::empty()
-                .rebind(&LaneCatalog::default(), &GovernanceCatalog::default()),
-        );
-        let third = queue.admission_privacy_registry_for(&replacement);
-        assert!(!Arc::ptr_eq(&first, &third));
+        let budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
+        let mut status = queue
+            .lane_manifests
+            .read()
+            .status(LaneId::SINGLE)
+            .unwrap()
+            .clone();
+        status.privacy_commitments = vec![LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(7),
+            MerkleCommitment::from_root_bytes([0x11; 32], 4),
+        )];
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+            LaneId::SINGLE,
+            status,
+        )])));
+        let first = queue
+            .admission_privacy_registry_for(
+                &manifests,
+                &budget,
+                &mut QueuePrivacyRetirements::default(),
+            )
+            .expect("original fixture pool");
+        let second = queue
+            .admission_privacy_registry_for(
+                &manifests,
+                &budget,
+                &mut QueuePrivacyRetirements::default(),
+            )
+            .expect("original fixture pool");
+        assert!(LanePrivacyRegistry::ptr_eq(&first, &second));
+        let replacement = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+            LaneId::SINGLE,
+            manifests.status(LaneId::SINGLE).unwrap().clone(),
+        )])));
+        let third = queue
+            .admission_privacy_registry_for(
+                &replacement,
+                &budget,
+                &mut QueuePrivacyRetirements::default(),
+            )
+            .expect("original fixture pool");
+        assert!(!LanePrivacyRegistry::ptr_eq(&first, &third));
         assert_eq!(
             third.is_empty(),
-            LanePrivacyRegistry::from_manifest_registry(&replacement).is_empty()
+            LanePrivacyRegistry::try_from_manifest_registry(&replacement, &budget)
+                .unwrap()
+                .is_empty()
         );
-        assert!(Arc::ptr_eq(
+        assert!(LanePrivacyRegistry::ptr_eq(
             &third,
-            &queue.admission_privacy_registry_for(&replacement)
+            &queue
+                .admission_privacy_registry_for(
+                    &replacement,
+                    &budget,
+                    &mut QueuePrivacyRetirements::default()
+                )
+                .expect("original fixture pool")
         ));
     }
     #[test]
@@ -9672,7 +10115,11 @@ pub mod tests {
                 &queue_test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 signed.creation_time(),
             )
             .expect("signed Network source passes stateless admission")
@@ -9891,7 +10338,7 @@ pub mod tests {
             .collect::<Vec<_>>();
         let hashes = transactions
             .iter()
-            .map(|tx| tx.hash_as_entrypoint())
+            .map(super::super::tx::AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>();
         for tx in transactions {
             queue.push(tx, state.view()).expect("push transaction");
@@ -10037,6 +10484,76 @@ pub mod tests {
     include!("queue/instruction_and_state_routing_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
     include!("queue/config_factory_test_support.rs");
+    /// Author the exact four zero rates selected by routing-only component fixtures.
+    fn zero_rate_routing_fees() -> iroha_data_model::block::consensus::RootFeePolicy {
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        fees.base_fee = Quantity::zero();
+        fees.per_byte_fee = Quantity::zero();
+        fees.per_instruction_fee = Quantity::zero();
+        fees.per_gas_unit_fee = Quantity::zero();
+        fees
+    }
+
+    /// Put the caller's complete fee policy in this explicit pre-chain component World.
+    fn world_with_explicit_queue_fees(
+        mut world: World,
+        fees: iroha_data_model::block::consensus::RootFeePolicy,
+    ) -> World {
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter()
+                    .expect("valid complete queue fixture fee policy"),
+            ))
+            .expect("explicit complete queue fixture fee policy");
+        world
+    }
+
+    #[test]
+    fn routing_fee_authoring_preserves_full_policy_and_unrelated_defaults() {
+        let defaults = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        let fees = zero_rate_routing_fees();
+        assert_eq!(fees.base_fee, Quantity::zero());
+        assert_eq!(fees.per_byte_fee, Quantity::zero());
+        assert_eq!(fees.per_instruction_fee, Quantity::zero());
+        assert_eq!(fees.per_gas_unit_fee, Quantity::zero());
+        assert_eq!(fees.fee_asset_id, defaults.fee_asset_id);
+        assert_eq!(fees.fee_sink_account_id, defaults.fee_sink_account_id);
+        assert_eq!(
+            fees.sponsor_vault_custody_account_id,
+            defaults.sponsor_vault_custody_account_id
+        );
+        assert_eq!(
+            fees.successful_claim_fee_exempt_authorities,
+            defaults.successful_claim_fee_exempt_authorities
+        );
+        let zero_world = world_with_explicit_queue_fees(world_with_test_domains(), fees.clone());
+        assert_eq!(zero_world.parameters.view().get().root_fees(), Some(&fees));
+        let default_world =
+            world_with_explicit_queue_fees(world_with_test_domains(), defaults.clone());
+        assert_eq!(
+            default_world.parameters.view().get().root_fees(),
+            Some(&defaults)
+        );
+        assert_ne!(defaults.per_instruction_fee, Quantity::zero());
+        assert_ne!(defaults.per_gas_unit_fee, Quantity::zero());
+        let fixture = nexus_routing_fixture_with_nexus(Nexus::default(), fees.clone());
+        assert_eq!(
+            fixture.state.world.parameters.view().get().root_fees(),
+            Some(&fees)
+        );
+        let default_fixture = nexus_routing_fixture();
+        assert_eq!(
+            default_fixture
+                .state
+                .world
+                .parameters
+                .view()
+                .get()
+                .root_fees(),
+            Some(&defaults)
+        );
+    }
+
     /// Choose the complete initial catalog before constructing State and Kura.
     fn test_nexus_for_routes(routes: &[(LaneId, DataSpaceId)]) -> Nexus {
         let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
@@ -10053,10 +10570,6 @@ pub mod tests {
             .find(|lane| lane.id == nexus.routing_policy.default_lane)
             .expect("fixture catalog contains the primary route");
         nexus.routing_policy.default_dataspace = primary.dataspace_id;
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus
     }
     fn world_with_uaid_account(
@@ -10073,12 +10586,16 @@ pub mod tests {
         let mut world = World::with([domain], [account], []);
         // This queue component has explicit Global routing metadata; its UAID
         // fixtures do not authenticate a native genesis or publication source.
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded original parameter-only fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
         if bind_manifest {
             let manifest = AssetPermissionManifest {

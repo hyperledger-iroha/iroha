@@ -17,4 +17,4 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 iroha_pasta = { workspace = true }
-sha2 = "0.10.9"
+sha2 = "0.11.1"

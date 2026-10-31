@@ -123,7 +123,7 @@ impl RetainedGenesis {
         let params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &parameter_state,
-            metadata.sumeragi_context.clone(),
+            metadata.sumeragi_context,
         )
         .map_err(|error| eyre!(error))?;
         let profile = ConsensusBootstrapProfile {
@@ -199,10 +199,12 @@ impl RetainedGenesis {
             &original,
             &AccountId::new(self.originals.public_key.clone()),
             topology,
-            Some(&config.pipeline),
-            Some(&config.nexus),
-            Some(&config.zk),
-            Some(config),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&config.pipeline),
+                nexus_config: Some(&config.nexus),
+                zk_config: Some(&config.zk),
+                runtime_config: Some(config),
+            },
         )?;
         // Native validation authenticates the proposal and computes its outputs.
         // Outputs are secondary state, not signed proposal content: a valid
@@ -261,6 +263,7 @@ impl NetworkBuilder {
                 && self.observer_p2p_bootstrap.is_none()
                 && self.observer_slow_reader_relays.is_none()
                 && self.custom_genesis.is_none()
+                && self.genesis_staking_policy.is_none()
                 && self.genesis_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_topology_isi.iter().all(Vec::is_empty)
                 && self.genesis_post_bootstrap_isi.iter().all(Vec::is_empty)
@@ -328,7 +331,7 @@ impl NetworkBuilder {
             "retained peer omitted its signed PoP"
         );
         let gossip_ms = i64::try_from(self.block_sync_gossip_period.as_millis())?;
-        let mut base_layer = config::base_iroha_config()
+        let base_layer = config::base_iroha_config()
             .write("chain", genesis.manifest.chain_id().to_string())
             .write("chain_discriminant", i64::from(discriminant))
             .write(
@@ -347,17 +350,6 @@ impl NetworkBuilder {
             .write(["pipeline", "signature_batch_max_bls"], 4_i64)
             .write(["torii", "transport", "norito_rpc", "stage"], "ga")
             .write(["torii", "transport", "norito_rpc", "enabled"], true);
-        // These are ordinary runtime defaults only. Native staging must match the
-        // signed policy after all caller layers; no genesis instruction is added.
-        let genesis_account = AccountId::new(genesis.originals.public_key.clone())
-            .to_i105_for_discriminant(discriminant)?;
-        for path in [
-            ["nexus", "fees", "fee_sink_account_id"],
-            ["nexus", "staking", "stake_escrow_account_id"],
-            ["nexus", "staking", "slash_sink_account_id"],
-        ] {
-            base_layer = base_layer.write(path, genesis_account.clone());
-        }
         let network = Network {
             env,
             peers,
@@ -374,6 +366,7 @@ impl NetworkBuilder {
             genesis_key_pair: None,
             genesis_isi: Vec::new(),
             genesis_post_topology_isi: Vec::new(),
+            generated_staking_policy: None,
             cached_genesis: OnceLock::new(),
             generated_genesis_manifest: OnceLock::new(),
             retained_genesis: Some(genesis),
@@ -670,6 +663,9 @@ mod tests {
             }),
             Box::new(|recipe| recipe.block_cadence = Some(Duration::from_secs(37))),
             Box::new(|recipe| recipe.ivm_fuel = IvmFuelConfig::Auto),
+            Box::new(|recipe| {
+                recipe.genesis_staking_policy = Some(config::default_test_network_staking_policy())
+            }),
             Box::new(|recipe| recipe.genesis_key_pair = ALICE_KEYPAIR.clone()),
             Box::new(|recipe| recipe.genesis_committee_keys_for_global_peers = true),
             Box::new(|recipe| recipe.auto_populate_trusted_peer_pops = false),
@@ -697,10 +693,18 @@ mod tests {
             .collect::<Vec<_>>();
         let mut actual = resolve_actual_config_result(&generated.peers[0], &layers)?;
         retained.validate_runtime(&actual, &topology)?;
-        actual.nexus.fees.fee_sink_account_id = iroha_test_samples::BOB_ID.clone();
+        // Fees are authored in the signed genesis; governance is still node execution policy.
+        actual.gov.slash_receiver_account = iroha_test_samples::BOB_ID.clone();
         let preexecutions = config::genesis_preexecution_count();
         let signatures = config::genesis_signing_count();
-        assert!(retained.validate_runtime(&actual, &topology).is_err());
+        let refusal = retained
+            .validate_runtime(&actual, &topology)
+            .err()
+            .expect("a changed native execution policy must be refused");
+        assert!(
+            format!("{refusal:#}").contains("Signed genesis policy mismatch"),
+            "{refusal:#}"
+        );
         assert!(
             config::genesis_preexecution_count() > preexecutions,
             "ordinary native validator was exercised"
@@ -733,10 +737,12 @@ mod tests {
             &original,
             &AccountId::new(originals.public_key.clone()),
             &topology,
-            Some(&actual.pipeline),
-            Some(&actual.nexus),
-            Some(&actual.zk),
-            Some(&actual),
+            crate::config::GenesisRuntimeConfig {
+                pipeline_config: Some(&actual.pipeline),
+                nexus_config: Some(&actual.nexus),
+                zk_config: Some(&actual.zk),
+                runtime_config: Some(&actual),
+            },
         )?;
         assert!(
             executed.has_results(),

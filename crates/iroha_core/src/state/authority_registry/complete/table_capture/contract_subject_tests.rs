@@ -6,6 +6,10 @@ use crate::state::{
 };
 use iroha_test_samples::BOB_ID;
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(
     state: &State,
     limits: LeafLimits,

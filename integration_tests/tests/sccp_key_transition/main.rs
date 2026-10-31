@@ -185,11 +185,6 @@ async fn run_key_change() -> Result<()> {
     let seats = 7;
     let supplementary = pool_size - 4;
     let registry_capacity = i64::try_from(pool_size.max(7))?;
-    let xor: AssetDefinitionId = defaults::nexus::staking::stake_asset_id().parse()?;
-    ensure!(
-        xor.to_string() == TAIRA_XOR,
-        "staking must use real genesis-pinned XOR"
-    );
     let npos = SumeragiNposParameters {
         epoch_length_blocks: NonZeroU64::new(EPOCH).expect("nonzero epoch"),
         max_validators: 7,
@@ -198,6 +193,11 @@ async fn run_key_change() -> Result<()> {
         slashing_delay_blocks: 1,
         ..SumeragiNposParameters::default()
     };
+    let xor: AssetDefinitionId = npos.xor_asset_definition_id.clone();
+    ensure!(
+        xor.to_string() == TAIRA_XOR,
+        "staking must use real genesis-pinned XOR"
+    );
     npos.validate().map_err(|error| eyre!(error))?;
     let clock = GovernanceClockParametersV1 {
         due_work_max_lag_ms: DUE_WORK_LAG_MS,

@@ -5,7 +5,6 @@
 //! the existing composition and original FRI. The canonical claim-free wire
 //! can be accepted only after both members of the paired verifier finish.
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::super::super::accumulator_stark::stages::{
     CaAwaitingMainAuxiliaryV1,
     joint::{CaAwaitingJointOpeningsV1, CaAwaitingJointPointV1},
@@ -19,7 +18,6 @@ use super::*;
 
 /// Borrowed, bounded original CA contribution used inside the original MAIN
 /// coefficient builder. MAIN24 is returned only after ordinary caches drop.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainCaCompositionContributionV1<'a> {
     pub(super) plan: &'a main_ca_links::MainCaPrivatePlanV1,
     pub(super) alphas: &'a [E; 108],
@@ -29,7 +27,6 @@ pub(super) struct MainCaCompositionContributionV1<'a> {
 
 /// All values are already jointly bound before this supplemental coefficient
 /// contribution can reach the common original FRI continuation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainCaDeepContributionV1<'a> {
     pub(super) plan: &'a main_ca_links::MainCaPrivatePlanV1,
     pub(super) original: &'a main_ca_links::MainCaOriginalAuxiliaryV1,
@@ -38,7 +35,6 @@ pub(super) struct MainCaDeepContributionV1<'a> {
 }
 
 /// Original MAIN composition and FRI-mask roots waiting for the CA checkpoint.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct MainAwaitingJointPointV1<'a> {
     phase: ZkX509MainCompositionPhaseV1<'a>,
     ca_plan: main_ca_links::MainCaPrivatePlanV1,
@@ -52,7 +48,6 @@ pub struct MainAwaitingJointPointV1<'a> {
 }
 
 /// MAIN's complete local DEEP record and 24 translated original openings.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct MainAwaitingJointOpeningsV1<'a> {
     oracles: MainAwaitingJointPointV1<'a>,
     point: E,
@@ -64,7 +59,6 @@ pub struct MainAwaitingJointOpeningsV1<'a> {
     timer: PhaseTimerV1,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Bind this phase's original joined auxiliary root with the original CA
     /// auxiliary root under the exact same X5B1 challenge capability.
@@ -86,7 +80,7 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Build the original combined composition before CA working LDEs exist.
     /// Every actual ordinary registration uses the narrowed joint cache plan.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn commit_joint_oracles_v1<R: TryRngCore>(
+    pub(crate) fn commit_joint_oracles_v1<R: TryRng>(
         self,
         ca: &CaAwaitingMainAuxiliaryV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -106,7 +100,7 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         result
     }
 
-    fn commit_joint_oracles_observed_v1<R: TryRngCore>(
+    fn commit_joint_oracles_observed_v1<R: TryRng>(
         mut self,
         ca: &CaAwaitingMainAuxiliaryV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -250,7 +244,6 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainAwaitingJointPointV1<'a> {
     /// Both original checkpoints and all translated-source exclusions define
     /// the same challenge. An independent standalone point is never accepted.
@@ -371,7 +364,6 @@ impl<'a> MainAwaitingJointPointV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainAwaitingJointOpeningsV1<'_> {
     /// Mutate both transcript owners in one operation before either local FRI
     /// may sample mixes. Each finishing stage checks the resulting capability.
@@ -383,7 +375,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
         let binding = ca
-            .bind_with_main_v1(&mut self.oracles.phase.transcript, self.main_openings)
+            .bind_with_main_v1(&mut self.oracles.phase.transcript, &self.main_openings)
             .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
         self.bound = true;
         Ok(binding)
@@ -393,7 +385,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
     /// divided differences accumulated before its original FRI evaluation.
     pub(crate) fn finish_v1(
         self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         #[cfg(test)]
         let mut encoding_completion = CompletionPhaseV1::default();
@@ -437,7 +429,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
             self.oracles.fri_mask_roots,
             self.deep,
             self.point,
-            self.key_openings,
+            &self.key_openings,
             key_mixes,
             mixes,
             Some(MainCaDeepContributionV1 {
@@ -499,8 +491,9 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
     pub(crate) fn new_v1(
         statement: &'a IrohaZkX509StarkP256StatementV1,
         rfc_statement: &'a ZkX509Rfc5280StatementV1,
+        crl_public_inputs: crate::privacy_engines::zk_x509::verifier_profile::ZkX509CrlPublicInputsV1,
         public: ZkX509CredentialPublicBindingV1,
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         auxiliary: JointAuxiliaryBindingV1,
         schedule: &ZkX509ShaCallScheduleV1,
         encoded: &[u8],
@@ -522,7 +515,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
             || proof.aggregate.composition_roots.len() != 1
             || proof.aggregate.fri_mask_roots.len() != 1
             || !auxiliary.matches_v1(
-                &binding,
+                binding,
                 JointSubproofV1::Main,
                 proof.aggregate.trace_groups[0].aux_root,
             )
@@ -564,6 +557,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
             statement,
             ZkX509Rfc5280StarkShapeV1::from_statement(rfc_statement)
                 .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?,
+            crl_public_inputs,
         )?;
         let _ = key_plan.derive_alphas_v1(&mut transcript)?;
         let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
@@ -595,7 +589,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
         Ok(Self {
             statement,
             rfc_statement,
-            binding,
+            binding: *binding,
             auxiliary,
             layout,
             proof,
@@ -667,7 +661,7 @@ impl MainJointVerifierDeepV1<'_> {
     pub(crate) fn bind_ca_openings_v1(
         &mut self,
         ca: &mut super::super::super::accumulator_stark::joint_verifier::CaJointVerifierDeepV1,
-        openings: JointOriginalOpeningsV1,
+        openings: &JointOriginalOpeningsV1,
     ) -> Result<JointDeepBindingV1, ZkX509StarkErrorV1> {
         if self.openings.is_some() {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
@@ -675,7 +669,7 @@ impl MainJointVerifierDeepV1<'_> {
         let binding = ca
             .bind_with_main_v1(&mut self.oracles.transcript, openings)
             .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-        self.openings = Some(openings);
+        self.openings = Some(*openings);
         Ok(binding)
     }
 
@@ -684,7 +678,7 @@ impl MainJointVerifierDeepV1<'_> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn finish_v1(
         mut self,
-        binding: JointDeepBindingV1,
+        binding: &JointDeepBindingV1,
     ) -> Result<(), ZkX509StarkErrorV1> {
         let proof_instance = self.oracles.binding.proof_instance_v1();
         if !binding.matches_v1(JointSubproofV1::Main, &self.oracles.transcript)
@@ -739,22 +733,22 @@ impl MainJointVerifierDeepV1<'_> {
         let log5 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             &p256_fixed,
-            post_base,
+            &post_base,
         )?;
         let projection = MainProjectionVerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.statement,
-            post_base,
+            &post_base,
         )?;
         let io = MainIoVerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.statement,
-            post_base,
+            &post_base,
         )?;
         let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
             &stage.layout,
             stage.rfc_statement,
-            post_base,
+            &post_base,
         )?;
         log19.prepare_complete_oods_fixed_v1()?;
         main_oods::verify_main_deep_constraints_with_ca_v1(
@@ -817,8 +811,7 @@ pub fn main_joint_auxiliary_from_proofs_v1(
 
 /// Complete both original subproofs using one shared point and paired openings.
 /// Calling this function never changes the production activation policy.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub fn finish_joint_main_ca_v1<R: TryRngCore>(
+pub fn finish_joint_main_ca_v1<R: TryRng>(
     main: ZkX509MainCompositionPhaseV1<'_>,
     ca: CaAwaitingMainAuxiliaryV1,
     rng: &mut R,
@@ -851,22 +844,21 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     let openings = binding.openings_v1();
     // Finish MAIN first so its large coefficient and LDE owners are released
     // before the complete CA row trees and local FRI are constructed.
-    let main = main.finish_v1(binding)?;
+    let main = main.finish_v1(&binding)?;
     #[cfg(test)]
     let ca_finalization_timer = PhaseTimerV1::start_v1(PhaseV1::CaJointFinalization);
     let ca = ca
-        .finish_v1(binding)
+        .finish_v1(&binding)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
     #[cfg(test)]
     ca_finalization_timer.complete_v1();
     Ok((main, ca, openings))
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Admit retained CA originals before allocating MAIN auxiliary replay and
     /// masks; the same owner is passed to every later joint phase.
-    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRng>(
         self,
         ca: &CaAwaitingMainAuxiliaryV1,
         rng: &mut R,
@@ -877,6 +869,6 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 ca,
                 None,
             )?;
-        self.bind_credential_pre_aux_v1_with_rng(ca.binding_v1(), rng)
+        self.bind_credential_pre_aux_v1_with_rng(&ca.binding_v1(), rng)
     }
 }

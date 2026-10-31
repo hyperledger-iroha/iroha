@@ -96,16 +96,16 @@ mod canonical_evidence_reader_tests {
             fixture_io::write(&self.root, DATA_FILE_NAME, &data);
             fixture_io::write(&self.root, INDEX_FILE_NAME, &indices);
             fixture_io::write(&self.root, HASHES_FILE_NAME, &hashes);
-            self.write_marker(BlockStoreCommitMarker::new(
+            self.write_marker(&BlockStoreCommitMarker::new(
                 self.blocks.len() as u64,
                 self.blocks.last().map(|b| b.hash()),
             ));
         }
-        fn write_marker(&self, marker: BlockStoreCommitMarker) {
+        fn write_marker(&self, marker: &BlockStoreCommitMarker) {
             fixture_io::write(
                 &self.root,
                 COUNT_FILE_NAME,
-                &norito::encode_canonical(&marker).unwrap(),
+                &norito::encode_canonical(marker).unwrap(),
             );
         }
         fn limits(&self) -> CanonicalKuraEvidenceLimits {
@@ -599,17 +599,15 @@ mod canonical_evidence_reader_tests {
             let original = fixture.root.join("original");
             fs::rename(fixture.root.join(DATA_FILE_NAME), &original).expect("save file");
             match kind {
-                0 => symlink(&original, &fixture.root.join(DATA_FILE_NAME)).expect("symlink"),
-                1 => {
-                    fs::hard_link(&original, &fixture.root.join(DATA_FILE_NAME)).expect("hardlink")
-                }
+                0 => symlink(&original, fixture.root.join(DATA_FILE_NAME)).expect("symlink"),
+                1 => fs::hard_link(&original, fixture.root.join(DATA_FILE_NAME)).expect("hardlink"),
                 2 => {
                     drop(resource_file_fifo_with_live_peer(
                         &fixture.root.join(DATA_FILE_NAME),
                     ));
                 }
                 _ => {
-                    fs::create_dir(&fixture.root.join(DATA_FILE_NAME)).expect("directory");
+                    fs::create_dir(fixture.root.join(DATA_FILE_NAME)).expect("directory");
                 }
             }
             assert!(
@@ -644,17 +642,17 @@ mod canonical_evidence_reader_tests {
         for variant in 0..11 {
             let fixture = Fixture::new();
             match variant {
-                0 => fixture.write_marker(BlockStoreCommitMarker {
+                0 => fixture.write_marker(&BlockStoreCommitMarker {
                     version: 2,
                     count: 3,
                     tip_hash: Some(fixture.blocks[2].hash()),
                 }),
-                1 => fixture.write_marker(BlockStoreCommitMarker::new(0, None)),
-                2 => fixture.write_marker(BlockStoreCommitMarker::new(
+                1 => fixture.write_marker(&BlockStoreCommitMarker::new(0, None)),
+                2 => fixture.write_marker(&BlockStoreCommitMarker::new(
                     2,
                     Some(fixture.blocks[1].hash()),
                 )),
-                3 => fixture.write_marker(BlockStoreCommitMarker::new(
+                3 => fixture.write_marker(&BlockStoreCommitMarker::new(
                     3,
                     Some(fixture.blocks[0].hash()),
                 )),

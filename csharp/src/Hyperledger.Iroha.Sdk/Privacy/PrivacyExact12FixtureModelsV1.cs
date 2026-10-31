@@ -37,7 +37,7 @@ public sealed class PrivacyExact12TypedFixtureRowV1 : IEquatable<PrivacyExact12T
         ArgumentNullException.ThrowIfNull(submitProofWireId);
         if (!string.Equals(
                 submitProofWireId,
-                PrivacyExact12FixtureCodecV1.SubmitProofWireId,
+                PrivacyExact12FixtureCodecV1.SubmitWireIdFor(protocolId),
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
@@ -106,6 +106,8 @@ public sealed class PrivacyExact12TypedFixtureRowV1 : IEquatable<PrivacyExact12T
         _signedTransactionVersionedNorito =
             (byte[])signedTransactionVersionedNorito.Clone();
         _signedTransactionHash = (byte[])signedTransactionHash.Clone();
+        if (ProtocolId == PrivacyProtocolIdV1.IrohaZkX509StarkP256V1)
+            PrivacyExact12FixtureCodecV1.ValidateX509Bindings(this);
     }
 
     /// <summary>Closed protocol identity in canonical wire order.</summary>
@@ -117,7 +119,7 @@ public sealed class PrivacyExact12TypedFixtureRowV1 : IEquatable<PrivacyExact12T
     /// <summary>Complete canonical <c>PrivacyProofEnvelopeV1</c> archive.</summary>
     public byte[] EnvelopeNorito => (byte[])_envelopeNorito.Clone();
 
-    /// <summary>Exact first-release <c>SubmitPrivacyProofV1</c> wire identifier.</summary>
+    /// <summary>Exact first-release instruction wire for this protocol.</summary>
     public string SubmitProofWireId { get; }
 
     /// <summary>Complete canonical submit-proof instruction archive.</summary>

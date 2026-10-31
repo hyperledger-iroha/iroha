@@ -153,8 +153,10 @@ impl CaMainPrivateLinkPlanV1 {
                         ZK_X509_SHA_DIGEST_PRODUCTS_V1
                     } + lane;
                     let main = MainCaColumnV1::Sha {
-                        segment: segment as u8,
-                        column: column as u16,
+                        segment: u8::try_from(segment)
+                            .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
+                        column: u16::try_from(column)
+                            .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
                     };
                     let opening = MainCaExtraOpeningV1 {
                         column: main,
@@ -187,7 +189,8 @@ impl CaMainPrivateLinkPlanV1 {
                         F::ONE
                     };
                     plan.ca_openings[link_count] = CaExtraOpeningV1 {
-                        column: ca_column as u16,
+                        column: u16::try_from(ca_column)
+                            .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
                         multiplier: eta,
                     };
                     plan.links[link_count] = CaMainLinkV1 {
@@ -207,12 +210,14 @@ impl CaMainPrivateLinkPlanV1 {
         let root_columns = super::super::rfc5280_stark::zk_x509_rfc_governed_root_columns_v1();
         for (lane, column) in root_columns.into_iter().enumerate() {
             plan.ca_openings[link_count] = CaExtraOpeningV1 {
-                column: root_spki_io_product_cell_v1(lane) as u16,
+                column: u16::try_from(root_spki_io_product_cell_v1(lane))
+                    .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
                 multiplier: eta,
             };
             plan.links[link_count] = CaMainLinkV1 {
                 main: MainCaColumnV1::Rfc {
-                    column: column as u16,
+                    column: u16::try_from(column)
+                        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
                 },
                 main_start: None,
                 ca: link_count,
@@ -238,7 +243,6 @@ impl CaMainPrivateLinkPlanV1 {
         &self.main_openings
     }
     /// Ordered CA translated openings.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn ca_openings_v1(&self) -> &[CaExtraOpeningV1; CA_EXTRA_OPENINGS_V1] {
         &self.ca_openings
     }
@@ -347,9 +351,15 @@ impl CaMainPrivateLinkPlanV1 {
             let mut record = [0_u8; 24];
             record[..4].copy_from_slice(&encode_main(link.main));
             record[4..6].copy_from_slice(
-                &(link.main_start.map_or(u16::MAX, |index| index as u16)).to_be_bytes(),
+                &(link.main_start.map_or(u16::MAX, |index| {
+                    u16::try_from(index).expect("fixed opening index fits u16")
+                }))
+                .to_be_bytes(),
             );
-            record[6..8].copy_from_slice(&(link.ca as u16).to_be_bytes());
+            record[6..8].copy_from_slice(
+                &(u16::try_from(link.ca).map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?)
+                    .to_be_bytes(),
+            );
             record[8..16].copy_from_slice(&link.endpoint.0.to_be_bytes());
             record[16..].copy_from_slice(&link.public_factor.0.to_be_bytes());
             transcript

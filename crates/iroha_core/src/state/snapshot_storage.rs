@@ -19,7 +19,7 @@ pub(super) fn manifest_set_matches_key(
 
 /// Mandatory current/undo envelope; first-release snapshots have one wire shape.
 #[derive(JsonSerialize, JsonDeserialize)]
-pub(crate) struct SnapshotStorage {
+pub struct SnapshotStorage {
     revert: Vec<SnapshotStorageUndo>,
     blocks: Vec<SnapshotStorageEntry>,
 }
@@ -73,11 +73,7 @@ fn serialize_maps<'a, K: mv::Key + Encode, V: mv::Value + Encode>(
 }
 
 /// Encode borrowed MV maps under the caller's State publication generation fence.
-pub(crate) fn serialize<
-    K: mv::Key + Encode,
-    V: mv::Value + Encode,
-    M: mv::storage::StorageMode<K, V>,
->(
+pub fn serialize<K: mv::Key + Encode, V: mv::Value + Encode, M: mv::storage::StorageMode<K, V>>(
     store: &Storage<K, V, M>,
     out: &mut String,
 ) {
@@ -87,7 +83,7 @@ pub(crate) fn serialize<
 
 /// Encode the exact staged post-commit maps without losing their original undo.
 #[cfg(test)]
-pub(crate) fn serialize_block<
+pub fn serialize_block<
     K: mv::Key + Encode,
     V: mv::Value + Encode,
     M: mv::storage::StorageMode<K, V>,
@@ -102,13 +98,14 @@ pub(super) fn decode_blob<T: DecodeAll + Encode>(
     record: SnapshotNoritoBlob,
     field: &str,
 ) -> Result<T, json::Error> {
+    let SnapshotNoritoBlob { encoded_hex } = record;
     let invalid = |message| json::Error::InvalidField {
         field: field.to_owned(),
         message,
     };
-    let bytes = hex::decode(&record.encoded_hex)
+    let bytes = hex::decode(&encoded_hex)
         .map_err(|error| invalid(format!("invalid Norito hex: {error}")))?;
-    if hex::encode(&bytes) != record.encoded_hex {
+    if hex::encode(&bytes) != encoded_hex {
         return Err(invalid("noncanonical Norito hex".to_owned()));
     }
     let decoded = T::decode_all(&mut bytes.as_slice())
@@ -288,18 +285,18 @@ impl SnapshotStorage {
             .into()
         }
         fn key(blob: SnapshotNoritoBlob) -> Result<u64, StateRestoreError> {
+            let SnapshotNoritoBlob { encoded_hex } = blob;
             // Fixed V1 u64 payload is exactly eight bytes. Reject alternate hex
             // and canonical Norito spellings without allocating a scratch Vec.
             let mut bytes = [0u8; 8];
-            if blob.encoded_hex.len() != 16
-                || blob
-                    .encoded_hex
+            if encoded_hex.len() != 16
+                || encoded_hex
                     .bytes()
                     .any(|b| !(b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             {
                 return Err(invalid("noncanonical generation key hex"));
             }
-            hex::decode_to_slice(&blob.encoded_hex, &mut bytes)
+            hex::decode_to_slice(&encoded_hex, &mut bytes)
                 .map_err(|_| invalid("invalid generation key hex"))?;
             let key = u64::decode_all(&mut bytes.as_slice())
                 .map_err(|_| invalid("invalid generation key"))?;
@@ -383,7 +380,8 @@ impl SnapshotStorage {
             blob: SnapshotNoritoBlob,
             budget: &iroha_allocation::AllocationBudget,
         ) -> Result<OffenceKey, StateRestoreError> {
-            OffenceKey::decode_snapshot_hex(&blob.encoded_hex, budget).map_err(|e| match e {
+            let SnapshotNoritoBlob { encoded_hex } = blob;
+            OffenceKey::decode_snapshot_hex(&encoded_hex, budget).map_err(|e| match e {
                 ForgeryStorageError::Invalid => invalid("invalid offence tuple"),
                 resource => resource.into(),
             })
@@ -392,7 +390,8 @@ impl SnapshotStorage {
             blob: SnapshotNoritoBlob,
             budget: &iroha_allocation::AllocationBudget,
         ) -> Result<[u8; 32], StateRestoreError> {
-            let text = blob.encoded_hex;
+            let SnapshotNoritoBlob { encoded_hex } = blob;
+            let text = encoded_hex;
             if !text.len().is_multiple_of(2)
                 || text
                     .bytes()
@@ -476,7 +475,8 @@ impl SnapshotStorage {
             .into()
         }
         fn key(blob: SnapshotNoritoBlob) -> Result<Key, StateRestoreError> {
-            let text = blob.encoded_hex;
+            let SnapshotNoritoBlob { encoded_hex } = blob;
+            let text = encoded_hex;
             if text.len() > 128
                 || !text.len().is_multiple_of(2)
                 || text
@@ -506,7 +506,8 @@ impl SnapshotStorage {
             blob: SnapshotNoritoBlob,
             budget: &iroha_allocation::AllocationBudget,
         ) -> Result<RetainedSccpLcSet, StateRestoreError> {
-            RetainedSccpLcSet::decode_snapshot_hex(&blob.encoded_hex, budget).map_err(|error| {
+            let SnapshotNoritoBlob { encoded_hex } = blob;
+            RetainedSccpLcSet::decode_snapshot_hex(&encoded_hex, budget).map_err(|error| {
                 StateRestoreError::Sccp(sccp_snapshot_state::SccpRestoreError::LightClient(error))
             })
         }

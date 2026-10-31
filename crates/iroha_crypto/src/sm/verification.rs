@@ -10,7 +10,7 @@ use sm2::{
         Group,
         ops::{LinearCombination, Reduce},
         point::AffineCoordinates,
-        sec1::{Coordinates, ToEncodedPoint},
+        sec1::{Coordinates, ToSec1Point},
     },
 };
 use sm3::{Digest, Sm3};
@@ -50,7 +50,7 @@ impl KeyRejection {
             Self::InvalidPoint => "invalid SM2 public key",
             Self::NonCanonical => "non-canonical SM2 public key encoding",
         };
-        ParseError(message.into())
+        ParseError::Invalid(message.into())
     }
 }
 
@@ -89,7 +89,7 @@ pub fn parse_point(distid: &str, bytes: &[u8]) -> Result<PublicKey, KeyRejection
 
 pub fn identity_hash(distid: &str, point: &AffinePoint) -> Result<[u8; 32], KeyRejection> {
     let bits = identity_bits(distid)?;
-    let encoded = point.to_encoded_point(false);
+    let encoded = point.to_sec1_point(false);
     let Coordinates::Uncompressed { x, y } = encoded.coordinates() else {
         return Err(KeyRejection::InvalidPoint);
     };
@@ -120,7 +120,7 @@ impl<'a> BorrowedKey<'a> {
             return Err(KeyRejection::PublicKeyLength);
         }
         let point = parse_point(distid, bytes)?;
-        if point.to_encoded_point(false).as_bytes() != bytes {
+        if point.to_sec1_point(false).as_bytes() != bytes {
             return Err(KeyRejection::NonCanonical);
         }
         let identity_hash = identity_hash(distid, point.as_affine())?;
@@ -165,22 +165,18 @@ pub fn verify(
         .chain_update(message)
         .finalize()
         .into();
-    // SM3 and the pinned curve use different fixed-array container versions.
-    // Bridge their identical 32 bytes on the stack before scalar reduction.
-    let digest_scalar = Scalar::reduce_bytes(&digest.into());
-    let combined = ProjectivePoint::lincomb(
-        &ProjectivePoint::generator(),
-        &s,
-        &ProjectivePoint::from(*point),
-        &t,
-    );
+    let digest_scalar = <Scalar as Reduce<sm2::FieldBytes>>::reduce(&digest.into());
+    let combined = ProjectivePoint::lincomb(&[
+        (ProjectivePoint::generator(), *s),
+        (ProjectivePoint::from(*point), t),
+    ]);
     // B6 requires a finite affine point. The arithmetic library's identity
     // sentinel has x=0, which is not an affine coordinate for infinity.
     if bool::from(combined.is_identity()) {
         return Err(Error::BadSignature);
     }
     let x_coordinate = combined.to_affine().x();
-    if *r == digest_scalar + Scalar::reduce_bytes(&x_coordinate) {
+    if *r == digest_scalar + <Scalar as Reduce<sm2::FieldBytes>>::reduce(&x_coordinate) {
         Ok(())
     } else {
         Err(Error::BadSignature)

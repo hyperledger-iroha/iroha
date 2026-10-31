@@ -6,7 +6,7 @@
 
 use std::sync::OnceLock;
 
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{PastaCurve, params::MAX_K};
 
 use super::{IpaError, PinnedParams};

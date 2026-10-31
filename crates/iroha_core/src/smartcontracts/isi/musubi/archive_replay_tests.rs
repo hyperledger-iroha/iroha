@@ -427,12 +427,16 @@ fn initial_executor_archive_registration_fixture() -> (State, AccountId, Registe
     );
     // Exercise the real execution boundary with committed, validated global authority.
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     world.provider_owners.insert(
@@ -1296,7 +1300,7 @@ fn archive_location_replay_fixture(
     };
     let mut pin_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
         pin,
-        archive.commitment.root_cid.clone(),
+        archive.commitment.root_cid,
         archive.commitment.chunker.clone(),
         *archive.commitment.chunk_plan_digest.as_bytes(),
         *archive.commitment.por_root.as_bytes(),
@@ -1319,7 +1323,7 @@ fn archive_location_replay_fixture(
         iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
             order_id: order,
             manifest_digest: pin,
-            manifest_root_cid: archive.commitment.root_cid.clone(),
+            manifest_root_cid: archive.commitment.root_cid,
             musubi_archive: Some(archive_id),
             issued_by: authority.clone(),
             issued_epoch: 1,
@@ -1481,7 +1485,7 @@ fn explicit_location_invalidation_preserves_a_protected_archives_replica_quorum(
     assert!(error.to_string().contains("quorum-healthy"));
 }
 /// Retain a deterministic log-only genesis anchor for these seeded ISI unit states.
-/// Advertising only its hash would make ordinary StateBlock creation fail DA hydration
+/// Advertising only its hash would make ordinary `StateBlock` creation fail DA hydration
 /// before any native archive authorization or exact-receipt check could execute.
 fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::SignedBlock {
     let key = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
@@ -2671,7 +2675,7 @@ fn archive_retention_point_lookups_reject_projection_identity_mismatches() {
         .musubi_archive_availability
         .view()
         .get(&archive_id)
-        .cloned()
+        .copied()
         .expect("seeded archive availability");
     world
         .musubi_archives
@@ -2693,7 +2697,7 @@ fn archive_retention_point_lookups_reject_projection_identity_mismatches() {
             releases: Vec::new(),
         },
     );
-    let mut mismatched_storage = valid_storage.clone();
+    let mut mismatched_storage = valid_storage;
     mismatched_storage.archive_id = other_archive_id;
     world
         .musubi_archive_availability

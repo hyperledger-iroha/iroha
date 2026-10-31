@@ -23,7 +23,7 @@ async fn cross_error_boundary(
                 let envelope = envelope.clone();
                 async move {
                     let mut response =
-                        utils::respond_with_status_and_format(status, envelope, format);
+                        utils::respond_with_status_and_format(status, &(envelope), format);
                     if let Some(retry_after) = retry_after {
                         response.headers_mut().insert(
                             axum::http::header::RETRY_AFTER,

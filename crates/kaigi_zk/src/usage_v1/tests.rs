@@ -14,8 +14,8 @@ use iroha_plonk::{
 fn context() -> KaigiUsageContextV1 {
     KaigiUsageContextV1 {
         network_id: array::from_fn(|i| i as u8 + 1),
-        call_id: [1, 2, 3, 4, 5, 6],
-        host_id: [11, 12, 13, 14, 15, 16],
+        call_id: [1, 2, 3, 4],
+        host_id: [11, 12, 13, 14],
         pre_roster_root: array::from_fn(|i| i as u8 + 33),
         segment_index: 7,
         duration_ms: 1200,
@@ -36,15 +36,18 @@ fn raw_circuit(words: [Scalar; CONTEXT_WORDS], secret: Scalar) -> KaigiUsageCirc
         )),
     }
 }
-fn raw_instance(words: [Scalar; CONTEXT_WORDS], secret: Scalar) -> [Scalar; 25] {
+fn raw_instance(
+    words: [Scalar; CONTEXT_WORDS],
+    secret: Scalar,
+) -> [Scalar; KAIGI_USAGE_INSTANCE_ROWS_V1] {
     let output = compute_words(&words, secret);
-    let mut instance = [Scalar::ZERO; 25];
-    instance[..23].copy_from_slice(&words);
-    instance[23] = output.host_commitment;
-    instance[24] = output.usage_commitment;
+    let mut instance = [Scalar::ZERO; KAIGI_USAGE_INSTANCE_ROWS_V1];
+    instance[..CONTEXT_WORDS].copy_from_slice(&words);
+    instance[HOST_COMMITMENT_ROW] = output.host_commitment;
+    instance[USAGE_COMMITMENT_ROW] = output.usage_commitment;
     instance
 }
-fn check(circuit: &KaigiUsageCircuitV1, instance: [Scalar; 25]) -> bool {
+fn check(circuit: &KaigiUsageCircuitV1, instance: [Scalar; KAIGI_USAGE_INSTANCE_ROWS_V1]) -> bool {
     check_circuit(
         circuit,
         KAIGI_USAGE_CIRCUIT_K_V1,
@@ -73,7 +76,7 @@ fn usage_c_and_u_match_independent_poseidon_framing() {
         state[0]
     };
     let context = context();
-    let mut host_payload = context.host_context().words()[..23].to_vec();
+    let mut host_payload = context.host_context().words()[..IDENTITY_WORDS].to_vec();
     host_payload.push(blinding());
     let c = reference(0x4b41_4947_4956_3143, &host_payload);
     let mut usage_payload = context.words().to_vec();
@@ -92,8 +95,8 @@ fn usage_c_and_u_match_independent_poseidon_framing() {
     assert_eq!(
         hex,
         [
-            "53267c7c98f82fcf475aab7997f3eedea5935ab7df7e17e0327ba5fbc4f5980c",
-            "4139861c7c35e3315f3b26097fd3b02bd66b4ad5301fa9d8f15cddb5db65d014",
+            "9d631166afebe8c7a19ac7b9409577c1df9e7f5ed7dfd66af39498c0f56c2028",
+            "8698de4128e0ae9829541b6b475b3354def137ab7e6d00f8f6587bc1bb36d93d",
         ]
     );
 }
@@ -120,7 +123,7 @@ fn usage_opens_the_exact_stored_authorization_host_commitment() {
         instance
     ));
     assert_eq!(KAIGI_USAGE_CIRCUIT_K_V1, 12);
-    assert_eq!(ASSIGNED_ROWS, 4037);
+    assert_eq!(ASSIGNED_ROWS, 2656);
     assert!(
         check_circuit(
             &raw_circuit(context.words(), blinding()),
@@ -133,8 +136,8 @@ fn usage_opens_the_exact_stored_authorization_host_commitment() {
     let maximal = KaigiUsageContextV1 {
         network_id: [255; 32],
         pre_roster_root: [255; 32],
-        call_id: [GOLDILOCKS_MODULUS_V1 - 1; 6],
-        host_id: [GOLDILOCKS_MODULUS_V1 - 1; 6],
+        call_id: [u64::MAX; KAIGI_IDENTITY_WORDS_V1],
+        host_id: [u64::MAX; KAIGI_IDENTITY_WORDS_V1],
         segment_index: u32::MAX,
         duration_ms: u64::MAX,
         billed_gas: u64::MAX,
@@ -158,7 +161,7 @@ fn every_context_limb_binds_usage_and_only_identity_changes_host_c() {
             output.usage_commitment, baseline.usage_commitment,
             "U row {row}"
         );
-        if row < 16 {
+        if row < ROOT_ROW {
             assert_ne!(
                 output.host_commitment, baseline.host_commitment,
                 "C row {row}"
@@ -176,11 +179,11 @@ fn every_context_limb_binds_usage_and_only_identity_changes_host_c() {
 }
 
 #[test]
-fn all_25_public_rows_context_witnesses_and_private_blinding_are_constrained() {
+fn all_public_rows_context_witnesses_and_private_blinding_are_constrained() {
     let words = context().words();
     let instance = raw_instance(words, blinding());
     let circuit = raw_circuit(words, blinding());
-    for row in 0..25 {
+    for row in 0..KAIGI_USAGE_INSTANCE_ROWS_V1 {
         let mut changed = instance;
         changed[row] += Scalar::ONE;
         assert!(!check(&circuit, changed), "public row {row}");
@@ -189,7 +192,7 @@ fn all_25_public_rows_context_witnesses_and_private_blinding_are_constrained() {
         let mut changed = words;
         changed[row] += Scalar::ONE;
         let mut public = instance;
-        public[..23].copy_from_slice(&changed);
+        public[..CONTEXT_WORDS].copy_from_slice(&changed);
         assert!(
             !check(&raw_circuit(changed, blinding()), public),
             "hash relation row {row}"
@@ -219,15 +222,15 @@ fn correct_hashes_cannot_hide_noncanonical_ranges_or_zero_duration_and_secret() 
             "limb bound row {row}"
         );
     }
-    for row in 4..16 {
+    for row in 4..ROOT_ROW {
         let mut changed = words;
-        changed[row] = Scalar::from(GOLDILOCKS_MODULUS_V1);
+        changed[row] = -Scalar::ONE;
         assert!(
             !check(
                 &raw_circuit(changed, blinding()),
                 raw_instance(changed, blinding())
             ),
-            "Goldilocks row {row}"
+            "negative native identity row {row}"
         );
     }
     let mut zero_duration = words;
@@ -269,17 +272,20 @@ fn usage_rejects_invalid_context_and_keeps_private_witness_redacted_and_owned() 
             .to_string(),
         "Kaigi usage duration must be positive"
     );
-    for row in 0..12 {
-        let mut invalid = context();
-        let limb = if row < 6 {
-            &mut invalid.call_id[row]
+    let original = compute_usage_v1(&context(), &secret).unwrap();
+    for row in 0..2 * KAIGI_IDENTITY_WORDS_V1 {
+        let mut changed = context();
+        let word = if row < KAIGI_IDENTITY_WORDS_V1 {
+            &mut changed.call_id[row]
         } else {
-            &mut invalid.host_id[row - 6]
+            &mut changed.host_id[row - KAIGI_IDENTITY_WORDS_V1]
         };
-        *limb = GOLDILOCKS_MODULUS_V1;
-        assert!(invalid.validate().is_err());
-        assert!(compute_usage_v1(&invalid, &secret).is_err());
-        assert!(KaigiUsageCircuitV1::new(invalid, secret.clone()).is_err());
+        *word = u64::MAX;
+        assert!(changed.validate().is_ok());
+        let output = compute_usage_v1(&changed, &secret).unwrap();
+        assert_ne!(output.host_commitment, original.host_commitment);
+        assert_ne!(output.usage_commitment, original.usage_commitment);
+        assert!(KaigiUsageCircuitV1::new(changed, secret.clone()).is_ok());
     }
     for mut invalid in [[0; 32], [255; 32]] {
         assert!(KaigiAuthorizationWitnessV1::take_blinding(&mut invalid).is_err());
@@ -320,13 +326,26 @@ fn real_usage_pipa_r_proof_rejects_every_context_and_commitment_replay() {
         .is_ok()
     };
     assert!(verify(&instance));
-    for row in 0..25 {
+    for length in [
+        0,
+        KAIGI_USAGE_INSTANCE_ROWS_V1 - 1,
+        KAIGI_USAGE_INSTANCE_ROWS_V1 + 1,
+        25,
+    ] {
+        let mut wrong_shape = instance.to_vec();
+        wrong_shape.resize(length, Scalar::ZERO);
+        assert!(
+            !verify(&wrong_shape),
+            "foreign usage instance width {length}"
+        );
+    }
+    for row in 0..KAIGI_USAGE_INSTANCE_ROWS_V1 {
         let mut changed = instance;
         changed[row] += Scalar::ONE;
         assert!(!verify(&changed), "usage replay row {row}");
     }
     println!(
-        "Kaigi usage final V1: k={}, assigned rows={}, public rows=25, proof bytes={}",
+        "Kaigi usage final V1: k={}, assigned rows={}, public rows=21, proof bytes={}",
         KAIGI_USAGE_CIRCUIT_K_V1,
         ASSIGNED_ROWS,
         proof.len()

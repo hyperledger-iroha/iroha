@@ -132,6 +132,10 @@ impl VerifiedNativeAmxExpiryDecisionV1 {
 
 /// Bounded progress, authenticated positive, or exhaustion of this captured finite range.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxExpiryDecisionPollV1 {
     /// Original certification/archive work or the next bounded height remains pending.
     Pending,
@@ -203,7 +207,9 @@ pub fn expiry_amx_decision<'v, V: StateReadOnly>(
         .map_err(|_| Error::Source("Begin height cannot index captured history"))?;
     if !cfg!(all(test, sumeragi_core_mutation = "HC338"))
         && (descriptor.source_network() != *view.network_id()
-            || view.native_execution_tip().map(|tip| tip.root_scope())
+            || view
+                .native_execution_tip()
+                .map(crate::state::native_execution_tip::NativeExecutionTip::root_scope)
                 != Some(SumeragiRootScope::Global)
             || view.block_hashes().get(begin_index).copied() != Some(descriptor.source_carrier()))
     {

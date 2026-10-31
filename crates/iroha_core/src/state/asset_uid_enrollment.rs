@@ -9,8 +9,8 @@ use iroha_data_model::{
     isi::error::InstructionExecutionError,
 };
 
-pub(crate) const ENROLLMENT_ROOT: &str = "asset_uid_enrollment_v1/";
-pub(crate) const SYSTEM_ROOT: &str = "asset_uid_system_v1/";
+pub const ENROLLMENT_ROOT: &str = "asset_uid_enrollment_v1/";
+pub const SYSTEM_ROOT: &str = "asset_uid_system_v1/";
 type Error = InstructionExecutionError;
 
 fn reject(message: impl Into<String>) -> Error {
@@ -21,13 +21,13 @@ fn digest(value: impl std::fmt::Display) -> String {
     hex::encode(Hash::new(value.to_string().as_bytes()).as_ref())
 }
 
-pub(crate) fn enrollment_key(definition: &AssetDefinitionId) -> StatePath {
+pub fn enrollment_key(definition: &AssetDefinitionId) -> StatePath {
     format!("{ENROLLMENT_ROOT}{}", digest(definition))
         .parse()
         .expect("fixed native asset enrollment path")
 }
 
-pub(crate) fn system_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
+pub fn system_key(definition: &AssetDefinitionId, account: &AccountId) -> StatePath {
     format!("{SYSTEM_ROOT}{}/{}", digest(definition), digest(account))
         .parse()
         .expect("fixed native system enrollment path")
@@ -38,21 +38,59 @@ where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
+    read_with_owner(world, key, None)
+}
+
+fn read_with_owner<T>(
+    world: &impl WorldReadOnly,
+    key: &StatePath,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<T>, Error>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
     world
         .smart_contract_state()
         .get(key)
         .map(|bytes| {
-            norito::decode_canonical(bytes)
-                .map_err(|error| reject(format!("invalid native enrollment state: {error}")))
+            crate::execution_attempt::canonical_policy_decode(
+                owner,
+                bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .map_err(|error| {
+                let rejected = |error: norito::CanonicalDecodeControlError| {
+                    reject(format!("invalid native enrollment state: {error}"))
+                };
+                match owner {
+                    Some(owner) => owner.attempt_error_to_instruction_error(
+                        crate::execution_attempt::canonical_decode_control_attempt_error(
+                            error, rejected,
+                        ),
+                    ),
+                    None => rejected(error),
+                }
+            })
         })
         .transpose()
 }
 
-pub(crate) fn enrollment(
+pub fn enrollment(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<Option<AssetUidEnrollmentV1>, Error> {
-    let value: Option<AssetUidEnrollmentV1> = read(world, &enrollment_key(definition))?;
+    enrollment_with_owner(world, definition, None)
+}
+
+/// Read enrollment while retaining a transaction's original local decode refusal.
+pub(crate) fn enrollment_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidEnrollmentV1>, Error> {
+    let value: Option<AssetUidEnrollmentV1> =
+        read_with_owner(world, &enrollment_key(definition), owner)?;
     if value
         .as_ref()
         .is_some_and(|v| v.asset_definition_id != *definition || v.activated_at_height == 0)
@@ -64,12 +102,22 @@ pub(crate) fn enrollment(
     Ok(value)
 }
 
-pub(crate) fn system(
+pub fn system(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<AssetUidSystemAccountV1>, Error> {
-    let value: Option<AssetUidSystemAccountV1> = read(world, &system_key(definition, account))?;
+    system_with_owner(world, definition, account, None)
+}
+
+fn system_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidSystemAccountV1>, Error> {
+    let value: Option<AssetUidSystemAccountV1> =
+        read_with_owner(world, &system_key(definition, account), owner)?;
     if value.as_ref().is_some_and(|v| {
         v.asset_definition_id != *definition || v.account_id != *account || v.revision == 0
     }) {
@@ -81,20 +129,31 @@ pub(crate) fn system(
 }
 
 /// Beneficial categories never overlap, including revoked institutional records.
-pub(crate) enum BeneficialEnrollment {
+pub enum BeneficialEnrollment {
     Retail,
     Fi { enabled: bool },
     System { enabled: bool },
 }
 
-pub(crate) fn beneficial(
+pub fn beneficial(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<BeneficialEnrollment>, Error> {
-    let retail = super::asset_uid::member_policy(world, definition, account)?.is_some();
-    let fi = super::asset_fi::fi(world, definition, account)?;
-    let system = system(world, definition, account)?;
+    beneficial_with_owner(world, definition, account, None)
+}
+
+/// Resolve categories in their existing order without losing transaction-local refusals.
+pub(crate) fn beneficial_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<BeneficialEnrollment>, Error> {
+    let retail =
+        super::asset_uid::member_policy_with_owner(world, definition, account, owner)?.is_some();
+    let fi = super::asset_fi::fi_with_owner(world, definition, account, owner)?;
+    let system = system_with_owner(world, definition, account, owner)?;
     if usize::from(retail) + usize::from(fi.is_some()) + usize::from(system.is_some()) > 1 {
         return Err(reject("asset enrollment categories overlap"));
     }
@@ -111,17 +170,23 @@ pub(crate) fn beneficial(
 
 /// New ordinary monetary use requires current eligibility at both boundaries.
 /// Native retained-payer returns use their separate sealed custody path.
-pub(crate) fn require_active_beneficial(
+pub fn require_active_beneficial(world: &impl WorldReadOnly, id: &AssetId) -> Result<(), Error> {
+    require_active_beneficial_with_owner(world, id, None)
+}
+
+/// Apply ordinary monetary enrollment checks with the transaction's decode owner.
+pub(crate) fn require_active_beneficial_with_owner(
     world: &impl WorldReadOnly,
     id: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<(), Error> {
-    if enrollment(world, id.definition())?.is_none() {
+    if enrollment_with_owner(world, id.definition(), owner)?.is_none() {
         return Ok(());
     }
     if id.scope() != &AssetBalanceScope::Global {
         return Err(reject("enrolled asset requires exact Global balances"));
     }
-    match beneficial(world, id.definition(), id.account())? {
+    match beneficial_with_owner(world, id.definition(), id.account(), owner)? {
         Some(
             BeneficialEnrollment::Retail
             | BeneficialEnrollment::Fi { enabled: true }
@@ -140,7 +205,7 @@ pub(crate) fn require_active_beneficial(
 /// This is also the snapshot invariant: revocation does not make existing funds
 /// disappear or reclassify them as retail. A stale institutional approval stops
 /// new movements while preserving the retained institutional ownership category.
-pub(crate) fn validate_reconciliation(
+pub fn validate_reconciliation(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<(), Error> {
@@ -196,7 +261,7 @@ pub(crate) fn validate_reconciliation(
     Ok(())
 }
 
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (key, _) in world.smart_contract_state().iter() {
         if key.as_ref().starts_with(ENROLLMENT_ROOT) {
             let value: AssetUidEnrollmentV1 =
@@ -234,9 +299,8 @@ pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Err
     Ok(())
 }
 
-
 /// Retained enrollment cannot be discarded by deleting its definition or account.
-pub(crate) fn retained(
+pub fn retained(
     world: &impl WorldReadOnly,
     definition: Option<&AssetDefinitionId>,
     account: Option<&AccountId>,
@@ -245,18 +309,17 @@ pub(crate) fn retained(
         if key.as_ref() == ENROLLMENT_ROOT.trim_end_matches('/')
             || key.as_ref().starts_with(ENROLLMENT_ROOT)
         {
-            let value: AssetUidEnrollmentV1 = read(world, key)?
-                .ok_or_else(|| reject("missing retained asset enrollment"))?;
+            let value: AssetUidEnrollmentV1 =
+                read(world, key)?.ok_or_else(|| reject("missing retained asset enrollment"))?;
             if definition == Some(&value.asset_definition_id) {
                 return Ok(true);
             }
         } else if key.as_ref() == SYSTEM_ROOT.trim_end_matches('/')
             || key.as_ref().starts_with(SYSTEM_ROOT)
         {
-            let value: AssetUidSystemAccountV1 = read(world, key)?
-                .ok_or_else(|| reject("missing retained system enrollment"))?;
-            if definition == Some(&value.asset_definition_id)
-                || account == Some(&value.account_id)
+            let value: AssetUidSystemAccountV1 =
+                read(world, key)?.ok_or_else(|| reject("missing retained system enrollment"))?;
+            if definition == Some(&value.asset_definition_id) || account == Some(&value.account_id)
             {
                 return Ok(true);
             }

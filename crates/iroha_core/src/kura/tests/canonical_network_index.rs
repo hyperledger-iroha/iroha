@@ -1,7 +1,7 @@
 use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext};
 // Canonical Network index fixtures exercise structural membership, never mint execution/finality.
 /// Attach structurally checked outputs under a finite, explicit storage-test policy.
-pub(crate) fn install_network_index_test_outputs(
+pub fn install_network_index_test_outputs(
     block: &mut SignedBlock,
     outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
 ) {

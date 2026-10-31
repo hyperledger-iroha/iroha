@@ -372,7 +372,7 @@ fn random_private_name(
     prefix: &str,
 ) -> Result<std::ffi::OsString, RuntimeProviderBrokerServerErrorV1> {
     let mut nonce = [0_u8; 12];
-    rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
         .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
     if nonce == [0; 12] {
         return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);

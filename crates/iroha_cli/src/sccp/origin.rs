@@ -4,11 +4,14 @@ use crate::RunContext;
 use eyre::{Result, ensure, eyre};
 use iroha::{
     blocking::Client,
+    client::sccp::SccpFinalityAt,
     crypto::{Hash, HashOf, PublicKey},
     data_model::{
         block::{BlockHeader, consensus::SumeragiRootScope},
         bridge::SccpNetworkV1,
+        crypto_admission_policy::CryptoAdmissionPolicyV1,
         id::NetworkId,
+        parameter::Parameters,
         sccp::{
             deployment::SccpCommitteePinV1,
             generation::{SccpAnchorV1, SccpCommitteeGenerationV1},
@@ -27,6 +30,7 @@ use iroha_sccp::{
     api::{SccpCapabilitiesV1, SccpGenerationV1},
     v1::committee::committee_root,
 };
+use iroha_sccp_wallet::{journal::SccpEvidenceItemV1, pure::preflight::check_cut_freshness};
 use std::{
     io::Read as _,
     num::NonZeroU64,
@@ -360,6 +364,59 @@ impl AuthenticatedOrigin {
         self.world
             .verify_cell_value("world.sccp_committee_current", &current.generation)?;
         Ok(current.generation)
+    }
+
+    /// Refuse a new burn or record unless this cut is the endpoint's certified tip or trails it
+    /// by at most [`MAX_CUT_LAG_BLOCKS`](iroha_sccp_wallet::pure::preflight::MAX_CUT_LAG_BLOCKS)
+    /// blocks (§7.1 step 2, §7.2 step 1). Idle Taira chains produce no blocks, so the bound
+    /// counts blocks, not time.
+    pub fn require_current_cut(&self, client: &Client) -> Result<SccpEvidenceItemV1> {
+        let tip = client.sccp().finality(SccpFinalityAt::Latest)?.height;
+        self.check_current_cut(tip, |height| {
+            client
+                .client()
+                .get_sumeragi_finality_proof(height, self.verifier.root_scope())
+        })
+    }
+
+    /// Accept the tip claim `tip` only after extending a copy of the original certified prefix
+    /// through it; the selected cut itself never moves.
+    fn check_current_cut(
+        &self,
+        tip: u64,
+        mut fetch: impl FnMut(NonZeroU64) -> Result<SumeragiFinalityProof>,
+    ) -> Result<SccpEvidenceItemV1> {
+        let cut = self.height();
+        check_cut_freshness(cut, tip)?;
+        let network = self.verifier.initial_epoch().network_id;
+        let mut verifier = self.verifier.clone();
+        for height in (cut..tip).map(|below| below + 1) {
+            let height =
+                NonZeroU64::new(height).ok_or_else(|| eyre!("a tip block height is zero"))?;
+            verifier
+                .verify(&fetch(height)?)?
+                .verify_global_scope(network, self.verifier.chain_id())?;
+        }
+        super::flows::evidence(
+            "taira.cut_freshness",
+            &norito::json!({"cut_height": cut, "tip_height": tip}),
+        )
+    }
+
+    /// The ordinary crypto admission policy at this cut. `parameters` must be the cut's complete
+    /// `world.parameters` value; the policy is its `crypto_admission_policy_v1` parameter, which
+    /// authenticated genesis always installs.
+    pub fn crypto_admission_policy(
+        &self,
+        parameters: &Parameters,
+    ) -> Result<CryptoAdmissionPolicyV1> {
+        self.world
+            .verify_cell_value("world.parameters", parameters)?;
+        let custom = parameters
+            .custom()
+            .get(&CryptoAdmissionPolicyV1::parameter_id())
+            .ok_or_else(|| eyre!("the authenticated parameters hold no crypto admission policy"))?;
+        Ok(CryptoAdmissionPolicyV1::from_payload(custom.payload())?)
     }
 }
 
@@ -1378,5 +1435,82 @@ mod message_tests {
                 .verify_message(&id, &SccpMessageStatusV1::Inbound(view))
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod cut_tests {
+    use super::*;
+    use iroha::data_model::testing::native_finality::NativeFinalityFixture;
+    use iroha_sccp_wallet::pure::preflight::MAX_CUT_LAG_BLOCKS;
+    use std::collections::BTreeMap;
+
+    /// A cut at height 2 and the certified proofs of the next `later` heights.
+    fn chain(
+        chain_id: &str,
+        later: u64,
+    ) -> (AuthenticatedOrigin, BTreeMap<u64, SumeragiFinalityProof>) {
+        let snapshot = WorldStateSnapshotV1 {
+            schema_hash: Hash::new(b"cut freshness fixture"),
+            entries: Vec::new(),
+        };
+        let root = snapshot.root().unwrap();
+        let mut native = NativeFinalityFixture::start(chain_id);
+        let block = native.block_with_submitted_work(native.next_header());
+        let proof = native.certify_with_world_root(block, root);
+        let cut = test_cut(&native, &snapshot, &proof);
+        let proofs = (0..later)
+            .map(|_| {
+                let block = native.block_with_submitted_work(native.next_header());
+                let proof = native.certify_with_world_root(block, root);
+                (proof.height(), proof)
+            })
+            .collect();
+        (cut, proofs)
+    }
+
+    #[test]
+    fn a_stale_cut_is_refused_and_a_tip_claim_must_extend_the_original_prefix() {
+        let (cut, proofs) = chain("sccp-cut-freshness", MAX_CUT_LAG_BLOCKS + 1);
+        let height = cut.height();
+        let fetched = std::cell::Cell::new(0);
+        let fetch = |at: NonZeroU64| {
+            fetched.set(fetched.get() + 1);
+            proofs
+                .get(&at.get())
+                .cloned()
+                .ok_or_else(|| eyre!("no certified block at {at}"))
+        };
+        // The certified tip itself, and a tip a few blocks ahead, are accepted once every
+        // block between them has been authenticated.
+        let evidence = cut.check_current_cut(height, fetch).unwrap();
+        assert_eq!(evidence.label, "taira.cut_freshness");
+        assert_eq!(fetched.get(), 0);
+        cut.check_current_cut(height + MAX_CUT_LAG_BLOCKS, fetch)
+            .unwrap();
+        assert_eq!(fetched.get(), MAX_CUT_LAG_BLOCKS);
+        // A stale cut is refused before any block is requested.
+        let stale = cut
+            .check_current_cut(height + MAX_CUT_LAG_BLOCKS + 1, |_| {
+                panic!("a stale cut needs no proof of the tip")
+            })
+            .unwrap_err();
+        assert!(stale.to_string().contains("--at-height"), "{stale}");
+        assert!(
+            cut.check_current_cut(height - 1, |_| panic!("a lower tip needs no proof"))
+                .is_err()
+        );
+        // A tip claim the endpoint cannot certify, or certifies on another chain, is refused.
+        assert!(
+            cut.check_current_cut(height + 1, |_| Err(eyre!("unavailable")))
+                .is_err()
+        );
+        let (_, foreign) = chain("sccp-cut-foreign", 1);
+        assert!(
+            cut.check_current_cut(height + 1, |at| Ok(foreign[&at.get()].clone()))
+                .is_err()
+        );
+        // Checking never moves the selected cut.
+        assert_eq!(cut.height(), height);
     }
 }

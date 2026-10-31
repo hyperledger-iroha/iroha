@@ -252,7 +252,7 @@ fn verify_input(
                 .iter()
                 .zip(&roster)
                 .all(|(seat, peer)| seat.id() == *peer)
-            && iroha_data_model::block::consensus::is_valid_committee_size(roster.len()),
+            && iroha_model_base::topology::is_valid_committee_size(roster.len()),
         "rotation processes must match every exact frozen 3f+1 seat in order"
     );
     let observed = selected.observed_height();
@@ -848,7 +848,7 @@ fn genesis_dkg_session(
         ])
         .into(),
         authority_generation: 0,
-        roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
+        roster_hash: global_threshold_beacon_roster_hash_v1(roster),
         committee_size: 4,
         threshold: 2,
         start_height: 1,
@@ -858,6 +858,29 @@ fn genesis_dkg_session(
     }
 }
 
+/// Chain identity and verification bounds shared by genesis seat operations.
+#[derive(Clone, Copy)]
+struct GenesisFinalityContext<'a> {
+    chain_id: &'a ChainId,
+    limits: NativeFinalityLimits,
+}
+
+/// Native executable and finality bounds for a disposable genesis DKG ceremony.
+#[derive(Clone, Copy)]
+pub struct GenesisDkgRunConfig<'a> {
+    /// Native daemon executable used to start each independent seat.
+    pub native_binary: &'a ResolvedProgram,
+    /// Bounds for authenticating signed genesis and subsequent finality proofs.
+    pub limits: NativeFinalityLimits,
+    /// Finalized height at which the completed DKG certificate is installed.
+    pub certificate_height: u64,
+}
+
+struct GenesisDkgParticipants {
+    session: GlobalThresholdBeaconDkgSessionV1,
+    roster: Vec<PeerId>,
+}
+
 fn spawn_genesis_seat(
     binary: &ResolvedProgram,
     seat: &NetworkPeer,
@@ -865,8 +888,7 @@ fn spawn_genesis_seat(
     session: &GlobalThresholdBeaconDkgSessionV1,
     public_paths: &[PathBuf; 4],
     chain_discriminant: u16,
-    chain_id: &ChainId,
-    limits: NativeFinalityLimits,
+    GenesisFinalityContext { chain_id, limits }: GenesisFinalityContext<'_>,
 ) -> Result<SeatProcess> {
     let owner_root =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
@@ -943,9 +965,8 @@ fn spawn_genesis_seat(
         public_fifo.as_fd(),
         finality_fifo.as_fd(),
     )?;
-    let child = command.spawn_async().map_err(|error| {
+    let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
-        error
     })?;
     drop(provision_key);
     drop(public_fifo);
@@ -1179,8 +1200,7 @@ fn spawn_genesis_config_seat(
     session: &GlobalThresholdBeaconDkgSessionV1,
     public_paths: &[PathBuf; 4],
     chain_discriminant: u16,
-    chain_id: &ChainId,
-    limits: NativeFinalityLimits,
+    GenesisFinalityContext { chain_id, limits }: GenesisFinalityContext<'_>,
 ) -> Result<SeatProcess> {
     let owner_root =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
@@ -1259,9 +1279,8 @@ fn spawn_genesis_config_seat(
         public_fifo.as_fd(),
         finality_fifo.as_fd(),
     )?;
-    let child = command.spawn_async().map_err(|error| {
+    let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
-        error
     })?;
     drop(provision_key);
     drop(public_fifo);
@@ -1461,8 +1480,7 @@ async fn run_genesis_public_command(
     reason = "the disposable supervisor passes one already opened owner-private BLS descriptor to the native signer"
 )]
 async fn sign_genesis_draft(
-    chain_id: &ChainId,
-    limits: NativeFinalityLimits,
+    GenesisFinalityContext { chain_id, limits }: GenesisFinalityContext<'_>,
     binary: &ResolvedProgram,
     network: NetworkId,
     discriminant: u16,
@@ -1726,8 +1744,7 @@ where
         .collect::<Result<Vec<_>>>()?;
     run_genesis_dkg_with_seats(
         bundle,
-        session,
-        roster,
+        GenesisDkgParticipants { session, roster },
         verifier,
         certificate_height,
         next_finality,
@@ -1740,8 +1757,7 @@ where
                 session,
                 paths,
                 discriminant,
-                chain_id,
-                limits,
+                GenesisFinalityContext { chain_id, limits },
             )
         },
     )
@@ -1767,9 +1783,11 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     network_id: NetworkId,
     chain_id: &ChainId,
     seats: &[DisposableGenesisConfigSeat],
-    native_binary: &ResolvedProgram,
-    limits: NativeFinalityLimits,
-    certificate_height: u64,
+    GenesisDkgRunConfig {
+        native_binary,
+        limits,
+        certificate_height,
+    }: GenesisDkgRunConfig<'_>,
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
@@ -1820,14 +1838,13 @@ where
     )
     .map_err(|error| eyre!(error))?;
     let session = genesis_dkg_session(network_id, &roster);
-    let _ = GlobalThresholdBeaconDkgStateV1::validate_session(
+    GlobalThresholdBeaconDkgStateV1::validate_session(
         &session,
         &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
     )?;
     run_genesis_dkg_with_seats(
         bundle,
-        session,
-        roster,
+        GenesisDkgParticipants { session, roster },
         verifier,
         certificate_height,
         next_finality,
@@ -1840,8 +1857,7 @@ where
                 session,
                 paths,
                 discriminant,
-                chain_id,
-                limits,
+                GenesisFinalityContext { chain_id, limits },
             )
         },
     )
@@ -1873,8 +1889,7 @@ where
 
 async fn run_genesis_dkg_with_seats<F, Fut, S>(
     bundle: NativeGenesisProvisioningBundle,
-    session: GlobalThresholdBeaconDkgSessionV1,
-    roster: Vec<PeerId>,
+    GenesisDkgParticipants { session, roster }: GenesisDkgParticipants,
     mut verifier: NativeJournalCursor,
     certificate_height: u64,
     mut next_finality: F,
@@ -2070,21 +2085,19 @@ where
         "--output".to_owned(),
         public_bundle_path.display().to_string(),
     ]);
-    run_genesis_public_command(
-        &binary,
-        &assemble_args,
-        NativePublicCommandPhase::GenesisDkg,
-    )
-    .await?;
+    run_genesis_public_command(binary, &assemble_args, NativePublicCommandPhase::GenesisDkg)
+        .await?;
 
     let mut signatures = Vec::with_capacity(3);
     for seat in outputs.iter().take(3) {
         let signature =
             controller_path.join(format!("install-signature-{}.json", seat.signer_index));
         sign_genesis_draft(
-            &chain_id,
-            limits,
-            &binary,
+            GenesisFinalityContext {
+                chain_id: &chain_id,
+                limits,
+            },
+            binary,
             session.network_id,
             bundle.chain_discriminant,
             &public_bundle_path,
@@ -2121,7 +2134,7 @@ where
         install_instruction_path.display().to_string(),
     ]);
     run_genesis_public_command(
-        &binary,
+        binary,
         &install_args,
         NativePublicCommandPhase::GenesisInstall,
     )
@@ -2814,8 +2827,10 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
                 &session,
                 &paths,
                 369,
-                &network.chain_id(),
-                limits,
+                GenesisFinalityContext {
+                    chain_id: &network.chain_id(),
+                    limits,
+                },
             )
         } else {
             let input = DisposableRotationProofInput {
@@ -3609,8 +3624,10 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
             &session,
             &public_paths,
             369,
-            &chain,
-            limits,
+            GenesisFinalityContext {
+                chain_id: &chain,
+                limits,
+            },
         )
         .unwrap();
         assert!(

@@ -3,6 +3,8 @@
 //! Stock nodes use mandatory TLS 1.3 over TCP, with optional QUIC using the
 //! same application identity and channel-binding invariants. No plaintext or
 //! legacy Noise peer transport is selectable in the first release.
+//! TLS configurations explicitly select Ring, matching certificate-signature verification,
+//! even when downstream applications also enable Rustls' AWS-LC provider.
 use rustls::{
     DigitallySignedStruct, Error as RustlsError, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -435,17 +437,21 @@ pub mod quic {
             let mut endpoint = Endpoint::client(bind_addr)?;
             let verifier: Arc<dyn ServerCertVerifier> =
                 Arc::new(super::CertificateKeyProofVerifier::unpinned());
-            let mut tls = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(verifier)
-                .with_no_client_auth();
+            let mut tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map_err(io::Error::other)?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
             // Application authentication happens after the transport
             // handshake; replayable 0-RTT bytes must never enter that path.
             tls.enable_early_data = false;
             tls.alpn_protocols = vec![P2P_ALPN.to_vec()];
             let tls = Arc::new(tls);
             let crypto = QuinnRustlsClientConfig::try_from(tls)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let mut client = ClientConfig::new(Arc::new(crypto));
             client.transport_config(transport);
             endpoint.set_default_client_config(client);
@@ -460,10 +466,10 @@ pub mod quic {
             let connecting = self
                 .endpoint
                 .connect(remote, server_name)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             connecting
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| io::Error::other(e.to_string()))
         }
     }
     fn build_transport_config(_cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
@@ -802,10 +808,14 @@ pub mod tls {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let mut config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+        let mut config = ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(std::io::Error::other)?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
         config.alpn_protocols = vec![alpn.to_vec()];
         let connector = TlsConnector::from(Arc::new(config));
         let tls = connector.connect(server_name(host)?, tcp).await?;
@@ -2530,11 +2540,14 @@ mod tests {
         let private_key = rustls::pki_types::PrivateKeyDer::from(
             rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
         );
-        let mut server_config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(cert_chain, private_key)
-                .expect("test TLS server config");
+        let mut server_config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, private_key)
+        .expect("test TLS server config");
         server_config.alpn_protocols = alpn_protocols;
         let acceptor = TlsAcceptor::from(Arc::new(server_config));
         let listener = match TcpListener::bind("127.0.0.1:0").await {
@@ -2577,6 +2590,10 @@ mod tests {
             }
             if let Ok(tls) = result {
                 assert_eq!(tls.get_ref().1.alpn_protocol(), Some(P2P_ALPN));
+                assert_eq!(
+                    tls.get_ref().1.protocol_version(),
+                    Some(rustls::ProtocolVersion::TLSv1_3),
+                );
             }
             server.await.expect("test TLS server task");
         }
@@ -2612,10 +2629,13 @@ mod tests {
             .expect("parse unrelated signing key");
         let advertised_cert = rustls::pki_types::CertificateDer::from(cert.der().as_ref().to_vec());
         let certified_key = CertifiedKey::new(vec![advertised_cert], unrelated_key);
-        let mut server_cfg =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
+        let mut server_cfg = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
         server_cfg.alpn_protocols = vec![P2P_ALPN.to_vec()];
         let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
         let listener = match TcpListener::bind("127.0.0.1:0").await {
@@ -2658,16 +2678,19 @@ mod tests {
                 .expect("generate test certificate");
         let pinned: Arc<[u8]> = Arc::from(cert.der().as_ref());
         let expected_binding = certificate_fingerprint(pinned.as_ref());
-        let mut config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(
-                    vec![rustls::pki_types::CertificateDer::from(pinned.to_vec())],
-                    rustls::pki_types::PrivateKeyDer::from(
-                        rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
-                    ),
-                )
-                .expect("test TLS server config");
+        let mut config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![rustls::pki_types::CertificateDer::from(pinned.to_vec())],
+            rustls::pki_types::PrivateKeyDer::from(rustls::pki_types::PrivatePkcs8KeyDer::from(
+                signing_key.serialize_der(),
+            )),
+        )
+        .expect("test TLS server config");
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         let proxy_acceptor = TlsAcceptor::from(Arc::new(config.clone()));
         config.alpn_protocols = vec![P2P_ALPN.to_vec()];

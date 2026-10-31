@@ -809,8 +809,10 @@ def _exchange(frame, deadline_ns, environment, inherited_fds=()):
     _remaining(deadline_ns)
     if not os.path.isabs(__file__):
         raise RuntimeError("bounded Requests owner requires an absolute installed module path")
+    # Isolated children ignore PYTHONDONTWRITEBYTECODE. Preserve authenticated
+    # installed package contents explicitly when importing the worker's owners.
     process = subprocess.Popen(
-        [sys.executable, "-I", __file__, "--worker"],
+        [sys.executable, "-I", "-B", __file__, "--worker"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         close_fds=True, bufsize=0, env=environment, pass_fds=inherited_fds,
     )

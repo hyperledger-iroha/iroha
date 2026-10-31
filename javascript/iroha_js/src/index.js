@@ -5,6 +5,13 @@
  * module.
  */
 export {
+  createPrivateSettlementHost,
+  PrivateSettlementHost,
+  PrivateSettlementOperation,
+  PrivateSettlementTicket,
+  PrivateSettlementOutcome,
+} from "./privateSettlement.js";
+export {
   KotodamaCompilerClient,
   compileKotodamaProgram,
 } from "./kotodamaCompiler/index.js";
@@ -145,6 +152,10 @@ export {
   FilterSyntaxError,
 } from "./toriiErrors.js";
 export {
+  ACCOUNT_ALIAS_FIELDS,
+  ACCOUNT_ALIAS_ROW_FIELDS,
+  ASSET_MOVEMENT_KINDS,
+  ASSET_MOVEMENT_ROW_FIELDS,
   AGGREGATE_FUNCTIONS,
   CURSOR_MAX_BYTES,
   FIELD_PATH_MAX_BYTES,
@@ -163,6 +174,12 @@ export {
   ListQuery,
   SortKey,
   ToriiCollection,
+  accountAliasScope,
+  accountsInAliasScope,
+  decodeAccountAliasRows,
+  decodeAccountAliases,
+  decodeAssetMovementRow,
+  decodeAssetMovementRows,
   decodePage,
   field,
   isDecimalText,
@@ -215,6 +232,8 @@ export {
   sm2PublicKeyMultihash,
   buildKaigiAuthorizationProofV1,
   buildKaigiUsageProofV1,
+  generateKaigiBlindingV1,
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
@@ -240,6 +259,8 @@ export {
   buildCanonicalRequestHeaders,
   buildCanonicalJsonRequest,
   withCanonicalReadRetry,
+  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,
+  CANONICAL_READ_TOTAL_TIMEOUT_MS,
 } from "./canonicalRequest.js";
 export {
   BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
@@ -398,23 +419,7 @@ export {
   buildPrecommitTriggerAction,
   submitSignedTransaction,
 } from "./transaction.js";
-export {
-  BrowserTransactionCodecError,
-  browserSignedTransactionHashHex,
-  browserTransactionCodec,
-  browserTransactionPayloadHashHex,
-  buildBrowserExecutableBatchPayload,
-  buildBrowserInstructionTransactionPayload,
-  buildBrowserVerifyingKeyTransactionPayload,
-  buildBrowserTransferPayload,
-  decodeCanonicalVerifyingKeyTransactionPayload,
-  finalizeBrowserExecutableBatchTransaction,
-  finalizeBrowserInstructionTransaction,
-  finalizeBrowserSignedTransaction,
-  validateBrowserExecutableBatchSignable,
-  validateBrowserInstructionTransactionSignable,
-  validateBrowserTransferSignable,
-} from "./transactionCodec.js";
+export * from "./public/transactionCodec.js";
 export {
   SMART_CONTRACT_CODE_CHUNK_BYTES,
   deploySmartContractBrowser,
@@ -431,6 +436,8 @@ export {
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   KAIGI_MAX_PARTICIPANTS_V1,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+  KAIGI_RELAY_HPKE_SUITES_V1,
+  buildKaigiRelayHpkeKeyV1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
@@ -687,3 +694,5 @@ export { inspectAccountViaNativeTransport, inspectToriiAccountIdentityViaNativeT
 export { requestNativeMultisigViaTransport, inspectNativeMultisigPrepareViaTransport, inspectNativeMultisigSignedViaTransport, queryNativeMultisigFinalityViaTransport, queryNativeMultisigProposalFinalityViaTransport } from "./nativeMultisigTransport.js";
 
 export { deriveMultisigProposalId } from "./multisigOccurrence.js";
+
+export { PrivacyX509DirectTransactionV1, preparePrivacyX509DirectTransactionV1, buildPrivacyX509DirectTransactionV1 } from "./privacyX509Transaction.js";

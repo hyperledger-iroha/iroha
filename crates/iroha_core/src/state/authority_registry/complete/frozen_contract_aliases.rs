@@ -1,10 +1,10 @@
-//! Exact contract-alias inverse and leases over the original frozen StateBlock.
+//! Exact contract-alias inverse and leases over the original frozen `StateBlock`.
 //!
 //! The committed and frozen owners share one bounded both-image relation. Undeployed and
 //! expired bindings remain representable; deployment, current authority, time-based resolution
 //! and cleanup are separate owners. No literal re-decode or fresh State view is needed.
 //! TODO: consume this scoped encoder with every canonical table/cell and authenticated history
-//! in the sole StatePublication owner. Whole predecessor coherence, custody and finality remain open.
+//! in the sole `StatePublication` owner. Whole predecessor coherence, custody and finality remain open.
 
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
@@ -48,9 +48,13 @@ impl<'frozen> Original<'frozen> {
 ///
 /// `None` refuses incomplete, foreign, differently acquired or released sources.
 /// Both original borrows and their State allocation pool survive validation and
-/// paired encoding; every local refusal leaves the same StateBlock available for
+/// paired encoding; every local refusal leaves the same `StateBlock` available for
 /// retry. No State view, publication reacquisition or replacement pool is opened.
 /// Success grants no complete State root, finality or private-row disclosure.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

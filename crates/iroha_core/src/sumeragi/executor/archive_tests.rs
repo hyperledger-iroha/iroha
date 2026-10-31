@@ -472,6 +472,9 @@ fn committed_archive_index_refusal_retains_original_release_and_exact_publicatio
 
 #[test]
 fn committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     run(|| {
         use iroha_allocation::AllocationBudget;
         use std::task::{Context, Waker};
@@ -604,7 +607,11 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
         &chain.network_id(),
         Duration::from_secs(1),
         chain.state().view().world().parameters().transaction(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         &time,
     )
     .unwrap();

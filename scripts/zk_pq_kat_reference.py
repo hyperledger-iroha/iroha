@@ -11,8 +11,9 @@ known-answer generator as PQClean runs it (`test/crypto_kem/nistkat.c` and
 `00..2f` supplies the 48-byte seed, the DRBG is re-seeded with it, and the
 algorithm draws its randomness from that second DRBG. PQClean records the
 SHA-256 of the printed response as `nistkat-sha256` in each scheme's `META.yml`;
-those files ship inside the `pqcrypto-mlkem` and `pqcrypto-mldsa` crates that
-Cargo.lock pins.
+the immutable upstream revisions and published crate versions recorded below
+identify that independent oracle. The tracked response bytes and their digests
+remain fixed when the production dependency changes.
 
 This module
 * reimplements AES-256 and the CTR_DRBG to derive the exact randomness each
@@ -23,9 +24,11 @@ This module
 
 The Rust tests in crates/soranet_pq compare the output of the implementation
 with the tracked response files byte for byte. Together the two checks show that
-the implementation reproduces the official response. They do not cover the NIST
-ACVP vectors (invalid encodings, context substitution, pre-hash variants); those
-files are not in the tree and were not fetched.
+the implementation reproduces the official response. These count-zero checks do
+not cover NIST ACVP vectors. The separate check_soranet_pq_acvp.py checker and
+soranet_pq ACVP tests cover a pinned subset of external pure-message vectors,
+key checks and context/message substitution. Prehash and internal-interface
+ACVP groups remain outside that subset.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@ use iroha_sumeragi::{
     crypto::{Crypto, Signer},
     types::{Bitmap, HeightConfig},
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 struct Schedule {
     instance: Hash32,
@@ -672,6 +672,75 @@ fn contiguous_heights_context_conflicts_and_reopening_preserve_prior_semantics()
     assert!(reopened.entry(3).unwrap().is_none());
 }
 
+struct CountFileSyncs(AtomicUsize);
+impl Faults for CountFileSyncs {
+    fn before(&self, step: FsStep, _: &Path) -> io::Result<()> {
+        if step == FsStep::SyncFile {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+}
+#[test]
+fn reopening_authenticates_only_the_tip_and_reads_authenticate_lower_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let (first, qc, source, budget, crypto) = fixture(1025);
+    let crypto: SharedCrypto = Arc::new(crypto);
+    let store = open(
+        dir.path(),
+        &source,
+        Arc::clone(&crypto),
+        &budget,
+        Arc::new(NoFaults),
+    );
+    store.append(&first, &qc).unwrap();
+    let (second, second_qc) = at_height(
+        &first,
+        &qc,
+        &source,
+        &budget,
+        &*crypto,
+        2,
+        first.hash(&*crypto),
+    );
+    store.append(&second, &second_qc).unwrap();
+    let (third, third_qc) = at_height(
+        &second,
+        &second_qc,
+        &source,
+        &budget,
+        &*crypto,
+        3,
+        second.hash(&*crypto),
+    );
+    store.append(&third, &third_qc).unwrap();
+    let lowest = store.dir.join(frame_name(1));
+    drop(store);
+    let mut bytes = fs::read(&lowest).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    fs::write(&lowest, &bytes).unwrap();
+    // Opening authenticates and synchronizes only the durable tip, whatever the history.
+    let syncs = Arc::new(CountFileSyncs(AtomicUsize::new(0)));
+    let faults: Arc<dyn Faults> = syncs.clone();
+    let reopened = open(dir.path(), &source, Arc::clone(&crypto), &budget, faults);
+    assert_eq!(reopened.height(), 3);
+    assert_eq!(syncs.0.load(Ordering::SeqCst), 1);
+    // The read that first uses a lower frame authenticates it.
+    assert_eq!(
+        reopened.entry(3).unwrap().unwrap().manifest.header,
+        *third.header()
+    );
+    assert_eq!(
+        reopened.entry(2).unwrap().unwrap().manifest.header,
+        *second.header()
+    );
+    assert_eq!(
+        reopened.entry(1).unwrap_err().io_kind(),
+        io::ErrorKind::InvalidData
+    );
+}
+
 struct FailBeforeLink(AtomicBool);
 impl Faults for FailBeforeLink {
     fn before(&self, step: FsStep, _: &Path) -> io::Result<()> {
@@ -1323,7 +1392,7 @@ fn startup_retains_original_directory_before_exposing_empty_or_recovered_tip() {
             .complete()
             .expect_err("startup must retain original namespace");
         assert_eq!(error.io_kind(), io::ErrorKind::Other);
-        assert_eq!(startup.validated, 0);
+        assert_eq!(startup.tip_authenticated, !populated);
         assert_eq!(startup.store.height(), 0);
         assert_eq!(budget.reserved_bytes(), charged);
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
@@ -1425,10 +1494,7 @@ fn read_only_missing_frame_preserves_not_found_and_reopens_after_publication() {
         Err(error) => error,
         Ok(mut read) => {
             // Dispose the original failed read before asserting its wrong classification.
-            let error = read
-                .poll()
-                .err()
-                .expect("missing frame cannot authenticate");
+            let error = read.poll().expect_err("missing frame cannot authenticate");
             drop(read);
             io::Error::new(error.io_kind(), "read-only missing source classification")
         }

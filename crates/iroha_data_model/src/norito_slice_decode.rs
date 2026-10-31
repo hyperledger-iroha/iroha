@@ -57,7 +57,7 @@ impl_canonical_slice_decode! {
     // Also cover event payloads that may appear in option/sequence contexts
     crate::events::data::proof::ProofVerified,
     crate::events::data::proof::ProofRejected,
-    crate::runtime::RuntimeUpgradeId,
+    crate::runtime::lifecycle::ChangeSetId,
 }
 // Kaigi components referenced by query/data-model responses
 impl_canonical_slice_decode! {
@@ -155,14 +155,14 @@ impl_canonical_slice_decode! {
     crate::soradns::ResolverRevocationRecordV1,
     crate::soradns::RadRevokeReason,
 }
-// Governance types (feature-gated, but default-enabled)
-#[cfg(feature = "governance")]
+// Canonical governance types share the same decoder in every build.
+
 impl_canonical_slice_decode! {
     crate::governance::types::ProposalId,
     crate::governance::types::AtWindow,
 }
 // ISI Governance enums used in instruction params
-#[cfg(feature = "governance")]
+
 impl_canonical_slice_decode! {
     crate::isi::governance::VotingMode,
 }

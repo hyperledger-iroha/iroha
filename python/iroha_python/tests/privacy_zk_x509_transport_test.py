@@ -334,93 +334,47 @@ def test_crypto_x509_inspector_rejects_bad_inputs_and_native_contract_drift(
         inspect(SIGNED_X509_WIRE, NETWORK_ID)
 
 
-def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[object, ...]] = []
-    signed_result = object()
+def _empty_x509_draft() -> TransactionDraft:
+    return TransactionDraft(TransactionConfig(
+        network_id=NETWORK_ID, authority="ed0120" + "11" * 32,
+        fee_payment={"payer": "authority", "value": {"charge_limits": [], "gas_limit": 1000}},
+        creation_time_ms=42, chain_discriminant=753,
+    ))
 
+
+def test_transaction_draft_returns_exact_native_x509_prepared_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Identity/forwarding test only: native custody and cryptography are Rust-owned.
+    calls = []
+    owner = object()
     class Builder:
-        def prepare_privacy_zk_x509_identity_presentation_action_v1(
-            self, statement: bytes
-        ) -> bytes:
-            calls.append(("prepare", statement))
-            return bytes([9]) * 32
-
-        def sign_privacy_zk_x509_identity_presentation_action_v1(
-            self,
-            private_key: bytes,
-            statement: bytes,
-            proof: bytes,
-        ) -> object:
-            calls.append(("sign", private_key, statement, proof))
-            return signed_result
-
-    draft = TransactionDraft(
-        TransactionConfig(
-            network_id=NETWORK_ID,
-            authority="ed0120" + "11" * 32,
-            fee_payment={
-                "payer": "authority",
-                "value": {"charge_limits": [], "gas_limit": 1000},
-            },
-            creation_time_ms=42,
-            chain_discriminant=753,
-        )
-    )
+        def prepare_privacy_zk_x509_identity_presentation_action_v1(self, request):
+            calls.append(request)
+            return owner
+    draft = _empty_x509_draft()
     monkeypatch.setattr(draft, "to_builder", lambda: Builder())
-
-    statement = b"canonical-typed-statement"
-    proof = b"X5S1-proof"
-    assert draft.prepare_privacy_zk_x509_identity_presentation_action_v1(
-        canonical_statement_archive=statement
-    ) == bytes([9]) * 32
-    assert (
-        draft.sign_privacy_zk_x509_identity_presentation_action_v1(
-            b"private-key",
-            canonical_statement_archive=statement,
-            credential_proof=proof,
-        )
-        is signed_result
-    )
-    assert calls == [
-        ("prepare", statement),
-        ("sign", b"private-key", statement, proof),
-    ]
+    request = b"canonical-proof-free-request"
+    prepared = draft.prepare_privacy_zk_x509_identity_presentation_action_v1(canonical_request_archive=request)
+    assert prepared is owner
+    assert calls == [request]
+    draft.add_instruction(object())
+    assert prepared is owner
+    assert not hasattr(draft, "sign_privacy_zk_x509_identity_presentation_action_v1")
 
 
-def test_transaction_draft_rejects_x509_action_mixing_before_native_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    draft = TransactionDraft(
-        TransactionConfig(
-            network_id=NETWORK_ID,
-            authority="ed0120" + "11" * 32,
-            fee_payment={
-                "payer": "authority",
-                "value": {"charge_limits": [], "gas_limit": 1000},
-            },
-            creation_time_ms=42,
-            chain_discriminant=753,
-        )
-    )
-    draft.add_instruction(object())  # type: ignore[arg-type]
-    monkeypatch.setattr(
-        draft,
-        "to_builder",
-        lambda: pytest.fail("mixed X509 draft reached native builder"),
-    )
+@pytest.mark.parametrize("archive", [bytearray(b"request"), memoryview(b"request"), "request", None])
+def test_x509_prepare_rejects_mutable_or_coerced_archives_before_native_call(monkeypatch, archive) -> None:
+    draft = _empty_x509_draft()
+    monkeypatch.setattr(draft, "to_builder", lambda: pytest.fail("non-bytes reached native owner"))
+    with pytest.raises(TypeError, match="exact immutable bytes"):
+        draft.prepare_privacy_zk_x509_identity_presentation_action_v1(canonical_request_archive=archive)
 
+
+def test_transaction_draft_rejects_x509_action_mixing_before_native_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    draft = _empty_x509_draft()
+    draft.add_instruction(object())
+    monkeypatch.setattr(draft, "to_builder", lambda: pytest.fail("mixed X509 draft reached native builder"))
     with pytest.raises(ValueError, match="otherwise empty"):
-        draft.prepare_privacy_zk_x509_identity_presentation_action_v1(
-            canonical_statement_archive=b"statement"
-        )
-    with pytest.raises(ValueError, match="otherwise empty"):
-        draft.sign_privacy_zk_x509_identity_presentation_action_v1(
-            b"private-key",
-            canonical_statement_archive=b"statement",
-            credential_proof=b"proof",
-        )
+        draft.prepare_privacy_zk_x509_identity_presentation_action_v1(canonical_request_archive=b"request")
 
 
 def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(

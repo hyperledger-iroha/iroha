@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 
 import { AccountAddress } from "./address.js";
 import {

@@ -3,7 +3,7 @@
 use super::*;
 use iroha_data_model::smart_contract::event::{ContractEmissionV1, ContractEventDescriptorV1};
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn event_context<'a>(
         &'a self,
         vm: &'a IVM,

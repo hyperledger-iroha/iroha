@@ -57,10 +57,13 @@ fn published_generation_survives_retry_with_an_unpublished_leftover() {
     let pin = read(&directory).unwrap().launcher;
     let mut request = LocalnetRequest::new(pin.path.clone(), pin.path);
     request.service_profile = prepared.service_profile;
-    assert!(matches!(
-        store.up(&request),
-        Err(Error::Timeout(timeout)) if timeout == request.startup_timeout
-    ));
+    let error = store.up(&request).unwrap_err();
+    // The minimal fixture's placeholder config is rejected before native spawn;
+    // retry must preserve that published generation instead of replacing it.
+    assert!(
+        matches!(&error, Error::Invalid(message) if message == "managed listener configuration is not valid TOML"),
+        "expected retained listener configuration refusal: {error}"
+    );
     assert_eq!(encode(&read(&directory).unwrap()).unwrap(), before);
     assert_eq!(store.prepared("local").unwrap(), prepared);
 }
@@ -98,7 +101,7 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
     let spec = super::super::tests::private_spec();
     let staged = fresh_stage(&directory).unwrap();
     let abandoned =
-        crate::localnet::prepare_private_root("private", staged.path(), &ports, &spec).unwrap();
+        crate::sora_network::prepare_private_root("private", staged.path(), &ports, &spec).unwrap();
     let abandoned_owner = abandoned.context.account_id;
     drop(staged);
     let retained = prepare(
@@ -243,6 +246,7 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "native-authorities".into();
+    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
     assert_eq!(
         request.service_profile,
         crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities

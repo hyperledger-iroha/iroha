@@ -456,7 +456,7 @@ fn resume_and_repeated_submit_make_only_a_status_read_and_do_not_change_the_jour
         };
         assert!(
             run_retained(
-                JournalArgs {
+                &JournalArgs {
                     journal: path.clone()
                 },
                 &mut context,

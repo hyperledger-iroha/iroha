@@ -1,8 +1,18 @@
 // Canonical native/user state namespace predicates, included in the host module.
-/// Reject native reserve originals in generic durable artifacts, including retained replay.
+/// Reject native reserve, escrow and multisig originals in generic durable artifacts.
 /// Native reserve instructions mutate their own state after their ordinary authorization checks;
 /// they never obtain mutation authority by supplying a generic durable-state overlay.
 pub(crate) fn validate_reserve_durable_state_path(path: &StatePath) -> Result<(), ValidationFail> {
+    if path.as_ref() == "multisig" || path.as_ref().starts_with("multisig/") {
+        return Err(ValidationFail::NotPermitted(
+            "native multisig state cannot be mutated by a contract durable-state artifact".into(),
+        ));
+    }
+    if iroha_data_model::escrow::scoped::is_native_scope_key(path.as_ref()) {
+        return Err(ValidationFail::NotPermitted(
+            "native escrow scope cannot be mutated by a contract durable-state artifact".into(),
+        ));
+    }
     if iroha_data_model::sorafs::reserve::history::is_reserve_state_key(path.as_ref()) {
         return Err(ValidationFail::NotPermitted(
             "native reserve state cannot be mutated by a contract durable-state artifact".into(),
@@ -11,7 +21,7 @@ pub(crate) fn validate_reserve_durable_state_path(path: &StatePath) -> Result<()
     Ok(())
 }
 
-impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     fn contract_state_key_matches_namespace(key: &str, prefix: &str) -> bool {
         if let Some(root) = prefix
             .strip_suffix('/')

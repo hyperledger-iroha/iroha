@@ -322,7 +322,7 @@ pub struct LeafV1 {
 }
 
 fn label(out: &mut BitsV1, label: &[bool], max: usize) {
-    let len_bits = usize::try_from(usize::BITS - max.leading_zeros()).expect("width");
+    let len_bits = usize::try_from(max.bit_width()).expect("width");
     let short = 2 + 2 * label.len();
     let long = 2 + len_bits + label.len();
     let same = if label

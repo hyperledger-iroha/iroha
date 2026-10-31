@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter
+import re
 import json
 from pathlib import Path
 from runpy import run_path
@@ -526,7 +528,12 @@ def test_a_read_of_an_uncommitted_node_policy_field_is_detected(tmp_path: Path) 
     assert owners["axt.slot_length_ms"] == "cfg.nexus.axt_windows"
     assert owners["pipeline.ivm_max_cycles_upper_bound"] == "cfg.pipeline.bounds"
     assert owners["governance.voting_asset_id"] == "cfg.governance"
-    assert owners["crypto.allowed_signing"] == "cfg.crypto.algorithms"
+    # These exact node-policy readers were retired with committed crypto policy.
+    assert not set(owners) & {
+        "crypto.allowed_signing", "crypto.allowed_curve_ids",
+        "crypto.default_hash", "crypto.sm2_distid_default",
+    }
+    assert entry(CENSUS, "cfg.crypto.algorithms")["status"] == "open"
 
 
 def test_fraud_reads_use_the_exact_committed_catalog_owner(tmp_path: Path) -> None:
@@ -715,7 +722,8 @@ def test_entries_read_in_repair_round_two_state_what_the_code_does() -> None:
     assert by_id["voting.qualification"]["status"] == "open"
     assert "release-audit reviewer" in by_id["voting.qualification"]["note"]
     assert by_id["ivm_proof.qualification"]["status"] == "open"
-    assert by_id["zk_x509.digest_identity"]["status"] == "open"
+    assert by_id["zk_x509.digest_identity"]["status"] == "not_a_gate"
+    assert by_id["zk_x509.unavailable"]["status"] == "unsupported"
     assert "build_sha256_word_circuit_v1" != by_id["zk_x509.digest_identity"]["symbol"]
     # The process-wide verification gas schedule is gone.
     gas = by_id["gas.process_wide_schedule"]
@@ -902,7 +910,11 @@ def test_every_gate_or_unfinished_entry_was_read_site_by_site() -> None:
     assert "zk_ace.activation" not in by_id
     assert by_id["zk_ace.revocation_state"]["status"] == "not_a_gate"
     assert by_id["vega.revocation_state"]["status"] == "not_a_gate"
-    assert "PrivacyProtocolLifecycleV1" in by_id["vega.activation"]["note"]
+    assert "vega.activation" not in by_id
+    assert "privacy.activation" not in by_id
+    assert by_id["privacy.profile_validation"]["status"] == "not_a_gate"
+    assert by_id["gate.privacy.activation_registry"]["status"] == "done"
+    assert by_id["gate.privacy.exact12_qualification"]["status"] == "done"
     # A constant that is `true` gates nothing; one that is `false` is unfinished work.
     assert "zk_ams.activation" not in by_id
     assert by_id["zk_ams.constant_true"]["status"] == "not_a_gate"
@@ -922,7 +934,7 @@ def test_every_gate_or_unfinished_entry_was_read_site_by_site() -> None:
     assert by_id["wall.core.execution_timing"]["attribution"] == "read"
     # SDK rows are split by what the file and the class name.
     for sdk in ("swift", "csharp", "javascript", "python", "kotlin"):
-        assert by_id[f"sdk_{sdk}.exact12_capability"]["status"] == "open", sdk
+        assert by_id[f"sdk_{sdk}.exact12_capability"]["status"] == "not_a_gate", sdk
         # Retired release DTOs are not retained as fictitious SDK source owners.
         assert f"sdk_{sdk}.kagemusha_release" not in by_id, sdk
         assert by_id[f"sdk_{sdk}.names"]["status"] == "not_a_gate", sdk
@@ -985,7 +997,10 @@ def test_native_owner_reconciliation_preserves_unfinished_relations() -> None:
     assert "Instant::now() >= control.deadline" in native
     execution = (ROOT / "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution.rs").read_text(encoding="utf-8")
     assert "VerificationControl::Synchronous," in execution
-    assert "stx.arm_local_storage_refusal(local);" in execution
+    assert ("ForgeryLocalRefusal::Storage(original) => {\n"
+            "                        stx.arm_local_storage_refusal(original);") in execution
+    assert ("ForgeryLocalRefusal::Execution(original) => {\n"
+            "                        stx.world.record_execution_deferral(original);") in execution
     pin_shape = entry(CENSUS, "sccp.committee_pin_shape")
     assert pin_shape["status"] == "not_a_gate" and pin_shape["symbol"] == "ZeroPinCoordinate"
     assert "Shape validation does not authenticate a committee" in pin_shape["note"]
@@ -1025,7 +1040,7 @@ def test_source_lookup_and_phone_key_checks_have_distinct_authorities() -> None:
 
 
 def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
-    """A compiled built-in profile is a binary-digest admission, never a strict lookup hint.
+    """A compiled built-in profile checks its semantic ABI and exact originals, never a strict lookup hint.
 
     It is recorded out of plan only while KAGEMUSHA is its sole production caller; a caller
     of the delivery plan makes it open F.4 work, so this test fails until the census is
@@ -1039,10 +1054,11 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source"),
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported"),
         ("crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source"),
+        ("crates/iroha_plonk/src/contract.rs", "digest_identity", "source"),
     }
     lookup = {site[0] for site in entry(CENSUS, "plonk.source_lookup")["sites"]}
     assert not {row[0] for row in rows} & lookup
-    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_source_identity_v1")
+    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_contract_v1")
     callers = set()
     for path in sorted((ROOT / "crates").glob("*/src/**/*.rs")):
         relative = path.relative_to(ROOT).as_posix()
@@ -1056,17 +1072,93 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
     assert all("kagemusha" in caller for caller in callers), sorted(callers)
 
 
-def test_slash_reads_of_the_node_local_staking_projection_stay_open() -> None:
-    """The slash path compares node-local staking fields: an open F.4 dependence."""
+def test_staking_monetary_owner_migrates_without_hiding_remaining_nexus_readers(tree_scan) -> None:
+    """Only monetary terms moved; validator capacity and other local policy stay open."""
     nexus = entry(CENSUS, "cfg.nexus.policy")
     assert nexus["status"] == "open" and nexus["owner"] == "F.4"
     staking = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
     rows = {site[2] for site in nexus["sites"] if site[0] == staking and site[1] == "node_policy_read"}
-    assert {"staking.max_slash_bps", "staking.max_stake_shares_per_validator",
-            "staking.slash_sink_account_id"} <= rows
-    source = (ROOT / staking).read_text(encoding="utf-8")
-    assert "let max_slash_bps = state_transaction.nexus.staking.max_slash_bps;" in source
-    assert "slash_within_limit(amount, &slashable_exposure, max_slash_bps)?" in source
+    assert rows == {"staking.max_validators"}
+    source = tree_scan.text(staking)
+    slash = source.split("fn apply_slash_to_validator_inner(", 1)[1].split("\nfn ", 1)[0]
+    assert "state_transaction.nexus.staking" not in slash
+    assert ".staking_monetary_policy()" in slash
+    assert "let allowed = slash_within_limit(amount, &slashable_exposure, max_slash_bps);" in slash
+    assert "if !allowed {" in slash
+    assert "state_transaction.nexus.staking.max_validators.get()" in source
+    assert entry(CENSUS, "cfg.root_fees.committed_policy")["status"] == "open"
+
+
+@pytest.mark.parametrize("owner,path,function,needle", [
+    ("cfg.nexus.policy", "crates/iroha_core/src/state.rs", "staking_monetary_policy", ".get_before_block()"),
+    ("cfg.root_fees.committed_policy", "crates/iroha_core/src/state.rs", "root_fee_policy", ".get_before_block()"),
+    ("cfg.root_fees.committed_policy", "crates/iroha_core/src/executor/root_fees.rs", "execution_parameters", "transaction.world.parameters.get_before_block()"),
+])
+@pytest.mark.parametrize("decoy", ["comment", "unrelated_function"])
+def test_original_policy_owner_rejects_current_cut_and_decoy(
+    tree_scan, owner, path, function, needle, decoy,
+) -> None:
+    """A current transaction value cannot replace the actual predecessor owner."""
+    source = tree_scan.text(path)
+    code, _ = CHECKER["mask_rust"](source)
+    match = re.search(r"\bfn\s+" + function + r"\b", code)
+    assert match is not None
+    opening = code.index("{", match.end())
+    closing = CHECKER["_matching_brace"](code, opening)
+    body = source[opening:closing]
+    assert body.count(needle) == 1
+    changed = source[:opening] + body.replace(needle, needle.replace("get_before_block", "get")) + source[closing:]
+    changed += ("\n// " + needle if decoy == "comment" else "\nfn unused_original_policy() { " + needle + "; }\n")
+    scan = copy.copy(tree_scan)
+    scan._text = {**tree_scan._text, path: changed}
+    assert_fails(scan, CENSUS, "entry " + owner + ": anchor")
+
+
+@pytest.mark.parametrize("statement,token", [
+    ("state_transaction.nexus.staking.max_slash_bps", "staking.max_slash_bps"),
+    ("state_transaction.nexus.staking.slash_sink_account_id", "staking.slash_sink_account_id"),
+    ("state_transaction.nexus.fees", "fees"),
+])
+def test_retired_monetary_node_policy_reads_cannot_return(tmp_path, statement, token) -> None:
+    """Reintroducing a retired configuration field and its reader cannot evade the census."""
+    path = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
+    write(tmp_path, path, "fn regress() { let _ = " + statement + "; }")
+    contract = copy.deepcopy(CONTRACT)
+    if token.startswith("staking."):
+        catalog_id = "nexus_consensus_policy_v1"
+        assert token not in CHECKER["contract_catalog_fields"](CONTRACT)[catalog_id]
+        catalog = next(item for item in contract["catalogs"] if item["id"] == catalog_id)
+        catalog["excluded"].append({
+            "reason": "Mutation restores the retired node policy field before adding its reader.",
+            "fields": [token],
+        })
+    write(tmp_path, CHECKER["RESOURCE_CONTRACT"], json.dumps(contract))
+    scan = Scan(tmp_path)
+    assert scan.rows[(path, "node_policy_read", token)] == 1
+    assert_fails(scan, CENSUS, f"unlisted site: {path} detector node_policy_read token {token!r}",
+                 contract=contract)
+
+
+def test_sccp_fixture_rows_are_excluded_only_by_actual_test_declaration(tree_scan) -> None:
+    path = "crates/iroha_core/src/smartcontracts/isi/sccp/reference_fixture_support.rs"
+    assert path in tree_scan.test_only
+    for key in ("sccp.activation", "sccp.time_budget"):
+        assert not any(site[0] == path for site in entry(CENSUS, key)["sites"])
+    declaration = tree_scan.text("crates/iroha_core/src/smartcontracts/isi/sccp/mod.rs")
+    assert "#[cfg(test)]\nmod reference_fixture_support;" in declaration
+
+
+def test_function_anchor_rejects_duplicate_owner_and_comment_only(tmp_path) -> None:
+    path = "crates/iroha_core/src/zk_gate.rs"
+    source = "fn owner() { actual(); }\nfn unrelated() { expected(); }"
+    write(tmp_path, path, source)
+    checker = CensusChecker(Scan(tmp_path), {}, {}, {})
+    assert checker._occurrences(path, "actual()", "owner") == 1
+    assert checker._occurrences(path, "expected()", "owner") == 0
+    checker.scan._text[path] = "fn owner() { /* expected(); */ }"
+    assert checker._occurrences(path, "expected()", "owner") == 0
+    checker.scan._text[path] = "fn owner() {}\nfn owner() { expected(); }"
+    assert checker._occurrences(path, "expected()", "owner") == 0
 
 
 def test_refresh_rewrites_counts_only(tmp_path: Path) -> None:
@@ -1098,3 +1190,131 @@ def test_cli_reports_drift_with_a_nonzero_status(tmp_path: Path, capsys) -> None
     assert "unlisted site" in capsys.readouterr().err
     assert CHECKER["main"](["--root", str(tmp_path), "--propose"]) == 0
     assert '"ZK_SKIP_VERIFY"' in capsys.readouterr().out
+
+
+def test_unavailable_family_filter_keeps_actual_identifier_membership(tmp_path: Path, tree_scan) -> None:
+    """Typed crypto errors outside family paths are a documented coverage limit."""
+    source = "fn f() { AnonymousBallotUnavailable; CryptoImplementationUnavailable; }"
+    outer = "crates/iroha_core/src/tx.rs"
+    inner = "crates/iroha_core/src/privacy.rs"
+    write(tmp_path, outer, source)
+    write(tmp_path, inner, source)
+    scanned = rows(tmp_path)
+    assert scanned[(outer, "unavailable", "unavailable")] == 1
+    assert scanned[(inner, "unavailable", "unavailable")] == 2
+    # Mutation: a second ballot identifier changes the outside-family row; a
+    # second crypto identifier changes only the inside-family row. Do not claim
+    # that this detector covers generic crypto transport throughout the tree.
+    write(tmp_path, outer, source + "fn g() { AnonymousBallotUnavailable; }")
+    write(tmp_path, inner, source + "fn g() { CryptoImplementationUnavailable; }")
+    scanned = rows(tmp_path)
+    assert scanned[(outer, "unavailable", "unavailable")] == 2
+    assert scanned[(inner, "unavailable", "unavailable")] == 3
+    code, strings = CHECKER["mask_rust"]((ROOT / outer).read_text())
+    code, _, _ = CHECKER["blank_test_items"](code, strings)
+    detector = CHECKER["DETECTORS"]["unavailable"]
+    names = Counter(name for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code)
+                    if CHECKER["FAMILY_PATH"].search(name)
+                    and tree_scan.token_of(detector, name) == "unavailable")
+    assert names == {"anonymous_ballot_unavailable": 5, "AnonymousBallotUnavailable": 5}
+    assert tree_scan.rows[(outer, "unavailable", "unavailable")] == sum(names.values())
+
+
+def test_anonymous_adapter_remains_unsupported_and_mixed_service_row_is_explicit() -> None:
+    """An honest execution deferral does not implement authenticated ballot execution."""
+    ballot = entry(CENSUS, "voting.anonymous_entrypoint_unavailable")
+    assert (ballot["status"], ballot["owner"]) == ("unsupported", "P.8")
+    tx = (ROOT / ballot["path"]).read_text()
+    assert ("pub(crate) fn anonymous_ballot_unavailable() -> ExecutionDeferred {\n"
+            "    ivm::error::ExecutionDeferral::VerifierInitializationUnavailable.into()\n}") in tx
+    assert ("TransactionEntrypoint::AnonymousBallot(_) => {\n"
+            "            Err(AcceptTransactionFail::AnonymousBallotUnavailable)") in tx
+    assert "two AnonymousBallotUnavailable identifiers" in ballot["note"]
+    assert "two bootle_lantern_issuance_unavailable_response_v1 service helpers" in ballot["note"]
+    mixed = ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 4]
+    assert mixed in ballot["sites"]
+    assert mixed not in entry(CENSUS, "torii.unavailable")["sites"]
+    code, strings = CHECKER["mask_rust"]((ROOT / mixed[0]).read_text())
+    code, _, _ = CHECKER["blank_test_items"](code, strings)
+    assert len(re.findall(r"\bAnonymousBallotUnavailable\b", code)) == 2
+    assert len(re.findall(r"\bbootle_lantern_issuance_unavailable_response_v1\b", code)) == 2
+
+
+def test_canonical_ballot_decode_refusal_is_distinct_from_missing_execution() -> None:
+    """Only the original decoder refusal is local; schema limits stay deterministic."""
+    decoding = entry(CENSUS, "voting.canonical_decode_local_refusal")
+    assert (decoding["status"], decoding["owner"]) == ("local_resource", "P.8")
+    assert {tuple(site) for site in decoding["sites"]} == {
+        (f"crates/iroha_data_model/src/governance/anonymous_ballot/{name}.rs",
+         "unavailable", "unavailable", 2) for name in ("ballot", "context", "framing")
+    }
+    source = (ROOT / decoding["path"]).read_text()
+    assert "norito::decode_canonical_for_admission(bytes, limits).map_err(|error|" in source
+    assert ("match error.into_local_refusal() {\n"
+            "            Ok(refusal) => AnonymousBallotCodecErrorV1::DecodeUnavailable(refusal),\n"
+            "            Err(error) => AnonymousBallotCodecErrorV1::codec(error.error()),") in source
+    assert "return Err(AnonymousBallotCodecErrorV1::TooLarge {" in source
+    assert entry(CENSUS, "voting.anonymous_entrypoint_unavailable")["status"] == "unsupported"
+
+
+def test_missing_crypto_implementation_remains_open_compiled_family_work() -> None:
+    """Typed transport preserves the missing backend; it does not certify availability."""
+    crypto = entry(CENSUS, "crypto.implementation_unavailable")
+    assert (crypto["status"], crypto["owner"]) == ("open", "M.2")
+    family = entry(CENSUS, "feature.sm_gost_bls_pqc")
+    assert (family["status"], family["owner"]) == ("open", "M.2")
+    implementation = (ROOT / "crates/iroha_crypto/src/implementation.rs").read_text()
+    assert "It does not carry or replace a local resource refusal." in implementation
+    for feature in ("pqc", "bls", "gost", "sm"):
+        assert f'cfg!(feature = "{feature}")' in implementation
+    admission = (ROOT / "crates/iroha_crypto/src/signature/admission.rs").read_text()
+    for feature in ("bls", "gost", "sm"):
+        assert f'#[cfg(not(feature = "{feature}"))]' in admission
+    privacy = entry(CENSUS, "privacy.unavailable")
+    assert privacy["status"] == "unsupported"
+    assert "UnsupportedOperation" in privacy["note"]
+    assert "TransactionSignatureError::UnsupportedImplementation" in privacy["note"]
+    assert ["crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+            "unavailable", "unsupported", 2] in privacy["sites"]
+    for path in ("privacy.rs", "sccp/recipients.rs"):
+        source = (ROOT / "crates/iroha_core/src/smartcontracts/isi" / path).read_text()
+        assert "UnsupportedImplementation(original)" in source
+        assert "ExecutionAttemptError::Deferred(" in source
+        assert "CryptoImplementationUnavailable(original)" in source
+
+
+def test_crypto_policy_migration_does_not_close_qualification_or_retain_old_catalog() -> None:
+    """Retired node allowlists and surviving local generation preferences are distinct."""
+    policy = entry(CENSUS, "cfg.crypto.algorithms")
+    assert (policy["status"], policy["owner"]) == ("open", "F.4")
+    assert policy["symbol"] == "pub struct CryptoAdmissionPolicyV1"
+    assert "whole-node cross-build/restart qualification" in policy["open_reason"]
+    retired = {"crypto.allowed_signing", "crypto.allowed_curve_ids",
+               "crypto.default_hash", "crypto.sm2_distid_default"}
+    fields = {field for catalog in CENSUS["config_catalogs"]
+              for group in catalog["groups"] for field in group["fields"]}
+    assert not fields & retired
+    guards = {item["contains"] for item in policy["removed"]}
+    assert guards == {"pub allowed_signing:", "pub allowed_curve_ids:",
+                      "CRYPTO_ALLOWED_SIGNING", "CRYPTO_CURVES_ALLOWED_IDS"}
+    local = entry(CENSUS, "env.crypto.local_preferences")
+    assert (local["status"], local["owner"]) == ("not_a_gate", None)
+    assert {site[2] for site in local["sites"]} == {
+        "CRYPTO_DEFAULT_HASH", "CRYPTO_SM2_DISTID_DEFAULT",
+        "CRYPTO_SM_INTRINSICS",
+    }
+    aliases = entry(CENSUS, "env.config.validity_family_aliases")
+    assert (aliases["status"], aliases["owner"]) == ("open", "F.4")
+    assert {site[2] for site in aliases["sites"] if site[2].startswith("CRYPTO_")} == {
+        "CRYPTO_SM_OPENSSL_PREVIEW",
+    }
+    assert "HandshakeCryptoMismatch" in aliases["note"]
+    daemon = (ROOT / "crates/irohad/src/main.rs").read_text()
+    assert "sm_openssl_preview: config.crypto.enable_sm_openssl_preview," in daemon
+    peer = (ROOT / "crates/iroha_p2p/src/peer.rs").read_text()
+    assert ("match (sm_openssl_preview, caps.require_sm_openssl_preview_match) {\n"
+            "            (Some(remote_preview), true) => {\n"
+            "                if remote_preview != caps.sm_openssl_preview {\n"
+            "                    return Err(crate::Error::HandshakeCryptoMismatch);") in peer
+    assert any(test["name"] == "sm_syscalls_ignore_local_crypto_preferences"
+               for test in local["tests"])

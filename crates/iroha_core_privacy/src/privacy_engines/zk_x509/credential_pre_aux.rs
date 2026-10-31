@@ -268,7 +268,6 @@ impl ZkX509CredentialPreAuxBindingV1 {
         self.main_post_base.sha()
     }
     /// SHA word-memory and base-error-folding challenges.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn sha_word(self) -> ZkX509ShaWordStarkChallengesV1 {
         self.main_post_base.sha_word()
     }
@@ -380,6 +379,7 @@ fn encode_pre_aux_roots_v1(
 }
 fn derive_credential_projection_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
+    hash_bus: ZkX509ShaCallBusChallengesV1,
 ) -> Result<ZkX509ProjectionChallengesV1, ZkX509CredentialPreAuxErrorV1> {
     let mut sampled = [F::ZERO; ZK_X509_PROJECTION_COPY_LANES_V1 * 7];
     for (index, challenge) in sampled.iter_mut().enumerate() {
@@ -387,6 +387,7 @@ fn derive_credential_projection_challenges_v1(
         *challenge = transcript.challenge_field(label)?;
     }
     let challenges = ZkX509ProjectionChallengesV1 {
+        hash_bus,
         copy: core::array::from_fn(|lane| ZkX509ProjectionCopyChallengesV1 {
             beta: sampled[lane * 7],
             gamma: sampled[lane * 7 + 1],
@@ -405,8 +406,13 @@ fn derive_credential_projection_challenges_v1(
     Ok(challenges)
 }
 fn validate_main_post_base_challenges_v1(
-    phase: ZkX509CredentialMainPostBaseChallengesV1,
+    phase: &ZkX509CredentialMainPostBaseChallengesV1,
 ) -> Result<(), ZkX509CredentialPreAuxErrorV1> {
+    // No duplicate challenge encoding: this bus must use the already committed
+    // SHA family, not a separately sampled or caller-selected substitute.
+    if phase.projection.hash_bus != phase.sha {
+        return Err(ZkX509CredentialPreAuxErrorV1::Challenge);
+    }
     phase
         .sha
         .validate()
@@ -450,10 +456,10 @@ fn append_challenge_field_v1(encoded: &mut Vec<u8>, value: F) {
     encoded.extend_from_slice(&value.0.to_be_bytes());
 }
 fn encode_pre_aux_challenges_v1(
-    binding: ZkX509CredentialPreAuxBindingV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
 ) -> Result<Vec<u8>, ZkX509CredentialPreAuxErrorV1> {
     let phase = binding.main_post_base;
-    validate_main_post_base_challenges_v1(phase)?;
+    validate_main_post_base_challenges_v1(&phase)?;
     let exact = ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1
         .checked_mul(core::mem::size_of::<u64>())
         .ok_or(ZkX509CredentialPreAuxErrorV1::Resource)?;
@@ -566,7 +572,7 @@ pub fn derive_zk_x509_credential_pre_aux_binding_v1(
     transcript.absorb(CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1, &[&roots])?;
     let sha = derive_zk_x509_sha_call_bus_challenges_v1(&mut transcript)?;
     let rfc5280 = derive_zk_x509_rfc5280_stark_challenges_v1(&mut transcript)?;
-    let projection = derive_credential_projection_challenges_v1(&mut transcript)?;
+    let projection = derive_credential_projection_challenges_v1(&mut transcript, sha)?;
     let io = derive_zk_x509_io_challenges_v1(&mut transcript)?;
     let der = derive_zk_x509_der_stark_challenges_v1(&mut transcript)?;
     let sha_word_memory = derive_sha256_word_memory_challenges_v1(&mut transcript)?;
@@ -590,7 +596,7 @@ pub fn derive_zk_x509_credential_pre_aux_binding_v1(
         p256_arithmetic_copy,
         transcript_state: transcript.state(),
     };
-    validate_main_post_base_challenges_v1(main_post_base)?;
+    validate_main_post_base_challenges_v1(&main_post_base)?;
     Ok(ZkX509CredentialPreAuxBindingV1 {
         main_pre_aux: main,
         main_post_base,
@@ -603,7 +609,7 @@ pub fn derive_zk_x509_credential_pre_aux_binding_v1(
 /// accidental state/challenge mixing fail closed even inside crate-private integration code.
 pub fn absorb_zk_x509_credential_pre_aux_binding_v1(
     transcript: &mut TransparentTranscriptV1,
-    binding: ZkX509CredentialPreAuxBindingV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
 ) -> Result<(), ZkX509CredentialPreAuxErrorV1> {
     binding
         .proof_instance_v1()
@@ -691,8 +697,11 @@ mod tests {
                 derive_zk_x509_rfc5280_stark_challenges_v1(transcript).expect("RFC challenges");
             }
             2 => {
-                derive_credential_projection_challenges_v1(transcript)
-                    .expect("projection challenges");
+                derive_credential_projection_challenges_v1(
+                    transcript,
+                    super::super::projection_air::tests::test_hash_bus_challenges_v1(),
+                )
+                .expect("projection challenges");
             }
             3 => {
                 derive_zk_x509_io_challenges_v1(transcript).expect("I/O challenges");
@@ -737,7 +746,7 @@ mod tests {
         }
         transcript.state()
     }
-    fn fields_in_binding_order_v1(phase: ZkX509CredentialMainPostBaseChallengesV1) -> Vec<F> {
+    fn fields_in_binding_order_v1(phase: &ZkX509CredentialMainPostBaseChallengesV1) -> Vec<F> {
         let mut fields = Vec::with_capacity(ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1);
         for lane in phase.sha.lanes {
             fields.extend(lane.terms);
@@ -790,7 +799,7 @@ mod tests {
         fields
     }
     fn local_state_for_encoded_challenges_v1(
-        binding: ZkX509CredentialPreAuxBindingV1,
+        binding: &ZkX509CredentialPreAuxBindingV1,
         encoded: &[u8],
     ) -> PrivacyOuterDigestV1 {
         let mut transcript = TransparentTranscriptV1::new(
@@ -841,10 +850,11 @@ mod tests {
             .unwrap();
             let before = transcript.state();
             assert!(
-                absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, baseline).is_err()
+                absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &baseline).is_err()
             );
             assert_eq!(transcript.state(), before);
-            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, changed_binding).unwrap();
+            absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, &changed_binding)
+                .unwrap();
             assert_ne!(transcript.state(), before);
         }
         let mut joint = TransparentTranscriptV1::new(
@@ -855,7 +865,9 @@ mod tests {
         )
         .unwrap();
         let before = joint.state();
-        assert!(absorb_zk_x509_credential_pre_aux_binding_v1(&mut joint, changed_binding).is_err());
+        assert!(
+            absorb_zk_x509_credential_pre_aux_binding_v1(&mut joint, &changed_binding).is_err()
+        );
         assert_eq!(joint.state(), before);
     }
 
@@ -894,7 +906,7 @@ mod tests {
         assert_eq!(binding, derive_v1(main_pre_aux_v1()));
         assert!(binding.matches_main_pre_aux_v1(main_pre_aux_v1()));
         let main_phase = binding.main_post_base();
-        validate_main_post_base_challenges_v1(main_phase).expect("all eleven challenge families");
+        validate_main_post_base_challenges_v1(&main_phase).expect("all eleven challenge families");
         assert_eq!(main_phase.sha(), binding.sha());
         assert_eq!(main_phase.rfc5280(), binding.rfc5280());
         assert_eq!(main_phase.transcript_state(), binding.transcript_state());
@@ -951,9 +963,9 @@ mod tests {
     fn exact_two_root_schedule_has_a_stable_known_answer() {
         let binding = derive_v1(main_pre_aux_v1());
         let phase = binding.main_post_base();
-        validate_main_post_base_challenges_v1(phase).expect("canonical challenge phase");
+        validate_main_post_base_challenges_v1(&phase).expect("canonical challenge phase");
         let encoded =
-            encode_pre_aux_challenges_v1(binding).expect("canonical 272-field challenge encoding");
+            encode_pre_aux_challenges_v1(&binding).expect("canonical 272-field challenge encoding");
         assert_eq!(encoded.len(), 272 * core::mem::size_of::<u64>());
         let challenge_digest = privacy_outer_digest_frame_v1(
             ZK_X509_DIGEST_CONTEXT_V1,
@@ -965,7 +977,8 @@ mod tests {
             &[&encoded],
         )
         .expect("challenge KAT frame");
-        // Emit both native values before either old-pin assertion can stop diagnostics.
+        // Independent SHA3 framing and ordered 272-field sampling bind the current
+        // 32-byte native BLAKE3 catalog; emit both values for release reproduction.
         eprintln!(
             "X509_PRE_AUX_CHALLENGE_KAT_V1={}",
             hex::encode(challenge_digest.to_bytes())
@@ -976,11 +989,11 @@ mod tests {
         );
         assert_eq!(
             hex::encode(challenge_digest.to_bytes()),
-            "12aab996200e37d217d8883ba45745ed327c94271d58fdade39e834120204218915d30d60fef9e380fd266ee8bdf7987"
+            "d55e9341f7d49f604abe86e7c4905fe32cb007c6d096b9ea23d5178871eb515878f6c8b92e4ddb77051ba08fd8b08292"
         );
         assert_eq!(
             hex::encode(binding.transcript_state().to_bytes()),
-            "18f3950d69fb451b3c8746e481a23a7de9fab93014d0d7286d5f8938bb60a7be610a0fe32be8684c5e8989e42c21e449"
+            "aa88c0e82593e78c087645cc8e5f394e51419bd9be20b7b8a865c8a5f67106bfb9e6a1e66cb7afcf3d185a6371e58a1d"
         );
     }
     #[test]
@@ -1012,12 +1025,12 @@ mod tests {
     #[test]
     fn challenge_binding_encoding_is_exact_lane_major_and_complete() {
         let binding = derive_v1(main_pre_aux_v1());
-        let fields = fields_in_binding_order_v1(binding.main_post_base());
+        let fields = fields_in_binding_order_v1(&binding.main_post_base());
         assert_eq!(
             fields.len(),
             ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1
         );
-        let encoded = encode_pre_aux_challenges_v1(binding).expect("canonical challenge encoding");
+        let encoded = encode_pre_aux_challenges_v1(&binding).expect("canonical challenge encoding");
         let decoded = encoded
             .chunks_exact(core::mem::size_of::<u64>())
             .map(|bytes| {
@@ -1061,13 +1074,13 @@ mod tests {
     #[test]
     fn every_byte_of_all_272_encoded_challenges_is_locally_bound() {
         let binding = derive_v1(main_pre_aux_v1());
-        let encoded = encode_pre_aux_challenges_v1(binding).expect("canonical challenge encoding");
-        let canonical_state = local_state_for_encoded_challenges_v1(binding, &encoded);
+        let encoded = encode_pre_aux_challenges_v1(&binding).expect("canonical challenge encoding");
+        let canonical_state = local_state_for_encoded_challenges_v1(&binding, &encoded);
         for byte in 0..encoded.len() {
             let mut changed = encoded.clone();
             changed[byte] ^= 1;
             assert_ne!(
-                local_state_for_encoded_challenges_v1(binding, &changed),
+                local_state_for_encoded_challenges_v1(&binding, &changed),
                 canonical_state,
                 "encoded challenge byte {byte}"
             );
@@ -1112,7 +1125,7 @@ mod tests {
         invalid.push(("P-256 arithmetic copy", changed));
         for (family, changed) in invalid {
             assert_eq!(
-                encode_pre_aux_challenges_v1(changed),
+                encode_pre_aux_challenges_v1(&changed),
                 Err(ZkX509CredentialPreAuxErrorV1::Challenge),
                 "{family}"
             );
@@ -1197,11 +1210,11 @@ mod tests {
         )
         .expect("left transcript");
         let mut right = left;
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut left, canonical)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut left, &canonical)
             .expect("canonical local binding");
         let mut hostile = canonical;
         mutate_digest_byte_v1(&mut hostile.main_post_base.transcript_state, 0);
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut right, hostile)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut right, &hostile)
             .expect("hostile local binding");
         assert_ne!(left.state(), right.state());
     }
@@ -1228,12 +1241,14 @@ mod tests {
             &public_digest,
         )
         .expect("pre-root transcript");
-        let premature = derive_credential_projection_challenges_v1(&mut before_roots)
-            .expect("premature projection schedule");
+        let premature =
+            derive_credential_projection_challenges_v1(&mut before_roots, canonical.hash_bus)
+                .expect("premature projection schedule");
         assert_ne!(premature, canonical);
         let mut reordered = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
-        let projection_first = derive_credential_projection_challenges_v1(&mut reordered)
-            .expect("projection-first schedule");
+        let projection_first =
+            derive_credential_projection_challenges_v1(&mut reordered, canonical.hash_bus)
+                .expect("projection-first schedule");
         assert_ne!(projection_first, canonical);
         let mut wrong_domain = transcript_after_roots_v1(
             main,
@@ -1243,8 +1258,9 @@ mod tests {
             .expect("wrong-domain SHA challenges");
         let _ = derive_zk_x509_rfc5280_stark_challenges_v1(&mut wrong_domain)
             .expect("wrong-domain RFC challenges");
-        let wrong_domain_projection = derive_credential_projection_challenges_v1(&mut wrong_domain)
-            .expect("wrong-domain projection challenges");
+        let wrong_domain_projection =
+            derive_credential_projection_challenges_v1(&mut wrong_domain, canonical.hash_bus)
+                .expect("wrong-domain projection challenges");
         assert_ne!(wrong_domain_projection, canonical);
         let mut injected = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
         injected
@@ -1254,18 +1270,26 @@ mod tests {
             .expect("injected SHA challenges");
         let _ = derive_zk_x509_rfc5280_stark_challenges_v1(&mut injected)
             .expect("injected RFC challenges");
-        let injected_projection = derive_credential_projection_challenges_v1(&mut injected)
-            .expect("injected projection challenges");
+        let injected_projection =
+            derive_credential_projection_challenges_v1(&mut injected, canonical.hash_bus)
+                .expect("injected projection challenges");
         assert_ne!(injected_projection, canonical);
     }
     #[test]
     fn local_binding_encodes_all_challenges_and_enforces_order() {
         let canonical = derive_v1(main_pre_aux_v1());
         assert_eq!(
-            encode_pre_aux_challenges_v1(canonical)
+            encode_pre_aux_challenges_v1(&canonical)
                 .expect("canonical challenge encoding")
                 .len(),
             ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1 * core::mem::size_of::<u64>()
+        );
+        let mut wrong_source = canonical;
+        wrong_source.main_post_base.projection.hash_bus.lanes[0].terms[0] =
+            wrong_source.main_post_base.projection.hash_bus.lanes[0].terms[0].add(F::ONE);
+        assert_eq!(
+            encode_pre_aux_challenges_v1(&wrong_source).err(),
+            Some(ZkX509CredentialPreAuxErrorV1::Challenge)
         );
         let mut changed_projection = canonical;
         changed_projection.main_post_base.projection.copy[0].beta =
@@ -1291,9 +1315,9 @@ mod tests {
         .expect("local");
         let mut canonical_local = local;
         let mut changed_local = local;
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut canonical_local, canonical)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut canonical_local, &canonical)
             .expect("canonical local binding");
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut changed_local, changed_projection)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut changed_local, &changed_projection)
             .expect("changed local binding");
         assert_ne!(canonical_local.state(), changed_local.state());
         let local_base_root = test_digest_v1(0x81).to_bytes();
@@ -1301,10 +1325,10 @@ mod tests {
         correct_order
             .absorb(b"local-base-roots", &[&local_base_root])
             .expect("local base roots");
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut correct_order, canonical)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut correct_order, &canonical)
             .expect("post-base binding");
         let mut reversed_order = local;
-        absorb_zk_x509_credential_pre_aux_binding_v1(&mut reversed_order, canonical)
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut reversed_order, &canonical)
             .expect("premature binding");
         reversed_order
             .absorb(b"local-base-roots", &[&local_base_root])

@@ -330,6 +330,7 @@ fn wait_for_multisig_proposal_status(
             &MultisigProposalsResolveRequestDto {
                 selector: selector.clone(),
                 proposal_id: proposal_id.parse()?,
+                include_approvals: false,
             },
         ) {
             Ok(payload) => {
@@ -652,6 +653,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
             status: vec!["CANCELED".to_owned()],
             cursor: None,
             limit: None,
+            include_approvals: false,
         },
     )?;
     let proposals = canceled_query

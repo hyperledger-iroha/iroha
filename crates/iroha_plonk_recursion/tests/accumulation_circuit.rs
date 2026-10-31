@@ -1,7 +1,7 @@
 //! Full k16 circuit/native PIPA-AS parity and adversarial binding tests.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{Ep, Eq, PastaCurve, PastaField, msm::MemoryBudget, poseidon::PoseidonField};
 use iroha_plonk::{
     check::{CheckMode, check_circuit},

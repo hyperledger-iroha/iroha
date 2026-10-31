@@ -181,35 +181,71 @@ fn controller_quote_and_settlements_have_exact_access_profiles() {
         SYSCALL_ASSET_LOCK_CANCEL_WATERFALL,
         SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL,
     ] {
-        assert_eq!(registered_syscall_access(number), Some(SyscallAccess::LedgerWrite));
+        assert_eq!(
+            registered_syscall_access(number),
+            Some(SyscallAccess::LedgerWrite)
+        );
     }
-    let row = syscalls_doc_gen::DOCS.iter()
+    let row = syscalls_doc_gen::DOCS
+        .iter()
         .find(|row| row.number == SYSCALL_ASSET_UID_HOLDING_QUOTE)
         .expect("generated quote ABI row");
-    assert_eq!(row.ret, "r10=owned public six-word AssetUidHoldingQuote heap table [asset_definition_id:&AssetDefinitionId, account_id:&AccountId, policy_revision:&Int(exact u64), beneficial_holdings:&Quantity, holding_limit:Option<Quantity> sum handle, required_overflow:&Quantity]");
+    assert_eq!(
+        row.ret,
+        "r10=owned public six-word AssetUidHoldingQuote heap table [asset_definition_id:&AssetDefinitionId, account_id:&AccountId, policy_revision:&Int(exact u64), beneficial_holdings:&Quantity, holding_limit:Option<Quantity> sum handle, required_overflow:&Quantity]"
+    );
 }
 
 #[test]
 fn fi_link_revision_is_a_controller_only_scalar_ledger_read() {
     let number = SYSCALL_ASSET_FI_LINK_REVISION;
-    assert_eq!(registered_syscall_access(number), Some(SyscallAccess::LedgerRead));
+    assert_eq!(
+        registered_syscall_access(number),
+        Some(SyscallAccess::LedgerRead)
+    );
     assert!(is_syscall_allowed(crate::SyscallPolicy::AbiV1, number));
-    assert!(!is_generic_program_syscall_allowed(crate::SyscallPolicy::AbiV1, number));
-    let row = syscalls_doc_gen::DOCS.iter().find(|row| row.number == number)
+    assert!(!is_generic_program_syscall_allowed(
+        crate::SyscallPolicy::AbiV1,
+        number
+    ));
+    let row = syscalls_doc_gen::DOCS
+        .iter()
+        .find(|row| row.number == number)
         .expect("generated exact FI revision row");
-    assert_eq!(row.args, "r10=&AssetDefinitionId, r11=&AccountId, r12=&AccountId(expected_fi); exact active link controller, enabled owner grant, expected-FI equality and current native FI/attestation revisions required");
-    assert_eq!(row.ret, "r10=&Int(exact current nonzero u64 link revision); no FI identity or reference returned");
+    assert_eq!(
+        row.args,
+        "r10=&AssetDefinitionId, r11=&AccountId, r12=&AccountId(expected_fi); exact active link controller, enabled owner grant, expected-FI equality and current native FI/attestation revisions required"
+    );
+    assert_eq!(
+        row.ret,
+        "r10=&Int(exact current nonzero u64 link revision); no FI identity or reference returned"
+    );
 }
 
 #[test]
 fn same_uid_is_reader_granted_retail_only_boolean_ledger_read() {
-    let number=SYSCALL_ASSET_SAME_UID;
-    assert_eq!(registered_syscall_access(number),Some(SyscallAccess::LedgerRead));
-    assert!(is_syscall_allowed(crate::SyscallPolicy::AbiV1,number));
-    assert!(!is_generic_program_syscall_allowed(crate::SyscallPolicy::AbiV1,number));
-    let row=syscalls_doc_gen::DOCS.iter().find(|row|row.number==number).expect("generated exact same-UID row");
-    assert_eq!(row.args,"r10=&AssetDefinitionId, r11=&AccountId(source), r12=&AccountId(destination); exact active frame and current asset-owner reader grant; both exact native retail memberships/policies required, institutional or unknown operands fail");
-    assert_eq!(row.ret,"r10=0|1 (bool); false only for two valid distinct retail UIDs; no UID or roster returned");
+    let number = SYSCALL_ASSET_SAME_UID;
+    assert_eq!(
+        registered_syscall_access(number),
+        Some(SyscallAccess::LedgerRead)
+    );
+    assert!(is_syscall_allowed(crate::SyscallPolicy::AbiV1, number));
+    assert!(!is_generic_program_syscall_allowed(
+        crate::SyscallPolicy::AbiV1,
+        number
+    ));
+    let row = syscalls_doc_gen::DOCS
+        .iter()
+        .find(|row| row.number == number)
+        .expect("generated exact same-UID row");
+    assert_eq!(
+        row.args,
+        "r10=&AssetDefinitionId, r11=&AccountId(source), r12=&AccountId(destination); exact active frame and current asset-owner reader grant; both exact native retail memberships/policies required, institutional or unknown operands fail"
+    );
+    assert_eq!(
+        row.ret,
+        "r10=0|1 (bool); false only for two valid distinct retail UIDs; no UID or roster returned"
+    );
 }
 
 #[test]

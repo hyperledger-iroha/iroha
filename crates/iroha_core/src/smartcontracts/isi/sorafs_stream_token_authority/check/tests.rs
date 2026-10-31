@@ -573,7 +573,7 @@ fn retained_phase_rejects_row_and_phase_substitution_and_never_writes() {
             .get(&journal::head_key(provider))
     );
     let result = apply(
-        instruction,
+        &(instruction),
         &observer,
         &mut tx,
         StreamTokenExecutionV1 {

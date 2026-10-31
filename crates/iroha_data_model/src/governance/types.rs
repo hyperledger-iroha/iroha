@@ -14,7 +14,7 @@ use crate::{
     asset::AssetId,
     isi::sorafs::SorafsProviderGovernanceActionV1,
     musubi::MusubiParliamentActionV1,
-    runtime::RuntimeUpgradeManifest,
+    runtime::lifecycle::RuntimeUpgradeActionV1,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
@@ -810,7 +810,8 @@ pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
     /// Closed grant-or-revoke effect.
     pub action: GlobalDataTriggerPermissionGovernanceActionV1,
 }
-/// Proposal payload for scheduling a runtime upgrade through governance.
+/// Proposal payload for scheduling or canceling a runtime change set through governance
+/// (`specs/live_runtime_upgrades.md` §6).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
@@ -821,8 +822,12 @@ pub struct RuntimeUpgradeProposal {
     /// The operator is part of the exact proposal and effect preimages so the
     /// retained runtime-upgrade attribution cannot depend on transaction order.
     pub proposal_operator: AccountId,
-    /// Canonical runtime-upgrade manifest payload.
-    pub manifest: RuntimeUpgradeManifest,
+    /// The change set to schedule, or the scheduled change set to withdraw.
+    pub action: RuntimeUpgradeActionV1,
+    /// The notice the committed policy required when the proposal was admitted, frozen for it.
+    pub notice: crate::runtime::lifecycle::RuntimeNoticeV1,
+    /// Committed time of the block that admitted the proposal.
+    pub proposed_ms: u64,
 }
 /// Proposal payload for one SCCP v1 governance decision (`specs/sccp.md` §4.14.3).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1692,15 +1697,15 @@ impl SortitionRequestV1 {
     ///
     /// Parliament sortition-request instruction preflight
     /// (`ParliamentLifecycleTransitionV1::validate_static`) uses this before Core
-    /// authenticates the live candidate corpus and hidden-body decision mode, so
-    /// it exists only with the `governance` instruction surface. Every other
+    /// authenticates the live candidate corpus and hidden-body decision mode.
+    /// This canonical instruction preflight is present in every build. Every other
     /// identifier, target, height, and pulse-reuse invariant remains identical to
     /// [`Self::validate`].
     ///
     /// # Errors
     /// Returns [`SortitionRequestErrorV1`] for every malformed binding other
     /// than an empty candidate snapshot.
-    #[cfg(feature = "governance")]
+
     pub(crate) fn validate_capacity_intent(
         &self,
         last_consumed_pulse_height: Option<u64>,
@@ -3545,19 +3550,28 @@ impl ProposalKind {
                     None
                 }
             }
-            Self::RuntimeUpgrade(proposal) => {
-                if proposal.manifest.start_height > maximum {
-                    Some(
-                        "runtime-upgrade proposal start height exceeds the exact JSON integer maximum",
-                    )
-                } else if proposal.manifest.end_height > maximum {
-                    Some(
-                        "runtime-upgrade proposal end height exceeds the exact JSON integer maximum",
-                    )
-                } else {
-                    None
-                }
+            Self::RuntimeUpgrade(proposal)
+                if [
+                    proposal.notice.blocks,
+                    proposal.notice.ms,
+                    proposal.notice.approval_cushion_ms,
+                    proposal.proposed_ms,
+                ]
+                .iter()
+                .any(|value| *value > maximum) =>
+            {
+                Some("runtime-upgrade proposal notice exceeds the exact JSON integer maximum")
             }
+            Self::RuntimeUpgrade(proposal) => match &proposal.action {
+                RuntimeUpgradeActionV1::Schedule(change_set)
+                    if change_set.effective_height > maximum =>
+                {
+                    Some(
+                        "runtime-upgrade proposal effective height exceeds the exact JSON integer maximum",
+                    )
+                }
+                RuntimeUpgradeActionV1::Schedule(_) | RuntimeUpgradeActionV1::Cancel(_) => None,
+            },
             Self::SccpRouteGovernance(proposal) => proposal.proposal.first_json_u64_violation(),
             Self::MusubiRegistryGovernance(action) => {
                 action.first_release_exact_json_u64_invariant_error(maximum)
@@ -3630,8 +3644,14 @@ impl ProposalKind {
             Self::ContractEmergencyHold(proposal) => {
                 GovernanceSubjectPreimageV1::Contract(proposal.contract_address.clone())
             }
+            // Scheduling and canceling one change set contend on the same subject.
             Self::RuntimeUpgrade(proposal) => {
-                GovernanceSubjectPreimageV1::RuntimeUpgrade(proposal.manifest.id())
+                GovernanceSubjectPreimageV1::RuntimeUpgrade(match &proposal.action {
+                    RuntimeUpgradeActionV1::Schedule(change_set) => change_set
+                        .id()
+                        .map_err(|error| norito::Error::Message(error.to_string()))?,
+                    RuntimeUpgradeActionV1::Cancel(id) => *id,
+                })
             }
             Self::SccpRouteGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::Sccp(proposal.proposal.subjects())
@@ -3687,7 +3707,7 @@ enum GovernanceSubjectPreimageV1 {
     #[codec(index = 0)]
     Contract(ContractAddress),
     #[codec(index = 1)]
-    RuntimeUpgrade(crate::runtime::RuntimeUpgradeId),
+    RuntimeUpgrade(crate::runtime::lifecycle::ChangeSetId),
     #[codec(index = 2)]
     Sccp(Vec<crate::sccp::governance::SccpGovernanceSubjectV1>),
     #[codec(index = 3)]

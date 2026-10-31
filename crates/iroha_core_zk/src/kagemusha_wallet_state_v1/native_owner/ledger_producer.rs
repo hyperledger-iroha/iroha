@@ -108,12 +108,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         signed: &SignedTransaction,
     ) -> Result<LedgerAttemptOutcomeV1, Error> {
         let entrypoint = ledger_outcome::entrypoint(signed)?;
-        Ok(
-            match self.retained_unload_outcome(manifest, &entrypoint, original_digest)? {
-                Some(outcome) => outcome.attempt(),
-                None => LedgerAttemptOutcomeV1::Awaiting { entrypoint },
-            },
-        )
+        Ok(self
+            .retained_unload_outcome(manifest, &entrypoint, original_digest)?
+            .map_or(LedgerAttemptOutcomeV1::Awaiting { entrypoint }, |outcome| {
+                outcome.attempt()
+            }))
     }
     // Offer one original for an intake-checked envelope. A retained outcome is reconciled and
     // never replaced. Otherwise exactly one original is verified, written and selected with
@@ -157,26 +156,19 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         self.publish_manifest(root, &manifest)?;
         Ok(LedgerAttemptIngestV1::Outcome(outcome.attempt()))
     }
-}
-
-impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
-    Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
-{
-    /// Freeze the actual next native Load ordinal and instruction under a stable caller request.
-    /// Retrying the same request returns its original instruction, even after credit changes the head.
-    /// # Errors
-    /// Missing/replaced custody, changed request amount, invalid lifecycle or durable publication failure.
-    pub fn prepare_ledger_load(
+    // The production owner supplies its admitted immutable scope. Keep preparation, exact
+    // retry, activation custody and both index publications in one shared implementation.
+    fn prepare_ledger_load_in_scope(
         &mut self,
         request: [u8; 32],
         amount: u128,
+        scope: [[u8; 32]; 4],
     ) -> Result<Vec<u8>, Error> {
         if request == [0; 32] || amount == 0 {
             return Err(Error::Invalid("ledger Load request"));
         }
         let (root, mut manifest) = self.sync_manifest()?;
         self.require_ledger_activation(&manifest)?;
-        let scope = self.load_plan_scope();
         if let Some(plan) = projection::selected_load_plan(
             &mut self.archive,
             &manifest.ledger_load_plans,
@@ -198,7 +190,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             scheme: self.scheme_id,
             action: KagemushaWalletLedgerActionV1::IssueLoad {
                 wallet: self.wallet_id,
-                asset: self.proofs.asset.asset_digest(),
+                asset: scope[2],
                 ordinal: core.next_load,
                 request_id: request,
                 amount,
@@ -220,6 +212,22 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         )?;
         self.publish_manifest(root, &manifest)?;
         Ok(plan.instruction)
+    }
+}
+
+impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
+    Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
+{
+    /// Freeze the actual next native Load ordinal and instruction under a stable caller request.
+    /// Retrying the same request returns its original instruction, even after credit changes the head.
+    /// # Errors
+    /// Missing/replaced custody, changed request amount, invalid lifecycle or durable publication failure.
+    pub fn prepare_ledger_load(
+        &mut self,
+        request: [u8; 32],
+        amount: u128,
+    ) -> Result<Vec<u8>, Error> {
+        self.prepare_ledger_load_in_scope(request, amount, self.load_plan_scope())
     }
     /// Wrap a complete canonical Native transport in the current closed ledger instruction.
     /// This conversion supplies no ledger acceptance or proof authority.

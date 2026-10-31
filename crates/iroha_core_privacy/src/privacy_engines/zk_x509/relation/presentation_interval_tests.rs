@@ -7,10 +7,9 @@
 //! the DER/RFC 5280 AIR trace builder and the in-relation numeric rows. They
 //! must all agree.
 //!
-//! The DER-to-bounds helper, the native relation and prover preflight are
-//! compiled with the prover, for tests and the `privacy-release-evidence`
-//! feature only; an ordinary node build verifies through state admission and
-//! the proof. The constraint-level control for a forged window end is
+//! The DER-to-bounds helper ships in ordinary builds. The native relation and
+//! prover preflight remain test/release-evidence tools; ordinary nodes verify
+//! through state admission and the proof. The constraint-level control for a forged window end is
 //! `rfc5280_presentation_interval_tests.rs` beside the RFC 5280 STARK.
 //!
 //! The binding upper bound is the **earliest** `notAfter` in the path. A bound
@@ -19,6 +18,7 @@
 //! `earliest_expiry_*` fail on it.
 
 use super::*;
+use crate::privacy_engines::zk_x509::presentation::derive_zk_x509_presentation_bounds_v1;
 use crate::{
     privacy_engines::zk_x509::{
         der_air::{ZkX509DerAirErrorV1, ZkX509Rfc5280TraceV1, build_zk_x509_rfc5280_trace_v1},
@@ -1164,4 +1164,55 @@ fn bounds_builder_rejects_malformed_der_and_depth() {
     truncated[1].pop();
     assert!(derive_zk_x509_presentation_bounds_v1(&truncated, &fixed.witness.crl_der).is_err());
     assert!(derive_zk_x509_presentation_bounds_v1(chain, &fixed.witness.crl_der[..10]).is_err());
+}
+
+/// Interval preflight deliberately leaves cryptographic and authority checks to the relation.
+#[test]
+fn shared_holder_bounds_do_not_replace_signature_or_governance_validation() {
+    use p256::ecdsa::signature::Signer as _;
+
+    let fixture = build_zk_x509_reference_fixture_v1().expect("signed reference fixture");
+    let mut presentation = Presentation::new(&fixture, fixture.statement.presentation_window());
+    assert!(presentation.native_relation().is_ok());
+    let expected = derive_zk_x509_presentation_bounds_v1(
+        &presentation.witness.certificate_chain_der,
+        &presentation.witness.crl_der,
+    )
+    .expect("original interval bounds");
+    let leaf = parse_certificate_v1(&presentation.witness.certificate_chain_der[0])
+        .expect("original leaf structure");
+    let signature: P256Signature = p256_key(5)
+        .expect("unrelated fixture key")
+        .sign(leaf.tbs_der);
+    let wrong_signature = sequence(&[
+        leaf.tbs_der.to_vec(),
+        ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
+        bit_string(signature.to_der().as_bytes(), 0),
+    ]);
+    presentation.witness.certificate_chain_der[0] = wrong_signature;
+    assert_eq!(
+        derive_zk_x509_presentation_bounds_v1(
+            &presentation.witness.certificate_chain_der,
+            &presentation.witness.crl_der,
+        ),
+        Ok(expected)
+    );
+    assert_eq!(
+        presentation.native_relation(),
+        Err(ZkX509RelationErrorV1::InvalidCertificateSignature)
+    );
+
+    let mut wrong_governance = Presentation::new(&fixture, fixture.statement.presentation_window());
+    wrong_governance.statement.crl_record_epoch += 1;
+    assert_eq!(
+        derive_zk_x509_presentation_bounds_v1(
+            &wrong_governance.witness.certificate_chain_der,
+            &wrong_governance.witness.crl_der,
+        ),
+        Ok(expected)
+    );
+    assert_eq!(
+        wrong_governance.native_relation(),
+        Err(ZkX509RelationErrorV1::StatementMismatch)
+    );
 }

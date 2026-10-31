@@ -33,24 +33,50 @@ const CHILD_INPUT_MAX: u64 = 32 * 1024 * 1024;
 pub(super) const CHILD_REPORT_MAX: usize = 512 * 1024;
 pub(super) const CHILD_LOG_MAX: usize = 1024 * 1024;
 const ARTIFACT_FILE_MAX: usize = 32 * 1024 * 1024 + 28;
+const TOTAL_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
+const FINALITY_FILE_MAX: usize = TOTAL_ARTIFACT_BYTES + 28;
 
 /// Closed fixture controls, never protocol or node configuration switches.
 #[derive(Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "integration_tests::private_onecall::Mode")]
 pub(super) enum Mode {
     ReadOnly,
+    PrepareOnly,
+    PrepareCached,
     Unaudited,
     Finish,
+    FinishCached,
+    RecoverCached,
     Checkpoint(u8),
 }
 impl Mode {
     pub(super) fn label(self) -> String {
         match self {
             Self::ReadOnly => "read_only".to_owned(),
+            Self::PrepareOnly => "prepare_only".to_owned(),
+            Self::PrepareCached => "prepare_cached_zero_reads".to_owned(),
             Self::Unaudited => "unaudited".to_owned(),
             Self::Finish => "finish".to_owned(),
+            Self::FinishCached => "finish_cached_zero_reads".to_owned(),
+            Self::RecoverCached => "recover_cached_zero_reads".to_owned(),
             Self::Checkpoint(step) => format!("checkpoint_{step}"),
         }
+    }
+    pub(super) fn finality_read_allowance(self) -> u16 {
+        if matches!(
+            self,
+            Self::PrepareCached | Self::FinishCached | Self::RecoverCached
+        ) {
+            0
+        } else {
+            PrivateSettlementRunOptions::default().max_finality_proof_reads
+        }
+    }
+    pub(super) fn requires_unchanged_effects(self) -> bool {
+        matches!(
+            self,
+            Self::ReadOnly | Self::PrepareCached | Self::FinishCached | Self::RecoverCached
+        )
     }
     fn validate(self) -> Result<()> {
         ensure!(
@@ -110,7 +136,7 @@ impl Pins {
 #[norito_schema(name = "integration_tests::private_onecall::ChildInput")]
 pub(super) struct ChildInput {
     pub(super) intent: PrivateSettlementProofIntentV1,
-    pub(super) policy_activation: u64,
+    pub(super) original_openings: Vec<wallet::OriginalOpening>,
     pub(super) original_genesis: Vec<u8>,
     pub(super) pins: Pins,
     pub(super) endpoint: String,
@@ -134,9 +160,10 @@ impl Drop for ChildInput {
 }
 impl ChildInput {
     pub(super) fn binding(&self) -> Result<Hash> {
-        let mut public = self.clone();
-        public.artifact_key.fill(0);
-        Ok(Hash::new(norito::encode_canonical(&public)?))
+        let mut binding_input = self.clone();
+        binding_input.artifact_key.fill(0);
+        let bytes = zeroize::Zeroizing::new(norito::encode_canonical(&binding_input)?);
+        Ok(Hash::new(&bytes))
     }
     fn report_name(&self) -> String {
         format!(
@@ -153,11 +180,14 @@ pub(super) struct ChildReport {
     binding: Hash,
     pub(super) preparation_id: [u8; 32],
     pub(super) settlement_id: Option<[u8; 32]>,
+    pub(super) provisional: Option<ProvisionalPublic>,
     pub(super) prepared: Option<PreparedPublic>,
     pub(super) receipt: Option<PrivateSettlementReceiptV1>,
     pub(super) evidence: Option<iroha_data_model::query::CommittedTransaction>,
     pub(super) openings: u64,
+    pub(super) stages: u64,
     pub(super) reservations: u64,
+    pub(super) reconciliations: u64,
 }
 
 pub(super) fn unix_ms() -> Result<u64> {
@@ -178,22 +208,64 @@ fn remaining(input: &ChildInput) -> Result<Duration> {
     );
     Ok(Duration::from_millis(remaining))
 }
-fn directory_snapshot(
+fn artifact_effect_snapshot(
     root: &iroha_fs::PrivateDirectory,
-    folder: &str,
-    maximum_files: usize,
+    original: &WorkflowCustodySnapshot,
 ) -> Result<Vec<(String, Hash)>> {
+    let folder = "encrypted-artifacts";
     let directory = iroha_fs::PrivateDirectory::open_exact(root.path().join(folder))?;
+    let mut admitted = std::collections::BTreeMap::new();
+    if let Some(round) = original.proof_round {
+        let round = hex::encode(round);
+        admitted.insert(format!("{round}.contexts"), (ARTIFACT_FILE_MAX, true));
+        admitted.insert(
+            format!("{round}.preparation-finality"),
+            (ARTIFACT_FILE_MAX, false),
+        );
+        for ordinal in 0..PARTICIPANT_COUNT {
+            admitted.insert(
+                format!("{round}-{ordinal:03}.prepared"),
+                (ARTIFACT_FILE_MAX, true),
+            );
+        }
+    }
+    if let Some(workflow) = original.settlement {
+        let workflow = hex::encode(workflow.as_bytes());
+        admitted.insert(
+            format!("{workflow}.settlement-finality"),
+            (FINALITY_FILE_MAX, false),
+        );
+        admitted.insert(format!("{workflow}.settlement-finality.lock"), (0, false));
+    }
     let mut names = Vec::new();
-    directory.visit_private_files(maximum_files, |name, metadata| {
-        if metadata.len() > ARTIFACT_FILE_MAX as u64 {
+    let mut plaintext_bytes = 0_u64;
+    // One context, three proof artifacts, one preparation prefix, and one prepared
+    // finality record plus its CAS lock. No unrelated file or historical record fits.
+    directory.visit_private_files(7, |name, metadata| {
+        let name = name
+            .to_str()
+            .ok_or_else(|| std::io::Error::other("invalid custody name"))?;
+        let (maximum, immutable) = admitted.get(name).ok_or_else(|| {
+            std::io::Error::other("custody name differs from original workflow/round")
+        })?;
+        if metadata.len() > *maximum as u64 {
             return Err(std::io::Error::other("original custody file exceeds bound"));
         }
-        names.push(
-            name.to_str()
-                .ok_or_else(|| std::io::Error::other("invalid custody name"))?
-                .to_owned(),
-        );
+        if *maximum != 0 {
+            let length = metadata
+                .len()
+                .checked_sub(28)
+                .ok_or_else(|| std::io::Error::other("original custody lacks AEAD envelope"))?;
+            plaintext_bytes = plaintext_bytes
+                .checked_add(length)
+                .filter(|total| *total <= TOTAL_ARTIFACT_BYTES as u64)
+                .ok_or_else(|| {
+                    std::io::Error::other("original aggregate custody bound exceeded")
+                })?;
+        }
+        if *immutable {
+            names.push(name.to_owned());
+        }
         Ok(())
     })?;
     names.sort();
@@ -208,7 +280,8 @@ fn directory_snapshot(
         .collect()
 }
 pub(super) fn artifact_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<Vec<(String, Hash)>> {
-    let files = directory_snapshot(root, "encrypted-artifacts", 4)?;
+    let original = workflow_snapshot(root)?;
+    let files = artifact_effect_snapshot(root, &original)?;
     ensure!(
         files.len() == 4
             && files
@@ -225,17 +298,20 @@ pub(super) fn artifact_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<Vec
     );
     Ok(files)
 }
-fn workflow_snapshot(
-    root: &iroha_fs::PrivateDirectory,
-    folder: &str,
-    maximum: usize,
-    effects_only: bool,
-) -> Result<Vec<(String, Hash)>> {
+struct WorkflowCustodySnapshot {
+    effects: Vec<(String, Hash)>,
+    proof_round: Option<Digest32>,
+    settlement: Option<WorkflowId>,
+}
+fn workflow_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<WorkflowCustodySnapshot> {
+    let folder = "journals";
     let directory = root.open_child(folder)?;
-    let mut names = directory.entries(maximum)?;
+    let mut names = directory.entries(4)?;
     names.sort();
     let mut result = Vec::new();
     let mut worker_round = None;
+    let mut phase_binding = None;
+    let mut settlement = None;
     let mut lease_rows = Vec::new();
     let mut drivers = std::collections::BTreeSet::new();
     for name in names {
@@ -261,8 +337,9 @@ fn workflow_snapshot(
             "noncanonical workflow directory identity"
         );
         let storage = FileWorkflowStorage::open_or_create(directory.path())?;
-        if let Some(bytes) = storage.load(&WorkflowId::from_bytes(id))? {
-            let digest = if effects_only {
+        let original_bytes = storage.load(&WorkflowId::from_bytes(id))?;
+        if let Some(bytes) = original_bytes {
+            let digest = {
                 let journal = WorkflowJournalV1::decode_record(&bytes)?;
                 ensure!(
                     matches!(
@@ -277,17 +354,19 @@ fn workflow_snapshot(
                         .first()
                         .and_then(|step| step.round.as_ref())
                         .and_then(|round| round.round_id);
+                } else {
+                    let network: iroha_data_model::NetworkId = journal.identity.network.parse()?;
+                    phase_binding =
+                        Some((*network.as_bytes(), journal.identity.request_context_digest));
+                    settlement = Some(WorkflowId::from_bytes(id));
                 }
                 // Recovery may reconcile observations but may not open or dispatch effects.
                 journal_effect_digest(&journal)?
-            } else {
-                Hash::new(&*bytes)
             };
             result.push((format!("{folder}/{text}/journal"), digest));
         } else {
             ensure!(
-                effects_only
-                    && files.len() == 2
+                files.len() == 2
                     && files.iter().all(|file| ["lock", "runner"]
                         .iter()
                         .any(|expected| file.as_os_str() == *expected)),
@@ -296,42 +375,101 @@ fn workflow_snapshot(
             lease_rows.push(text.to_owned());
         }
     }
-    if effects_only {
-        require_original_worker_lease(worker_round, &lease_rows)?;
-        for name in lease_rows {
+    {
+        for (name, role) in
+            require_original_worker_leases(worker_round, phase_binding, &lease_rows)?
+        {
             // Pin the storage-owned lease identity. Lock contents are not application state.
             result.push((
-                format!("{folder}/{name}/proof-worker-lease"),
+                format!("{folder}/{name}/{role}"),
                 Hash::new(name.as_bytes()),
             ));
         }
         result.sort_by(|left, right| left.0.cmp(&right.0));
     }
-    Ok(result)
+    Ok(WorkflowCustodySnapshot {
+        effects: result,
+        proof_round: worker_round,
+        settlement,
+    })
 }
-fn require_original_worker_lease(round: Option<Digest32>, leases: &[String]) -> Result<()> {
-    let expected = round.map(|round| {
-        hex::encode(iroha::workflow::domain_digest(
-            b"iroha:private-settlement:proof-worker:v1\0",
-            &[&round],
-        ))
-    });
+fn require_original_worker_leases(
+    round: Option<Digest32>,
+    phase: Option<(Digest32, Digest32)>,
+    leases: &[String],
+) -> Result<Vec<(String, &'static str)>> {
+    let mut expected = std::collections::BTreeMap::new();
+    if let Some(round) = round {
+        expected.insert(
+            hex::encode(iroha::workflow::domain_digest(
+                b"iroha:private-settlement:proof-worker:v1\0",
+                &[&round],
+            )),
+            "proof-worker-lease",
+        );
+    }
+    if let Some((network, request)) = phase {
+        expected.insert(
+            hex::encode(iroha::workflow::domain_digest(
+                b"iroha:private-settlement:global-phase-worker:v1\0",
+                &[&network, &request],
+            )),
+            "phase-worker-lease",
+        );
+    }
     ensure!(
-        match expected {
-            Some(expected) => leases == [expected],
-            None => leases.is_empty(),
-        },
-        "proof-worker lease does not bind the original preparation round"
+        leases.iter().eq(expected.keys()),
+        "worker leases do not bind the original preparation round and prepared request"
     );
-    Ok(())
+    Ok(expected.into_iter().collect())
 }
-pub(super) fn custody_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<Vec<(String, Hash)>> {
-    let mut files = directory_snapshot(root, "encrypted-artifacts", 4)?;
-    // Two actual workflow journals plus exactly one canonical proof-worker lease-only row.
-    // The lease has no monetary journal; its identity is derived from the original round.
-    files.extend(workflow_snapshot(root, "journals", 3, true)?);
-    files.extend(workflow_snapshot(root, "wallet-reservations", 3, false)?);
-    Ok(files)
+// Snapshots run only before or after a joined child. Native in-flight staging is owned and
+// bounded by FilePrivateSettlementWallet; a completed child must leave exactly these roles.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct WalletSnapshot {
+    pub(super) envelope: Option<(usize, Hash)>,
+    pub(super) lock: bool,
+}
+pub(super) fn wallet_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<WalletSnapshot> {
+    let directory = root.open_child("software-wallet")?;
+    let names = directory.entries(2)?;
+    ensure!(
+        names.iter().all(
+            |name| ["authorized-inputs.wallet", "authorized-inputs.wallet.lock"]
+                .iter()
+                .any(|expected| name.as_os_str() == *expected)
+        ),
+        "unexpected software wallet custody file"
+    );
+    let lock = directory
+        .read_optional("authorized-inputs.wallet.lock", 0)?
+        .is_some();
+    let envelope = directory
+        .read_optional(
+            "authorized-inputs.wallet",
+            wallet::MAX_WALLET_INDEX_BYTES + 28,
+        )?
+        .map(|bytes| (bytes.len(), Hash::new(&bytes)));
+    ensure!(
+        envelope.is_none_or(|(length, _)| length >= 28) && (envelope.is_none() || lock),
+        "incomplete software wallet custody"
+    );
+    Ok(WalletSnapshot { envelope, lock })
+}
+pub(super) struct CustodySnapshot {
+    pub(super) effects: Vec<(String, Hash)>,
+    pub(super) wallet: WalletSnapshot,
+}
+pub(super) fn custody_snapshot(root: &iroha_fs::PrivateDirectory) -> Result<CustodySnapshot> {
+    // Exact transaction identities and immutable artifacts remain independent of the sole
+    // encrypted pending-wallet record, whose one success transition is checked separately.
+    let original = workflow_snapshot(root)?;
+    let mut effects = artifact_effect_snapshot(root, &original)?;
+    effects.extend(original.effects);
+    Ok(CustodySnapshot {
+        effects,
+        wallet: wallet_snapshot(root)?,
+    })
 }
 
 struct CheckpointStorage {
@@ -466,7 +604,7 @@ fn options(input: &ChildInput) -> Result<PrivateSettlementRunOptions> {
             retransmit_identical_bytes: false,
             retry_rejected_step: false,
         },
-        ..Default::default()
+        max_finality_proof_reads: input.mode.finality_read_allowance(),
     })
 }
 fn execute(input: ChildInput) -> Result<ChildReport> {
@@ -475,17 +613,10 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
     let original_verifier = verifier(&input)?; // Authenticate independently selected pins before opening any wallet.
     let root = Path::new(&input.custody_path);
     iroha_fs::PrivateDirectory::open_exact(root)?;
-    let routes = input
-        .intent
-        .legs
-        .iter()
-        .map(|leg| leg.route)
-        .collect::<Vec<_>>();
     let wallet = Arc::new(wallet::OriginalWallet::open(
-        &routes,
-        input.policy_activation,
-        input.intent.expiry_height,
-        &root.join("wallet-reservations"),
+        input.original_openings.clone(),
+        &root.join("software-wallet"),
+        &input.artifact_key,
     )?);
     let storage = Arc::new(CheckpointStorage {
         inner: FileWorkflowStorage::open_or_create(root.join("journals"))?,
@@ -499,6 +630,7 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
         root.join("encrypted-artifacts"),
         &input.artifact_key,
     )?);
+    let finality = artifacts.finality().clone();
     let terms = input
         .intent
         .legs
@@ -539,7 +671,7 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
         input.intent.expiry_height + SIDECAR_RETENTION_BLOCKS,
         PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,
         32 * 1024 * 1024,
-        128 * 1024 * 1024,
+        TOTAL_ARTIFACT_BYTES,
     )?;
     let account = client(&input)?;
     let operation = OneCallPrivateSettlementOperation::new(
@@ -558,11 +690,26 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
     let recovered = runtime.block_on(operation.recover(&options(&input)?))?;
     ensure!(
         wallet.openings.load(Ordering::SeqCst) == 0
+            && wallet.stages.load(Ordering::SeqCst) == 0
             && wallet.reservations_called.load(Ordering::SeqCst) == 0,
         "cold readonly recovery cannot reopen wallet secrets or acquire notes"
     );
-    let verified = if input.mode == Mode::ReadOnly {
-        recovered.receipt
+    ensure!(
+        wallet.reconciliations.load(Ordering::SeqCst) == usize::from(recovered.outcome.is_some()),
+        "cold recovery must reconcile exactly verified successful original custody"
+    );
+    let verified = if matches!(input.mode, Mode::ReadOnly | Mode::RecoverCached) {
+        recovered.outcome
+    } else if matches!(input.mode, Mode::PrepareOnly | Mode::PrepareCached) {
+        ensure!(
+            recovered.outcome.is_none(),
+            "preparation unexpectedly settled"
+        );
+        wallet.enable_explicit_continuation();
+        let original = runtime.block_on(operation.prepare(&options(&input)?))?;
+        ensure!(original.manifest().proof_intent() == input.intent);
+        drop(original);
+        None
     } else {
         wallet.enable_explicit_continuation();
         let result = runtime.block_on(operation.run(&options(&input)?));
@@ -579,33 +726,66 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
             );
             None
         } else {
-            ensure!(input.mode == Mode::Finish, "unknown cold SDK fixture mode");
-            Some(result?.receipt)
+            ensure!(
+                matches!(input.mode, Mode::Finish | Mode::FinishCached),
+                "unknown cold SDK fixture mode"
+            );
+            Some(result?.outcome)
         }
     };
-    let prepared = runtime.block_on(operation.prepared_request(&options(&input)?))?;
+    let verified = verified
+        .map(|outcome| match outcome {
+            iroha::client::VerifiedPrivateSettlementOutcome::Settled(receipt) => Ok(receipt),
+            iroha::client::VerifiedPrivateSettlementOutcome::Aborted(_) => {
+                Err(eyre!("original payment aborted instead of settling"))
+            }
+        })
+        .transpose()?;
+    // The same completed original preparation must be readable without another native proof.
+    let mut cached_options = options(&input)?;
+    cached_options.max_finality_proof_reads = 0;
+    let prepared = runtime.block_on(operation.prepared_request(&cached_options))?;
+    let provisional = prepared
+        .as_ref()
+        .map(|request| ProvisionalPublic::from_materials(request.materials()))
+        .transpose()?;
     let (settlement_id, public) = if let Some(prepared) = &prepared {
-        let settlement =
-            account.private_settlement(prepared.clone(), storage.clone(), verifier(&input)?)?;
+        let settlement = account.private_settlement(
+            prepared.clone(),
+            storage.clone(),
+            finality,
+            verifier(&input)?,
+        )?;
         let id = settlement.id();
-        let journal = storage
-            .load(&id)?
-            .ok_or_else(|| eyre!("prepared child omitted original settlement journal"))?;
-        let journal = WorkflowJournalV1::decode_record(&journal)?;
-        let certificates = journal.steps[0]
-            .round
-            .as_ref()
-            .and_then(|round| round.transcript.as_deref())
-            .ok_or_else(|| eyre!("original availability transcript absent"))?;
-        let certificates: Vec<PrivateSettlementSidecarAvailabilityV1> =
-            norito::decode_canonical(certificates)?;
-        (
-            Some(*id.as_bytes()),
+        let journal = storage.load(&id)?;
+        let public = if let Some(journal) = journal {
+            ensure!(
+                !matches!(input.mode, Mode::PrepareOnly | Mode::PrepareCached),
+                "preparation-only created a settlement journal"
+            );
+            let journal = WorkflowJournalV1::decode_record(&journal)?;
+            let certificates = journal.steps[0]
+                .round
+                .as_ref()
+                .and_then(|round| round.transcript.as_deref())
+                .ok_or_else(|| eyre!("original availability transcript absent"))?;
+            let certificates: Vec<PrivateSettlementSidecarAvailabilityV1> =
+                norito::decode_canonical(certificates)?;
             Some(PreparedPublic::from_materials(
                 prepared.materials(),
                 &certificates,
-            )?),
-        )
+            )?)
+        } else {
+            ensure!(
+                matches!(
+                    input.mode,
+                    Mode::ReadOnly | Mode::PrepareOnly | Mode::PrepareCached
+                ),
+                "settlement continuation omitted original journal"
+            );
+            None
+        };
+        (Some(*id.as_bytes()), public)
     } else {
         (None, None)
     };
@@ -623,11 +803,14 @@ fn execute(input: ChildInput) -> Result<ChildReport> {
         binding: input.binding()?,
         preparation_id,
         settlement_id,
+        provisional,
         prepared: public,
         receipt,
         evidence,
         openings: wallet.openings.load(Ordering::SeqCst) as u64,
+        stages: wallet.stages.load(Ordering::SeqCst) as u64,
         reservations: wallet.reservations_called.load(Ordering::SeqCst) as u64,
+        reconciliations: wallet.reconciliations.load(Ordering::SeqCst) as u64,
     })
 }
 
@@ -642,8 +825,22 @@ fn validate_report(report: &ChildReport, input: &ChildInput, pid: u32) -> Result
         report.pid == pid && pid != std::process::id() && report.binding == input.binding()?,
         "report substituted original invocation, phase, pins or actual child process"
     );
-    if input.mode == Mode::ReadOnly {
-        ensure!(report.openings == 0 && report.reservations == 0);
+    ensure!(
+        if report.receipt.is_some() {
+            (1..=2).contains(&report.reconciliations)
+        } else {
+            report.reconciliations == 0
+        },
+        "local wallet consumption must follow a successful verified receipt"
+    );
+    if input.mode.requires_unchanged_effects() {
+        ensure!(report.openings == 0 && report.stages == 0 && report.reservations == 0);
+    }
+    if matches!(input.mode, Mode::ReadOnly | Mode::RecoverCached) {
+        ensure!(
+            report.reconciliations == u64::from(report.receipt.is_some()),
+            "readonly wallet reconciliation must follow exactly verified success"
+        );
     }
     Ok(())
 }
@@ -812,6 +1009,20 @@ fn cold_child_control_is_closed_and_filter_is_exact() {
     assert!(Mode::Checkpoint(3).validate().is_ok());
     assert!(Mode::Checkpoint(4).validate().is_err());
     assert!(Mode::Checkpoint(u8::MAX).validate().is_err());
+    for mode in [Mode::PrepareCached, Mode::FinishCached, Mode::RecoverCached] {
+        assert!(mode.validate().is_ok());
+        assert_eq!(mode.finality_read_allowance(), 0);
+        assert!(mode.requires_unchanged_effects());
+    }
+    for mode in [
+        Mode::ReadOnly,
+        Mode::PrepareOnly,
+        Mode::Finish,
+        Mode::Checkpoint(0),
+    ] {
+        assert_eq!(mode.finality_read_allowance(), 64);
+    }
+    assert!(!Mode::PrepareOnly.requires_unchanged_effects());
     assert!(
         test_filter()
             .unwrap()
@@ -831,7 +1042,7 @@ fn test_input(network: &Network, custody_path: String) -> ChildInput {
     let wire = network.genesis().0.encode_wire().unwrap();
     ChildInput {
         intent: intent(network.network_id(), 301, 401, &governed).unwrap(),
-        policy_activation: 301,
+        original_openings: wallet::original_openings(&governed),
         pins: Pins::from_network(network, &wire).unwrap(),
         original_genesis: wire,
         endpoint: "http://127.0.0.1:1/".to_owned(),
@@ -891,11 +1102,14 @@ fn cold_child_rejects_substituted_signed_genesis_before_wallet_and_binds_reports
                 binding: input.binding().unwrap(),
                 preparation_id: [1; 32],
                 settlement_id: None,
+                provisional: None,
                 prepared: None,
                 receipt: None,
                 evidence: None,
                 openings: 0,
+                stages: 0,
                 reservations: 0,
+                reconciliations: 0,
             };
             assert!(validate_report(&report, &input, pid).is_ok());
             assert!(validate_report(&report, &input, pid.wrapping_add(1)).is_err());
@@ -905,6 +1119,9 @@ fn cold_child_rejects_substituted_signed_genesis_before_wallet_and_binds_reports
             input.mode = Mode::Finish;
             assert!(validate_report(&report, &input, pid).is_err());
             input.mode = Mode::ReadOnly;
+            input.original_openings.swap(0, 1);
+            assert!(validate_report(&report, &input, pid).is_err());
+            input.original_openings.swap(0, 1);
             let original_deadline = input.deadline_unix_ms;
             input.deadline_unix_ms = 0;
             assert!(remaining(&input).is_err());
@@ -964,18 +1181,119 @@ fn cold_child_terminal_and_logs_are_exact_and_bounded() {
 }
 
 #[test]
-fn cold_snapshot_accepts_only_the_original_round_worker_lease() {
+fn cold_snapshot_accepts_only_the_original_round_and_phase_worker_leases() {
     let original = [7; 32];
     let name = hex::encode(iroha::workflow::domain_digest(
         b"iroha:private-settlement:proof-worker:v1\0",
         &[&original],
     ));
-    assert!(require_original_worker_lease(None, &[]).is_ok());
-    assert!(require_original_worker_lease(Some(original), &[name.clone()]).is_ok());
-    assert!(require_original_worker_lease(None, &[name.clone()]).is_err());
-    assert!(require_original_worker_lease(Some(original), &[]).is_err());
-    assert!(require_original_worker_lease(Some([8; 32]), &[name.clone()]).is_err());
-    assert!(require_original_worker_lease(Some(original), &[name.clone(), name]).is_err());
+    assert!(require_original_worker_leases(None, None, &[]).is_ok());
+    assert!(require_original_worker_leases(Some(original), None, &[name.clone()]).is_ok());
+    assert!(require_original_worker_leases(None, None, &[name.clone()]).is_err());
+    assert!(require_original_worker_leases(Some(original), None, &[]).is_err());
+    assert!(require_original_worker_leases(Some([8; 32]), None, &[name.clone()]).is_err());
+    assert!(
+        require_original_worker_leases(Some(original), None, &[name.clone(), name.clone()])
+            .is_err()
+    );
+    let phase = ([9; 32], [10; 32]);
+    let phase_name = hex::encode(iroha::workflow::domain_digest(
+        b"iroha:private-settlement:global-phase-worker:v1\0",
+        &[&phase.0, &phase.1],
+    ));
+    let mut leases = vec![name, phase_name];
+    leases.sort();
+    assert!(require_original_worker_leases(Some(original), Some(phase), &leases).is_ok());
+    assert!(require_original_worker_leases(Some(original), None, &leases).is_err());
+    assert!(require_original_worker_leases(None, Some(phase), &leases).is_err());
+    assert!(
+        require_original_worker_leases(Some(original), Some(([11; 32], phase.1)), &leases).is_err()
+    );
+    assert!(
+        require_original_worker_leases(Some(original), Some((phase.0, [11; 32])), &leases).is_err()
+    );
+}
+
+#[test]
+fn cold_effect_snapshot_excludes_only_original_bounded_pending_prefixes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root =
+        iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("custody")).unwrap();
+    let artifacts = root.create_child("encrypted-artifacts").unwrap();
+    let original = WorkflowCustodySnapshot {
+        effects: Vec::new(),
+        proof_round: Some([7; 32]),
+        settlement: Some(WorkflowId::from_bytes([9; 32])),
+    };
+    let context = format!("{}.contexts", hex::encode([7; 32]));
+    artifacts
+        .write_atomic(&context, &[1; 64], iroha_fs::PublishMode::CreateNew)
+        .unwrap();
+    let before = artifact_effect_snapshot(&root, &original).unwrap();
+    for (name, bytes) in [
+        (
+            format!("{}.preparation-finality", hex::encode([7; 32])),
+            &[2; 64][..],
+        ),
+        (
+            format!("{}.settlement-finality", hex::encode([9; 32])),
+            &[3; 64][..],
+        ),
+        (
+            format!("{}.settlement-finality.lock", hex::encode([9; 32])),
+            &b""[..],
+        ),
+    ] {
+        artifacts
+            .write_atomic(name, bytes, iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+    }
+    // This helper checks inventory/effect separation; actual child recovery is the
+    // only fixture path that decrypts and independently authenticates checkpoint slots.
+    assert_eq!(artifact_effect_snapshot(&root, &original).unwrap(), before);
+    artifacts
+        .write_atomic(&context, &[4; 64], iroha_fs::PublishMode::Replace)
+        .unwrap();
+    assert_ne!(artifact_effect_snapshot(&root, &original).unwrap(), before);
+    let substituted = WorkflowCustodySnapshot {
+        proof_round: Some([8; 32]),
+        ..original
+    };
+    assert!(artifact_effect_snapshot(&root, &substituted).is_err());
+    let oversized = artifacts
+        .path()
+        .join(format!("{}.settlement-finality", hex::encode([9; 32])));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(oversized)
+        .unwrap()
+        .set_len(FINALITY_FILE_MAX as u64 + 1)
+        .unwrap();
+    let restored = WorkflowCustodySnapshot {
+        proof_round: Some([7; 32]),
+        ..substituted
+    };
+    assert!(artifact_effect_snapshot(&root, &restored).is_err());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(artifacts.path().join(&context))
+        .unwrap()
+        .set_len(ARTIFACT_FILE_MAX as u64)
+        .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(
+            artifacts
+                .path()
+                .join(format!("{}.settlement-finality", hex::encode([9; 32]))),
+        )
+        .unwrap()
+        .set_len(100 * 1024 * 1024 + 28)
+        .unwrap();
+    assert!(
+        artifact_effect_snapshot(&root, &restored).is_err(),
+        "individually bounded files cannot exceed the original aggregate custody cap"
+    );
 }
 
 #[test]
@@ -1042,4 +1360,58 @@ fn cold_effect_snapshot_binds_every_signed_identity_and_dispatch_coordinate() {
         expected,
         "read-only reconciliation may persist observations without starting another effect"
     );
+}
+
+#[test]
+fn cold_wallet_snapshot_requires_exact_bounded_production_file_roles() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("owner")).unwrap();
+    let directory = root.create_child("software-wallet").unwrap();
+    assert_eq!(wallet_snapshot(&root).unwrap(), WalletSnapshot::default());
+    // Opaque bytes exercise physical inventory only, never AEAD or successful settlement.
+    directory
+        .write_atomic(
+            "authorized-inputs.wallet",
+            &[1; 40],
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .unwrap();
+    assert!(wallet_snapshot(&root).is_err());
+    directory
+        .write_atomic(
+            "authorized-inputs.wallet.lock",
+            &[],
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .unwrap();
+    let original = wallet_snapshot(&root).unwrap();
+    assert_eq!(original.envelope.unwrap().0, 40);
+    directory
+        .write_atomic("unexpected", b"unknown", iroha_fs::PublishMode::CreateNew)
+        .unwrap();
+    assert!(wallet_snapshot(&root).is_err());
+    directory.remove_private("unexpected").unwrap();
+    directory
+        .write_atomic(
+            "authorized-inputs.wallet.lock",
+            b"nonempty",
+            iroha_fs::PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(wallet_snapshot(&root).is_err());
+    directory
+        .write_atomic(
+            "authorized-inputs.wallet.lock",
+            &[],
+            iroha_fs::PublishMode::Replace,
+        )
+        .unwrap();
+    assert_eq!(wallet_snapshot(&root).unwrap(), original);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(directory.path().join("authorized-inputs.wallet"))
+        .unwrap()
+        .set_len((wallet::MAX_WALLET_INDEX_BYTES + 29) as u64)
+        .unwrap();
+    assert!(wallet_snapshot(&root).is_err());
 }

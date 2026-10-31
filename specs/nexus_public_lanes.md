@@ -18,16 +18,25 @@ slashing/runbook levers.
 The implementation lives in:
 
 - Data model types: `crates/iroha_data_model/src/nexus/staking.rs`
+- Committed monetary policy: `crates/iroha_data_model/src/block/consensus/staking_policy.rs`
 - ISI definitions: `crates/iroha_data_model/src/isi/staking.rs`
 - Core instruction execution and custody:
   `crates/iroha_core/src/smartcontracts/isi/staking.rs`
 
 Stake instructions lock the network XOR identity committed in NPoS parameters by
-withdrawing from the `stake_account`/`staker` into a bonded escrow account
-(`nexus.staking.stake_escrow_account_id`). Slashes debit the escrow and credit
-the configured sink (`nexus.staking.slash_sink_account_id`), and unbonds return
+withdrawing from the `stake_account`/`staker` into the bonded escrow named by
+`PublicLaneStakingPolicy.stake_escrow_account_id`. Slashes debit the retained
+escrow and credit `PublicLaneStakingPolicy.slash_sink_account_id`, and unbonds return
 funds to the originating account once both their timestamp and evidence-liability
 height have elapsed. A matured pending unbond remains claimable until finalised.
+
+Signed genesis explicitly authors the complete `public_lane_staking_v1` custom
+parameter for both permissioned and NPoS roots. Execution borrows the typed policy
+from the block's original parameter cut; an update in that block becomes visible
+to staking operations in the next block. Genesis execution uses its authenticated
+original policy source. New monetary operations use the committed canonical asset
+and custody identities, while existing liabilities retain their original asset,
+escrow and scope until discharged. Node configuration cannot supply monetary terms.
 
 ## 1. Ledger State & Types
 
@@ -89,11 +98,12 @@ Delegators (and validators topping up their own bond) are modelled via
 - `metadata` stores UX/back-office hints (e.g., custody desk reference numbers).
 
 Consensus work is explicitly bounded: one validator may retain at most
-`nexus.staking.max_stake_shares_per_validator` stake-share rows, and one share
-may retain at most `nexus.staking.max_pending_unbonds_per_share` pending
+`PublicLaneStakingPolicy.max_stake_shares_per_validator` stake-share rows, and one share
+may retain at most `PublicLaneStakingPolicy.max_pending_unbonds_per_share` pending
 requests. Bond and unbond scheduling reject an operation before mutation when
-it would exceed the corresponding bound. The defaults are 256 shares and 8
-pending requests per share, bounding one validator to 2,048 pending requests.
+it would exceed the corresponding bound. The explicit default genesis recipe
+authors 256 shares and 8 pending requests per share, bounding one validator to
+2,048 pending requests; execution requires the committed values.
 
 `PublicLaneUnbonding` holds the deterministic withdrawal schedule (`amount`,
 `release_at_ms`, `slashable_through_height`, and `liability_release_height`). Torii
@@ -444,21 +454,20 @@ account migration and entity deletion preserve these obligations.
   only after the tenure boundary has passed and its staking custody has been
   explicitly drained; retirement never serves as an implicit withdrawal or
   deletion path.
-- **Config knobs:** `nexus.staking.min_validator_stake`,
-  `nexus.staking.stake_asset_id`, `nexus.staking.stake_escrow_account_id`,
-  `nexus.staking.slash_sink_account_id`, `nexus.staking.unbonding_delay`,
-  `nexus.staking.max_validators`,
-  `nexus.staking.max_stake_shares_per_validator`,
-  `nexus.staking.max_pending_unbonds_per_share`,
-  `nexus.staking.max_slash_bps` and the
-  validator-mode switches above.
+- **Monetary policy:** `PublicLaneStakingPolicy` owns `min_validator_stake`,
+  `stake_asset_id`, `stake_escrow_account_id`, `slash_sink_account_id`,
+  `unbonding_delay_ms`, `max_stake_shares_per_validator`,
+  `max_pending_unbonds_per_share`, and `max_slash_bps`. Genesis recipes carry
+  the entire typed policy, and authorized committed updates preserve existing
+  custody and SCCP liabilities. `nexus.staking` contains only `max_validators`
+  and the validator-mode switches above, which remain in the genesis-pinned
+  Nexus consensus projection.
   `SumeragiNposParameters.reconfig.epoch_length_blocks` defines the election
   boundary grid. It, `evidence_horizon_blocks`, and
   `slashing_delay_blocks` are immutable after the initial NPoS parameter
   installation; horizon plus delay cannot exceed three epoch lengths.
-  Thread them through
-  `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
-  once GA values are ratified.
+  These values belong to the committed parameter owner; local startup settings
+  cannot replace them.
 - **Torii/CLI quickstart:**
   - `iroha --operator-private-key-file /absolute/runtime/operator.key app nexus lane-report --summary`
     summarizes each lane's governance module, manifest readiness, validator

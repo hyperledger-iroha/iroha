@@ -3,7 +3,7 @@ mod tests {
     use super::*;
     use core::ops::Range;
     use rand::{SeedableRng, rngs::StdRng};
-    use rand_core::{CryptoRng, RngCore, TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     const TEST_RELAY_AUTHENTICATED_BINDING: [u8; TRANSCRIPT_BINDING_LEN] =
         [0xB7; TRANSCRIPT_BINDING_LEN];
     const TEST_RELAY_AUTH_CLIENT_HELLO: &[u8] = b"dual-auth-client-hello";
@@ -314,27 +314,29 @@ mod tests {
         (params, client_state, relay_hello, relay_keys)
     }
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
-            panic!("relay RNG must not be consumed before KEM preflight");
+    impl rand::TryRng for PanicRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            panic!("relay RNG must not be consumed before KEM preflight")
         }
-        fn next_u64(&mut self) -> u64 {
-            panic!("relay RNG must not be consumed before KEM preflight");
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            panic!("relay RNG must not be consumed before KEM preflight")
         }
-        fn fill_bytes(&mut self, _dest: &mut [u8]) {
-            panic!("relay RNG must not be consumed before KEM preflight");
+        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
+            panic!("relay RNG must not be consumed before KEM preflight")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing SoraNet handshake RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -350,7 +352,7 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))

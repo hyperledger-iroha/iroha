@@ -970,7 +970,7 @@ fn merged_space_directory_bindings_response(
         row.insert("dataspace_id".to_owned(), Value::from(dataspace_id));
         row.insert(
             "dataspace_alias".to_owned(),
-            alias.map(Value::from).unwrap_or(Value::Null),
+            alias.map_or(Value::Null, Value::from),
         );
         row.insert("accounts".to_owned(), Value::Array(account_values));
         rows.push(Value::Object(row));
@@ -978,8 +978,7 @@ fn merged_space_directory_bindings_response(
     let mut root = norito::json::Map::new();
     root.insert(
         "uaid".to_owned(),
-        uaid.map(Value::from)
-            .unwrap_or(Value::String(String::new())),
+        uaid.map_or(Value::String(String::new()), Value::from),
     );
     root.insert("dataspaces".to_owned(), Value::Array(rows));
     let mut response = budget.json_response(&Value::Object(root))?;
@@ -1196,25 +1195,22 @@ fn merged_portfolio_response(
         let account_count = row
             .get("accounts")
             .and_then(Value::as_array)
-            .map(|accounts| accounts.len() as u64)
-            .unwrap_or(0);
+            .map_or(0, |accounts| accounts.len() as u64);
         total_accounts = total_accounts.saturating_add(account_count);
         let position_count = row
             .get("accounts")
             .and_then(Value::as_array)
-            .map(|accounts| {
+            .map_or(0, |accounts| {
                 accounts
                     .iter()
                     .map(|account| {
                         account
                             .get("assets")
                             .and_then(Value::as_array)
-                            .map(|assets| assets.len() as u64)
-                            .unwrap_or(0)
+                            .map_or(0, |assets| assets.len() as u64)
                     })
                     .sum::<u64>()
-            })
-            .unwrap_or(0);
+            });
         total_positions = total_positions.saturating_add(position_count);
     }
     budget.admit_merge_btree::<String, Value>(2, 5)?;
@@ -1227,7 +1223,7 @@ fn merged_portfolio_response(
     let mut merged_dataspaces = budget.try_merge_vec(dataspaces.len())?;
     merged_dataspaces.extend(dataspaces.into_values());
     let mut root = norito::json::Map::new();
-    root.insert("uaid".into(), uaid.map(Value::from).unwrap_or(Value::Null));
+    root.insert("uaid".into(), uaid.map_or(Value::Null, Value::from));
     root.insert("totals".into(), Value::Object(totals));
     root.insert("dataspaces".into(), Value::Array(merged_dataspaces));
     let mut response = budget.json_response(&Value::Object(root))?;
@@ -1428,11 +1424,11 @@ fn merged_dataspace_summary_response(
     let mut root = norito::json::Map::new();
     root.insert(
         "account".into(),
-        account_literal.map(Value::from).unwrap_or(Value::Null),
+        account_literal.map_or(Value::Null, Value::from),
     );
     root.insert(
         "account_id".into(),
-        account_id.map(Value::from).unwrap_or(Value::Null),
+        account_id.map_or(Value::Null, Value::from),
     );
     root.insert("uaid".into(), uaid.unwrap_or(Value::Null));
     root.insert("totals".into(), Value::Object(totals));

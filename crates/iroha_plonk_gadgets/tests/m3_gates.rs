@@ -93,7 +93,7 @@ use iroha_plonk_gadgets::{
 };
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -361,11 +361,11 @@ where
     );
 }
 
-/// Bind the measured executable to its complete compiled native source identity.
-fn native_source_report(digest: [u8; 32], binary_sha256: &str) -> norito::json::Value {
+/// Report the proof compatibility contract separately from build-source provenance.
+fn native_contract_report(digest: [u8; 32], binary_sha256: &str) -> norito::json::Value {
     norito::json!({
-        "schema": "kagemusha.m3.native-source.v1",
-        "native_source_digest": (hex(&digest)),
+        "schema": "kagemusha.m3.native-contract.v1",
+        "proof_contract_digest": (hex(&digest)),
         "binary_sha256": binary_sha256,
         "target_arch": (std::env::consts::ARCH),
         "target_os": (std::env::consts::OS),
@@ -532,16 +532,15 @@ fn measure_in_pool<C, Ci>(
 // G3.6: the Q leaf filled with the P-256 and SHA-256 chips.
 // ---------------------------------------------------------------------------
 
-/// Inspect the exact compiled source identity without deriving workload keys.
+/// Inspect the compiled proof contract without deriving workload keys.
 #[test]
-#[ignore = "explicit complete-source identity join before qualification"]
+#[ignore = "explicit proof-contract and executable join before qualification"]
 fn qualification_candidate_identity() {
-    let digest = iroha_plonk::keys::builtin_source_identity_v1()
-        .expect("qualification requires a complete compiled native source closure");
-    let report = native_source_report(digest, &binary_digest());
+    let digest = iroha_plonk::keys::builtin_contract_v1();
+    let report = native_contract_report(digest, &binary_digest());
     println!(
-        "M3_SOURCE_JSON {}",
-        norito::json::to_json(&report).expect("native source JSON")
+        "M3_CONTRACT_JSON {}",
+        norito::json::to_json(&report).expect("native contract JSON")
     );
 }
 
@@ -1705,21 +1704,21 @@ fn qualification_workload_degrees_include_norm_lookup_products() {
 }
 
 #[test]
-fn qualification_native_source_record_binds_digest_binary_and_target() {
+fn qualification_native_contract_record_binds_digest_binary_and_target() {
     let digest = std::array::from_fn(|index| u8::try_from(index).expect("32-byte index"));
     let binary = "a5".repeat(32);
-    let record = native_source_report(digest, &binary);
-    let encoded = norito::json::to_json(&record).expect("source JSON");
+    let record = native_contract_report(digest, &binary);
+    let encoded = norito::json::to_json(&record).expect("contract JSON");
     let decoded: norito::json::Value =
-        norito::json::from_str(&encoded).expect("source JSON decode");
+        norito::json::from_str(&encoded).expect("contract JSON decode");
     assert_eq!(decoded, record);
-    assert_eq!(record.as_object().expect("source object").len(), 7);
+    assert_eq!(record.as_object().expect("contract object").len(), 7);
     assert_eq!(
         record["schema"].as_str(),
-        Some("kagemusha.m3.native-source.v1")
+        Some("kagemusha.m3.native-contract.v1")
     );
     assert_eq!(
-        record["native_source_digest"].as_str(),
+        record["proof_contract_digest"].as_str(),
         Some("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
     );
     assert_eq!(record["binary_sha256"].as_str(), Some(binary.as_str()));
@@ -1733,8 +1732,8 @@ fn qualification_native_source_record_binds_digest_binary_and_target() {
         record["little_endian"].as_bool(),
         Some(cfg!(target_endian = "little"))
     );
-    assert_ne!(native_source_report([0xff; 32], &binary), record);
-    assert_ne!(native_source_report(digest, &"5a".repeat(32)), record);
+    assert_ne!(native_contract_report([0xff; 32], &binary), record);
+    assert_ne!(native_contract_report(digest, &"5a".repeat(32)), record);
 }
 
 #[test]

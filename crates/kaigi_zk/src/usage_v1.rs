@@ -1,7 +1,7 @@
 //! Final V1 call-bound usage authorization with an opening of the stored host C.
 //!
 //! Core authenticates network, permanent call, original host, pre-roster root,
-//! segment and metrics. One exact 25-row column binds those facts, host C and U.
+//! segment and metrics. One exact 21-row column binds those facts, host C and U.
 //! Owned blinding and CPU scratch cleanup use the authorization witness and
 //! shared frame owner; native prover-owned copies remain outside that erasure guarantee.
 
@@ -16,19 +16,19 @@ use zeroize::Zeroizing;
 use crate::{
     POSEIDON_ROUNDS, Scalar,
     authorization_v1::{
-        KaigiAuthorizationActionV1, KaigiAuthorizationContextV1, KaigiAuthorizationErrorV1,
-        KaigiAuthorizationWitnessV1, assign_identity_commitment_v1, compute_identity_commitment_v1,
+        IDENTITY_WORDS, KAIGI_IDENTITY_WORDS_V1, KaigiAuthorizationActionV1,
+        KaigiAuthorizationContextV1, KaigiAuthorizationErrorV1, KaigiAuthorizationWitnessV1,
+        assign_identity_commitment_v1, compute_identity_commitment_v1,
     },
     relation_v1::{
-        AssignedValue, GOLDILOCKS_MODULUS_V1, KaigiRelationConfigV1, ScalarSlots, assign_range,
-        assign_sponge, sponge,
+        AssignedValue, KaigiRelationConfigV1, ScalarSlots, assign_range, assign_sponge, sponge,
     },
 };
 
 /// Fixed IPA domain exponent for the complete final usage relation.
 pub const KAIGI_USAGE_CIRCUIT_K_V1: u32 = 12;
 /// Exactly one instance column contains this many rows.
-pub const KAIGI_USAGE_INSTANCE_ROWS_V1: usize = 25;
+pub const KAIGI_USAGE_INSTANCE_ROWS_V1: usize = 21;
 /// Canonical circuit identity; the previous usage relation has no alternate path.
 pub const KAIGI_USAGE_CIRCUIT_ID_V1: &str = "pipa-r/pasta/kaigi-usage-v1";
 /// Exact native registry label for the compiled usage relation.
@@ -36,13 +36,15 @@ pub const KAIGI_USAGE_BACKEND_V1: &str = "pipa-r/pasta/kaigi-usage-v1";
 /// Exact final public-input schema.
 pub const KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = b"kaigi-usage-v1";
 
-const CONTEXT_WORDS: usize = 23;
-const SEGMENT_ROW: usize = 20;
-const DURATION_ROW: usize = 21;
-const GAS_ROW: usize = 22;
-const HOST_COMMITMENT_ROW: usize = 23;
-const USAGE_COMMITMENT_ROW: usize = 24;
-const ASSIGNED_ROWS: usize = 4037;
+const ROOT_ROW: usize = 4 + 2 * KAIGI_IDENTITY_WORDS_V1;
+const HOST_IDENTITY_END: usize = IDENTITY_WORDS - 1;
+const SEGMENT_ROW: usize = ROOT_ROW + 4;
+const DURATION_ROW: usize = SEGMENT_ROW + 1;
+const GAS_ROW: usize = DURATION_ROW + 1;
+const CONTEXT_WORDS: usize = GAS_ROW + 1;
+const HOST_COMMITMENT_ROW: usize = CONTEXT_WORDS;
+const USAGE_COMMITMENT_ROW: usize = HOST_COMMITMENT_ROW + 1;
+const ASSIGNED_ROWS: usize = 2656;
 const DOMAIN_USAGE: u64 = 0x4b41_4947_4956_3155;
 
 /// Invalid typed usage context.
@@ -68,10 +70,10 @@ impl std::error::Error for KaigiUsageErrorV1 {}
 pub struct KaigiUsageContextV1 {
     /// Exact genesis-derived network bytes, without field reduction.
     pub network_id: [u8; 32],
-    /// All six canonical Goldilocks call identity limbs.
-    pub call_id: [u64; 6],
-    /// All six canonical Goldilocks original host identity limbs.
-    pub host_id: [u64; 6],
+    /// All four complete native call identity words.
+    pub call_id: [u64; KAIGI_IDENTITY_WORDS_V1],
+    /// All four complete native original host identity words.
+    pub host_id: [u64; KAIGI_IDENTITY_WORDS_V1],
     /// Exact authenticated current roster root bytes.
     pub pre_roster_root: [u8; 32],
     /// Ledger-owned segment counter before this usage record is appended.
@@ -82,7 +84,7 @@ pub struct KaigiUsageContextV1 {
     pub billed_gas: u64,
 }
 impl KaigiUsageContextV1 {
-    /// Validate identity canonicality and positive duration.
+    /// Validate the host role and positive duration.
     pub fn validate(&self) -> Result<(), KaigiUsageErrorV1> {
         self.host_context()
             .validate()
@@ -106,8 +108,8 @@ impl KaigiUsageContextV1 {
     fn words(&self) -> [Scalar; CONTEXT_WORDS] {
         let host = self.host_context().words();
         let mut words = [Scalar::ZERO; CONTEXT_WORDS];
-        words[..16].copy_from_slice(&host[..16]);
-        words[16..20].copy_from_slice(&host[24..28]);
+        words[..ROOT_ROW].copy_from_slice(&host[..ROOT_ROW]);
+        words[ROOT_ROW..SEGMENT_ROW].copy_from_slice(&host[IDENTITY_WORDS + 1..]);
         words[SEGMENT_ROW] = Scalar::from(u64::from(self.segment_index));
         words[DURATION_ROW] = Scalar::from(self.duration_ms);
         words[GAS_ROW] = Scalar::from(self.billed_gas);
@@ -137,13 +139,13 @@ impl KaigiUsageOutputsV1 {
 /// Sole public column with one fixed final row order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KaigiUsagePublicInputsV1 {
-    /// Trusted context occupies rows 0 through 22.
+    /// Trusted context occupies rows 0 through 18.
     pub context: KaigiUsageContextV1,
-    /// Host C and U occupy rows 23 and 24.
+    /// Host C and U occupy rows 19 and 20.
     pub outputs: KaigiUsageOutputsV1,
 }
 impl KaigiUsagePublicInputsV1 {
-    /// Encode network[4], call[6], host[6], root[4], segment, duration, gas, C, U.
+    /// Encode network[4], call[4], host[4], root[4], segment, duration, gas, C, U.
     #[must_use]
     pub fn instance(&self) -> [Scalar; KAIGI_USAGE_INSTANCE_ROWS_V1] {
         let mut instance = [Scalar::ZERO; KAIGI_USAGE_INSTANCE_ROWS_V1];
@@ -154,19 +156,19 @@ impl KaigiUsagePublicInputsV1 {
     }
 }
 
-fn identity_words(words: &[Scalar; CONTEXT_WORDS]) -> [Scalar; 23] {
+fn identity_words(words: &[Scalar; CONTEXT_WORDS]) -> [Scalar; IDENTITY_WORDS] {
     array::from_fn(|row| match row {
-        0..16 => words[row],
-        16..22 => words[row - 6],
+        0..ROOT_ROW => words[row],
+        ROOT_ROW..HOST_IDENTITY_END => words[row - KAIGI_IDENTITY_WORDS_V1],
         _ => Scalar::ZERO,
     })
 }
 fn compute_words(words: &[Scalar; CONTEXT_WORDS], blinding: Scalar) -> KaigiUsageOutputsV1 {
     let host_commitment = compute_identity_commitment_v1(&identity_words(words), blinding);
-    let mut payload = Zeroizing::new(ScalarSlots::<25>::default());
-    payload.0[..23].copy_from_slice(words);
-    payload.0[23] = host_commitment;
-    payload.0[24] = blinding;
+    let mut payload = Zeroizing::new(ScalarSlots::<KAIGI_USAGE_INSTANCE_ROWS_V1>::default());
+    payload.0[..CONTEXT_WORDS].copy_from_slice(words);
+    payload.0[HOST_COMMITMENT_ROW] = host_commitment;
+    payload.0[USAGE_COMMITMENT_ROW] = blinding;
     KaigiUsageOutputsV1 {
         host_commitment,
         usage_commitment: sponge(DOMAIN_USAGE, &payload.0),
@@ -262,10 +264,14 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
                     .try_into()
                     .map_err(|_| Error::Synthesis)?;
                 let secret = region
-                    .assign_advice(config.shared.value, 23, blinding)?
+                    .assign_advice(config.shared.value, CONTEXT_WORDS, blinding)?
                     .cell();
                 let zero = region
-                    .assign_advice(config.shared.value, 24, Value::known(Scalar::ZERO))?
+                    .assign_advice(
+                        config.shared.value,
+                        CONTEXT_WORDS + 1,
+                        Value::known(Scalar::ZERO),
+                    )?
                     .cell();
                 region.constrain_constant(zero, Scalar::ZERO)?;
                 Ok((cells, secret, zero))
@@ -274,7 +280,7 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
         for (row, cell) in cells.iter().enumerate() {
             layouter.constrain_instance(*cell, config.shared.instance, row)?;
         }
-        let mut offset = 25;
+        let mut offset = CONTEXT_WORDS + 2;
         for row in 0..CONTEXT_WORDS {
             if row == SEGMENT_ROW {
                 assign_range::<32>(
@@ -291,26 +297,6 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
                     offset,
                     (cells[row], words[row]),
                 )?;
-                offset += 65;
-            }
-            if (4..16).contains(&row) {
-                let complement =
-                    words[row].map(|value| Scalar::from(GOLDILOCKS_MODULUS_V1 - 1) - value);
-                let cell = layouter.assign_region(
-                    || "Kaigi usage canonical identity",
-                    |mut region| {
-                        config.shared.q_goldilocks.enable(&mut region, offset)?;
-                        let source = region
-                            .assign_advice(config.shared.previous[0], offset, words[row])?
-                            .cell();
-                        region.constrain_equal(source, cells[row])?;
-                        Ok(region
-                            .assign_advice(config.shared.previous[1], offset, complement)?
-                            .cell())
-                    },
-                )?;
-                offset += 1;
-                assign_range::<64>(&mut layouter, &config.shared, offset, (cell, complement))?;
                 offset += 65;
             }
         }
@@ -336,9 +322,12 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
             )?;
             offset += 1;
         }
-        let identity: [AssignedValue; 23] = array::from_fn(|row| match row {
-            0..16 => (cells[row], words[row]),
-            16..22 => (cells[row - 6], words[row - 6]),
+        let identity: [AssignedValue; IDENTITY_WORDS] = array::from_fn(|row| match row {
+            0..ROOT_ROW => (cells[row], words[row]),
+            ROOT_ROW..HOST_IDENTITY_END => (
+                cells[row - KAIGI_IDENTITY_WORDS_V1],
+                words[row - KAIGI_IDENTITY_WORDS_V1],
+            ),
             _ => (zero, Value::known(Scalar::ZERO)),
         });
         let commitment = assign_identity_commitment_v1(
@@ -348,7 +337,7 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
             &identity,
             (secret, blinding),
         )?;
-        offset += 13 * (POSEIDON_ROUNDS + 1);
+        offset += (IDENTITY_WORDS + 3).div_ceil(2) * (POSEIDON_ROUNDS + 1);
         let mut payload: Vec<_> = cells.into_iter().zip(words).collect();
         payload.extend([commitment, (secret, blinding)]);
         let usage = assign_sponge(
@@ -358,7 +347,7 @@ impl Circuit<Scalar> for KaigiUsageCircuitV1 {
             DOMAIN_USAGE,
             &payload,
         )?;
-        offset += 14 * (POSEIDON_ROUNDS + 1);
+        offset += (payload.len() + 2).div_ceil(2) * (POSEIDON_ROUNDS + 1);
         debug_assert_eq!(offset, ASSIGNED_ROWS);
         layouter.constrain_instance(commitment.0, config.shared.instance, HOST_COMMITMENT_ROW)?;
         layouter.constrain_instance(usage.0, config.shared.instance, USAGE_COMMITMENT_ROW)?;

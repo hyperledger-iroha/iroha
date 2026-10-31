@@ -42,7 +42,7 @@
 #![allow(clippy::many_single_char_names)]
 
 use ff::Field;
-use group::{GroupEncoding, prime::PrimeCurveAffine};
+use group::{CurveAffine, GroupEncoding};
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -139,7 +139,7 @@ fn first_missing<T>(slots: Vec<Option<T>>) -> Result<Vec<T>, ParamsError> {
 }
 
 /// Index of the first identity point of `points`, if any.
-fn first_identity<'a, A: PrimeCurveAffine + 'a>(
+fn first_identity<'a, A: group::prime::PrimeCurveAffine + 'a>(
     points: impl IntoIterator<Item = &'a A>,
 ) -> Option<usize> {
     points.into_iter().position(|p| bool::from(p.is_identity()))

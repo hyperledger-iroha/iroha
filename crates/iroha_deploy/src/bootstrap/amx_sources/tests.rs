@@ -1,16 +1,15 @@
 //! Real executed G1/H2 source custody and fresh private-staging regression controls.
 //!
 //! Injected HTTP transports carry actual Core-produced canonical proofs. No remote network,
-//! fabricated QC, release-selected signer or synthetic execution result is used.
+//! fabricated QC, response-selected signer or synthetic execution result is used.
 
 use super::*;
-use crate::bootstrap::{ReleaseCheckpointStore, ReleaseTrust};
+use crate::bootstrap::tests::{authenticated, metadata};
 use iroha::http::{HttpTransport, PublicHttpClient, Response, TransportFuture, TransportRequest};
 use iroha_core::{
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
-use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     isi::Log,
     level::Level,
@@ -92,23 +91,11 @@ impl Fixture {
                 )
             })
             .collect();
-        // This authenticated release checkpoint is already past H2, so its tip is not a source substitute.
+        // This authenticated native checkpoint is already past H2, so its tip is not a source substitute.
         let checkpoint = iroha_core::sumeragi::finality::build_checkpoint(&view, 3).unwrap();
         assert_eq!(checkpoint.height(), 3);
-        let release_key = KeyPair::from_seed(vec![0x63; 32], Algorithm::Ed25519);
         let temporary = tempfile::tempdir().unwrap();
-        let release = ReleaseCheckpointStore::open(&temporary.path().join("release")).unwrap();
-        let bootstrap = release
-            .authenticate(
-                &ReleaseTrust::new("fixture".into(), release_key.public_key().clone(), 5).unwrap(),
-                &crate::bootstrap::tests::signed(
-                    crate::bootstrap::tests::metadata(&checkpoint),
-                    &checkpoint,
-                    &release_key,
-                ),
-                2_000,
-            )
-            .unwrap();
+        let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
         let attachment =
             PrivateDirectory::open_or_create(temporary.path().join("attachment")).unwrap();
         let alias = "managedamx";
@@ -144,7 +131,9 @@ impl Fixture {
     }
     fn retain(&self, may_create: bool) -> Result<ParentBootstrapSources> {
         self.selection()
-            .retain_with(&self.spec, may_create, &self.transport, || Ok(2_000))
+            .retain_with(&self.spec, may_create, &self.transport, || {
+                Ok(Instant::now())
+            })
     }
 }
 
@@ -265,7 +254,7 @@ fn managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publi
     assert!(
         fixture
             .selection()
-            .retain_with(&wrong, true, &fixture.transport, || Ok(2_000))
+            .retain_with(&wrong, true, &fixture.transport, || Ok(Instant::now()))
             .is_err()
     );
     assert!(fixture.raw.requests.lock().unwrap().is_empty());
@@ -275,7 +264,9 @@ fn managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publi
     };
     assert!(
         expired
-            .retain_with(&fixture.spec, true, &fixture.transport, || Ok(2_000))
+            .retain_with(&fixture.spec, true, &fixture.transport, || Ok(
+                Instant::now()
+            ))
             .is_err()
     );
     assert!(fixture.raw.requests.lock().unwrap().is_empty());
@@ -285,9 +276,9 @@ fn managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publi
             .selection()
             .retain_with(&fixture.spec, true, &fixture.transport, || {
                 Ok(if clock.fetch_add(1, Ordering::SeqCst) == 0 {
-                    2_000
+                    Instant::now()
                 } else {
-                    10_000
+                    Instant::now() + Duration::from_secs(120)
                 })
             })
             .is_err()
@@ -313,7 +304,7 @@ fn managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publi
     assert!(
         fixture
             .selection()
-            .retain_with(&fixture.spec, true, &transport, || Ok(2_000))
+            .retain_with(&fixture.spec, true, &transport, || Ok(Instant::now()))
             .is_err()
     );
     assert!(
@@ -326,7 +317,7 @@ fn managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publi
 }
 
 #[test]
-fn managed_amx_sources_recheck_release_after_retained_authentication_without_refetch() {
+fn managed_amx_sources_recheck_deadline_after_retained_authentication_without_refetch() {
     let fixture = Fixture::new();
     let original = fixture.retain(true).unwrap();
     drop(original);
@@ -335,15 +326,15 @@ fn managed_amx_sources_recheck_release_after_retained_authentication_without_ref
         .selection()
         .retain_with(&fixture.spec, false, &fixture.transport, || {
             Ok(if clock.fetch_add(1, Ordering::SeqCst) == 0 {
-                2_000
+                Instant::now()
             } else {
-                10_000
+                Instant::now() + Duration::from_secs(120)
             })
         });
     assert!(matches!(
         result,
         Err(BootstrapError::Invalid(
-            "AMX sources require the original live selected parent release"
+            "AMX sources require the original selected parent and acquisition deadline"
         ))
     ));
     assert_eq!(fixture.raw.requests.lock().unwrap().len(), 2);
@@ -360,7 +351,7 @@ fn managed_amx_sources_feed_real_private_staging_and_exact_retained_generation()
     let sources = fixture.retain(true).unwrap();
     let child = fixture.temporary.path().join("private");
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
-    let prepared = crate::localnet::prepare_private_root_with_amx_at(
+    let prepared = crate::sora_network::prepare_private_root_with_amx_at(
         "private",
         &child,
         &ports,
@@ -372,7 +363,7 @@ fn managed_amx_sources_feed_real_private_staging_and_exact_retained_generation()
     sources.require_signed_generation(&prepared).unwrap();
     let original = std::fs::read(child.join("genesis.signed.nrt")).unwrap();
     let reopened_sources = fixture.retain(false).unwrap();
-    let reopened = crate::localnet::prepare_private_root_with_amx_at(
+    let reopened = crate::sora_network::prepare_private_root_with_amx_at(
         "private",
         &child,
         &ports,

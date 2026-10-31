@@ -114,6 +114,7 @@ fn append_nodes(ty: &Type, output: &mut Vec<CallTypeNodeV1>) -> Result<(), Strin
             // References retain their nominal source type, but their private call-table
             // transport is the same public Blob leaf used for their canonical address.
             Type::ContractRef(_) => CallTypeNodeV1::Leaf(Kind::Blob),
+            Type::PendingAction => CallTypeNodeV1::PendingAction,
             Type::Json => CallTypeNodeV1::Leaf(Kind::Json),
             Type::AxtDescriptor => CallTypeNodeV1::Pointer(PointerType::AxtDescriptor as u16),
             Type::AxtAnchoredSpendV1 => {

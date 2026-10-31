@@ -25,7 +25,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::domain::DomainId;
-use rand_08::{SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 use std::str::FromStr as _;
 
 pub(super) fn bytes(seed: u8) -> [u8; 32] {
@@ -110,7 +111,7 @@ pub(super) fn fixture() -> Fixture {
     let recipient_public_key =
         ivm_private_recipient_public_key_v1(&bytes(0x71)).expect("recipient public key");
     let encrypted_output = encrypt_ivm_private_wallet_note_v1(
-        &mut StdRng::seed_from_u64(0x49_50_4e_45),
+        &mut ChaCha12Rng::seed_from_u64(0x49_50_4e_45),
         pool_id,
         program_id,
         &output_note,
@@ -245,7 +246,7 @@ pub(super) fn three_output_fixture() -> ThreeOutputFixture {
         second_input_note,
         second_input_secret,
         1,
-        path_1,
+        &path_1,
         profile,
     )
     .expect("second cover input witness");

@@ -1,4 +1,4 @@
-//! Closed OpenAPI contracts for generation authority and frozen committee preparation.
+//! Closed `OpenAPI` contracts for generation authority and frozen committee preparation.
 
 use super::*;
 

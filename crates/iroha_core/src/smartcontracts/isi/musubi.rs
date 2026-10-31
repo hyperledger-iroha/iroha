@@ -704,96 +704,93 @@ impl Execute for PublishMusubiReleaseV1 {
                     .cloned();
                 let first_claim = existing_package.is_none();
                 let (package, governance_advance, first_member, first_metadata) =
-                    match existing_package {
-                        Some(mut package) => {
-                            if package.claimed_namespace != self.namespace {
-                                return Err(invariant(
-                                    "Musubi publication namespace does not match the package claim",
-                                ));
-                            }
-                            let expected = self.expected_governance_revision.ok_or_else(|| {
+                    if let Some(mut package) = existing_package {
+                        if package.claimed_namespace != self.namespace {
+                            return Err(invariant(
+                                "Musubi publication namespace does not match the package claim",
+                            ));
+                        }
+                        let expected = self.expected_governance_revision.ok_or_else(|| {
                         invalid_parameter(
                             "existing Musubi package publication requires a governance revision",
                         )
                     })?;
-                            classify_governance_rejection(
-                                ensure_revision(
-                                    "package governance",
-                                    package.revisions.governance,
-                                    expected,
-                                ),
-                                rejection_reason,
-                                MusubiGovernanceRejectionReasonV1::StaleRevision,
-                            )?;
-                            ensure_package_capability(
-                                &release_id.package,
-                                authority,
-                                PackageCapability::Publish,
-                                state_transaction.world(),
-                                rejection_reason,
-                            )?;
-                            let advance = plan_package_governance_advance(
-                                &mut package,
-                                height,
-                                None,
-                                state_transaction.world(),
-                            )?;
-                            (package, Some(advance), None, None)
+                        classify_governance_rejection(
+                            ensure_revision(
+                                "package governance",
+                                package.revisions.governance,
+                                expected,
+                            ),
+                            rejection_reason,
+                            MusubiGovernanceRejectionReasonV1::StaleRevision,
+                        )?;
+                        ensure_package_capability(
+                            &release_id.package,
+                            authority,
+                            PackageCapability::Publish,
+                            state_transaction.world(),
+                            rejection_reason,
+                        )?;
+                        let advance = plan_package_governance_advance(
+                            &mut package,
+                            height,
+                            None,
+                            state_transaction.world(),
+                        )?;
+                        (package, Some(advance), None, None)
+                    } else {
+                        if self.expected_governance_revision.is_some() {
+                            return Err(invalid_parameter(
+                                "first Musubi package claim must not supply a governance revision",
+                            ));
                         }
-                        None => {
-                            if self.expected_governance_revision.is_some() {
-                                return Err(invalid_parameter(
-                                    "first Musubi package claim must not supply a governance revision",
-                                ));
-                            }
-                            let binding = namespace_binding_for_package(
-                                &self.namespace,
-                                &release_id.package,
-                                state_transaction.world(),
-                            )?;
-                            ensure_namespace_claim_authority(
-                                &binding,
-                                self.namespace_delegation.as_ref(),
-                                authority,
-                                state_transaction,
-                                rejection_reason,
-                            )
-                            .map_err(|error| namespace_attempt_error(error, state_transaction))?;
-                            let package = MusubiPackageRecordV1 {
-                                package: release_id.package.clone(),
-                                claimed_namespace: self.namespace,
-                                claimed_namespace_binding: binding.digest(),
-                                owners: vec![authority.clone()],
-                                member_accounts: vec![authority.clone()],
-                                claimed_at_height: height,
-                                revisions: MusubiPackageRevisionsV1 {
-                                    governance: 1,
-                                    metadata: 1,
-                                    archive_locations: 1,
-                                },
-                            };
-                            let member = MusubiPackageMemberV1 {
-                                package: release_id.package.clone(),
-                                account: authority.clone(),
-                                role: MusubiPackageRoleV1::Owner,
-                                accepted_at_height: height,
-                                governance_revision: 1,
-                            };
-                            member
-                                .validate()
-                                .map_err(|error| invariant(error.reason()))?;
-                            let metadata = MusubiPackageMetadataRecordV1 {
-                                package: release_id.package.clone(),
-                                metadata: self.publication.manifest.metadata.clone(),
-                                revision: 1,
-                                changed_by: authority.clone(),
-                                changed_at_height: height,
-                            };
-                            metadata
-                                .validate()
-                                .map_err(|error| invariant(error.reason()))?;
-                            (package, None, Some(member), Some(metadata))
-                        }
+                        let binding = namespace_binding_for_package(
+                            &self.namespace,
+                            &release_id.package,
+                            state_transaction.world(),
+                        )?;
+                        ensure_namespace_claim_authority(
+                            &binding,
+                            self.namespace_delegation.as_ref(),
+                            authority,
+                            state_transaction,
+                            rejection_reason,
+                        )
+                        .map_err(|error| namespace_attempt_error(error, state_transaction))?;
+                        let package = MusubiPackageRecordV1 {
+                            package: release_id.package.clone(),
+                            claimed_namespace: self.namespace,
+                            claimed_namespace_binding: binding.digest(),
+                            owners: vec![authority.clone()],
+                            member_accounts: vec![authority.clone()],
+                            claimed_at_height: height,
+                            revisions: MusubiPackageRevisionsV1 {
+                                governance: 1,
+                                metadata: 1,
+                                archive_locations: 1,
+                            },
+                        };
+                        let member = MusubiPackageMemberV1 {
+                            package: release_id.package.clone(),
+                            account: authority.clone(),
+                            role: MusubiPackageRoleV1::Owner,
+                            accepted_at_height: height,
+                            governance_revision: 1,
+                        };
+                        member
+                            .validate()
+                            .map_err(|error| invariant(error.reason()))?;
+                        let metadata = MusubiPackageMetadataRecordV1 {
+                            package: release_id.package.clone(),
+                            metadata: self.publication.manifest.metadata.clone(),
+                            revision: 1,
+                            changed_by: authority.clone(),
+                            changed_at_height: height,
+                        };
+                        metadata
+                            .validate()
+                            .map_err(|error| invariant(error.reason()))?;
+                        (package, None, Some(member), Some(metadata))
                     };
                 package
                     .validate()
@@ -2779,7 +2776,7 @@ fn bind_location_reverse_indices(
             .world
             .musubi_locations_by_pin
             .get(&existing.pin_manifest)
-            .cloned()
+            .copied()
             .ok_or_else(|| invariant("Musubi pin reverse index is inconsistent"))?;
         if !old_pin.active || old_pin.location != key {
             return Err(invariant("Musubi pin reverse index is inconsistent"));
@@ -2937,7 +2934,7 @@ fn retire_location_reverse_indices(
         .world
         .musubi_locations_by_pin
         .get(&location.pin_manifest)
-        .cloned()
+        .copied()
         .ok_or_else(|| invariant("Musubi pin reverse index is inconsistent"))?;
     if !pin.active || pin.location != key {
         return Err(invariant("Musubi pin reverse index is inconsistent"));
@@ -3615,7 +3612,7 @@ pub(crate) fn ensure_provider_may_be_removed(
 const fn provider_count_is_healthy(provider_count: usize) -> bool {
     provider_count >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 as usize
 }
-/// Recompute location and universal resolver projections after an underlying SoraFS lifecycle
+/// Recompute location and universal resolver projections after an underlying `SoraFS` lifecycle
 /// change. Every lookup is exact or bounded by archive-local directories populated at registration.
 pub(crate) fn refresh_musubi_locations(
     locations: &[MusubiArchiveLocationKeyV1],

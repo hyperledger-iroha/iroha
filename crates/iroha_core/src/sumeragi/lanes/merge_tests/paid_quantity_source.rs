@@ -4,7 +4,7 @@ use super::*;
 use crate::sumeragi::test_chain::Signers;
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId},
-    block::consensus::NexusFeeSettlementV1,
+    block::consensus::{NexusFeeSettlementV1, RootFeePolicy},
     fastpq::{
         FastpqExecutionEffectContextV1, FastpqExecutionEffectKindV1, FastpqSourceEffectCoverageV1,
         FastpqSourceExecutionEntryV1, FastpqSourceExecutionKindV1, FastpqSourceLaneV1,
@@ -27,10 +27,22 @@ fn fee_asset() -> AssetDefinitionId {
     .expect("canonical network XOR")
 }
 
+fn paid_fee_policy(sink: AccountId) -> RootFeePolicy {
+    RootFeePolicy {
+        fee_asset_id: fee_asset(),
+        fee_sink_account_id: sink,
+        base_fee: Quantity::from(FEE),
+        per_byte_fee: Quantity::zero(),
+        per_instruction_fee: Quantity::zero(),
+        per_gas_unit_fee: Quantity::zero(),
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    }
+}
+
 fn paid_fixture(dataspace: DataSpaceId) -> Fixture {
     let mut lane_policy = policy();
     lane_policy.fixed[0].dataspace = dataspace;
-    Fixture::start_with_policy_and_configure(lane_policy, |config| {
+    let fixture = Fixture::start_with_policy_and_configure(lane_policy, |config| {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         let mut dataspaces = vec![DataSpaceMetadata::default()];
         if dataspace != DataSpaceId::UNIVERSAL {
@@ -76,13 +88,13 @@ fn paid_fixture(dataspace: DataSpaceId) -> Fixture {
                     },
                 });
         }
-        nexus.fees.fee_asset_id = fee_asset().clone();
-        nexus.fees.fee_sink_account_id =
-            AccountId::new(config.genesis_key.public_key().clone()).clone();
-        nexus.fees.base_fee = Quantity::from(FEE);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        // Ordinary execution reads its original signed fee policy. Local Nexus
+        // configuration cannot make this paid source acquire a Burn receipt.
+        config.genesis_parameters.push(Parameter::Custom(
+            paid_fee_policy(AccountId::new(config.genesis_key.public_key().clone()))
+                .into_custom_parameter()
+                .expect("complete original paid fee schedule"),
+        ));
         config.nexus = Some(nexus);
         config.genesis_instructions.push(
             Register::asset_definition(AssetDefinition::numeric(
@@ -102,7 +114,19 @@ fn paid_fixture(dataspace: DataSpaceId) -> Fixture {
                 .into(),
             );
         }
-    })
+    });
+    assert_eq!(
+        fixture
+            .chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .root_fees(),
+        Some(&paid_fee_policy(fixture.chain.genesis_account().clone())),
+        "the paid fixture retains its exact original signed fee schedule"
+    );
+    fixture
 }
 
 fn paid_log(fixture: &Fixture, key: &KeyPair, text: &str, created_ms: u64) -> SignedTransaction {
@@ -125,7 +149,7 @@ fn paid_log(fixture: &Fixture, key: &KeyPair, text: &str, created_ms: u64) -> Si
 }
 
 fn assert_paid_lane_source(dataspace: DataSpaceId) {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let mut fixture = paid_fixture(dataspace);
     for (height, created_ms) in [(2, GENESIS_MS), (3, GENESIS_MS + 1)] {
         let work = paid_log(&fixture, &other_user(), "activate paid lane", created_ms);

@@ -177,6 +177,29 @@ fn impossible(error: std::convert::Infallible) -> axum::Error {
     match error {}
 }
 
+/// Exact wrappers for the closed, single-buffer native finality response.
+/// The original encoded owner and the extracted data-frame wrapper coexist;
+/// cloning or slicing either `Bytes` retains those same controls.
+pub(crate) fn native_response_control_bytes() -> Option<usize> {
+    type Source = http_body_util::combinators::MapErr<
+        Full<axum::body::Bytes>,
+        fn(std::convert::Infallible) -> axum::Error,
+    >;
+    [
+        axum::body::Bytes::owner_with_reclaim_layout::<
+            crate::native_projection_response::EncodedBody,
+            QueryDataReclaim,
+        >()
+        .size(),
+        axum::body::Bytes::owner_with_reclaim_layout::<axum::body::Bytes, QueryDataReclaim>()
+            .size(),
+        Body::body_layout::<QueryResponseBody<Source>>().size(),
+        Body::reclaim_layout::<QueryBodyReclaim>().size(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+}
+
 /// A canonical JSON buffer's first body allocation is the prepaid typed source.
 pub fn json(
     bytes: axum::body::Bytes,
@@ -202,14 +225,13 @@ pub fn hold(mut response: Response, memory: QueryFanoutMemoryReservation) -> Res
     };
     response.extensions_mut().insert(memory.clone());
     let (parts, body) = response.into_parts();
-    match self::body(body, &owner) {
-        Ok(body) => Response::from_parts(parts, body),
-        Err(_) => {
-            drop(parts);
-            drop(owner);
-            drop(memory);
-            refusal()
-        }
+    if let Ok(body) = self::body(body, &owner) {
+        Response::from_parts(parts, body)
+    } else {
+        drop(parts);
+        drop(owner);
+        drop(memory);
+        refusal()
     }
 }
 

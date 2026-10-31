@@ -198,6 +198,10 @@ pub enum KagemushaWalletLookupV1<R> {
 }
 
 /// Older released record of one operation found by name.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "retain the original verified pair without allocating on the recovery path"
+)]
 pub(super) enum OlderCompletionV1<R> {
     /// A valid copy.
     Found(KagemushaWalletLoadedPairV1<R>),

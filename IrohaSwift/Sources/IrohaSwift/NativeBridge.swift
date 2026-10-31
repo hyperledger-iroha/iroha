@@ -144,10 +144,17 @@ enum NoritoBridgeLoader {
         "connect_norito_committed_transaction_query_payload_hash_v1",
         "connect_norito_committed_transaction_query_finalize_v1",
         "connect_norito_verify_committed_transaction_inclusion_v1",
+        "connect_norito_verify_exact_successful_committed_transaction_v1",
+        "connect_norito_verify_fi_checkpoint_selection_v1",
+        "connect_norito_advance_fi_checkpoint_v1",
+        "connect_norito_verify_fi_context_assertion_v1",
+        "connect_norito_admit_fi_assertion_original_v1",
+        "connect_norito_verify_fi_context_continuation_v1",
         "connect_norito_committed_transaction_candidate_block_hash_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_validate_exact12_capability_manifest_v1",
+        "iroha_privacy_validate_exact12_submit_proof_construction_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
         "iroha_privacy_free_buffer",
@@ -173,7 +180,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 31
+        return 33
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -1593,6 +1600,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias PrivacyValidateCompiledProfileCatalogFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
+    private typealias PrivacyValidateExact12SubmitProofConstructionFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong, UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias PrivacyExact12FixtureBundleFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
@@ -1748,6 +1760,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var privacyCompiledProfileCatalogFn: PrivacyCompiledProfileCatalogFn? = nil
     private var privacyValidateCompiledProfileCatalogFn: PrivacyValidateCompiledProfileCatalogFn? = nil
     private var privacyValidateExact12CapabilityManifestFn: PrivacyValidateCompiledProfileCatalogFn? = nil
+    private var privacyValidateExact12SubmitProofConstructionFn: PrivacyValidateExact12SubmitProofConstructionFn? = nil
     private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
     private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
     // Privacy outputs point past a private allocation header. Only the dedicated
@@ -1869,6 +1882,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let privacyCompiledProfileCatalogFn: Any? = nil
     private let privacyValidateCompiledProfileCatalogFn: Any? = nil
     private let privacyValidateExact12CapabilityManifestFn: Any? = nil
+    private let privacyValidateExact12SubmitProofConstructionFn: Any? = nil
     private let privacyExact12FixtureBundleFn: Any? = nil
     private let privacyValidateExact12FixtureBundleFn: Any? = nil
     private let privacyFreeFn: Any? = nil
@@ -1884,6 +1898,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
             self.privacyValidateExact12CapabilityManifestFn = nil
+            self.privacyValidateExact12SubmitProofConstructionFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -1918,6 +1933,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.privacyValidateExact12CapabilityManifestFn = nil
+            self.privacyValidateExact12SubmitProofConstructionFn = nil
+        }
+        if let constructionSymbol = dlsym(
+            handle,
+            "iroha_privacy_validate_exact12_submit_proof_construction_v1"
+        ) {
+            self.privacyValidateExact12SubmitProofConstructionFn = unsafeBitCast(
+                constructionSymbol,
+                to: PrivacyValidateExact12SubmitProofConstructionFn.self
+            )
+        } else {
+            self.privacyValidateExact12SubmitProofConstructionFn = nil
         }
         if let fixtureSymbol = dlsym(handle, "iroha_privacy_exact12_fixture_bundle_v1") {
             self.privacyExact12FixtureBundleFn = unsafeBitCast(
@@ -1989,7 +2016,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }) else {
             self.loadedBridgeAbiVersion = nil
             NSLog(
-                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-31 exports"
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-33 exports"
             )
             return
         }
@@ -2900,6 +2927,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyCompiledProfileCatalogFn = nil
             self.privacyValidateCompiledProfileCatalogFn = nil
             self.privacyValidateExact12CapabilityManifestFn = nil
+            self.privacyValidateExact12SubmitProofConstructionFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
@@ -3179,6 +3207,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && privacyCompiledProfileCatalogFn != nil
             && privacyValidateCompiledProfileCatalogFn != nil
             && privacyValidateExact12CapabilityManifestFn != nil
+            && privacyValidateExact12SubmitProofConstructionFn != nil
             && privacyExact12FixtureBundleFn != nil
             && privacyValidateExact12FixtureBundleFn != nil
             && privacyFreeFn != nil
@@ -5575,6 +5604,40 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 bytes.bindMemory(to: UInt8.self).baseAddress,
                 CUnsignedLong(archive.count)
             )
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    /// Shared Rust validation of the selected profile, network and committed resource policy.
+    /// The caller authenticates the Torii origin; this does not verify a transaction or proof.
+    func privacyExact12SubmitProofConstructionValidationStatusV1(
+        manifestArchive: Data,
+        protocolIndex: UInt32,
+        instructionArchive: Data,
+        expectedNetwork: Data
+    ) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateExact12SubmitProofConstructionFn,
+              !manifestArchive.isEmpty,
+              manifestArchive.count <= PrivacyNativeBridge.exact12CapabilityManifestArchiveMaximumBytes,
+              !instructionArchive.isEmpty, instructionArchive.count <= 10 * 1024 * 1024,
+              expectedNetwork.count == 32 else {
+            return nil
+        }
+        return manifestArchive.withUnsafeBytes { manifest in
+            instructionArchive.withUnsafeBytes { instruction in
+                expectedNetwork.withUnsafeBytes { network in
+                    privacyValidateExact12SubmitProofConstructionFn(
+                        manifest.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(manifestArchive.count),
+                        protocolIndex,
+                        instruction.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(instructionArchive.count),
+                        network.bindMemory(to: UInt8.self).baseAddress, CUnsignedLong(expectedNetwork.count)
+                    )
+                }
+            }
         }
         #else
         return nil

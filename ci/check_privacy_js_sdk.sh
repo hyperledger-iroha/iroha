@@ -5,7 +5,7 @@ ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ABI31_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
+ABI33_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
 # Preserve the tracked root source authority and the independently sealed
@@ -51,14 +51,14 @@ node_candidate_path() {
   return 1
 }
 
-is_node_20_bin() {
+is_node_22_bin() {
   local candidate="$1"
   local version
   version="$("${candidate}" --version 2>/dev/null || true)"
-  [[ "${version}" == v20.* ]]
+  [[ "${version}" == v22.* ]]
 }
 
-resolve_node_20_bin() {
+resolve_node_22_bin() {
   if [[ -n "${NODE_OVERRIDE}" ]]; then
     printf '%s\n' "${NODE_OVERRIDE}"
     return 0
@@ -66,16 +66,16 @@ resolve_node_20_bin() {
 
   local candidate path
   for candidate in \
-    node20 \
-    node20.20 \
-    /opt/homebrew/opt/node@20/bin/node \
-    /usr/local/opt/node@20/bin/node \
-    /opt/homebrew/Cellar/node@20/*/bin/node \
-    /usr/local/Cellar/node@20/*/bin/node \
+    node22 \
+    node22.23 \
+    /opt/homebrew/opt/node@22/bin/node \
+    /usr/local/opt/node@22/bin/node \
+    /opt/homebrew/Cellar/node@22/*/bin/node \
+    /usr/local/Cellar/node@22/*/bin/node \
     "${HOME}"/.npm/_npx/*/node_modules/node/bin/node \
     node; do
     path="$(node_candidate_path "${candidate}" || true)"
-    if [[ -n "${path}" ]] && is_node_20_bin "${path}"; then
+    if [[ -n "${path}" ]] && is_node_22_bin "${path}"; then
       printf '%s\n' "${path}"
       return 0
     fi
@@ -84,7 +84,7 @@ resolve_node_20_bin() {
   printf '%s\n' "node"
 }
 
-NODE_BIN="$(resolve_node_20_bin)"
+NODE_BIN="$(resolve_node_22_bin)"
 
 sha256_file() {
   "${PYTHON_BIN}" -I -S - "$1" <<'PY'
@@ -111,11 +111,11 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
 [[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript external Cargo.lock does not match the canonical reviewed graph" >&2; exit 1; }
 RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
-IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"
-RUSTC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustc)"
-RUSTDOC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustdoc)"
-[[ "$("${RUSTC}" --version)" == rustc\ 1.93.1\ * ]] \
-  || { echo "error: privacy JavaScript native execution requires exact rustc 1.93.1" >&2; exit 1; }
+IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.99.1 cargo)"
+RUSTC="$("${RUSTUP_BIN}" which --toolchain 1.99.1 rustc)"
+RUSTDOC="$("${RUSTUP_BIN}" which --toolchain 1.99.1 rustdoc)"
+[[ "$("${RUSTC}" --version)" == rustc\ 1.99.1\ * ]] \
+  || { echo "error: privacy JavaScript native execution requires exact rustc 1.99.1" >&2; exit 1; }
 export IROHA_JS_CARGO_PATH RUSTC RUSTDOC
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
@@ -131,9 +131,9 @@ cd "${ROOT_DIR}/javascript/iroha_js"
 NODE_VERSION="$("${NODE_BIN}" --version)"
 printf '%s\n' "${NODE_VERSION}"
 case "${NODE_VERSION}" in
-  v20.*) ;;
+  v22.*) ;;
   *)
-    echo "error: privacy JavaScript SDK tests require Node 20; got ${NODE_VERSION}" >&2
+    echo "error: privacy JavaScript SDK tests require Node 22; got ${NODE_VERSION}" >&2
     exit 1
     ;;
 esac
@@ -145,16 +145,16 @@ export PYTHONDONTWRITEBYTECODE=1
 "${NODE_BIN}" scripts/build-native.mjs
 "${NODE_BIN}" scripts/copy-native.mjs
 NATIVE_ARTIFACT="${IROHA_JS_NATIVE_DIR}/iroha_js_host.node"
-NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/node-native-abi31.json"
+NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/node-native-abi33.json"
 NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`)')"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" record \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --node "${NODE_BIN}" \
   --sdk node \
   --target "${NATIVE_TARGET}"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
@@ -179,7 +179,7 @@ NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}
 "${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy compiled-profile catalog bridge as a safe stub" \
   test/crypto.browser.test.js
 
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \

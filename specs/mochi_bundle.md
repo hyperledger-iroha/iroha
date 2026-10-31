@@ -34,28 +34,14 @@ built daemon.
 | `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
 
 Release packaging requires `defaults/developer/network-profiles.nrt` from the authenticated
-release source, containing the independently approved Taira release key, rollback floor and
-checkpoint URL. The packager requires its exact committed image and refuses an override,
-missing file or absent Taira entry before building or replacing a bundle. The preset is sourced
-from the approved [Taira publication](https://taira.sora.org/bootstrap/network-profiles.nrt)
-and selects `https://taira.sora.org/bootstrap/checkpoint.nrt`. Its SHA-256 is
-`29a9d26dfb40293280bbfcde7b30f2d5f3f635c5e18bbc4e1a8878efd9acd18f`;
-the release owner must commit those exact bytes. Checkpoints remain fetched artifacts with
-bounded signed validity; recurring publication is an operator responsibility. The packager
-generates no authority. Developers using an installed official bundle supply no file.
-The edge renderer and `configs/soranexus/taira/install_taira_edge_nginx_conf.sh`
-accept `--bootstrap-publication-dir` for a separately promoted public pair. It maps
-only `/bootstrap/checkpoint.nrt` and `/bootstrap/network-profiles.nrt`; other
-`/bootstrap` paths return 404. Files are served through direct paths with symlink
-traversal disabled, GET/HEAD only (the existing CORS preflight remains available),
-and no cache retention. `kagami advanced network-bootstrap prepare` creates an
-owner-private directory containing the pair. The operator must copy only those
-two verified output images into a dedicated nginx-readable directory, preserving
-bytes and keeping signing keys and private inputs outside it. Never relax the
-preparation directory's permissions or point nginx at it. The renderer does not
-read or authenticate remote-host files; activation must check native nginx,
-file custody/readability and exact public readback. Renew the signed checkpoint
-before expiry; routing and HTTP success do not establish current artifact trust.
+release source, containing Taira's native Torii root, expected chain identity and account-address
+prefix. The packager requires its exact committed image and refuses an override, missing file or
+absent Taira entry before building or replacing a bundle. Developers using an installed official
+bundle supply no configuration file. Bootstrap discovers the network through
+`https://taira.sora.org/`, verifies native genesis and finality proofs, and retains the exact network
+identity and checkpoint locally. Funding uses the native faucet policy from that same network.
+The existing Torii ingress serves these APIs; no static checkpoint publication or additional
+bootstrap edge route is required.
 Debug/development bundles may omit profiles or use explicit fixture installation input.
 The same xtask selection owner gates the CLI-only `kagami-bundle` release path, which
 installs the identical original preset beside Kagami and the daemon and records its
@@ -120,6 +106,8 @@ icon and installed profiles. Inventory and staging propagate traversal failures 
 reject symlinks or other nonregular entries instead of silently omitting them.
 The inventory is sorted by relative path; its hashes need authenticated release
 provenance before they establish download trust.
+macOS archive creation omits AppleDouble records and host extended attributes so
+extraction installs only the inventoried file content and manifest.
 
 `--smoke` first checks the exact retained profile image and packaged Kagami network-name
 projection. It then runs the packaged Kagami from an empty workspace with an empty `PATH`.
@@ -196,11 +184,10 @@ uncertain cleanup stops the campaign.
 
 The remote entry point invokes the exact eight-validator installed regression
 twenty times sequentially. It records attachment and the three distinct private
-deployment inputs separately, all labeled as a disposable loopback parent with
-TLS. Deployment timing ends at local CLI Applied; exact child scope, artifact and
+deployment inputs separately, all labeled as a disposable loopback HTTP parent. Deployment timing ends at local CLI Applied; exact child scope, artifact and
 all-peer views remain required postconditions. Later parent anchoring is separate
 evidence. The test driver digest, whole-test exit and authenticated cleanup of
-both native stores and the TLS controller are recorded independently. Any later
+both native stores and the loopback controller are recorded independently. Any later
 proof, privacy or cleanup failure prevents a successful campaign or p95 threshold
 claim, even when an earlier command succeeded. Missing dependent cases remain
 unattempted. A missing cleanup confirmation stops further ordinals.
@@ -208,7 +195,7 @@ unattempted. A missing cleanup confirmation stops further ordinals.
 The remote report is written at `<out>/report.json`; raw typed records are in
 `<out>/samples/` and can be passed to `mochi-latency-report`. A matching normal
 release test driver is an externally verified prerequisite, not established by
-its filename or digest. Python/OpenSSL belong only to the disposable test
+its filename or digest. Python belongs only to the disposable test
 controller, and no product installation gains a Python requirement.
 
 Every report is diagnostic. Collection rejects non-release bundle profiles, but a
@@ -227,17 +214,24 @@ The `cargo xtask` alias enables the required `dev-tools` feature. Native release
 qualification is dispatched through `.github/workflows/devex_native.yml` using
 five explicitly supplied existing runner labels. Its resource and host checks,
 native custody tests and installed-runtime smoke are execution gates. Each target
-also builds the standalone `kagami-bundle` and runs the same installed deployment,
-restart and fresh bytecode/package flows against its `bin` directory. The Mochi
+also builds the standalone `kagami-bundle` and runs installed deployment,
+restart, fresh bytecode/package and eight-validator private attachment flows against
+its own `bin` directory. The Mochi
 archive is also extracted into a fresh runner temporary directory; the same installed
 flows and subsequent private/attachment checks use only that extracted application's
 runtime paths. These installed flows keep build tools off `PATH` and supply no runtime
-TOML. Defining the workflow does not establish that those platform jobs passed. An installation
+TOML. The same native job runs Mochi's existing headless live walkthrough against
+the extracted runtime with real quickstart, fee quotes, deployment, calls, views and
+state listings. It requires authenticated zero-peer shutdown; failed cleanup retains
+private diagnostics on the runner. Only its public PPM screens are uploaded, never
+the managed workspace or custody. This exercises the desktop state machine, not
+native window interaction. Defining the workflow does not establish that those
+platform jobs passed. An installation
 built with a development profile may omit remote authority. Release packaging requires
 the committed Taira preset; a successful local smoke still does not qualify remote attachment.
-The workflow also runs the eight-validator attachment regression with its
-disposable TLS controller. Python 3.10+ with SSL and OpenSSL are test prerequisites;
-the controller supplies a private temporary CA only to its own child processes.
+The workflow also runs the eight-validator attachment regression with a disposable
+HTTP controller bound to numeric loopback addresses. Python 3.10+ is a test prerequisite;
+remote endpoints continue to require normal HTTPS.
 Installed Kagami and Mochi flows continue to use the native bundle alone.
 
 The separate manual `.github/workflows/devex_renewal.yml` runs

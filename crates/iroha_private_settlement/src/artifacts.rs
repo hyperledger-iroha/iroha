@@ -1,10 +1,13 @@
-//! Immutable encrypted prepared artifacts on the existing private filesystem owner.
+//! Encrypted pending-preparation custody on the existing private filesystem owner.
 //! This codec cannot contain a wallet witness, note opening, membership path or spending key.
 use super::*;
 use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 use iroha_data_model::nexus::{
     PrivateSettlementAuditCapsuleV1, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementDeltaV1, PrivateSettlementProofStatementV1,
+};
+use iroha_data_model::sumeragi_finality::{
+    MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
 };
 use iroha_fs::{PrivateDirectory, PublishMode};
 
@@ -24,6 +27,9 @@ impl ArtifactKey {
     }
     fn context_name(self) -> String {
         format!("{}.contexts", hex::encode(self.round))
+    }
+    fn finality_name(self) -> String {
+        format!("{}.preparation-finality", hex::encode(self.round))
     }
     fn aad(
         self,
@@ -83,7 +89,8 @@ impl Artifact {
     }
 }
 /// Caller-keyed private prepared-artifact store. Files are AEAD-authenticated, written once
-/// under exact original round/leg names and never overwritten. Existing private-directory
+/// under exact original round/leg names and never overwritten. A separate bounded finality
+/// checkpoint replaces only the authenticated prefix for this pending preparation. Existing private-directory
 /// native identity, mode, size, atomic publication and durability rules remain the sole owner.
 ///
 /// Encryption keys stay with the caller; losing the key makes these local artifacts unavailable.
@@ -91,6 +98,7 @@ impl Artifact {
 pub struct FilePrivateSettlementArtifacts {
     directory: PrivateDirectory,
     cipher: SymmetricEncryptor<ChaCha20Poly1305>,
+    finality: Arc<FilePrivateSettlementFinality>,
 }
 impl FilePrivateSettlementArtifacts {
     /// Open/create an owner-private artifact directory with a caller-retained encryption key.
@@ -103,12 +111,96 @@ impl FilePrivateSettlementArtifacts {
         if key.iter().all(|b| *b == 0) {
             return Err(OneCallPrivateSettlementError::Binding);
         }
+        let path = path.as_ref();
         Ok(Self {
             directory: PrivateDirectory::open_or_create(path)
                 .map_err(OneCallPrivateSettlementError::Storage)?,
             cipher: SymmetricEncryptor::new_with_key(key)
                 .map_err(|_| OneCallPrivateSettlementError::Binding)?,
+            finality: Arc::new(
+                FilePrivateSettlementFinality::open(
+                    path,
+                    key,
+                    MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES,
+                )
+                .map_err(PrivateSettlementError::from)?,
+            ),
         })
+    }
+    /// Borrow the same caller-key file owner for advanced prepared-settlement recovery.
+    ///
+    /// This creates no record. One-call handoff restricts it to the remaining original
+    /// aggregate artifact allowance; direct prepared callers must select their own finite cap.
+    #[must_use]
+    pub fn finality(&self) -> &Arc<FilePrivateSettlementFinality> {
+        &self.finality
+    }
+
+    /// Read the locally authenticated prefix for this exact pending request and round.
+    /// The preparation owner must still bind the decoded checkpoint to its independently
+    /// selected genesis, chain and root before importing it. Missing is distinct from corrupt.
+    pub(super) fn read_finality(
+        &self,
+        key: ArtifactKey,
+        maximum: usize,
+    ) -> std::result::Result<
+        Option<(SumeragiFinalityCheckpoint, usize)>,
+        OneCallPrivateSettlementError,
+    > {
+        let maximum = maximum.min(MAX_FINALITY_CHECKPOINT_BYTES);
+        let limit = maximum
+            .checked_add(28)
+            .ok_or(OneCallPrivateSettlementError::Capacity)?;
+        let Some(envelope) = self
+            .directory
+            .read_optional(key.finality_name(), limit)
+            .map_err(OneCallPrivateSettlementError::Storage)?
+        else {
+            return Ok(None);
+        };
+        let plaintext = zeroize::Zeroizing::new(
+            self.cipher
+                .decrypt_easy(
+                    &ArtifactKey { ordinal: 0, ..key }.aad("preparation-finality")?,
+                    &envelope,
+                )
+                .map_err(|_| OneCallPrivateSettlementError::Binding)?,
+        );
+        if plaintext.len() > maximum {
+            return Err(OneCallPrivateSettlementError::Capacity);
+        }
+        Ok(Some((
+            SumeragiFinalityCheckpoint::decode_canonical(&plaintext)?,
+            plaintext.len(),
+        )))
+    }
+
+    /// Replace one bounded, already-authenticated pending prefix under the original runner lease.
+    /// The caller reads the original first, refuses corrupt custody, and publishes only an advance.
+    /// An uncertain durable acknowledgement is reconciled from this same filename on retry.
+    pub(super) fn publish_finality(
+        &self,
+        key: ArtifactKey,
+        checkpoint: &SumeragiFinalityCheckpoint,
+        maximum: usize,
+    ) -> std::result::Result<usize, OneCallPrivateSettlementError> {
+        let maximum = maximum.min(MAX_FINALITY_CHECKPOINT_BYTES);
+        let length = norito::canonical_frame_len(checkpoint)?;
+        if length > maximum {
+            return Err(OneCallPrivateSettlementError::Capacity);
+        }
+        let plaintext = zeroize::Zeroizing::new(checkpoint.encode_canonical()?);
+        let ciphertext = self
+            .cipher
+            .encrypt_easy(
+                &ArtifactKey { ordinal: 0, ..key }.aad("preparation-finality")?,
+                &plaintext,
+            )
+            .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
+        self.directory
+            .write_atomic(key.finality_name(), &ciphertext, PublishMode::Replace)
+            .map_err(OneCallPrivateSettlementError::Storage)?;
+        Ok(length)
     }
     /// Reopen the exact original all-leg public context. Decode and AEAD custody do not authenticate it;
     /// the caller must reverify it against the independently pinned original native decision.
@@ -247,15 +339,15 @@ impl FilePrivateSettlementArtifacts {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub mod tests {
     use super::*;
     use crate::test_support::client_with_base_url;
     use iroha_test_samples::private_settlement::{
         availability_material_fixture_v1, context_fixture,
     };
 
-    fn fixture() -> Artifact {
-        let client = client_with_base_url("http://mock.local/".parse().unwrap());
+    pub(crate) fn fixture() -> Artifact {
+        let client = client_with_base_url(&"http://mock.local/".parse().unwrap());
         let (material, _) = availability_material_fixture_v1(client.network_id(), client.account());
         Artifact {
             key: ArtifactKey {
@@ -281,7 +373,7 @@ pub(super) mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("artifacts");
         let key = fixture().key;
-        let client = client_with_base_url("http://mock.local/".parse().unwrap());
+        let client = client_with_base_url(&"http://mock.local/".parse().unwrap());
         let proof = PrivateSettlementContextsProofV1 {
             contexts: vec![context_fixture(client.network_id(), client.account())],
         };
@@ -476,6 +568,77 @@ pub(super) mod tests {
         assert!(
             store.read(artifact.key, size).is_err(),
             "AEAD rejects corrupted retained originals"
+        );
+    }
+
+    #[test]
+    fn private_pending_finality_custody_refuses_substitution_corruption_and_capacity() {
+        use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("artifacts");
+        let key = fixture().key;
+        let mut native = NativeFinalityFixture::new();
+        let first = native.checkpoint();
+        let maximum = first.encode_canonical().unwrap().len();
+        let store = FilePrivateSettlementArtifacts::open(&path, &[43; 32]).unwrap();
+        assert!(store.read_finality(key, maximum).unwrap().is_none());
+        assert!(matches!(
+            store.publish_finality(key, &first, maximum - 1),
+            Err(OneCallPrivateSettlementError::Capacity)
+        ));
+        assert_eq!(
+            store.publish_finality(key, &first, maximum).unwrap(),
+            maximum
+        );
+        assert_eq!(store.read_finality(key, maximum).unwrap().unwrap().0, first);
+        assert!(store.read_finality(key, maximum - 1).is_err());
+        let original = std::fs::read(path.join(key.finality_name())).unwrap();
+        assert_ne!(original, first.encode_canonical().unwrap());
+        drop(store);
+        let store = FilePrivateSettlementArtifacts::open(&path, &[43; 32]).unwrap();
+        assert_eq!(store.read_finality(key, maximum).unwrap().unwrap().0, first);
+        assert!(
+            store
+                .read_finality(
+                    ArtifactKey {
+                        request: [12; 32],
+                        ..key
+                    },
+                    maximum
+                )
+                .is_err()
+        );
+        let other_round = ArtifactKey {
+            round: [13; 32],
+            ..key
+        };
+        std::fs::write(path.join(other_round.finality_name()), &original).unwrap();
+        assert!(store.read_finality(other_round, maximum).is_err());
+        let foreign = FilePrivateSettlementArtifacts::open(&path, &[44; 32]).unwrap();
+        assert!(foreign.read_finality(key, maximum).is_err());
+        std::fs::write(path.join(key.context_name()), &original).unwrap();
+        assert!(
+            store.read_context(key, maximum).is_err(),
+            "finality custody has a distinct purpose"
+        );
+        let mut damaged = original.clone();
+        *damaged.last_mut().unwrap() ^= 1;
+        std::fs::write(path.join(key.finality_name()), damaged).unwrap();
+        assert!(store.read_finality(key, maximum).is_err());
+        std::fs::write(path.join(key.finality_name()), original).unwrap();
+        let next = native.block_with_submitted_work(native.next_header());
+        native.certify(next);
+        let second = native.checkpoint();
+        let maximum = second.encode_canonical().unwrap().len().max(maximum);
+        store.publish_finality(key, &second, maximum).unwrap();
+        assert_eq!(
+            store.read_finality(key, maximum).unwrap().unwrap().0,
+            second
+        );
+        assert_eq!(
+            std::fs::read_dir(&path).unwrap().count(),
+            3,
+            "advancing the prefix replaces one bounded record, not a history archive"
         );
     }
 }

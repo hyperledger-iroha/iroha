@@ -25,11 +25,12 @@ impl Source for FixtureSource {
             })
         })
     }
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
         Box::pin(async move {
             self.proofs
                 .get(&height.get())
                 .cloned()
+                .map(|proof| ProofInput::Fixture(Box::new(proof)))
                 .ok_or_else(|| eyre!("fixture has no unrelated later block"))
         })
     }
@@ -84,16 +85,20 @@ pub(super) fn fixture(
     let ledger = RelayLedger {
         source: Arc::new(source),
         dispatch: Arc::new(NoDispatch),
-        verifier: Mutex::new(root.clone()),
+        custody: PendingCustody::for_test(&root, authority.clone()),
+        original: root.clone().into_genesis_verifier(),
         network: fixture.network_id(),
         authority,
         fee_payment,
-        instruction: Mutex::new(Some(digest)),
-        approval: Mutex::new(None),
-        handoff_scan: Mutex::new(HandoffScan::default()),
+        instruction: Mutex::new(Some(digest)).into(),
+        approval: Mutex::new(None).into(),
+        source_plan: Mutex::new(None).into(),
+        handoff: Mutex::new(None).into(),
+        test_lease: Mutex::new(None).into(),
         max_reads: 4,
-        reads: AtomicUsize::new(4),
-    };
+        reads: AtomicUsize::new(4).into(),
+    }
+    .with_test_observation();
     (ledger, identity, root)
 }
 
@@ -107,19 +112,24 @@ async fn relay_authenticates_last_payment_without_successor_and_after_restart() 
         }
     );
     // Restart discards verifier caches. The same original H2 is authenticated again.
+    ledger.test_lease.lock().unwrap().take();
     let restarted = RelayLedger {
         source: ledger.source.clone(),
         dispatch: Arc::new(NoDispatch),
-        verifier: Mutex::new(root),
+        custody: ledger.custody.reopen_for_test(),
+        original: root.into_genesis_verifier(),
         network: ledger.network,
         authority: ledger.authority.clone(),
         fee_payment: ledger.fee_payment.clone(),
-        instruction: Mutex::new(*ledger.instruction.lock().unwrap()),
-        approval: Mutex::new(None),
-        handoff_scan: Mutex::new(HandoffScan::default()),
+        instruction: Mutex::new(*ledger.instruction.lock().unwrap()).into(),
+        approval: Mutex::new(None).into(),
+        source_plan: Mutex::new(None).into(),
+        handoff: Mutex::new(None).into(),
+        test_lease: Mutex::new(None).into(),
         max_reads: 4,
-        reads: AtomicUsize::new(4),
-    };
+        reads: AtomicUsize::new(4).into(),
+    }
+    .with_test_observation();
     assert_eq!(
         restarted.committed_outcome(&identity).await,
         CommittedOutcome::Applied {
@@ -152,7 +162,7 @@ async fn relay_refusal_preserves_verifier_progress_and_never_closes_identity() {
         CommittedOutcome::ReadFailed { .. }
     ));
     let digest = ledger.instruction.lock().unwrap().unwrap();
-    ledger.begin_observation(digest, None).unwrap();
+    ledger.begin_test_observation(digest, None).unwrap();
     assert!(matches!(
         ledger.committed_outcome(&identity).await,
         CommittedOutcome::Applied { .. }
@@ -162,8 +172,7 @@ async fn relay_refusal_preserves_verifier_progress_and_never_closes_identity() {
 #[tokio::test]
 async fn relay_rejects_substituted_history_and_locator_without_proof() {
     let (mut ledger, identity, _) = fixture(false);
-    *ledger.verifier.get_mut().unwrap() =
-        NativeFinalityFixture::start("different-amx-network").verifier();
+    ledger.original = NativeFinalityFixture::start("different-amx-network").verifier();
     assert!(matches!(
         ledger.committed_outcome(&identity).await,
         CommittedOutcome::ReadFailed { .. }
@@ -183,11 +192,185 @@ async fn relay_rejects_substituted_history_and_locator_without_proof() {
 async fn relay_journal_identity_cannot_substitute_an_unrelated_successful_carrier() {
     let (ledger, identity, _) = fixture(false);
     ledger
-        .begin_observation(Hash::new(b"different authenticated source intent"), None)
+        .begin_test_observation(Hash::new(b"different authenticated source intent"), None)
         .unwrap();
     assert!(matches!(
         ledger.committed_outcome(&identity).await,
         CommittedOutcome::ReadFailed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn cold_journal_reset_cannot_resign_a_retained_unknown_or_applied_identity() {
+    struct CountingSigner {
+        signed: SignedTransaction,
+        identity: TransactionIdentityV1,
+        signs: AtomicUsize,
+    }
+    impl WorkflowAccount for CountingSigner {
+        fn binding(&self) -> WorkflowBindingV1 {
+            WorkflowBindingV1 {
+                network: "native-amx-fixture".into(),
+                authority: "original-signer".into(),
+            }
+        }
+        fn sign<'a>(
+            &'a self,
+            _: &'a [u8],
+        ) -> WorkflowFuture<'a, Result<SignedStepTransaction, StepFailure>> {
+            Box::pin(async move {
+                self.signs.fetch_add(1, Ordering::Relaxed);
+                Ok(SignedStepTransaction {
+                    signed_transaction: self.signed.encode_wire_v1().unwrap(),
+                    identity: self.identity,
+                })
+            })
+        }
+        fn identify(&self, _: &[u8]) -> Result<TransactionIdentityV1, StepFailure> {
+            Ok(self.identity)
+        }
+    }
+    for state in ["unknown", "applied", "rejected"] {
+        let rejected = state == "rejected";
+        let (original, identity, _) = fixture(rejected);
+        let mut verifier = original.original.clone();
+        let genesis = original
+            .source
+            .proof(NonZeroU64::new(1).unwrap())
+            .await
+            .unwrap()
+            .decode_checked()
+            .unwrap();
+        verifier.verify(&genesis).unwrap();
+        let proof = original
+            .source
+            .proof(NonZeroU64::new(2).unwrap())
+            .await
+            .unwrap()
+            .decode_checked()
+            .unwrap();
+        let block = verifier.verify(&proof).unwrap();
+        let signed = block
+            .block()
+            .external_transactions()
+            .next()
+            .unwrap()
+            .clone();
+        original.select_carrier_identity(&identity).await.unwrap();
+        if state != "unknown" {
+            let outcome = original.committed_outcome(&identity).await;
+            assert!(matches!(
+                outcome,
+                CommittedOutcome::Applied { .. } | CommittedOutcome::Rejected { .. }
+            ));
+        }
+        original.test_lease.lock().unwrap().take();
+        let (mut reopened, _, _) = fixture(rejected);
+        reopened.test_lease.lock().unwrap().take();
+        reopened.custody = original.custody.reopen_for_test();
+        let reopened = Arc::new(reopened.with_test_observation());
+        let signer = Arc::new(CountingSigner {
+            signed,
+            identity,
+            signs: AtomicUsize::new(0),
+        });
+        let account = RelayAccount {
+            account: signer.clone(),
+            ledger: reopened,
+        };
+        // A decoded journal reset asks the actual account wrapper to sign the original
+        // unsigned payload again. Native custody, not that label, decides whether it may.
+        let payload = norito::encode_canonical(signer.signed.payload()).unwrap();
+        let result = account.sign(&payload).await;
+        if rejected {
+            result.unwrap();
+            assert_eq!(signer.signs.load(Ordering::Relaxed), 1);
+        } else {
+            assert!(
+                result.is_err(),
+                "original unresolved or applied custody must refuse a fresh signature after journal reset"
+            );
+            assert_eq!(
+                result.unwrap_err().code,
+                WorkflowErrorCode::EvidenceUnavailable
+            );
+            assert_eq!(signer.signs.load(Ordering::Relaxed), 0);
+        }
+    }
+}
+
+#[test]
+fn signed_custody_failures_keep_their_original_operational_categories() {
+    use super::super::pending_custody::CustodyError;
+    for (error, expected) in [
+        (CustodyError::Binding, WorkflowErrorCode::BindingMismatch),
+        (
+            CustodyError::Capacity,
+            WorkflowErrorCode::LocalResourceUnavailable,
+        ),
+        (CustodyError::Busy, WorkflowErrorCode::JournalConflict),
+        (CustodyError::Conflict, WorkflowErrorCode::JournalConflict),
+        (
+            CustodyError::Codec(norito::Error::AllocationFailed { bytes: 1 }),
+            WorkflowErrorCode::EvidenceUnavailable,
+        ),
+        (
+            CustodyError::Codec(norito::Error::TotalAllocationExceeded {
+                attempted: 2,
+                limit: 1,
+            }),
+            WorkflowErrorCode::EvidenceUnavailable,
+        ),
+        (
+            CustodyError::Codec(norito::Error::InvalidMagic),
+            WorkflowErrorCode::NonCanonicalEncoding,
+        ),
+        (
+            CustodyError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            WorkflowErrorCode::LocalResourceUnavailable,
+        ),
+    ] {
+        assert_eq!(approval_evidence_failure(error.into()).code, expected);
+    }
+    for error in [
+        iroha::client::NativeWorkerError::RuntimeUnavailable,
+        iroha::client::NativeWorkerError::Panicked,
+        iroha::client::NativeWorkerError::CompletionUnavailable,
+        iroha::client::NativeWorkerError::ThreadCreation(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )),
+    ] {
+        assert_eq!(
+            approval_evidence_failure(error.into()).code,
+            WorkflowErrorCode::LocalResourceUnavailable
+        );
+    }
+}
+
+#[tokio::test]
+async fn occupied_original_native_worker_refuses_before_dispatch() {
+    let (ledger, identity, _) = fixture(false);
+    let proof = ledger
+        .source
+        .proof(NonZeroU64::new(2).unwrap())
+        .await
+        .unwrap()
+        .decode_checked()
+        .unwrap();
+    let block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
+    let wire = block
+        .external_transactions()
+        .next()
+        .unwrap()
+        .encode_wire_v1()
+        .unwrap();
+    let (_permit, _original) = ledger.custody.native_custody().unwrap();
+    assert!(matches!(
+        ledger.dispatch(&wire, &identity).await,
+        DispatchOutcome::NotAdmitted {
+            code: WorkflowErrorCode::LocalResourceUnavailable,
+            ..
+        }
     ));
 }
 
@@ -221,7 +404,7 @@ async fn relay_durable_restart_retransmits_identical_bytes_and_never_resigns_unk
                 }
             })
         }
-        fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+        fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
             self.original.proof(height)
         }
     }
@@ -324,6 +507,8 @@ async fn relay_durable_restart_retransmits_identical_bytes_and_never_resigns_unk
         .source
         .proof(NonZeroU64::new(2).unwrap())
         .await
+        .unwrap()
+        .decode_checked()
         .unwrap();
     let block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
     let transaction = block.external_transactions().next().unwrap();
@@ -383,19 +568,26 @@ async fn relay_durable_restart_retransmits_identical_bytes_and_never_resigns_unk
     assert_eq!(account.signs.load(Ordering::Relaxed), 1);
     assert_eq!(account.sent.lock().unwrap().len(), 1);
     // Fresh verifier and reopened file store reproduce an actual process boundary.
-    let restarted = Arc::new(RelayLedger {
-        source: ledger.source.clone(),
-        dispatch: account.clone(),
-        verifier: Mutex::new(root),
-        network: ledger.network,
-        authority: ledger.authority.clone(),
-        fee_payment: ledger.fee_payment.clone(),
-        instruction: Mutex::new(*ledger.instruction.lock().unwrap()),
-        approval: Mutex::new(None),
-        handoff_scan: Mutex::new(HandoffScan::default()),
-        max_reads: 4,
-        reads: AtomicUsize::new(4),
-    });
+    ledger.test_lease.lock().unwrap().take();
+    let restarted = Arc::new(
+        RelayLedger {
+            source: ledger.source.clone(),
+            dispatch: account.clone(),
+            custody: ledger.custody.reopen_for_test(),
+            original: root.into_genesis_verifier(),
+            network: ledger.network,
+            authority: ledger.authority.clone(),
+            fee_payment: ledger.fee_payment.clone(),
+            instruction: Mutex::new(*ledger.instruction.lock().unwrap()).into(),
+            approval: Mutex::new(None).into(),
+            source_plan: Mutex::new(None).into(),
+            handoff: Mutex::new(None).into(),
+            test_lease: Mutex::new(None).into(),
+            max_reads: 4,
+            reads: AtomicUsize::new(4).into(),
+        }
+        .with_test_observation(),
+    );
     drop(storage);
     let reopened =
         Arc::new(FileWorkflowStorage::open_or_create(directory.path().join("relay")).unwrap());
@@ -493,6 +685,8 @@ async fn relay_canonical_resumed_payload_cannot_cross_signing_or_dispatch_bounda
         .source
         .proof(NonZeroU64::new(2).unwrap())
         .await
+        .unwrap()
+        .decode_checked()
         .unwrap();
     let block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
     let transaction = block.external_transactions().next().unwrap().clone();
@@ -658,6 +852,8 @@ async fn relay_changed_fee_policy_preserves_authenticated_delivery_but_cannot_di
         .source
         .proof(NonZeroU64::new(2).unwrap())
         .await
+        .unwrap()
+        .decode_checked()
         .unwrap();
     let block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
     let transaction = block.external_transactions().next().unwrap();

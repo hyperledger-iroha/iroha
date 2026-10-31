@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::privacy_engines::zk_x509::private_table::inspection;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 fn native(log: u8, column: usize) -> ZeroizingMainTraceColumnV1 {
     ZeroizingMainTraceColumnV1(
@@ -15,7 +16,7 @@ fn native(log: u8, column: usize) -> ZeroizingMainTraceColumnV1 {
 #[test]
 fn native_device_replay_preserves_full_masked_coefficients_and_serial_source_order() {
     for log in [3, 11] {
-        let mut rng = StdRng::from_seed([log + 121; 32]);
+        let mut rng = ChaCha12Rng::from_seed([log + 121; 32]);
         let group = MainTraceMaskGroupV1::sample_v1(log, 13, 10, &mut rng, |column| {
             Ok(native(log, column))
         })
@@ -72,13 +73,16 @@ fn native_device_replay_preserves_full_masked_coefficients_and_serial_source_ord
                 .collect::<Vec<_>>(),
             masks_before
         );
-        assert_eq!(rng.next_u64(), rng_before.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            rng_before.try_next_u64().expect("test RNG draw succeeds")
+        );
     }
 }
 
 #[test]
 fn native_replay_failed_late_inverse_clears_all_sources_and_word_batches_before_masking() {
-    let mut rng = StdRng::from_seed([142; 32]);
+    let mut rng = ChaCha12Rng::from_seed([142; 32]);
     let group = MainTraceMaskGroupV1::sample_v1(3, 13, 8, &mut rng, |column| Ok(native(3, column)))
         .unwrap();
     for failure in 0..7 {
@@ -141,7 +145,7 @@ fn native_replay_failed_late_inverse_clears_all_sources_and_word_batches_before_
 
 #[test]
 fn native_replay_rejects_excess_capacity_and_quarantine_before_dispatch_or_source() {
-    let mut rng = StdRng::from_seed([143; 32]);
+    let mut rng = ChaCha12Rng::from_seed([143; 32]);
     let group = MainTraceMaskGroupV1::sample_v1(3, 13, 2, &mut rng, |column| Ok(native(3, column)))
         .unwrap();
     let (result, erased) = inspection::observe_v1(|| {
@@ -180,7 +184,7 @@ fn native_replay_rejects_excess_capacity_and_quarantine_before_dispatch_or_sourc
 #[test]
 #[ignore = "requires a normally built Metal privacy binary; full coefficient parity is component evidence only"]
 fn native_replay_log19_width8_required_metal_matches_full_cpu_masked_output() {
-    let mut rng = StdRng::from_seed([144; 32]);
+    let mut rng = ChaCha12Rng::from_seed([144; 32]);
     let group =
         MainTraceMaskGroupV1::sample_v1(19, 22, 8, &mut rng, |column| Ok(native(19, column)))
             .unwrap();
@@ -221,7 +225,7 @@ fn native_replay_log19_width8_required_metal_matches_full_cpu_masked_output() {
 
 #[test]
 fn native_replay_final_short_batch_preserves_global_mask_indices_and_exact_capacity() {
-    let mut rng = StdRng::from_seed([145; 32]);
+    let mut rng = ChaCha12Rng::from_seed([145; 32]);
     let group =
         MainTraceMaskGroupV1::sample_v1(3, 13, 10, &mut rng, |column| Ok(native(3, column)))
             .unwrap();
@@ -233,8 +237,8 @@ fn native_replay_final_short_batch_preserves_global_mask_indices_and_exact_capac
     let arrays = (0..8)
         .map(|row| {
             [
-                F((row * row + 17 * 8 + 3) as u64),
-                F((row * row + 17 * 9 + 3) as u64),
+                F(u64::try_from(row * row + 17 * 8 + 3).expect("fixture value fits u64")),
+                F(u64::try_from(row * row + 17 * 9 + 3).expect("fixture value fits u64")),
             ]
         })
         .collect::<Vec<_>>();

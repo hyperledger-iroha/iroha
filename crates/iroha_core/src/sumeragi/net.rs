@@ -459,6 +459,10 @@ pub trait SumeragiTransport: Send + Sync + 'static {
     ///
     /// # Errors
     /// Backpressure retains admission ownership; closure and rejection are terminal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn post_frame(
         &self,
         post: Post<NetworkMessage>,
@@ -517,6 +521,8 @@ impl Counters {
 
 /// One caller-owned refusal, never a hidden adapter queue. The returned P2P ticket
 /// owns its exact per-recipient/class FIFO position and topology generation.
+type EncodedEnvelope = (Arc<[u8]>, Arc<SumeragiFrame>);
+
 struct PendingP2pSend<T> {
     transport: Arc<T>,
     counters: Arc<Counters>,
@@ -556,7 +562,7 @@ const PEER_CACHE: usize = 4096;
 pub struct P2pNet<T> {
     transport: Arc<T>,
     /// The envelope of the frame sent last (one per frame, shared by its recipients).
-    envelope: Mutex<Option<(Arc<[u8]>, Arc<SumeragiFrame>)>>,
+    envelope: Mutex<Option<EncodedEnvelope>>,
     /// Recipient keys already converted to `PeerId`s.
     peers: Mutex<BTreeMap<PublicKey, PeerId>>,
     counters: Arc<Counters>,
@@ -932,7 +938,7 @@ pub fn spawn_ingress(
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use iroha_p2p::network::message::ClassifyTopic;
     use iroha_sumeragi::availability::{AvailabilityFrame, RowBytes};
     use iroha_sumeragi::{
@@ -944,7 +950,7 @@ mod tests {
         types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN, Signature},
     };
     use norito::core as ncore;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     use super::*;
 
@@ -1152,17 +1158,14 @@ mod tests {
             for layout in LAYOUTS {
                 let (raw_topic, raw_class, decoded) = raw_and_decoded(&network, layout);
                 assert_eq!(decoded.subscriber_route(), SubscriberRoute::Sumeragi);
-                match raw_topic {
-                    Ok(topic) => {
-                        assert_eq!(topic, Some(decoded.topic()), "round {round} {layout:#x}");
-                        assert_eq!(raw_class.unwrap(), decoded.admission_class());
-                        assert!(decoded.is_outbound_allowed());
-                    }
-                    Err(_) => {
-                        assert!(raw_class.is_err());
-                        assert_eq!(decoded.topic(), Topic::Other);
-                        assert!(!decoded.is_outbound_allowed(), "never sent");
-                    }
+                if let Ok(topic) = raw_topic {
+                    assert_eq!(topic, Some(decoded.topic()), "round {round} {layout:#x}");
+                    assert_eq!(raw_class.unwrap(), decoded.admission_class());
+                    assert!(decoded.is_outbound_allowed());
+                } else {
+                    assert!(raw_class.is_err());
+                    assert_eq!(decoded.topic(), Topic::Other);
+                    assert!(!decoded.is_outbound_allowed(), "never sent");
                 }
                 if valid {
                     let expected = topic_of_class(msg.traffic_class());
@@ -1647,7 +1650,7 @@ mod tests {
         );
     }
 
-    /// The actual actor must see a live FIFO owner for the row refused by Net::send.
+    /// The actual actor must see a live FIFO owner for the row refused by `Net::send`.
     /// This same test fails against the old void/dropping adapter and passes when the
     /// returned outcome owns the original post and rank until explicitly cancelled.
     #[test]

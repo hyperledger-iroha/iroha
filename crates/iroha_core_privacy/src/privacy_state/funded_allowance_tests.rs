@@ -72,7 +72,7 @@ fn funded_reserve_restore_keeps_bootstrap_identity_and_requires_exact_backing() 
     };
     let key = PrivacyCommitmentKeyV1::public_reserve_custody(owner.protocol_id(), &id).unwrap();
     fixture.commitments.insert(
-        key.clone(),
+        key,
         PrivacyStateItemRecordV1::PublicReserveCustody {
             reserve_asset_id: id.clone(),
             owner,

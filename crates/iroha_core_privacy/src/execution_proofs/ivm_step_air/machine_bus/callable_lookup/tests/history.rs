@@ -15,18 +15,46 @@ fn as_event(fields: &[F; packet::WIDTH]) -> Option<packet::Event> {
             4 => Space::Owner,
             _ => panic!("original packet space"),
         },
-        vm: fields[packet::VM].0 as u8,
-        generation: fields[GENERATION].0 as u16,
-        index: fields[packet::INDEX].0 as u32,
+        vm: u8::from_le_bytes(
+            u64::to_le_bytes(fields[packet::VM].0)[..1]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        generation: u16::from_le_bytes(
+            u64::to_le_bytes(fields[GENERATION].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        index: u32::from_le_bytes(
+            u64::to_le_bytes(fields[packet::INDEX].0)[..4]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         write: fields[packet::WRITE] == F::ONE,
         before: core::array::from_fn(|index| {
-            (fields[BEFORE + index / 2].0 >> (8 * (index % 2))) as u8
+            u8::from_le_bytes(
+                u64::to_le_bytes(fields[BEFORE + index / 2].0 >> (8 * (index % 2)))[..1]
+                    .try_into()
+                    .expect("low-byte width"),
+            )
         }),
         after: core::array::from_fn(|index| {
-            (fields[packet::AFTER + index / 2].0 >> (8 * (index % 2))) as u8
+            u8::from_le_bytes(
+                u64::to_le_bytes(fields[packet::AFTER + index / 2].0 >> (8 * (index % 2)))[..1]
+                    .try_into()
+                    .expect("low-byte width"),
+            )
         }),
-        before_private: fields[packet::BEFORE_TAG].0 as u16,
-        after_private: fields[packet::AFTER_TAG].0 as u16,
+        before_private: u16::from_le_bytes(
+            u64::to_le_bytes(fields[packet::BEFORE_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        after_private: u16::from_le_bytes(
+            u64::to_le_bytes(fields[packet::AFTER_TAG].0)[..2]
+                .try_into()
+                .expect("low-byte width"),
+        ),
     })
 }
 
@@ -88,7 +116,11 @@ impl History {
             assert!(index < first_clock as usize);
             events[index] = Some(event);
         }
-        let trace_log2 = (events.len() * 8).next_power_of_two().ilog2() as u8;
+        let trace_log2 = u8::from_le_bytes(
+            u32::to_le_bytes((events.len() * 8).next_power_of_two().ilog2())[..1]
+                .try_into()
+                .expect("low-byte width"),
+        );
         assert!((17..=18).contains(&trace_log2));
         let segments = if trace_log2 == 18 { 2 } else { 1 };
         // Reuse only the algebraic column oracle at the requested candidate
@@ -125,7 +157,7 @@ impl History {
             (0..self.schedule.size() / size).map(|segment| {
                 let range = segment * size..(segment + 1) * size;
                 private_history::Segment::new(
-                    core::array::from_fn(|index| {
+                    &core::array::from_fn(|index| {
                         &self.columns[NOTE_COPY_WIDTH_V1 + index][range.clone()]
                     }),
                     core::array::from_fn(|index| &self.aux[index][range.clone()]),
@@ -268,7 +300,7 @@ fn impossible_geometry_and_consumer_failure_cannot_report_completion() {
     let view = private_history::View::new(
         schedule,
         [private_history::Segment::new(
-            [column.as_slice(); ROW_WIDTH],
+            &[column.as_slice(); ROW_WIDTH],
             [column.as_slice(); permutation::WIDTH],
         )],
         &challenges,
@@ -292,7 +324,7 @@ fn impossible_geometry_and_consumer_failure_cannot_report_completion() {
     let view = private_history::View::new(
         private_history::Schedule::new(17, 1).unwrap(),
         [private_history::Segment::new(
-            [column.as_slice(); ROW_WIDTH],
+            &[column.as_slice(); ROW_WIDTH],
             [column.as_slice(); permutation::WIDTH],
         )],
         &challenges,

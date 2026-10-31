@@ -47,24 +47,24 @@ mod supported {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Identity {
-        dev: u64,
+        dev: rustix::fs::Dev,
         ino: u64,
-        mode: u32,
+        mode: rustix::fs::RawMode,
         uid: u32,
         gid: u32,
     }
     impl Identity {
         fn from_stat(stat: Stat) -> Self {
             Self {
-                dev: stat.st_dev as u64,
-                ino: stat.st_ino as u64,
-                mode: stat.st_mode as u32,
+                dev: stat.st_dev,
+                ino: stat.st_ino,
+                mode: stat.st_mode,
                 uid: stat.st_uid,
                 gid: stat.st_gid,
             }
         }
         fn directory(self) -> bool {
-            FileType::from_raw_mode(self.mode as rustix::fs::RawMode) == FileType::Directory
+            FileType::from_raw_mode(self.mode) == FileType::Directory
         }
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,22 +72,21 @@ mod supported {
         identity: Identity,
         links: u64,
         size: u64,
-        modified: (i64, i64),
-        changed: (i64, i64),
+        modified: (i128, i128),
+        changed: (i128, i128),
     }
     impl FileState {
         fn from_stat(stat: Stat) -> Result<Self> {
             Ok(Self {
                 identity: Identity::from_stat(stat),
-                links: stat.st_nlink as u64,
+                links: u64::from(stat.st_nlink),
                 size: u64::try_from(stat.st_size)?,
-                modified: (stat.st_mtime as i64, stat.st_mtime_nsec as i64),
-                changed: (stat.st_ctime as i64, stat.st_ctime_nsec as i64),
+                modified: (i128::from(stat.st_mtime), i128::from(stat.st_mtime_nsec)),
+                changed: (i128::from(stat.st_ctime), i128::from(stat.st_ctime_nsec)),
             })
         }
         fn owned_regular(self, uid: u32) -> bool {
-            FileType::from_raw_mode(self.identity.mode as rustix::fs::RawMode)
-                == FileType::RegularFile
+            FileType::from_raw_mode(self.identity.mode) == FileType::RegularFile
                 && self.identity.uid == uid
                 && self.identity.mode & 0o7777 == 0o600
                 && self.links == 1
@@ -315,7 +314,7 @@ mod supported {
         }
     }
     #[cfg(test)]
-    pub(crate) fn new_owned_file(path: &Path) -> Result<File> {
+    pub fn new_owned_file(path: &Path) -> Result<File> {
         new_owned_file_with_hook(path, |_| Ok(()))
     }
     #[cfg(test)]
@@ -328,7 +327,7 @@ mod supported {
         Ok(file)
     }
     /// Owns stage descriptor and its original namespace until consuming publication.
-    pub(crate) struct TraceOutput {
+    pub struct TraceOutput {
         parent: Parent,
         file: File,
         identity: Identity,
@@ -465,11 +464,11 @@ mod supported {
         }
     }
     /// Exact journal and trace owners retained through terminal reply flush.
-    pub(crate) mod load_receipt {
+    pub mod load_receipt {
         include!("output/load_receipt.rs");
     }
     /// Raw file identities for retained load outputs.
-    pub(crate) mod canonical_inputs {
+    pub mod canonical_inputs {
         include!("output/canonical_inputs.rs");
     }
     #[cfg(test)]
@@ -495,7 +494,7 @@ mod unsupported {
     // TODO: implement retained parent handles and atomic no-replace publication on other targets.
     // No pathname reopen, overwrite, hard-link fallback or unsafe compatibility route is accepted.
     /// Raw file identities carried by the fail-closed retained load outputs.
-    pub(crate) mod canonical_inputs {
+    pub mod canonical_inputs {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(crate) struct RawFileIdentity {
             pub(crate) raw_sha256: [u8; 32],
@@ -530,7 +529,7 @@ mod unsupported {
             Err(eyre!("retained load output unavailable"))
         }
     }
-    pub(crate) struct TraceOutput {
+    pub struct TraceOutput {
         file: File,
     }
     impl TraceOutput {

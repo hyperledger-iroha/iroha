@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "60567387d5e8a61fe80e55989d9217155cdf03d5f2ac1311f7454420b18f3e29"
+            "3ed162ef4c27c5c4e3afb89096dac5ed748c71c823e9320b838dd80f0cc314a5"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -259,7 +259,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_470, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_464, "complete current nominal inventory");
         result
     })
 }
@@ -289,9 +289,8 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
     let expected = current_owner_fixture()
         .get(owner)
         .expect("every current owner is captured");
-    let expected = owner_for_current_inventory(expected, cfg!(feature = "governance"));
     assert_eq!(
-        actual, expected,
+        &actual, expected,
         "current codec owner or directional identity changed"
     );
 }
@@ -301,52 +300,11 @@ fn current_native_fixture_has_complete_owner_inventory() {
     assert_eq!(current_owner_fixture().len(), 102);
 }
 
-// Apply only the closed feature conditions in the current typed inventory.
-// The current fixture already excludes retired governance owners.
-fn owner_for_current_inventory(owner: &Value, governance: bool) -> Value {
-    let name = owner.get("owner").and_then(Value::as_str).unwrap();
-    let removed: &[&str] = match name {
-        "iroha_data_model::fraud::types::captured_types_schema_tests" if !governance => &[
-            "iroha_data_model::fraud::types::GovernanceExport",
-            "iroha_data_model::fraud::types::DecisionAggregate",
-        ],
-        _ => return owner.clone(),
-    };
-    let rows = owner.get("rows").and_then(Value::as_array).unwrap();
-    assert_eq!(
-        rows.len(),
-        9,
-        "the complete feature-shaped source inventory has nine rows"
-    );
-    let actual_removed = rows
-        .iter()
-        .filter_map(|row| {
-            let nominal = row.get("nominal").and_then(Value::as_str).unwrap();
-            removed.contains(&nominal).then_some(nominal)
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(actual_removed, removed.iter().copied().collect());
-    let rows = rows
-        .iter()
-        .filter(|row| {
-            let nominal = row.get("nominal").and_then(Value::as_str).unwrap();
-            !removed.contains(&nominal)
-        })
-        .cloned()
-        .collect();
-    json::object([
-        ("schema", owner.get("schema").unwrap().clone()),
-        ("owner", owner.get("owner").unwrap().clone()),
-        ("rows", Value::Array(rows)),
-    ])
-    .expect("explicit governance feature projection")
-}
-
 #[test]
 fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
     let owners = current_owner_fixture();
     for (name, owner) in owners {
-        let complete = owner_for_current_inventory(owner, true);
+        let complete = owner;
         if name == "iroha_data_model::captured_schema_tests::current_release_capture" {
             assert_eq!(complete["rows"].as_array().unwrap().len(), 1);
             assert!(complete["rows"].as_array().unwrap().iter().all(|row| {
@@ -373,22 +331,14 @@ fn current_owner_inventory_excludes_retired_types_under_every_feature_shape() {
                 );
             }
         } else {
-            assert_eq!(complete, *owner);
+            assert_eq!(complete, owner);
         }
-        let minimal = owner_for_current_inventory(owner, false);
-        let expected = match name.as_str() {
-            "iroha_data_model::captured_schema_tests::current_release_capture" => 1,
-            "iroha_data_model::fraud::types::captured_types_schema_tests" => 7,
-            _ => {
-                assert_eq!(minimal, *owner);
-                continue;
-            }
-        };
-        assert_eq!(
-            minimal.get("rows").and_then(Value::as_array).unwrap().len(),
-            expected
-        );
-        assert_eq!(minimal.get("owner"), owner.get("owner"));
-        assert_eq!(minimal.get("schema"), owner.get("schema"));
+        if name == "iroha_data_model::fraud::types::captured_types_schema_tests" {
+            assert_eq!(
+                owner["rows"].as_array().unwrap().len(),
+                9,
+                "the complete governance export identity ships in every build"
+            );
+        }
     }
 }

@@ -92,13 +92,21 @@ fn control_chain(branch: bool) -> (Box<CertifiedTestChain>, GovernanceCertificat
         SumeragiNposParameters::default().into_custom_parameter(),
     ));
     config.genesis_block_cadence_ms = 1_000.try_into().unwrap();
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.fee_asset_id = sccp_taira_xor_asset_definition_id().clone();
-    nexus.staking.unbonding_delay = std::time::Duration::from_millis(
-        crate::smartcontracts::isi::sccp::test_support::SCCP_UNBONDING_DELAY_MS,
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.fee_asset_id = sccp_taira_xor_asset_definition_id().clone();
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(fees.into_custom_parameter().unwrap()));
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(
+        sccp_taira_xor_asset_definition_id().clone(),
     );
-    nexus.staking.max_slash_bps = 10_000;
-    config.nexus = Some(nexus);
+    staking.unbonding_delay_ms =
+        crate::smartcontracts::isi::sccp::test_support::SCCP_UNBONDING_DELAY_MS;
+    staking.max_slash_bps = 10_000;
+    crate::smartcontracts::isi::sccp::forgery::tests::replace_original_staking_parameter(
+        &mut config,
+        &staking,
+    );
     let mut prepared = CertifiedTestChain::prepare(config).expect("original signed Global genesis");
     let original = crate::sumeragi::epoch::authenticated_genesis(prepared.genesis.block()).unwrap();
     let (epoch, scope) = original.into_parts();
@@ -537,6 +545,9 @@ fn native_control_binds_component_cause_paid_rollback_and_current_fields_to_orig
 
 #[test]
 fn native_control_capacity_preserves_original_wait_retry_and_unwind_custody() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let (chain, _) = control_chain(false);
     let stop = AtomicBool::new(false);
     let view = chain.state().view();

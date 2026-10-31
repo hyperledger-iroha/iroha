@@ -58,8 +58,10 @@ mod query_response_roundtrip;
 mod registry_decode_roundtrip;
 #[path = "../registry_excludes_signatory_quorum.rs"]
 mod registry_excludes_signatory_quorum;
-#[path = "../runtime_doc_sync.rs"]
-mod runtime_doc_sync;
+#[path = "../runtime_definition.rs"]
+mod runtime_definition;
+#[path = "../runtime_lifecycle.rs"]
+mod runtime_lifecycle;
 #[path = "../signed_block_roundtrip.rs"]
 mod signed_block_roundtrip;
 #[path = "../sm_norito_roundtrip.rs"]

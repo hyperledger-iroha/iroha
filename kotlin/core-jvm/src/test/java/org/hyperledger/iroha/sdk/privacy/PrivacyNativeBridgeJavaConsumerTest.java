@@ -57,7 +57,7 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
 
   @Test
   public void exactClosedRegistryIsStable() {
-    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 31;
+    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 33;
     assert PrivacyNativeBridge.protocolsV1().size() == 12;
     assert PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal() == 0;
     assert PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal() == 4;
@@ -229,7 +229,7 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(
-          "ABI-31 connect_norito_bridge with compiled-profile catalog JNI exports is required");
+          "ABI-33 connect_norito_bridge with compiled-profile catalog JNI exports is required");
     }
 
     final byte[] canonical = PrivacyNativeBridge.compiledProfileCatalogV1();
@@ -241,6 +241,15 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
     final org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1 typed =
         PrivacyNativeBridge.compiledProfileCatalogTypedV1();
     assert typed.protocols.size() == 12;
+    final PrivacyCompiledProfileResultV1 x509 =
+        typed.protocols.get(PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal())
+            .compiledProfile;
+    assert x509 instanceof PrivacyCompiledProfileResultV1.Unavailable;
+    final PrivacyCompiledProfileResultV1.Unavailable unavailableX509 =
+        (PrivacyCompiledProfileResultV1.Unavailable) x509;
+    assert unavailableX509.reason
+        == PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE;
+    assert unavailableX509.statementSchemaError == null;
     assert Arrays.equals(
         canonical,
         org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(
@@ -284,7 +293,7 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(
-          "ABI-31 connect_norito_bridge with exact-12 fixture JNI exports is required");
+          "ABI-33 connect_norito_bridge with exact-12 fixture JNI exports is required");
     }
 
     final byte[] fetched = PrivacyNativeBridge.exact12FixtureBundleV1();

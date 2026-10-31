@@ -1,4 +1,4 @@
-//! Durable exact-anchor archive for finalized SoraFS reputation projections.
+//! Durable exact-anchor archive for finalized `SoraFS` reputation projections.
 //!
 //! The archive is deliberately a projection store, not finality authority. A commit-owned caller
 //! supplies one immutable finalized state view bound to current embedded commit certificates; capture
@@ -148,6 +148,10 @@ const RETENTION_APPROVAL_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
 );
 /// Resource ceilings enforced for every archive scan, read, and write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Each max_ field is an explicit resource ceiling, distinct from observed work and current usage"
+)]
 pub struct ReputationFinalizedArchiveBounds {
     max_record_bytes: u64,
     max_entries: NonZeroUsize,
@@ -1575,7 +1579,7 @@ impl ReputationReconstructionStateV1 {
         checkpoint: &ReputationFinalizedVirtualBaseCheckpointV1,
     ) -> Result<Self, ReputationFinalizedArchiveError> {
         let state = Self {
-            key: checkpoint.retention_floor.clone(),
+            key: checkpoint.retention_floor,
             finalized_at_unix_ms: checkpoint.retention_floor_finalized_at_unix_ms,
             authority_policy: checkpoint.authority_policy.clone(),
             proof_outcomes: ReputationRetainedFeedStateV1 {
@@ -1631,7 +1635,7 @@ impl ReputationReconstructionStateV1 {
             });
         }
         Ok(ReputationFinalizedProjectionV1 {
-            key: self.key.clone(),
+            key: self.key,
             finalized_at_unix_ms: self.finalized_at_unix_ms,
             authority_policy: self.authority_policy.clone(),
             proof_outcomes: self.proof_outcomes.retained_suffix.clone(),
@@ -1821,7 +1825,7 @@ fn journal_source_view(
         .ok()
         .map(|index| source_heads[index].clone());
     Ok(ReputationFinalizedArchiveJournalSourceViewV1 {
-        key: key.clone(),
+        key: *key,
         finalized_at_unix_ms,
         event,
     })
@@ -1989,10 +1993,10 @@ fn require_contiguous_capture_key_in_index(
     index: &ArchiveIndex,
     key: &ReputationFinalizedArchiveKeyV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    if let Some(existing) = index.by_height.get(&(key.network_id.clone(), key.height)) {
+    if let Some(existing) = index.by_height.get(&(key.network_id, key.height)) {
         if existing.manifest.key.block_hash != key.block_hash {
             return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                network_id: key.network_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
             });
         }
@@ -2005,14 +2009,14 @@ fn require_contiguous_capture_key_in_index(
     if let Some(latest_height) = latest {
         let expected_height = latest_height.checked_add(1).ok_or(
             ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                network_id: key.network_id.clone(),
+                network_id: key.network_id,
                 missing_height: u64::MAX,
                 observed_height: key.height,
             },
         )?;
         if key.height != expected_height {
             return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                network_id: key.network_id.clone(),
+                network_id: key.network_id,
                 missing_height: expected_height,
                 observed_height: key.height,
             });
@@ -2741,7 +2745,7 @@ impl ProjectionCaptureBudget {
         Ok(())
     }
 }
-/// Durable exact-anchor SoraFS reputation projection archive.
+/// Durable exact-anchor `SoraFS` reputation projection archive.
 #[derive(Debug)]
 pub struct ReputationFinalizedArchive {
     root: PathBuf,
@@ -3192,7 +3196,7 @@ impl ReputationFinalizedArchive {
         Ok(PreparedReputationInsertion {
             archive: self,
             index,
-            key: captured.next_state.key.clone(),
+            key: captured.next_state.key,
             state: material.map(|material| material.finish(captured.next_state)),
         })
     }
@@ -3207,7 +3211,7 @@ impl ReputationFinalizedArchive {
         let mut budget = ProjectionCaptureBudget::new(self.bounds.max_total_bytes);
         let authority_policy = FindSorafsReputationJournalAuthorityPolicy
             .execute(state_ro)
-            .map_err(|error| projection_query_error("reputation authority policy", error))?;
+            .map_err(|error| projection_query_error("reputation authority policy", &(error)))?;
         budget.charge("reputation authority policy", &authority_policy)?;
         let authority_policy_history =
             crate::smartcontracts::isi::sorafs_reputation::read_reputation_authority_policy_history(
@@ -3257,7 +3261,7 @@ impl ReputationFinalizedArchive {
                         .expect("proof-outcome query maximum fits u32"),
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("proof-outcome events", error))?;
+                .map_err(|error| projection_query_error("proof-outcome events", &(error)))?;
                 if page.finalized_cursor != proof_cursor {
                     return Err(projection_anchor_error("proof-outcome events"));
                 }
@@ -3300,7 +3304,7 @@ impl ReputationFinalizedArchive {
                         .expect("reputation journal query maximum fits u32"),
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reputation journal events", error))?;
+                .map_err(|error| projection_query_error("reputation journal events", &(error)))?;
                 if page.finalized_cursor != journal_cursor {
                     return Err(projection_anchor_error("reputation journal events"));
                 }
@@ -3341,7 +3345,7 @@ impl ReputationFinalizedArchive {
                     limit: REPAIR_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("repair events", error))?;
+                .map_err(|error| projection_query_error("repair events", &(error)))?;
                 if page.finalized_cursor != repair_cursor {
                     return Err(projection_anchor_error("repair events"));
                 }
@@ -3380,7 +3384,7 @@ impl ReputationFinalizedArchive {
                     limit: ORDERBOOK_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("orderbook events", error))?;
+                .map_err(|error| projection_query_error("orderbook events", &(error)))?;
                 if page.finalized_cursor != orderbook_cursor {
                     return Err(projection_anchor_error("orderbook events"));
                 }
@@ -3419,7 +3423,7 @@ impl ReputationFinalizedArchive {
                     limit: RESERVE_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reserve events", error))?;
+                .map_err(|error| projection_query_error("reserve events", &(error)))?;
                 if page.finalized_cursor != reserve_cursor {
                     return Err(projection_anchor_error("reserve events"));
                 }
@@ -3442,7 +3446,7 @@ impl ReputationFinalizedArchive {
                     limit: RESERVE_QUERY_MAX_ITEMS_V1,
                 }
                 .execute(state_ro)
-                .map_err(|error| projection_query_error("reserve providers", error))?;
+                .map_err(|error| projection_query_error("reserve providers", &(error)))?;
                 if page.finalized_cursor != reserve_cursor {
                     return Err(projection_anchor_error("reserve providers"));
                 }
@@ -3536,28 +3540,23 @@ impl ReputationFinalizedArchive {
             let mut anchors = index
                 .by_height
                 .range((
-                    std::ops::Bound::Included((network_id.clone(), 0)),
-                    std::ops::Bound::Included((network_id.clone(), u64::MAX)),
+                    std::ops::Bound::Included((*network_id, 0)),
+                    std::ops::Bound::Included((*network_id, u64::MAX)),
                 ))
-                .map(|(_, entry)| {
-                    (
-                        entry.manifest.key.clone(),
-                        entry.manifest.finalized_at_unix_ms,
-                    )
-                })
+                .map(|(_, entry)| (entry.manifest.key, entry.manifest.finalized_at_unix_ms))
                 .collect::<Vec<_>>();
             let activation_floor = if let Some(checkpoint) = index.checkpoints.get(network_id) {
                 let material = &checkpoint.persisted.checkpoint;
                 anchors.insert(
                     0,
                     (
-                        material.retention_floor.clone(),
+                        material.retention_floor,
                         material.retention_floor_finalized_at_unix_ms,
                     ),
                 );
-                material.original_activation_floor.clone()
+                material.original_activation_floor
             } else {
-                anchors.first().map(|(key, _)| key.clone()).ok_or(
+                anchors.first().map(|(key, _)| *key).ok_or(
                     ReputationFinalizedArchiveError::ArchiveUnavailable {
                         reason: "no exact anchor exists for the requested chain",
                     },
@@ -3577,7 +3576,7 @@ impl ReputationFinalizedArchive {
         validate_contiguous_archive_coverage(network_id, &anchors)?;
         let archive_tip = anchors
             .last()
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .expect("non-empty archive coverage has a tip");
         let certified =
             CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
@@ -3614,7 +3613,7 @@ impl ReputationFinalizedArchive {
                 != expected_digest
             {
                 return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    network_id: network_id.clone(),
+                    network_id: *network_id,
                     height: checkpoint_height,
                     reason: "virtual-base certified block identity changed",
                 });
@@ -3659,21 +3658,17 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         if let Some(checkpoint) = index.checkpoints.get(network_id) {
             return Ok(Some(
-                checkpoint
-                    .persisted
-                    .checkpoint
-                    .original_activation_floor
-                    .clone(),
+                checkpoint.persisted.checkpoint.original_activation_floor,
             ));
         }
         Ok(index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, u64::MAX)),
             ))
             .next()
-            .map(|(_, entry)| entry.manifest.key.clone()))
+            .map(|(_, entry)| entry.manifest.key))
     }
     /// Return the active virtual-base retention floor, if compaction occurred.
     ///
@@ -3694,7 +3689,7 @@ impl ReputationFinalizedArchive {
         Ok(index
             .checkpoints
             .get(network_id)
-            .map(|checkpoint| checkpoint.persisted.checkpoint.retention_floor.clone()))
+            .map(|checkpoint| checkpoint.persisted.checkpoint.retention_floor))
     }
     #[cfg(test)]
     fn latest_reconstruction_state_at_or_before(
@@ -3721,8 +3716,8 @@ impl ReputationFinalizedArchive {
         if let Some(entry) = index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), maximum_height)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry)
@@ -3763,6 +3758,10 @@ impl ReputationFinalizedArchive {
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         self.prepare_insert(projection)?.persist()
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The insertion attempt consumes its captured projection while transferring prepared durable state"
+    )]
     fn prepare_insert(
         &self,
         projection: ReputationFinalizedProjectionV1,
@@ -3775,11 +3774,11 @@ impl ReputationFinalizedArchive {
             &projection.authority_policy,
             projection.finalized_at_unix_ms,
         )?;
-        let subject = (projection.key.network_id.clone(), projection.key.height);
+        let subject = (projection.key.network_id, projection.key.height);
         if let Some(existing) = index.by_height.get(&subject).cloned() {
             if existing.manifest.key.block_hash != projection.key.block_hash {
                 return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    network_id: projection.key.network_id.clone(),
+                    network_id: projection.key.network_id,
                     height: projection.key.height,
                 });
             }
@@ -3792,7 +3791,7 @@ impl ReputationFinalizedArchive {
                 });
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                network_id: projection.key.network_id.clone(),
+                network_id: projection.key.network_id,
                 height: projection.key.height,
                 block_hash: projection.key.block_hash,
             });
@@ -3801,7 +3800,7 @@ impl ReputationFinalizedArchive {
         if let Some(previous) = &predecessor {
             if projection.key.height <= previous.key.height {
                 return Err(ReputationFinalizedArchiveError::OutOfOrderAnchor {
-                    network_id: projection.key.network_id.clone(),
+                    network_id: projection.key.network_id,
                     height: projection.key.height,
                     latest_height: previous.key.height,
                 });
@@ -3827,7 +3826,7 @@ impl ReputationFinalizedArchive {
             index,
             predecessor.as_ref(),
             next_state,
-            authority_policy_history,
+            &(authority_policy_history),
             delta,
         )
     }
@@ -3835,7 +3834,7 @@ impl ReputationFinalizedArchive {
     fn insert_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         self.prepare_captured_state(next_state, authority_policy_history)?
             .persist()
@@ -3844,15 +3843,15 @@ impl ReputationFinalizedArchive {
     fn prepare_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
     ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
         let index = self.write_index()?;
         let material =
-            self.prepare_captured_material(&index, &next_state, &authority_policy_history)?;
+            self.prepare_captured_material(&index, &next_state, authority_policy_history)?;
         Ok(PreparedReputationInsertion {
             archive: self,
             index,
-            key: next_state.key.clone(),
+            key: next_state.key,
             state: material.map(|material| material.finish(next_state)),
         })
     }
@@ -3871,11 +3870,11 @@ impl ReputationFinalizedArchive {
         )?;
         self.verify_storage_boundaries()?;
         require_contiguous_capture_key_in_index(index, &next_state.key)?;
-        let subject = (next_state.key.network_id.clone(), next_state.key.height);
+        let subject = (next_state.key.network_id, next_state.key.height);
         if let Some(existing) = index.by_height.get(&subject).cloned() {
             if existing.manifest.key.block_hash != next_state.key.block_hash {
                 return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    network_id: next_state.key.network_id.clone(),
+                    network_id: next_state.key.network_id,
                     height: next_state.key.height,
                 });
             }
@@ -3889,7 +3888,7 @@ impl ReputationFinalizedArchive {
                 return Ok(None);
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                network_id: next_state.key.network_id.clone(),
+                network_id: next_state.key.network_id,
                 height: next_state.key.height,
                 block_hash: next_state.key.block_hash,
             });
@@ -3898,7 +3897,7 @@ impl ReputationFinalizedArchive {
         if let Some(previous) = &predecessor {
             if next_state.key.height <= previous.key.height {
                 return Err(ReputationFinalizedArchiveError::OutOfOrderAnchor {
-                    network_id: next_state.key.network_id.clone(),
+                    network_id: next_state.key.network_id,
                     height: next_state.key.height,
                     latest_height: previous.key.height,
                 });
@@ -3925,20 +3924,20 @@ impl ReputationFinalizedArchive {
         index: ArchiveIndexWriteGuard<'archive, ArchiveIndex>,
         predecessor: Option<&ReputationReconstructionStateV1>,
         next_state: ReputationReconstructionStateV1,
-        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
         delta: ReputationFinalizedAnchorDeltaV1,
     ) -> Result<PreparedReputationInsertion<'archive>, ReputationFinalizedArchiveError> {
         let material = self.prepare_new_state_material(
             &index,
             predecessor,
             &next_state,
-            &authority_policy_history,
+            authority_policy_history,
             delta,
         )?;
         Ok(PreparedReputationInsertion {
             archive: self,
             index,
-            key: next_state.key.clone(),
+            key: next_state.key,
             state: Some(material.finish(next_state)),
         })
     }
@@ -3972,8 +3971,8 @@ impl ReputationFinalizedArchive {
         let predecessor_anchor_digest = index
             .by_height
             .range((
-                std::ops::Bound::Included((next_state.key.network_id.clone(), 0)),
-                std::ops::Bound::Included((next_state.key.network_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((next_state.key.network_id, 0)),
+                std::ops::Bound::Included((next_state.key.network_id, u64::MAX)),
             ))
             .next_back()
             .map(|(_, entry)| entry.anchor_digest)
@@ -3999,8 +3998,8 @@ impl ReputationFinalizedArchive {
                 &next_state.journal_events.retained_suffix,
             )?;
         let manifest = ReputationFinalizedAnchorManifestV1 {
-            key: next_state.key.clone(),
-            predecessor: predecessor.map(|previous| previous.key.clone()),
+            key: next_state.key,
+            predecessor: predecessor.map(|previous| previous.key),
             predecessor_anchor_digest,
             finalized_at_unix_ms: next_state.finalized_at_unix_ms,
             policy_record_digest: active_policy_record_digest,
@@ -4131,21 +4130,20 @@ impl ReputationFinalizedArchive {
         key.validate()?;
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        let entry = index
-            .by_height
-            .get(&(key.network_id.clone(), key.height))
-            .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                network_id: key.network_id.clone(),
+        let entry = index.by_height.get(&(key.network_id, key.height)).ok_or(
+            ReputationFinalizedArchiveError::MissingAnchor {
+                network_id: key.network_id,
                 height: key.height,
-            })?;
+            },
+        )?;
         if &entry.manifest.key != key {
             return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                network_id: key.network_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
             });
         }
         ReputationFinalizedArchiveRetentionFenceV1::try_new(
-            key.clone(),
+            *key,
             entry.anchor_digest,
             active_checkpoint_digest(&index, &key.network_id),
             index.generation,
@@ -4294,10 +4292,10 @@ impl ReputationFinalizedArchive {
         }
         let target = index
             .by_height
-            .get(&(network_id.clone(), fence.compact_through.height))
+            .get(&(*network_id, fence.compact_through.height))
             .cloned()
             .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                network_id: network_id.clone(),
+                network_id: *network_id,
                 height: fence.compact_through.height,
             })?;
         if target.manifest.key != fence.compact_through
@@ -4311,8 +4309,8 @@ impl ReputationFinalizedArchive {
         let anchors = index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), fence.compact_through.height)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, fence.compact_through.height)),
             ))
             .map(|(_, entry)| entry.clone())
             .collect::<Vec<_>>();
@@ -4325,12 +4323,7 @@ impl ReputationFinalizedArchive {
             network_id,
             &anchors
                 .iter()
-                .map(|entry| {
-                    (
-                        entry.manifest.key.clone(),
-                        entry.manifest.finalized_at_unix_ms,
-                    )
-                })
+                .map(|entry| (entry.manifest.key, entry.manifest.finalized_at_unix_ms))
                 .collect::<Vec<_>>(),
         )?;
         let newly_pruned_bytes = anchors.iter().try_fold(0_u64, |total, entry| {
@@ -4362,8 +4355,7 @@ impl ReputationFinalizedArchive {
                         .first()
                         .expect("non-empty compacted prefix")
                         .manifest
-                        .key
-                        .clone(),
+                        .key,
                     None,
                     1,
                     0,
@@ -4374,7 +4366,7 @@ impl ReputationFinalizedArchive {
             |checkpoint| {
                 let material = &checkpoint.persisted.checkpoint;
                 (
-                    material.original_activation_floor.clone(),
+                    material.original_activation_floor,
                     Some(checkpoint.persisted.checkpoint_digest),
                     material.checkpoint_generation.saturating_add(1),
                     material.cumulative_pruned_anchor_count,
@@ -4426,7 +4418,7 @@ impl ReputationFinalizedArchive {
         }
         let mut checkpoint = ReputationFinalizedVirtualBaseCheckpointV1 {
             original_activation_floor,
-            retention_floor: state.key.clone(),
+            retention_floor: state.key,
             retention_floor_finalized_at_unix_ms: state.finalized_at_unix_ms,
             retention_floor_anchor_digest: fence.compact_through_anchor_digest,
             // The finality digest is fixed-width. A nonzero placeholder lets
@@ -4547,7 +4539,7 @@ impl ReputationFinalizedArchive {
             },
         )?;
         Ok(PreparedReputationFinalizedArchiveCompactionV1 {
-            network_id: network_id.clone(),
+            network_id: *network_id,
             persisted,
             checkpoint_bytes,
             anchors,
@@ -4555,6 +4547,10 @@ impl ReputationFinalizedArchive {
             expected_archive_generation,
         })
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Compaction consumes its prepared publication owner exactly once through publication and cleanup"
+    )]
     fn publish_prepared_compaction<BeforeCleanup>(
         &self,
         index: &mut ArchiveIndex,
@@ -4564,7 +4560,7 @@ impl ReputationFinalizedArchive {
     where
         BeforeCleanup: FnOnce() -> Result<(), ReputationFinalizedArchiveError>,
     {
-        let retention_floor = prepared.persisted.checkpoint.retention_floor.clone();
+        let retention_floor = prepared.persisted.checkpoint.retention_floor;
         let checkpoint_digest = prepared.persisted.checkpoint_digest;
         let pruned_anchors = bounded_len(prepared.anchors.len())?;
         self.publish_checkpoint_and_reconcile(
@@ -4651,17 +4647,14 @@ impl ReputationFinalizedArchive {
         &self,
         index: &mut ArchiveIndex,
     ) -> Result<(), ReputationFinalizedArchiveError> {
-        match self.scan_inventory() {
-            Ok(refreshed) => {
-                *index = refreshed;
-                Ok(())
-            }
-            Err(_) => {
-                index.requires_reopen = true;
-                Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-                    reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
-                })
-            }
+        if let Ok(refreshed) = self.scan_inventory() {
+            *index = refreshed;
+            Ok(())
+        } else {
+            index.requires_reopen = true;
+            Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
+                reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
+            })
         }
     }
     /// Read one exact `(network_id, height, block_hash)` projection.
@@ -4684,7 +4677,7 @@ impl ReputationFinalizedArchive {
         {
             return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
         }
-        let Some(entry) = index.by_height.get(&(key.network_id.clone(), key.height)) else {
+        let Some(entry) = index.by_height.get(&(key.network_id, key.height)) else {
             return Ok(None);
         };
         if entry.manifest.key.block_hash != key.block_hash {
@@ -4738,7 +4731,7 @@ impl ReputationFinalizedArchive {
                 )?));
             }
         }
-        let Some(entry) = index.by_height.get(&(key.network_id.clone(), key.height)) else {
+        let Some(entry) = index.by_height.get(&(key.network_id, key.height)) else {
             return Ok(None);
         };
         if entry.manifest.key.block_hash != key.block_hash {
@@ -4792,8 +4785,8 @@ impl ReputationFinalizedArchive {
         if let Some(entry) = index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), maximum_height)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry)
@@ -4851,8 +4844,8 @@ impl ReputationFinalizedArchive {
         let entry = index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), maximum_height)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry);
@@ -4901,8 +4894,8 @@ impl ReputationFinalizedArchive {
         let entry = index
             .by_height
             .range((
-                std::ops::Bound::Included((network_id.clone(), 0)),
-                std::ops::Bound::Included((network_id.clone(), maximum_height)),
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry);
@@ -5101,12 +5094,12 @@ impl ReputationFinalizedArchive {
             });
         }
         persisted.validate_standalone()?;
-        if let Some(expected_key) = expected_key {
-            if &persisted.manifest.key != expected_key {
-                return Err(ReputationFinalizedArchiveError::ExactKeyMismatch {
-                    path: path.to_path_buf(),
-                });
-            }
+        if let Some(expected_key) = expected_key
+            && &persisted.manifest.key != expected_key
+        {
+            return Err(ReputationFinalizedArchiveError::ExactKeyMismatch {
+                path: path.to_path_buf(),
+            });
         }
         let expected_name = anchor_file_name(&persisted.manifest.key)?;
         if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
@@ -5404,23 +5397,22 @@ impl ReputationFinalizedArchive {
             if key.height == material.retention_floor.height {
                 if key != &material.retention_floor {
                     return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                        network_id: key.network_id.clone(),
+                        network_id: key.network_id,
                         height: key.height,
                     });
                 }
                 return ReputationReconstructionStateV1::from_checkpoint(material);
             }
         }
-        let entry = index
-            .by_height
-            .get(&(key.network_id.clone(), key.height))
-            .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                network_id: key.network_id.clone(),
+        let entry = index.by_height.get(&(key.network_id, key.height)).ok_or(
+            ReputationFinalizedArchiveError::MissingAnchor {
+                network_id: key.network_id,
                 height: key.height,
-            })?;
+            },
+        )?;
         if &entry.manifest.key != key {
             return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                network_id: key.network_id.clone(),
+                network_id: key.network_id,
                 height: key.height,
             });
         }
@@ -5431,7 +5423,7 @@ impl ReputationFinalizedArchive {
         index: &ArchiveIndex,
         target: &AnchorIndexEntry,
     ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
-        let network_id = target.manifest.key.network_id.clone();
+        let network_id = target.manifest.key.network_id;
         let target_height = target.manifest.key.height;
         let (mut state, mut predecessor_anchor_digest, first_height) =
             if let Some(checkpoint) = index.checkpoints.get(&network_id) {
@@ -5462,13 +5454,13 @@ impl ReputationFinalizedArchive {
                 (None, None, 0)
             };
         for (_, entry) in index.by_height.range((
-            std::ops::Bound::Included((network_id.clone(), first_height)),
-            std::ops::Bound::Included((network_id.clone(), target_height)),
+            std::ops::Bound::Included((network_id, first_height)),
+            std::ops::Bound::Included((network_id, target_height)),
         )) {
             let persisted = self.load_anchor_at(&entry.path, Some(&entry.manifest.key))?;
             if persisted.manifest != entry.manifest {
                 return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                    network_id: entry.manifest.key.network_id.clone(),
+                    network_id: entry.manifest.key.network_id,
                     height: entry.manifest.key.height,
                     block_hash: entry.manifest.key.block_hash,
                 });
@@ -5707,7 +5699,7 @@ impl ReputationFinalizedArchive {
                 .len();
             charge_archive_bytes(&mut index.total_bytes, size, self.bounds)?;
             checkpoint_lineages
-                .entry(persisted.checkpoint.retention_floor.network_id.clone())
+                .entry(persisted.checkpoint.retention_floor.network_id)
                 .or_default()
                 .push(CheckpointIndexEntry { persisted, path });
         }
@@ -5798,7 +5790,7 @@ impl ReputationFinalizedArchive {
                     reason: "checkpoint authority-policy history commitment was substituted",
                 });
             }
-            index.checkpoints.insert(network_id.clone(), active);
+            index.checkpoints.insert(*network_id, active);
         }
         let mut persisted_anchors = BTreeMap::new();
         for entry in
@@ -5837,10 +5829,10 @@ impl ReputationFinalizedArchive {
                 .len();
             charge_archive_bytes(&mut index.total_bytes, size, self.bounds)?;
             let subject = (
-                persisted.manifest.key.network_id.clone(),
+                persisted.manifest.key.network_id,
                 persisted.manifest.key.height,
             );
-            if let Some(previous) = persisted_anchors.insert(subject.clone(), persisted.clone()) {
+            if let Some(previous) = persisted_anchors.insert(subject, persisted.clone()) {
                 return Err(
                     if previous.manifest.key.block_hash == persisted.manifest.key.block_hash {
                         ReputationFinalizedArchiveError::ConflictingProjection {
@@ -5878,11 +5870,10 @@ impl ReputationFinalizedArchive {
         for (network_id, checkpoint) in &index.checkpoints {
             let material = &checkpoint.persisted.checkpoint;
             states.insert(
-                network_id.clone(),
+                *network_id,
                 ReputationReconstructionStateV1::from_checkpoint(material)?,
             );
-            predecessor_anchor_digests
-                .insert(network_id.clone(), material.retention_floor_anchor_digest);
+            predecessor_anchor_digests.insert(*network_id, material.retention_floor_anchor_digest);
         }
         for ((network_id, _), persisted) in &persisted_anchors {
             if let Some(checkpoint) = index.checkpoints.get(network_id)
@@ -5942,8 +5933,8 @@ impl ReputationFinalizedArchive {
                 policy,
                 &policy_history,
             )?;
-            predecessor_anchor_digests.insert(network_id.clone(), persisted.anchor_digest()?);
-            states.insert(network_id.clone(), state);
+            predecessor_anchor_digests.insert(*network_id, persisted.anchor_digest()?);
+            states.insert(*network_id, state);
         }
         for state in states.values() {
             state.validate()?;
@@ -5954,7 +5945,7 @@ impl ReputationFinalizedArchive {
                 state
                     .full_projection()
                     .ok()
-                    .map(|projection| (network_id.clone(), projection))
+                    .map(|projection| (*network_id, projection))
             })
             .collect();
         for projection in index.latest_projection.values() {
@@ -6043,7 +6034,7 @@ fn compaction_proposal(
 ) -> Result<ReputationFinalizedArchiveCompactionProposalV1, ReputationFinalizedArchiveError> {
     let source_summary = &prepared.persisted.checkpoint.validation_summary;
     ReputationFinalizedArchiveCompactionProposalV1::try_new(
-        fence.clone(),
+        *fence,
         prepared.persisted.checkpoint_digest,
         canonical_bytes_domain_digest(
             RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1,
@@ -6335,7 +6326,7 @@ fn authenticate_approval_checkpoint_against_certified(
         &certified,
     )?;
     let mut retained_anchors = vec![(
-        material.retention_floor.clone(),
+        material.retention_floor,
         material.retention_floor_finalized_at_unix_ms,
     )];
     retained_anchors.extend(
@@ -6343,17 +6334,12 @@ fn authenticate_approval_checkpoint_against_certified(
             .by_height
             .range((
                 std::ops::Bound::Excluded((
-                    material.retention_floor.network_id.clone(),
+                    material.retention_floor.network_id,
                     material.retention_floor.height,
                 )),
-                std::ops::Bound::Included((material.retention_floor.network_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((material.retention_floor.network_id, u64::MAX)),
             ))
-            .map(|(_, entry)| {
-                (
-                    entry.manifest.key.clone(),
-                    entry.manifest.finalized_at_unix_ms,
-                )
-            }),
+            .map(|(_, entry)| (entry.manifest.key, entry.manifest.finalized_at_unix_ms)),
     );
     validate_contiguous_archive_coverage(&material.retention_floor.network_id, &retained_anchors)?;
     let mut retained_tip_height = material.retention_floor.height;
@@ -6493,14 +6479,14 @@ fn validate_contiguous_archive_coverage(
         if let Some(previous_height) = previous_height {
             let expected_height = previous_height.checked_add(1).ok_or(
                 ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    network_id: network_id.clone(),
+                    network_id: *network_id,
                     missing_height: u64::MAX,
                     observed_height: key.height,
                 },
             )?;
             if key.height != expected_height {
                 return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    network_id: network_id.clone(),
+                    network_id: *network_id,
                     missing_height: expected_height,
                     observed_height: key.height,
                 });
@@ -6575,7 +6561,7 @@ fn candidate_capture_key(
 }
 fn projection_query_error(
     source: &'static str,
-    error: iroha_data_model::query::error::QueryExecutionFail,
+    error: &iroha_data_model::query::error::QueryExecutionFail,
 ) -> ReputationFinalizedArchiveError {
     ReputationFinalizedArchiveError::ProjectionCaptureQuery {
         projection: source,
@@ -6696,7 +6682,7 @@ fn build_captured_successor_state(
     let mut next = previous
         .cloned()
         .unwrap_or_else(|| ReputationReconstructionStateV1 {
-            key: captured.key.clone(),
+            key: captured.key,
             finalized_at_unix_ms: captured.finalized_at_unix_ms,
             authority_policy: captured.authority_policy.clone(),
             proof_outcomes: ReputationRetainedFeedStateV1::default(),
@@ -7146,7 +7132,7 @@ fn build_anchor_delta(
     current: &ReputationFinalizedProjectionV1,
 ) -> Result<ReputationFinalizedAnchorDeltaV1, ReputationFinalizedArchiveError> {
     let empty = ReputationFinalizedProjectionV1 {
-        key: current.key.clone(),
+        key: current.key,
         finalized_at_unix_ms: current.finalized_at_unix_ms,
         authority_policy: current.authority_policy.clone(),
         proof_outcomes: Vec::new(),
@@ -7496,7 +7482,7 @@ fn reconstruction_state_from_full_successor(
     };
     validate_projection_transition_from_state(previous, current, authority_policy_history)?;
     let state = ReputationReconstructionStateV1 {
-        key: current.key.clone(),
+        key: current.key,
         finalized_at_unix_ms: current.finalized_at_unix_ms,
         authority_policy: current.authority_policy.clone(),
         proof_outcomes: ReputationRetainedFeedStateV1 {
@@ -7647,7 +7633,7 @@ fn apply_anchor_delta_to_state(
     }
     validate_delta_event_anchors(persisted)?;
     let mut state = previous.unwrap_or_else(|| ReputationReconstructionStateV1 {
-        key: manifest.key.clone(),
+        key: manifest.key,
         finalized_at_unix_ms: manifest.finalized_at_unix_ms,
         authority_policy: policy.clone(),
         proof_outcomes: ReputationRetainedFeedStateV1::default(),
@@ -7658,7 +7644,7 @@ fn apply_anchor_delta_to_state(
         reserve_events: ReputationRetainedFeedStateV1::default(),
         reserve_providers: Vec::new(),
     });
-    state.key = manifest.key.clone();
+    state.key = manifest.key;
     state.finalized_at_unix_ms = manifest.finalized_at_unix_ms;
     state.authority_policy = policy.clone();
     state
@@ -7694,16 +7680,15 @@ fn apply_anchor_delta_to_state(
         }
     }
     for account in &persisted.delta.reserve_provider_upserts {
-        if let Some(previous) = providers.get(&account.terms.provider_id) {
-            if previous == account
+        if let Some(previous) = providers.get(&account.terms.provider_id)
+            && (previous == account
                 || previous.terms != account.terms
                 || account.revision <= previous.revision
-                || account.updated_at_unix < previous.updated_at_unix
-            {
-                return Err(ReputationFinalizedArchiveError::InvalidDelta {
-                    reason: "reserve provider upsert is redundant or non-monotonic",
-                });
-            }
+                || account.updated_at_unix < previous.updated_at_unix)
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidDelta {
+                reason: "reserve provider upsert is redundant or non-monotonic",
+            });
         }
         providers.insert(account.terms.provider_id, account.clone());
     }
@@ -7883,9 +7868,7 @@ fn validate_feed_against_index<T>(
 ) -> Result<(), ReputationFinalizedArchiveError> {
     for event in events {
         let (height, block_hash) = identity(event);
-        if let Some(anchor) = index
-            .by_height
-            .get(&(projection.key.network_id.clone(), height))
+        if let Some(anchor) = index.by_height.get(&(projection.key.network_id, height))
             && anchor.manifest.key.block_hash != block_hash
         {
             return Err(ReputationFinalizedArchiveError::InvalidProjection {
@@ -7903,7 +7886,7 @@ fn validate_state_feed_against_index<T>(
 ) -> Result<(), ReputationFinalizedArchiveError> {
     for event in events {
         let (height, block_hash) = identity(event);
-        if let Some(anchor) = index.by_height.get(&(key.network_id.clone(), height))
+        if let Some(anchor) = index.by_height.get(&(key.network_id, height))
             && anchor.manifest.key.block_hash != block_hash
         {
             return Err(ReputationFinalizedArchiveError::InvalidProjection {
@@ -8128,7 +8111,7 @@ fn recover_staged_directory(
                 || u64::try_from(metadata.st_size)
                     .ok()
                     .is_none_or(|size| size > max_record_bytes)
-                || match metadata.st_nlink as u64 {
+                || match u64::from(metadata.st_nlink) {
                     1 => false,
                     2 => !unix_staged_file_has_canonical_target(
                         &directory_file,
@@ -8167,11 +8150,7 @@ fn recover_staged_directory(
                 }
             })?;
         }
-        return verify_unix_directory_handle(
-            &directory_file,
-            expected_directory_identity,
-            directory,
-        );
+        verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)
     }
     #[cfg(not(unix))]
     {
@@ -8226,7 +8205,7 @@ fn publish_immutable_bytes(
             })?;
     #[cfg(unix)]
     {
-        return publish_immutable_bytes_unix_with_hooks(
+        publish_immutable_bytes_unix_with_hooks(
             directory,
             expected_directory_identity,
             target,
@@ -8234,7 +8213,7 @@ fn publish_immutable_bytes(
             bytes,
             || {},
             || {},
-        );
+        )
     }
     #[cfg(not(unix))]
     {
@@ -8277,7 +8256,7 @@ fn unlink_immutable_archive_file(
             source,
         })?;
         if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::RegularFile
-            || before.st_nlink as u64 != 1
+            || u64::from(before.st_nlink) != 1
         {
             return Err(ReputationFinalizedArchiveError::InvalidStorage {
                 path: target.to_path_buf(),
@@ -8544,7 +8523,7 @@ fn read_bounded_archive_file_at_unix(
     let before = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
         .map_err(io::Error::from)?;
     if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::RegularFile
-        || before.st_nlink as u64 != 1
+        || u64::from(before.st_nlink) != 1
         || u64::try_from(before.st_size)
             .ok()
             .is_none_or(|size| size > max_bytes)
@@ -9610,12 +9589,7 @@ mod tests {
     fn proposal_network_id(
         approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> NetworkId {
-        approval
-            .proposal()
-            .fence()
-            .compact_through()
-            .network_id
-            .clone()
+        approval.proposal().fence().compact_through().network_id
     }
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
@@ -9953,7 +9927,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         reserve.sequence = 2;
         CapturedReputationSuccessorV1 {
             key: ReputationFinalizedArchiveKeyV1::try_new(
-                previous.key.network_id.clone(),
+                previous.key.network_id,
                 height,
                 block_hash,
             )
@@ -10004,7 +9978,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let index = archive.read_index().expect("read archive index");
         let target = index
             .by_height
-            .get(&(target_key.network_id.clone(), target_key.height))
+            .get(&(target_key.network_id, target_key.height))
             .expect("target anchor is indexed")
             .clone();
         assert_eq!(&target.manifest.key, target_key);
@@ -10014,8 +9988,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let anchors = index
             .by_height
             .range((
-                std::ops::Bound::Included((target_key.network_id.clone(), 0)),
-                std::ops::Bound::Included((target_key.network_id.clone(), target_key.height)),
+                std::ops::Bound::Included((target_key.network_id, 0)),
+                std::ops::Bound::Included((target_key.network_id, target_key.height)),
             ))
             .map(|(_, entry)| entry.clone())
             .collect::<Vec<_>>();
@@ -10046,9 +10020,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 .first()
                 .expect("checkpoint prefix is non-empty")
                 .manifest
-                .key
-                .clone(),
-            retention_floor: state.key.clone(),
+                .key,
+            retention_floor: state.key,
             retention_floor_finalized_at_unix_ms: state.finalized_at_unix_ms,
             retention_floor_anchor_digest: target.anchor_digest,
             certified_block_id: [0xA5; 32],
@@ -10486,7 +10459,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let (directory, persisted, opened, resolved, terminal) =
             archive_with_source_revision_checkpoint();
         let fence = ReputationFinalizedArchiveRetentionFenceV1::try_new(
-            persisted.checkpoint.retention_floor.clone(),
+            persisted.checkpoint.retention_floor,
             persisted.checkpoint.retention_floor_anchor_digest,
             None,
             1,
@@ -10668,7 +10641,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
     ) -> ReputationFinalizedVirtualBaseCheckpointV1 {
         let mut current = previous.checkpoint.clone();
         current.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            current.retention_floor.network_id.clone(),
+            current.retention_floor.network_id,
             current.retention_floor.height + 1,
             retention_floor_block_hash,
         )
@@ -10788,12 +10761,9 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             );
             let resolved_source_id = resolved.entry.source_id;
             let mut second = first;
-            second.key = ReputationFinalizedArchiveKeyV1::try_new(
-                second.key.network_id.clone(),
-                8,
-                [0x81; 32],
-            )
-            .expect("construct source-lineage successor key");
+            second.key =
+                ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id, 8, [0x81; 32])
+                    .expect("construct source-lineage successor key");
             second.finalized_at_unix_ms += 1;
             second.journal_events = vec![opened.clone(), resolved];
             archive
@@ -10803,7 +10773,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 let index = archive.read_index().expect("read successor anchor index");
                 let entry = index
                     .by_height
-                    .get(&(second.key.network_id.clone(), second.key.height))
+                    .get(&(second.key.network_id, second.key.height))
                     .expect("source-lineage successor anchor");
                 (
                     entry.anchor_digest,
@@ -10910,7 +10880,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         resolved.event_index = 0;
         let mut forged = previous.checkpoint.clone();
         forged.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            forged.retention_floor.network_id.clone(),
+            forged.retention_floor.network_id,
             8,
             [0x81; 32],
         )
@@ -10987,7 +10957,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         first.journal_events.push(historical);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            first.key.network_id.clone(),
+            first.key.network_id,
             first.key.height + 1,
             [0x81; 32],
         )
@@ -11316,7 +11286,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let first = sample_projection(7, [0x71; 32]);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            second.key.network_id.clone(),
+            second.key.network_id,
             first.key.height + 1,
             [0x81; 32],
         )
@@ -11371,7 +11341,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             archive
                 .retention_floor(&first.key.network_id)
                 .expect("read reconciled retention floor"),
-            Some(first.key.clone())
+            Some(first.key)
         );
         assert!(matches!(
             archive.get_exact(&first.key),
@@ -11411,7 +11381,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         );
         assert!(matches!(
             ReputationFinalizedArchiveRetentionFenceV1::try_new(
-                second.key.clone(),
+                second.key,
                 fresh_fence.compact_through_anchor_digest(),
                 Some([0; 32]),
                 fresh_fence.expected_generation(),
@@ -11580,9 +11550,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         second_prefix_event.event_index = 1;
         first.journal_events.push(second_prefix_event);
         let mut second = first.clone();
-        second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
-                .expect("construct successor key");
+        second.key = ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id, 8, [0x81; 32])
+            .expect("construct successor key");
         second.finalized_at_unix_ms += 1;
         second.journal_events.push(journal_event(
             &second.authority_policy.policy,
@@ -11611,13 +11580,13 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             reopened
                 .retention_floor(&first.key.network_id)
                 .expect("read retention floor"),
-            Some(first.key.clone())
+            Some(first.key)
         );
         assert_eq!(
             reopened
                 .activation_floor(&first.key.network_id)
                 .expect("read original floor"),
-            Some(first.key.clone())
+            Some(first.key)
         );
         assert_eq!(
             fs::read_dir(&reopened.anchors)
@@ -11640,7 +11609,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             reopened
                 .page_journal_events(
                     &second.key,
-                    first.journal_events.first().map(|event| event.cursor()),
+                    first.journal_events.first().map(iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventV1::cursor),
                     REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1,
                 )
                 .expect("return typed boundary for an older retained cursor"),
@@ -11649,7 +11618,9 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let page = reopened
             .page_journal_events(
                 &second.key,
-                first.journal_events.last().map(|event| event.cursor()),
+                first.journal_events.last().map(
+                    iroha_data_model::sorafs::reputation::ReputationJournalFinalizedEventV1::cursor,
+                ),
                 REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1,
             )
             .expect("page retained suffix from exact compacted cursor");
@@ -11732,7 +11703,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         assert_eq!(absent.key, floor.key);
         assert_eq!(absent.event, None);
         let wrong_hash = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.network_id.clone(),
+            floor.key.network_id,
             floor.key.height,
             [0x72; 32],
         )
@@ -11744,7 +11715,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             None
         );
         let missing_successor = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.network_id.clone(),
+            floor.key.network_id,
             floor.key.height + 1,
             [0x81; 32],
         )
@@ -11756,7 +11727,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             None
         );
         let below_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.network_id.clone(),
+            floor.key.network_id,
             floor.key.height - 1,
             [0x61; 32],
         )
@@ -11804,7 +11775,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         floor.journal_events.push(opened.clone());
         let mut successor = floor.clone();
         successor.key = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.network_id.clone(),
+            floor.key.network_id,
             floor.key.height + 1,
             [0x81; 32],
         )
@@ -11990,12 +11961,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let next = build_captured_successor_state(
             Some(&previous),
             CapturedReputationSuccessorV1 {
-                key: ReputationFinalizedArchiveKeyV1::try_new(
-                    first.key.network_id.clone(),
-                    8,
-                    [0x81; 32],
-                )
-                .expect("construct empty captured successor"),
+                key: ReputationFinalizedArchiveKeyV1::try_new(first.key.network_id, 8, [0x81; 32])
+                    .expect("construct empty captured successor"),
                 finalized_at_unix_ms: previous.finalized_at_unix_ms + 1,
                 authority_policy: previous.authority_policy.clone(),
                 proof_outcomes: Vec::new(),
@@ -12013,11 +11980,11 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         assert_eq!(next.repair_events, previous.repair_events);
         assert_eq!(next.orderbook_events, previous.orderbook_events);
         assert_eq!(next.reserve_events, previous.reserve_events);
-        let next_key = next.key.clone();
+        let next_key = next.key;
         let authority_policy_history = vec![next.authority_policy.clone()];
         assert_eq!(
             archive
-                .insert_captured_state(next, authority_policy_history)
+                .insert_captured_state(next, &(authority_policy_history))
                 .expect("insert empty captured successor"),
             ReputationFinalizedArchiveInsertOutcome::Inserted
         );
@@ -12064,7 +12031,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             assert_eq!(next.reserve_events.retained_suffix.len(), 1);
             let authority_policy_history = vec![next.authority_policy.clone()];
             archive
-                .insert_captured_state(next.clone(), authority_policy_history)
+                .insert_captured_state(next.clone(), &(authority_policy_history))
                 .expect("insert retained capture");
             let index = archive.read_index().expect("read capture index");
             let checkpoint = index
@@ -12073,9 +12040,9 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 .expect("active checkpoint");
             let anchor = index
                 .by_height
-                .get(&(next.key.network_id.clone(), next.key.height))
+                .get(&(next.key.network_id, next.key.height))
                 .expect("captured successor anchor");
-            assert_eq!(anchor.manifest.predecessor, Some(first.key.clone()));
+            assert_eq!(anchor.manifest.predecessor, Some(first.key));
             assert_eq!(
                 anchor.manifest.predecessor_anchor_digest,
                 Some(
@@ -12106,7 +12073,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let authority_policy_history = vec![replay.authority_policy.clone()];
         assert_eq!(
             reopened
-                .insert_captured_state(replay, authority_policy_history)
+                .insert_captured_state(replay, &(authority_policy_history))
                 .expect("replay retained capture"),
             ReputationFinalizedArchiveInsertOutcome::ExactReplay
         );
@@ -12162,12 +12129,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             .expect("reserve prefix cursor")
             .sequence = 2;
         let empty = CapturedReputationSuccessorV1 {
-            key: ReputationFinalizedArchiveKeyV1::try_new(
-                first.key.network_id.clone(),
-                8,
-                [0x81; 32],
-            )
-            .expect("construct malformed-cursor successor"),
+            key: ReputationFinalizedArchiveKeyV1::try_new(first.key.network_id, 8, [0x81; 32])
+                .expect("construct malformed-cursor successor"),
             finalized_at_unix_ms: substituted.finalized_at_unix_ms + 1,
             authority_policy: substituted.authority_policy.clone(),
             proof_outcomes: Vec::new(),
@@ -12246,7 +12209,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let first = projection_with_all_feeds(7, [0x71; 32]);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            second.key.network_id.clone(),
+            second.key.network_id,
             first.key.height + 1,
             [0x81; 32],
         )
@@ -12311,9 +12274,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let gc_directory = tempdir().expect("create policy-GC archive directory");
         let first = sample_projection(7, [0x71; 32]);
         let mut second = first.clone();
-        second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
-                .expect("construct policy successor key");
+        second.key = ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id, 8, [0x81; 32])
+            .expect("construct policy successor key");
         second.finalized_at_unix_ms += 1;
         let mut rotated = second.authority_policy.policy.clone();
         rotated.revision += 1;
@@ -12377,7 +12339,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             Some(projection.clone())
         );
         let missing = ReputationFinalizedArchiveKeyV1::try_new(
-            projection.key.network_id.clone(),
+            projection.key.network_id,
             projection.key.height,
             [0x72; 32],
         )
@@ -12483,12 +12445,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let next = build_captured_successor_state(
             Some(&first),
             CapturedReputationSuccessorV1 {
-                key: ReputationFinalizedArchiveKeyV1::try_new(
-                    first.key.network_id.clone(),
-                    8,
-                    [0x81; 32],
-                )
-                .expect("construct captured successor key"),
+                key: ReputationFinalizedArchiveKeyV1::try_new(first.key.network_id, 8, [0x81; 32])
+                    .expect("construct captured successor key"),
                 finalized_at_unix_ms: first.finalized_at_unix_ms + 1,
                 authority_policy: third,
                 proof_outcomes: Vec::new(),
@@ -12504,10 +12462,10 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         {
             let archive = open_archive(&directory, bounds());
             archive
-                .insert_captured_state(first.clone(), vec![first.authority_policy.clone()])
+                .insert_captured_state(first.clone(), std::slice::from_ref(&first.authority_policy))
                 .expect("insert revision-one capture");
             archive
-                .insert_captured_state(next.clone(), authority_policy_history.clone())
+                .insert_captured_state(next.clone(), &(authority_policy_history))
                 .expect("insert revision-three capture");
         }
         let reopened = open_archive(&directory, bounds());
@@ -12542,7 +12500,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let canonical_history = vec![revision_one.authority_policy.clone(), canonical_second];
         let archive = open_archive(&directory, bounds());
         archive
-            .insert_captured_state(previous.clone(), canonical_history)
+            .insert_captured_state(previous.clone(), &(canonical_history))
             .expect("insert canonical revision-two capture");
         let divergent_second =
             rotated_policy_record(&revision_one.authority_policy, 0x71, activation_time);
@@ -12556,7 +12514,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             Some(&previous),
             CapturedReputationSuccessorV1 {
                 key: ReputationFinalizedArchiveKeyV1::try_new(
-                    previous.key.network_id.clone(),
+                    previous.key.network_id,
                     8,
                     [0x81; 32],
                 )
@@ -12682,7 +12640,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 archive
                     .activation_floor(&first.key.network_id)
                     .expect("read activation floor"),
-                Some(first.key.clone())
+                Some(first.key)
             );
         }
         let reopened = open_archive(&directory, bounds());
@@ -12724,7 +12682,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
     fn qualification_coverage_rejects_every_gap_above_activation_floor() {
         let network_id = network_id(0x61);
         let key = |height, marker| {
-            ReputationFinalizedArchiveKeyV1::try_new(network_id.clone(), height, [marker; 32])
+            ReputationFinalizedArchiveKeyV1::try_new(network_id, height, [marker; 32])
                 .expect("construct coverage key")
         };
         let contiguous = vec![
@@ -12734,7 +12692,7 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         ];
         validate_contiguous_archive_coverage(&network_id, &contiguous)
             .expect("contiguous activation coverage");
-        let gapped = vec![contiguous[0].clone(), contiguous[2].clone()];
+        let gapped = vec![contiguous[0], contiguous[2]];
         assert!(matches!(
             validate_contiguous_archive_coverage(&network_id, &gapped),
             Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
@@ -13005,12 +12963,9 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             1
         );
         let mut successor = projection;
-        successor.key = ReputationFinalizedArchiveKeyV1::try_new(
-            successor.key.network_id.clone(),
-            8,
-            [0x81; 32],
-        )
-        .expect("construct successor key");
+        successor.key =
+            ReputationFinalizedArchiveKeyV1::try_new(successor.key.network_id, 8, [0x81; 32])
+                .expect("construct successor key");
         successor.finalized_at_unix_ms += 1;
         assert!(matches!(
             archive.insert(successor),
@@ -13047,12 +13002,9 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         for offset in 0_u8..8 {
             let height = 7 + u64::from(offset);
             let block_hash = [0x70 + offset; 32];
-            latest.key = ReputationFinalizedArchiveKeyV1::try_new(
-                latest.key.network_id.clone(),
-                height,
-                block_hash,
-            )
-            .expect("valid advancing key");
+            latest.key =
+                ReputationFinalizedArchiveKeyV1::try_new(latest.key.network_id, height, block_hash)
+                    .expect("valid advancing key");
             latest.finalized_at_unix_ms = 1_750_000_000_000 + height;
             latest.journal_events.push(journal_event(
                 &latest.authority_policy.policy,
@@ -13109,9 +13061,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         first.reserve_providers = vec![reserve_account(0x21, 1), reserve_account(0x31, 1)];
         archive.insert(first.clone()).expect("insert provider base");
         let mut second = first.clone();
-        second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
-                .expect("valid second key");
+        second.key = ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id, 8, [0x81; 32])
+            .expect("valid second key");
         second.finalized_at_unix_ms += 1;
         second.reserve_providers = vec![reserve_account(0x31, 2), reserve_account(0x41, 1)];
         archive

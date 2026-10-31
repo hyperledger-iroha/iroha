@@ -31,6 +31,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 
+pub(in crate::smartcontracts::isi) mod preflight;
+pub(super) use preflight::PreparedReleases;
+
 /// Decimal scale of Taira XOR; every SCCP amount is in these Taira units (§0, §3.2).
 pub const SCCP_XOR_SCALE: u32 = 9;
 
@@ -173,14 +176,21 @@ pub fn precheck_release(
     to: &AccountId,
     amount: u128,
 ) -> Result<(), Error> {
-    let escrow = escrow_asset(&*state_transaction.world, network)?;
-    let destination = AssetId::of(escrow.definition().clone(), to.clone());
-    asset_isi::precheck_sccp_escrow_release(
-        state_transaction,
-        &escrow,
-        &destination,
-        &xor_quantity(amount)?,
-    )
+    precheck_releases(state_transaction, network, &[Some((to, amount)), None])
+        .map_err(|(_, error)| error)
+}
+
+/// Check the ordered nonzero credits of one settlement before either moves money.
+/// Inbound settlement supplies at most two credits after coalescing a self fee sink;
+/// refunds use one. The fixed slots borrow accounts and cannot contain more than two
+/// credits. A refusal retains its occupied-credit index for the caller's pending reason.
+pub(super) fn precheck_releases(
+    state_transaction: &StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    credits: &[Option<(&AccountId, u128)>; 2],
+) -> Result<(), (usize, Error)> {
+    PreparedReleases::new(state_transaction, network, credits)?
+        .map_or(Ok(()), |prepared| prepared.check(state_transaction))
 }
 
 /// Book `amount` Taira units that stay in `network`'s escrow as `stranded(route)` (§4.16).
@@ -212,6 +222,19 @@ pub fn strand(
 #[must_use]
 pub fn is_escrow(world: &(impl WorldReadOnly + ?Sized), account: &AccountId) -> bool {
     store::routes::iter(world).any(|(_, route)| route.escrow == *account)
+}
+
+/// Return whether `account` is the escrow id of one of `network_id`'s routes. Escrow ids
+/// derive from the `NetworkId` alone, so this holds before `InitializeSccpV1` creates them.
+///
+/// Parameters naming accounts that protocol custody credits or debits without the escrow
+/// guards (the staking slash sink and stake escrow, the moderation challenge custody) refuse
+/// these ids when they are set, so no penalty can move value in or out of an escrow (§4.15).
+#[must_use]
+pub fn is_route_escrow_id(network_id: &NetworkId, account: &AccountId) -> bool {
+    SCCP_ROUTE_NETWORKS_V1
+        .into_iter()
+        .any(|network| escrow_account(network_id, network).as_ref() == Some(account))
 }
 
 #[cfg(test)]
@@ -250,6 +273,18 @@ mod tests {
             )],
             [],
         );
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install fixture crypto policy");
+        parameters.commit();
         State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -264,8 +299,7 @@ mod tests {
                 sccp_taira_xor_asset_definition_id(),
                 account.clone(),
             ))
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone())
     }
 
     #[test]
@@ -373,6 +407,52 @@ mod tests {
             .expect_err("another route's escrow is empty");
         release(&mut stx, SccpNetworkV1::BscMainnet, &holder, 1, [5; 32])
             .expect_err("another route's escrow is empty");
+    }
+
+    #[test]
+    fn bounded_precheck_preserves_empty_and_ordered_refusals() {
+        let holder = authority(1);
+        let state = funded_state(&holder, 5_000_000_000);
+        let mut block = state.block(header(1));
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
+            b"sccp-bounded-release-precheck-component",
+        ));
+        let network = SccpNetworkV1::EthereumMainnet;
+        // Empty input succeeds before route lookup, including before escrow creation.
+        precheck_releases(&stx, network, &[None, None]).expect("empty release");
+        create_route_escrows(&mut stx).expect("escrows");
+        lock(&mut stx, network, &holder, 2_000_000_000, [1; 32]).expect("lock");
+        let escrow = escrow_account(stx.network_id(), network).expect("route");
+        let first_unknown = authority(9);
+        let second_unknown = authority(10);
+        let first_error = precheck_release(&stx, network, &first_unknown, 1)
+            .expect_err("first absent recipient")
+            .to_string();
+        let second_error = precheck_release(&stx, network, &second_unknown, 1)
+            .expect_err("second absent recipient")
+            .to_string();
+        for (credits, expected_index, expected_error) in [
+            (
+                [Some((&first_unknown, 1)), Some((&second_unknown, 1))],
+                0,
+                first_error.as_str(),
+            ),
+            (
+                [Some((&holder, 1)), Some((&second_unknown, 1))],
+                1,
+                second_error.as_str(),
+            ),
+            ([None, Some((&first_unknown, 1))], 0, first_error.as_str()),
+        ] {
+            let (index, error) =
+                precheck_releases(&stx, network, &credits).expect_err("ordered refusal");
+            assert_eq!(index, expected_index);
+            assert_eq!(error.to_string(), expected_error);
+        }
+        precheck_releases(&stx, network, &[None, Some((&holder, 1))])
+            .expect("one occupied credit after an empty slot");
+        assert_eq!(balance(&stx, &escrow), xor_quantity(2_000_000_000).unwrap());
+        assert_eq!(balance(&stx, &holder), xor_quantity(3_000_000_000).unwrap());
     }
 
     #[test]

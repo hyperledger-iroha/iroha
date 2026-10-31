@@ -51,6 +51,7 @@ pub mod artifact;
 
 use ff::{BatchInvert, Field, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
+use rayon::prelude::*;
 
 use super::{DescriptorBinding, KeyError, check_shape, vk::VerifyingKey};
 use crate::{
@@ -360,14 +361,15 @@ pub struct ProvingKey<C: PastaCurve> {
     copy_digest: [u8; 32],
 }
 
-/// Interpolates evaluation-form columns.
+/// Interpolates evaluation-form columns, several at once: one column alone leaves
+/// most workers idle.
 fn interpolate_all<F: PastaField>(
     domain: &FftDomain<F>,
     columns: &[Vec<F>],
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<Vec<Vec<F>>, KeyError> {
     columns
-        .iter()
+        .par_iter()
         .map(|column| {
             let mut coeffs = column.clone();
             domain.ifft_cancellable(&mut coeffs, cancellation)?;
@@ -377,7 +379,7 @@ fn interpolate_all<F: PastaField>(
 }
 
 /// Interpolate the public row masks, using the closed form for singleton rows.
-/// The coefficient of X^i in L_r is omega^(-r*i) / n, so L_0 and L_last
+/// The coefficient of `X^i` in `L_r` is `omega^(-r*i) / n`, so `L_0` and `L_last`
 /// need no FFT or temporary evaluation copies. The active prefix still uses
 /// the ordinary inverse transform, preserving the exact mask polynomials.
 fn interpolate_masks<F: PastaField>(
@@ -768,7 +770,7 @@ mod mask_tests;
 mod tests {
     use iroha_pasta::{Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::pcs::ipa::evaluate_polynomial;

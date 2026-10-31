@@ -8,7 +8,7 @@ use iroha_crypto::{
     sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload},
 };
 use norito::json;
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use std::{fs, path::PathBuf};
 use zeroize::{Zeroize, Zeroizing};
 enum PrivateInput {
@@ -104,7 +104,7 @@ pub struct Sm2KeygenArgs {
 }
 impl Sm2KeygenArgs {
     fn material(&self) -> Result<Sm2KeyMaterial> {
-        self.material_with_rng(&mut OsRng)
+        self.material_with_rng(&mut SysRng)
     }
     fn material_with_rng<R: TryCryptoRng>(&self, rng: &mut R) -> Result<Sm2KeyMaterial> {
         let distid = parse_distid(self.distid.clone())?;
@@ -847,7 +847,7 @@ private_key = "{private_key}"
 
 [crypto]
 default_hash = "sm3-256"
-allowed_signing = ["ed25519", "sm2"]  # remove "sm2" to stay in verify-only mode
+# Admit sm2 in genesis crypto_admission_policy.allowed_algorithms before account use.
 sm2_distid_default = "{distid}"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 "#,
@@ -936,18 +936,19 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::metadata::Metadata;
     use norito::json::{self, JsonSerialize};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use std::fmt;
     use url::Url;
     struct FailingSm2SeedRng;
     #[derive(Debug)]
     struct FailingSm2SeedRngError;
+    impl std::error::Error for FailingSm2SeedRngError {}
     impl fmt::Display for FailingSm2SeedRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing SM2 seed RNG")
         }
     }
-    impl TryRngCore for FailingSm2SeedRng {
+    impl TryRng for FailingSm2SeedRng {
         type Error = FailingSm2SeedRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingSm2SeedRngError)
@@ -1117,8 +1118,8 @@ mod tests {
             "snippet missing default_hash guidance: {snippet}"
         );
         assert!(
-            snippet.contains("allowed_signing = [\"ed25519\", \"sm2\"]"),
-            "snippet missing allowed_signing guidance: {snippet}"
+            snippet.contains("genesis crypto_admission_policy.allowed_algorithms"),
+            "snippet missing committed crypto policy guidance: {snippet}"
         );
     }
     #[test]

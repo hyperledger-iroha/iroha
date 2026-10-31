@@ -99,7 +99,8 @@ fn materialized_rows(
     let root = goldilocks_primitive_root_v1(plan.commitment_lde_log2).unwrap();
     (0..(1 << plan.commitment_lde_log2))
         .map(|index| {
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
+            let x = F(GOLDILOCKS_GENERATOR_V1)
+                .mul(root.pow(u128::try_from(index).expect("fixture index")));
             polynomials
                 .iter()
                 .flat_map(|group| {
@@ -505,7 +506,8 @@ fn streamed_private_row_scratch_clears_and_invalid_columns_leave_no_partial_abso
 
 #[test]
 fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     let (parameters, domains, layout) = fixture();
     let plan =
         JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
@@ -517,7 +519,7 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
                 .map(|row| F((1 + 100_000 * group + 1_000 * column + row) as u64))
                 .collect::<Vec<_>>()
         };
-        let mut first_rng = StdRng::from_seed([0x49; 32]);
+        let mut first_rng = ChaCha12Rng::from_seed([0x49; 32]);
         let mut next_column = 0;
         let polynomials = MaskedTracePolynomialSetV1::sample_columns_v1(
             *native,
@@ -533,16 +535,18 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
         )
         .unwrap();
         assert_eq!(next_column, range.len());
-        let mut reference_rng = StdRng::from_seed([0x49; 32]);
+        let mut reference_rng = ChaCha12Rng::from_seed([0x49; 32]);
         let (_, reference) = commit_masked_trace_polynomial_columns_v1(
             domains.digest_context,
             domains.base_leaf,
             domains.base_node,
-            group,
-            *native,
-            plan.commitment_lde_log2,
-            range.len(),
-            3,
+            MaskedTraceShapeV1 {
+                group,
+                native_trace_log2: *native,
+                lde_log2: plan.commitment_lde_log2,
+                width: range.len(),
+                mask_degree: 3,
+            },
             &[],
             &mut reference_rng,
             |column| Ok(source(column)),
@@ -567,7 +571,7 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
         (8, 11, usize::MAX, 3),
     ] {
         let mut calls = 0;
-        let mut rng = StdRng::from_seed([3; 32]);
+        let mut rng = ChaCha12Rng::from_seed([3; 32]);
         assert!(
             MaskedTracePolynomialSetV1::sample_columns_v1(
                 native,
@@ -585,7 +589,7 @@ fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
         assert_eq!(calls, 0);
     }
     let mut calls = 0;
-    let mut rng = StdRng::from_seed([7; 32]);
+    let mut rng = ChaCha12Rng::from_seed([7; 32]);
     assert!(
         MaskedTracePolynomialSetV1::sample_columns_v1(5, 11, 3, 3, &mut rng, |column| {
             calls += 1;

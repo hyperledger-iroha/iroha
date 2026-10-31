@@ -7,11 +7,18 @@
 //! client must join against (lanes, dataspaces, routing rules and the autoscale range) and
 //! treats every other field as opaque bytes. Every decoded value must re-encode to its exact
 //! original bytes. Golden tests in `iroha_config` keep the writer and this grammar aligned:
-//! a field added to the projection must also be added to [`tag`] and to the grammar here.
+//! a field added to the projection must also be added to [`tag`], to the grammar here and to
+//! the field-level rendering in [`nexus_amx_context_fields_v1`].
 use super::{LaneConsensusProjectionV1, LaneVisibility};
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 use norito::codec::{Decode, Encode};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
+
+mod fields;
+pub use fields::{
+    NexusAmxContextFieldDiffV1, NexusAmxContextFieldOriginV1, NexusAmxContextFieldV1,
+    diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+};
 
 /// Domain prefix of every Nexus/AMX context preimage.
 pub const NEXUS_AMX_CONTEXT_DOMAIN_V1: &[u8] = b"sumeragi:nexus-amx-context\0v1";
@@ -60,44 +67,11 @@ pub mod tag {
     pub const STAKING_PUBLIC_VALIDATOR_MODE: &str = "nexus.staking.public_validator_mode";
     /// Restricted-lane validator mode.
     pub const STAKING_RESTRICTED_VALIDATOR_MODE: &str = "nexus.staking.restricted_validator_mode";
-    /// Minimum validator stake.
-    pub const STAKING_MIN_VALIDATOR_STAKE: &str = "nexus.staking.min_validator_stake";
     /// Maximum validators.
     pub const STAKING_MAX_VALIDATORS: &str = "nexus.staking.max_validators";
-    /// Maximum stake shares per validator.
-    pub const STAKING_MAX_STAKE_SHARES_PER_VALIDATOR: &str =
-        "nexus.staking.max_stake_shares_per_validator";
-    /// Maximum pending unbonds per share.
-    pub const STAKING_MAX_PENDING_UNBONDS_PER_SHARE: &str =
-        "nexus.staking.max_pending_unbonds_per_share";
-    /// Unbonding delay.
-    pub const STAKING_UNBONDING_DELAY_NS: &str = "nexus.staking.unbonding_delay_ns";
-    /// Maximum slash basis points.
-    pub const STAKING_MAX_SLASH_BPS: &str = "nexus.staking.max_slash_bps";
-    /// Stake asset.
-    pub const STAKING_STAKE_ASSET_ID: &str = "nexus.staking.stake_asset_id";
-    /// Stake escrow account.
-    pub const STAKING_STAKE_ESCROW_ACCOUNT_ID: &str = "nexus.staking.stake_escrow_account_id";
-    /// Slash sink account.
-    pub const STAKING_SLASH_SINK_ACCOUNT_ID: &str = "nexus.staking.slash_sink_account_id";
-    /// Fee asset.
-    pub const FEES_ASSET: &str = "nexus.fees.asset";
-    /// Fee sink.
-    pub const FEES_SINK: &str = "nexus.fees.sink";
-    /// Base fee.
-    pub const FEES_BASE: &str = "nexus.fees.base";
-    /// Per-byte fee.
-    pub const FEES_PER_BYTE: &str = "nexus.fees.per_byte";
-    /// Per-instruction fee.
-    pub const FEES_PER_INSTRUCTION: &str = "nexus.fees.per_instruction";
-    /// Per-gas-unit fee.
-    pub const FEES_PER_GAS_UNIT: &str = "nexus.fees.per_gas_unit";
-    /// Sponsor vault custody account.
-    pub const FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID: &str =
-        "nexus.fees.sponsor_vault_custody_account_id";
-    /// Successful-claim fee-exempt authorities.
-    pub const FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES: &str =
-        "nexus.fees.successful_claim_exempt_authorities";
+    /// Exact optional original root fee policy, including all typed custody and exemptions.
+    /// Absence records only the actual pre-genesis state; runtime presence is enforced by Core.
+    pub const ROOT_FEE_POLICY: &str = "root.fee_policy";
     /// Default fee sponsor program per dataspace.
     pub const DATASPACE_FEE_SPONSOR_PROGRAM_IDS: &str = "nexus.dataspace_fee_sponsor_program_ids";
     /// AXT slot length.
@@ -198,26 +172,11 @@ pub mod tag {
     pub const STAGED_ACTIVE_PUBLIC_LANE_VALIDATORS: &str = "staged.active_public_lane_validators";
 
     /// Fixed-arity fields after the routing rules, in exact preimage order.
-    pub const TAIL: [&str; 65] = [
+    pub const TAIL: [&str; 50] = [
         STAKING_PUBLIC_VALIDATOR_MODE,
         STAKING_RESTRICTED_VALIDATOR_MODE,
-        STAKING_MIN_VALIDATOR_STAKE,
         STAKING_MAX_VALIDATORS,
-        STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-        STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
-        STAKING_UNBONDING_DELAY_NS,
-        STAKING_MAX_SLASH_BPS,
-        STAKING_STAKE_ASSET_ID,
-        STAKING_STAKE_ESCROW_ACCOUNT_ID,
-        STAKING_SLASH_SINK_ACCOUNT_ID,
-        FEES_ASSET,
-        FEES_SINK,
-        FEES_BASE,
-        FEES_PER_BYTE,
-        FEES_PER_INSTRUCTION,
-        FEES_PER_GAS_UNIT,
-        FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
-        FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
+        ROOT_FEE_POLICY,
         DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
         AXT_SLOT_LENGTH_MS,
         AXT_MAX_CLOCK_SKEW_MS,
@@ -305,6 +264,41 @@ impl NexusAmxContextWriterV1 {
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
         self.0
+    }
+}
+
+/// The exact Nexus/AMX context preimage a node derived, retained by a refusal as evidence.
+///
+/// `Debug` shows its length and hash, not its bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NexusAmxContextPreimageV1(Vec<u8>);
+
+impl NexusAmxContextPreimageV1 {
+    /// Retain derived preimage bytes.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// The exact preimage bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The commitment of the preimage, as signed genesis records it.
+    #[must_use]
+    pub fn hash(&self) -> iroha_crypto::Hash {
+        iroha_crypto::Hash::new(&self.0)
+    }
+}
+
+impl fmt::Debug for NexusAmxContextPreimageV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NexusAmxContextPreimageV1")
+            .field("len", &self.0.len())
+            .field("hash", &self.hash())
+            .finish()
     }
 }
 
@@ -814,6 +808,99 @@ mod tests {
     }
 
     #[test]
+    fn root_fee_policy_has_one_tag_and_retired_local_terms_are_rejected() {
+        assert_eq!(
+            tag::TAIL
+                .iter()
+                .filter(|&&name| name == tag::ROOT_FEE_POLICY)
+                .count(),
+            1
+        );
+        assert!(!tag::TAIL.iter().any(|name| name.starts_with("nexus.fees.")));
+        let good = sample();
+        let fields = Fields::tokenize(&good).unwrap().fields;
+        for retired in [
+            "nexus.fees.asset",
+            "nexus.fees.sink",
+            "nexus.fees.base",
+            "nexus.fees.per_byte",
+            "nexus.fees.per_instruction",
+            "nexus.fees.per_gas_unit",
+            "nexus.fees.sponsor_vault_custody_account_id",
+            "nexus.fees.successful_claim_exempt_authorities",
+        ] {
+            let mut encoded = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
+            for (field, value) in &fields {
+                let field = if *field == tag::ROOT_FEE_POLICY {
+                    retired
+                } else {
+                    *field
+                };
+                encoded.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                encoded.extend_from_slice(field.as_bytes());
+                encoded.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+                encoded.extend_from_slice(value);
+            }
+            assert_eq!(
+                decode_nexus_amx_context_v1(&encoded),
+                Err(NexusAmxContextError::UnexpectedTag {
+                    expected: tag::ROOT_FEE_POLICY,
+                    found: Some(retired.to_owned()),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn monetary_staking_tags_cannot_reenter_the_node_context() {
+        let staking: Vec<_> = tag::TAIL
+            .iter()
+            .copied()
+            .filter(|name| name.starts_with("nexus.staking."))
+            .collect();
+        assert_eq!(
+            staking,
+            [
+                tag::STAKING_PUBLIC_VALIDATOR_MODE,
+                tag::STAKING_RESTRICTED_VALIDATOR_MODE,
+                tag::STAKING_MAX_VALIDATORS
+            ]
+        );
+        let good = sample();
+        let fields = Fields::tokenize(&good).unwrap().fields;
+        for retired in [
+            "nexus.staking.min_validator_stake",
+            "nexus.staking.max_stake_shares_per_validator",
+            "nexus.staking.max_pending_unbonds_per_share",
+            "nexus.staking.unbonding_delay_ns",
+            "nexus.staking.max_slash_bps",
+            "nexus.staking.stake_asset_id",
+            "nexus.staking.stake_escrow_account_id",
+            "nexus.staking.slash_sink_account_id",
+        ] {
+            let mut encoded = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
+            for (field, value) in &fields {
+                if *field == tag::STAKING_MAX_VALIDATORS {
+                    let mut insertion = NexusAmxContextWriterV1(encoded);
+                    insertion.field(retired, &7_u64);
+                    encoded = insertion.finish();
+                }
+                encoded.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                encoded.extend_from_slice(field.as_bytes());
+                encoded.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+                encoded.extend_from_slice(value);
+            }
+            assert_eq!(
+                decode_nexus_amx_context_v1(&encoded),
+                Err(NexusAmxContextError::UnexpectedTag {
+                    expected: tag::STAKING_MAX_VALIDATORS,
+                    found: Some(retired.to_owned()),
+                })
+            );
+        }
+    }
+
+    #[test]
     fn writer_preimage_decodes_selected_catalog() {
         let catalog = decode_nexus_amx_context_v1(&sample()).unwrap();
         assert_eq!(catalog.lane_count(), 8);
@@ -997,5 +1084,33 @@ mod tests {
             decode_nexus_amx_context_v1(&out),
             Err(NexusAmxContextError::Structure(_))
         ));
+    }
+    #[test]
+    fn retired_staking_and_fee_tags_are_rejected_by_the_canonical_grammar() {
+        let preimage = sample();
+        let fields = Fields::tokenize(&preimage).unwrap().fields;
+        for (expected, retired) in [
+            (
+                tag::STAKING_MAX_VALIDATORS,
+                "nexus.staking.min_validator_stake",
+            ),
+            (tag::ROOT_FEE_POLICY, "nexus.fees.asset"),
+        ] {
+            let mut changed = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
+            for &(field, value) in &fields {
+                let field = if field == expected { retired } else { field };
+                changed.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(field.as_bytes());
+                changed.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(value);
+            }
+            assert_eq!(
+                decode_nexus_amx_context_v1(&changed),
+                Err(NexusAmxContextError::UnexpectedTag {
+                    expected,
+                    found: Some(retired.to_owned()),
+                })
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! OpenAPI schema construction and package authority tests.
+//! `OpenAPI` schema construction and package authority tests.
 
 use super::*;
 use crate::utils;
@@ -246,7 +246,6 @@ impl ComponentRefContext {
     fn child(self, key: &str) -> Self {
         match self {
             Self::Schema | Self::SchemaMap => Self::Schema,
-            Self::HeaderMap => Self::Header,
             Self::Components => match key {
                 "schemas" => Self::SchemaMap,
                 "headers" => Self::HeaderMap,
@@ -258,7 +257,7 @@ impl ComponentRefContext {
                 Self::Schema
             }
             Self::Document => Self::Document,
-            Self::Header => Self::Header,
+            Self::HeaderMap | Self::Header => Self::Header,
         }
     }
     fn expected_component(self) -> Option<&'static str> {
@@ -494,6 +493,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"
+                    | "/v1/assets/{definition_id}/movements/query"
                     | "/v1/transactions/query"
                     | "/v1/accounts/{account_id}/transactions/query"
                     | "/v1/repo/agreements/query"
@@ -805,89 +805,201 @@ fn package_openapi_authority_is_canonical_norito_json() {
     );
 }
 #[test]
-fn privacy_proposed_lifecycle_schema_matches_explicit_governance_payload() {
-    use iroha_data_model::privacy::{PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1};
-
-    let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-        proposed_at_height: 7,
-    });
-    let encoded = norito::json::to_json(&lifecycle).expect("serialize pending proposal");
-    let payload: Value = norito::json::from_str(&encoded).expect("parse typed proposal JSON");
-    assert_eq!(payload["state"].as_str(), Some("proposed"));
-    let payload_fields = payload["record"]
-        .as_object()
-        .expect("typed proposal record")
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(payload_fields, BTreeSet::from(["proposed_at_height"]));
-    assert_eq!(payload["record"]["proposed_at_height"].as_u64(), Some(7));
+fn privacy_protocol_policy_schema_matches_native_limits_and_future_updates() {
+    use iroha_data_model::privacy::{
+        JindoLimitsV1, PrivacyConsensusLimitsV1, PrivacyConsensusPolicyUpdateV1,
+        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+    };
+    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+    let update = PrivacyProtocolLimitsUpdateV1 {
+        scheduled_at_height: 7,
+        effective_at_height: 8,
+        next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            max_polynomial_count: 3,
+        }),
+    };
+    let policy = PrivacyProtocolPolicyV1 {
+        protocol_id,
+        current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            max_polynomial_count: 2,
+        }),
+        pending_update: Some(update),
+    };
+    policy
+        .validate_at_committed_height(7)
+        .expect("bounded ordinary increase");
+    let encoded = norito::json::to_json(&policy).expect("serialize ordinary policy");
     assert_eq!(
-        norito::json::from_str::<PrivacyProtocolLifecycleV1>(&encoded)
-            .expect("decode typed pending proposal"),
-        lifecycle
+        norito::json::from_str::<PrivacyProtocolPolicyV1>(&encoded).unwrap(),
+        policy
     );
-
+    assert_eq!(
+        norito::decode_from_bytes::<PrivacyProtocolPolicyV1>(&norito::to_bytes(&policy).unwrap())
+            .unwrap(),
+        policy
+    );
+    let payload: Value = norito::json::from_str(&encoded).unwrap();
+    assert_eq!(
+        payload["protocol_id"]["protocol"].as_str(),
+        Some(protocol_id.canonical_label())
+    );
+    assert_eq!(
+        payload["pending_update"]["scheduled_at_height"].as_u64(),
+        Some(7)
+    );
+    assert_eq!(
+        payload["pending_update"]["effective_at_height"].as_u64(),
+        Some(8)
+    );
+    assert_eq!(
+        payload["pending_update"]["next_limits"]["limits"]["max_polynomial_count"].as_u64(),
+        Some(3)
+    );
+    let mut current = PrivacyConsensusLimitsV1::taira_default();
+    current.retained_root_count = 1024;
+    let consensus_update = PrivacyConsensusPolicyUpdateV1 {
+        scheduled_at_height: 7,
+        effective_at_height: 8,
+        next_limits: PrivacyConsensusLimitsV1::taira_default(),
+    };
+    let consensus = PrivacyConsensusPolicyV1 {
+        current_limits: current,
+        pending_update: Some(consensus_update),
+    };
+    consensus
+        .validate_at_committed_height(7)
+        .expect("bounded consensus increase");
+    let samples = [
+        (
+            "PrivacyProtocolPolicyV1",
+            norito::json::to_value(&policy).unwrap(),
+        ),
+        (
+            "PrivacyProtocolLimitsUpdateV1",
+            norito::json::to_value(&update).unwrap(),
+        ),
+        (
+            "PrivacyConsensusPolicyV1",
+            norito::json::to_value(&consensus).unwrap(),
+        ),
+        (
+            "PrivacyConsensusPolicyUpdateV1",
+            norito::json::to_value(&consensus_update).unwrap(),
+        ),
+    ];
     for (label, document) in [
         ("authored", canonical_document()),
         ("compiled", generate_spec()),
     ] {
-        let variants = component_schemas(&document)["PrivacyProtocolLifecycleV1"]["oneOf"]
-            .as_array()
-            .expect("privacy lifecycle alternatives");
-        let proposed = variants
-            .iter()
-            .filter(|variant| variant["properties"]["state"]["const"] == payload["state"])
-            .collect::<Vec<_>>();
-        assert_eq!(proposed.len(), 1, "{label}: one typed Proposed alternative");
-        let record = &proposed[0]["properties"]["record"];
-        assert_eq!(record["type"].as_str(), Some("object"), "{label}");
-        assert_eq!(
-            record["additionalProperties"].as_bool(),
-            Some(false),
-            "{label}"
-        );
-        let properties = record["properties"]
-            .as_object()
-            .expect("proposal properties");
-        assert_eq!(
-            properties
+        let schemas = component_schemas(&document);
+        for (name, value) in &samples {
+            let fields = value
+                .as_object()
+                .unwrap()
                 .keys()
                 .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            payload_fields,
-            "{label}: authored properties must match the typed payload"
-        );
-        let required = record["required"]
+                .collect::<Vec<_>>();
+            assert_strict_object_schema(schemas, name, &fields, &[]);
+        }
+        for name in [
+            "PrivacyProtocolLimitsUpdateV1",
+            "PrivacyConsensusPolicyUpdateV1",
+        ] {
+            for field in ["scheduled_at_height", "effective_at_height"] {
+                let property = &schemas[name]["properties"][field];
+                assert_eq!(
+                    property["type"].as_str(),
+                    Some("integer"),
+                    "{label}: {name}.{field}"
+                );
+                assert_eq!(
+                    property["format"].as_str(),
+                    Some("uint64"),
+                    "{label}: {name}.{field}"
+                );
+                assert_eq!(
+                    property["minimum"].as_u64(),
+                    Some(1),
+                    "{label}: {name}.{field}"
+                );
+            }
+        }
+        let variants = schemas["PrivacyProtocolLimitsV1"]["oneOf"]
             .as_array()
-            .expect("required proposal fields")
-            .iter()
-            .map(|value| value.as_str().expect("required field name"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            required, payload_fields,
-            "{label}: required typed payload fields"
-        );
-        assert_eq!(
-            properties["proposed_at_height"]["type"].as_str(),
-            Some("integer")
-        );
-        assert_eq!(
-            properties["proposed_at_height"]["format"].as_str(),
-            Some("uint64")
-        );
-        assert_eq!(
-            properties["proposed_at_height"]["minimum"].as_u64(),
-            Some(1)
-        );
+            .expect("closed native protocol limits");
+        assert_eq!(variants.len(), PrivacyProtocolIdV1::COUNT);
+        for (variant, protocol_id) in variants.iter().zip(PrivacyProtocolIdV1::ALL) {
+            let limits = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+            let native = norito::json::to_value(&limits).unwrap();
+            assert_eq!(
+                native
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["protocol", "limits"])
+            );
+            assert_eq!(
+                variant["properties"]["protocol"]["const"], native["protocol"],
+                "{label}: canonical limit tag"
+            );
+            assert_eq!(variant["additionalProperties"].as_bool(), Some(false));
+            assert_eq!(
+                variant["required"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["protocol", "limits"])
+            );
+            if native["limits"].is_null() {
+                assert_eq!(
+                    variant["properties"]["limits"]["type"].as_str(),
+                    Some("null")
+                );
+            } else {
+                assert_eq!(
+                    variant["properties"]["limits"]["properties"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
+                    native["limits"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>()
+                );
+            }
+        }
     }
-
-    for removed in [
-        r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":7}}"#,
-        r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":307}}"#,
+    for retired in [
+        "lifecycle",
+        "pending_protocol_limits_tightening",
+        "parameter_digest",
+        "production_qualification",
     ] {
-        assert!(norito::json::from_str::<PrivacyProtocolLifecycleV1>(removed).is_err());
+        let mut changed = payload.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .insert(retired.to_owned(), Value::Null);
+        assert!(
+            norito::json::from_value::<PrivacyProtocolPolicyV1>(changed).is_err(),
+            "accepted retired {retired}"
+        );
     }
+    let mut changed = norito::json::to_value(&consensus).unwrap();
+    changed
+        .as_object_mut()
+        .unwrap()
+        .insert("pending_tightening".to_owned(), Value::Null);
+    assert!(norito::json::from_value::<PrivacyConsensusPolicyV1>(changed).is_err());
 }
 
 #[test]
@@ -2417,7 +2529,7 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            "activation",
+            "policy",
             "compiled_profile",
             "execution_mode",
             "operation_schema",
@@ -2438,15 +2550,55 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
                     .expect("Exact12 readiness tag")
             })
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["production-qualified", "unavailable"])
+        BTreeSet::from(["available", "unavailable"])
     );
-    let activation_properties = schemas["PrivacyProtocolActivationRecordV1"]["properties"]
-        .as_object()
-        .expect("privacy activation properties");
-    assert!(!activation_properties.contains_key("production_qualification"));
-    assert!(!activation_properties.contains_key("assurance"));
+    assert_strict_object_schema(
+        schemas,
+        "PrivacyProtocolPolicyV1",
+        &["protocol_id", "current_limits", "pending_update"],
+        &[],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "PrivacyCompiledProfileSnapshotV1",
+        &[
+            "protocol_id",
+            "proof_system_id",
+            "engine_id",
+            "parameter_id",
+            "parameter_digest",
+            "verifier_digest",
+            "statement_schema_digest",
+            "engine_manifest_digest",
+            "protocol_limits",
+        ],
+        &[],
+    );
+    assert_eq!(
+        schemas["PrivacyCompiledProfileSnapshotV1"]["properties"]["protocol_limits"]["$ref"]
+            .as_str(),
+        Some("#/components/schemas/PrivacyProtocolLimitsV1")
+    );
     for retired in [
         "PrivacyAssuranceV1",
+        "PrivacyProtocolActivationRecordV1",
+        "PrivacyProtocolLifecycleV1",
+        "PrivacyProposedLifecycleV1",
+        "PrivacyActiveLifecycleV1",
+        "PrivacySuspendedLifecycleV1",
+        "PrivacyRetiredLifecycleV1",
+        "PrivacyProtocolActivationLimitsV1",
+        "AnonymousPgcActivationLimitsV1",
+        "VeRangeActivationLimitsV1",
+        "ZkAmsActivationLimitsV1",
+        "JindoActivationLimitsV1",
+        "OrchardActivationLimitsV1",
+        "FcmpActivationLimitsV1",
+        "IvmPrivateNoteActivationLimitsV1",
+        "PqMaspActivationLimitsV1",
+        "PrivacyProtocolLimitsTighteningV1",
+        "PrivacyConsensusPolicyTighteningV1",
+        "PrivacyDeploymentActivationV1",
         "PrivacyCapabilityActivationStateV1",
         "PrivacyCapabilityLimitationV1",
     ] {
@@ -2467,15 +2619,7 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
                     .expect("Exact12 unavailable-reason tag")
             })
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "compiled-profile",
-            "invalid-production-qualification",
-            "missing-production-qualification",
-            "not-registered",
-            "proposed",
-            "retired",
-            "suspended",
-        ])
+        BTreeSet::from(["compiled-profile"])
     );
     let qualification = schemas["PrivacyExact12QualificationRecordV1"]["properties"]
         .as_object()
@@ -2490,7 +2634,8 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
     let manifest_properties = schemas["PrivacyExact12CapabilityManifestV1"]["properties"]
         .as_object()
         .expect("Exact12 manifest properties");
-    assert!(manifest_properties.contains_key("qualification"));
+    assert!(!manifest_properties.contains_key("qualification"));
+    assert!(manifest_properties.contains_key("network_id"));
     assert!(!schemas.contains_key("PrivacyProtocolProductionQualificationV1"));
     let security_claim = schemas["PrivacySecurityClaimV1"]["properties"]
         .as_object()
@@ -2521,7 +2666,18 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["classical-rom", "pq-qrom"])
     );
-    let catalog_commitment = schemas["PrivacyExact12CatalogCommitmentV1"]["const"]
+    let catalog_commitment_schema = &schemas["PrivacyExact12CatalogCommitmentV1"];
+    let catalog_commitment_width =
+        u64::try_from(iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::BYTES)
+            .expect("catalog commitment width fits u64");
+    for bound in ["minItems", "maxItems"] {
+        assert_eq!(
+            catalog_commitment_schema[bound].as_u64(),
+            Some(catalog_commitment_width),
+            "Exact12 catalog commitment {bound} must match its native owner"
+        );
+    }
+    let catalog_commitment = catalog_commitment_schema["const"]
         .as_array()
         .expect("pinned Exact12 catalog commitment")
         .iter()
@@ -2531,10 +2687,8 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        catalog_commitment,
-        iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
-            .digest()
-            .to_le_bytes()
+        catalog_commitment.as_slice(),
+        iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical().as_bytes()
     );
     let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
     assert_eq!(
@@ -3141,6 +3295,119 @@ mod privacy_release_qualification;
 #[path = "tests/validator_committee_contract.rs"]
 mod validator_committee_contract;
 
+#[test]
+fn asset_movement_feed_documents_rows_kinds_and_freshness() {
+    let document = canonical_document();
+    for (path, method) in [
+        ("/v1/assets/{definition_id}/movements", "get"),
+        ("/v1/assets/{definition_id}/movements/query", "post"),
+    ] {
+        let operation = openapi_operation(&document, path, method);
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", path),
+            "#/components/schemas/AssetMovementPage",
+            "{method} {path}"
+        );
+        for status in ["400", "503"] {
+            assert_eq!(
+                operation_response_schema_ref(operation, status, path),
+                "#/components/schemas/ErrorEnvelope",
+                "{method} {path} {status}"
+            );
+        }
+        assert!(
+            operation["responses"]["503"]["headers"]
+                .get("Retry-After")
+                .is_some(),
+            "{method} {path} names its retry delay"
+        );
+    }
+    let schemas = component_schemas(&document);
+    let row = &schemas["AssetMovementRow"];
+    assert_eq!(row["additionalProperties"].as_bool(), Some(false));
+    let properties = row["properties"].as_object().unwrap();
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "id",
+            "kind",
+            "timestamp_ms",
+            "from_account_id",
+            "to_account_id",
+            "asset_definition_id",
+            "amount",
+            "tx_hash",
+            "authority",
+            "block_height",
+            "block_index",
+            "movement_index",
+            "result_ok",
+        ])
+    );
+    let kinds: Vec<&str> = properties["kind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kind| kind.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "TRANSFER",
+            "MINT",
+            "BURN",
+            "OFFLINE_LOAD",
+            "OFFLINE_UNLOAD",
+            "OFFLINE_FEE",
+            "OFFLINE_CHARGE"
+        ]
+    );
+    assert_eq!(properties["result_ok"]["type"].as_str(), Some("boolean"));
+}
+
+#[test]
+fn multisig_proposal_reads_return_approval_times_only_when_asked() {
+    let schemas = openapi_schemas();
+    for name in [
+        "MultisigProposalsQueryRequest",
+        "MultisigProposalsResolveRequest",
+    ] {
+        let flag = &schemas[name]["properties"]["include_approvals"];
+        assert_eq!(flag["type"].as_str(), Some("boolean"), "{name}");
+        assert_eq!(flag["default"].as_bool(), Some(false), "{name}");
+    }
+    for name in ["MultisigProposalEntry", "MultisigProposalResolveResponse"] {
+        let schema = &schemas[name];
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("approvals")),
+            "{name}.approvals stays optional for readers that do not ask"
+        );
+        assert_eq!(
+            schema["properties"]["approvals"]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/MultisigProposalApproval"),
+            "{name}"
+        );
+    }
+    let approval = &schemas["MultisigProposalApproval"];
+    assert_eq!(approval["additionalProperties"].as_bool(), Some(false));
+    for field in ["approver", "approved_at_ms", "block_height"] {
+        assert!(
+            approval["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some(field)),
+            "MultisigProposalApproval.{field}"
+        );
+    }
+}
 #[test]
 fn multisig_occurrence_contract_separates_identity_from_content() {
     let schemas = openapi_schemas();

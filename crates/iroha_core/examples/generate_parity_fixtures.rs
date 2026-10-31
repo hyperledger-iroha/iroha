@@ -6,7 +6,7 @@
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
 use iroha_core::{
     state::{State, World},
-    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, TestChainError},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
 use iroha_model_base::chain::ChainId;
@@ -18,13 +18,13 @@ fn start_fixture_chain(
     world: World,
     parallel_apply: bool,
     chain_id: &ChainId,
-) -> Result<CertifiedTestChain, TestChainError> {
+) -> Result<CertifiedTestChain, Box<dyn Error>> {
     let mut config = TestChainConfig::new(world, 0);
     config.chain_id = chain_id.clone();
     config.pipeline.parallel_apply = parallel_apply;
-    CertifiedTestChain::start(config).map_err(|failure| failure.error)
+    CertifiedTestChain::start(config).map_err(|failure| failure.error.into())
 }
-fn fixture_network_id(chain_id: &ChainId) -> Result<NetworkId, TestChainError> {
+fn fixture_network_id(chain_id: &ChainId) -> Result<NetworkId, Box<dyn Error>> {
     Ok(start_fixture_chain(World::new(), false, chain_id)?.network_id())
 }
 fn fixtures_dir() -> PathBuf {

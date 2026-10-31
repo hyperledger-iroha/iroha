@@ -1,5 +1,15 @@
 //! Grouped Iroha Core integration tests.
 
+#[cfg(feature = "zk-tests")]
+#[path = "../common/root_scope_fixture.rs"]
+mod root_scope_fixture;
+#[cfg(feature = "zk-tests")]
+#[path = "../common/world_fixture.rs"]
+mod test_world;
+#[cfg(feature = "zk-tests")]
+#[path = "../common/zk_components.rs"]
+mod zk_components;
+
 #[path = "../fx_routing_review.rs"]
 mod fx_routing_review;
 #[path = "../../src/manifest_signing_test_support.rs"]
@@ -14,8 +24,8 @@ mod query_active_abi;
 mod queue_regressions;
 #[path = "../queue_stress.rs"]
 mod queue_stress;
-#[path = "../runtime_upgrade_admission.rs"]
-mod runtime_upgrade_admission;
+#[path = "../runtime_change_sets.rs"]
+mod runtime_change_sets;
 #[path = "../settlement_overlay.rs"]
 mod settlement_overlay;
 #[path = "../social_viral_incentives.rs"]

@@ -13,6 +13,7 @@ fn local_owner() -> (
     let drops = Arc::new(AtomicUsize::new(0));
     let owner = Arc::new(Owner {
         background: background::Background::default(),
+        exchanges: Mutex::new(exchange::Tokens::default()),
         closing: Arc::new(CloseState::default()),
         scheduler: state::Scheduler::new(),
         wallet: Mutex::new(Some(Box::new(super::super::tests::TestWallet {

@@ -1,0 +1,6 @@
+# Isolated Poetry environment for Dockerfile.build; resolve native Linux architectures.
+# Regenerate with:
+# uv pip compile --python-platform linux --generate-hashes \
+#   --no-emit-index-url --python-version 3.14 --output-file scripts/ci_image_poetry.lock \
+#   scripts/ci_image_poetry.in
+poetry==2.5.1

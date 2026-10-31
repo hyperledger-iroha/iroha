@@ -52,7 +52,7 @@
       "sites": [
         {
           "path": "crates/iroha_kagemusha_proof/src/rebuild_measurement.rs",
-          "use": "Unit-test-only ignored real-family rebuild comparison: fallible process CPU, lifetime peak RSS and supported-host instruction counters; no production or proof-verdict dependency."
+          "use": "Test-only ignored real-family rebuild comparison: fallible process CPU, kernel lifetime RSS and optional retired-instruction diagnostics. Unavailable instruction counts remain explicit nonnumeric observations; measurements never decide proof validity."
         },
         {
           "path": "crates/iroha_kagemusha_proof/tests/common/proof_fixtures/native_load_measurement.rs",

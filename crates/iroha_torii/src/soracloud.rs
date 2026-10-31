@@ -2826,7 +2826,7 @@ fn encode_rollout_signature_payload(
         payload.rollout_handle.as_str(),
         payload.healthy,
         payload.promote_to_percent,
-        payload.governance_tx_hash.clone(),
+        payload.governance_tx_hash,
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollout payload: {err}")))
 }
@@ -2878,7 +2878,7 @@ fn encode_training_job_checkpoint_signature_payload(
         payload.job_id.as_str(),
         payload.completed_step,
         payload.checkpoint_size_bytes,
-        payload.metrics_hash.clone(),
+        payload.metrics_hash,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -2918,11 +2918,11 @@ fn encode_model_weight_register_signature_payload(
         payload.weight_version.as_str(),
         payload.training_job_id.as_str(),
         payload.parent_version.as_deref(),
-        payload.weight_artifact_hash.clone(),
+        payload.weight_artifact_hash,
         payload.dataset_ref.as_str(),
-        payload.training_config_hash.clone(),
-        payload.reproducibility_hash.clone(),
-        payload.provenance_attestation_hash.clone(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -2941,7 +2941,7 @@ fn encode_model_weight_promote_signature_payload(
         payload.model_name.as_str(),
         payload.weight_version.as_str(),
         payload.gate_approved,
-        payload.gate_report_hash.clone(),
+        payload.gate_report_hash,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -2977,11 +2977,11 @@ fn encode_model_artifact_register_signature_payload(
         payload.service_name.as_str(),
         payload.model_name.as_str(),
         payload.training_job_id.as_str(),
-        payload.weight_artifact_hash.clone(),
+        payload.weight_artifact_hash,
         payload.dataset_ref.as_str(),
-        payload.training_config_hash.clone(),
-        payload.reproducibility_hash.clone(),
-        payload.provenance_attestation_hash.clone(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -3413,7 +3413,7 @@ fn build_soracloud_mutation_draft(
     }
     let tx_instructions = instructions
         .into_iter()
-        .map(soracloud_tx_instr_from_box)
+        .map(|value| soracloud_tx_instr_from_box(&value))
         .collect();
     let draft = SoracloudMutationDraftResponse {
         ok: true,
@@ -3428,8 +3428,8 @@ fn build_soracloud_mutation_draft(
     })?;
     Ok(draft)
 }
-fn soracloud_tx_instr_from_box(boxed: InstructionBox) -> SoracloudTxInstruction {
-    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+fn soracloud_tx_instr_from_box(boxed: &InstructionBox) -> SoracloudTxInstruction {
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(boxed)
         .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     SoracloudTxInstruction {
         wire_id: wire_id.to_owned(),
@@ -4460,7 +4460,7 @@ fn authoritative_public_service_discovery_artifact_for_content_cid(
 
 /// Reconstruct the one authoritative Inrou public-discovery document from committed state.
 ///
-/// This deliberately does not provide a generic SoraFS lookup. The requested CID must be present
+/// This deliberately does not provide a generic `SoraFS` lookup. The requested CID must be present
 /// in the committed Soracloud discovery registry, bind an admitted public HttpService+Inrou
 /// revision, and reference an exactly matching approved pin record. Returning the canonical bytes
 /// reconstructed from that state keeps public read availability independent of which validator
@@ -4831,7 +4831,7 @@ fn authoritative_agent_status_entry(
         persistent_state_key_count: u32::try_from(record.persistent_state.key_sizes.len())
             .unwrap_or(u32::MAX),
         spend_limit_count: u32::try_from(record.manifest.spend_limits.len()).unwrap_or(u32::MAX),
-        upgrade_policy: record.manifest.upgrade_policy.clone(),
+        upgrade_policy: record.manifest.upgrade_policy,
         last_restart_sequence: record.last_restart_sequence,
         last_restart_reason: record.last_restart_reason.clone(),
     }
@@ -4963,9 +4963,9 @@ fn authoritative_agent_autonomy_status_response(
 }
 fn authoritative_ciphertext_query_response(
     app: &SharedAppState,
-    request: SignedCiphertextQueryRequest,
+    request: &SignedCiphertextQueryRequest,
 ) -> Result<CiphertextQueryResponse, SoracloudError> {
-    verify_ciphertext_query_signature(&request)?;
+    verify_ciphertext_query_signature(request)?;
     request.query.validate().map_err(|err| {
         SoracloudError::bad_request(format!("ciphertext query failed validation: {err}"))
     })?;
@@ -6845,7 +6845,7 @@ pub async fn handle_ciphertext_query(
     {
         return err.into_response();
     }
-    match authoritative_ciphertext_query_response(&app, request) {
+    match authoritative_ciphertext_query_response(&app, &(request)) {
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
@@ -10845,7 +10845,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let response = authoritative_ciphertext_query_response(
                 &app,
-                signed_ciphertext_query_request(fixture_ciphertext_query_spec(), &query_signer),
+                &(signed_ciphertext_query_request(fixture_ciphertext_query_spec(), &query_signer)),
             )
             .map_err(|err| eyre::eyre!("authoritative ciphertext query failed: {err:?}"))?;
             assert_eq!(response.action, SoracloudAction::CiphertextQuery);
@@ -10925,7 +10925,7 @@ mod tests {
                             lease_usage: None,
                             service_lease_commitment: None,
                             lease_reporting_epoch_rollover: None,
-                            signer: checked_test_keypair(0x70u8.wrapping_add(sequence as u8))
+                            signer: checked_test_keypair(0x70u8.wrapping_add(u8::try_from(sequence).expect("fixture sequence fits u8")))
                                 .public_key()
                                 .clone(),
                         },
@@ -10962,7 +10962,7 @@ mod tests {
     }
     #[test]
     fn soracloud_query_limits_and_filters_are_exact_v1_values() {
-        let app = mk_app_state_for_tests_with_world(Default::default());
+        let app = mk_app_state_for_tests_with_world(iroha_core::state::World::default());
         for invalid in [0, MAX_AUDIT_LIMIT + 1] {
             let error = authoritative_app_infra_status_response(&app, None, invalid)
                 .expect_err("app audit_limit must not be clamped");
@@ -11050,7 +11050,7 @@ mod tests {
     #[tokio::test]
     async fn health_compliance_report_rate_limit_keys_transport_remote_when_internal_header_missing()
      {
-        let mut app = mk_app_state_for_tests_with_world(Default::default());
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
@@ -11193,6 +11193,8 @@ mod tests {
         use iroha_core::state::World;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
+            use http_body_util::BodyExt as _;
+
             let mut world = World::default();
             let bundle = fixture_hosted_http_inrou_bundle("1.0.0");
             let service_name = bundle.service.service_name.clone();
@@ -11683,7 +11685,7 @@ mod tests {
             )
             .await;
             assert_eq!(path_response.status(), StatusCode::NOT_FOUND);
-            use http_body_util::BodyExt as _;
+
             let path_body = path_response
                 .into_body()
                 .collect()
@@ -12848,7 +12850,7 @@ mod tests {
             rollout_handle: "web_portal:rollout:2".to_owned(),
             healthy: true,
             promote_to_percent: Some(100),
-            governance_tx_hash: governance_tx_hash.clone(),
+            governance_tx_hash,
         };
         let encoded = encode_rollout_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
@@ -13146,7 +13148,7 @@ mod tests {
             job_id: "job-1".to_owned(),
             completed_step: 20,
             checkpoint_size_bytes: 1_024,
-            metrics_hash: metrics_hash.clone(),
+            metrics_hash,
         };
         let encoded = encode_training_job_checkpoint_signature_payload(&payload)
             .expect("encode signature payload");
@@ -13187,11 +13189,11 @@ mod tests {
             service_name: "web_portal".to_owned(),
             model_name: "model-1".to_owned(),
             training_job_id: "job-1".to_owned(),
-            weight_artifact_hash: weight_artifact_hash.clone(),
+            weight_artifact_hash,
             dataset_ref: "dataset://synthetic/v2".to_owned(),
-            training_config_hash: training_config_hash.clone(),
-            reproducibility_hash: reproducibility_hash.clone(),
-            provenance_attestation_hash: provenance_attestation_hash.clone(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
         };
         let encoded = encode_model_artifact_register_signature_payload(&payload)
             .expect("encode signature payload");
@@ -13220,11 +13222,11 @@ mod tests {
             weight_version: "1.0.0".to_owned(),
             training_job_id: "job-1".to_owned(),
             parent_version: Some("0.9.0".to_owned()),
-            weight_artifact_hash: weight_artifact_hash.clone(),
+            weight_artifact_hash,
             dataset_ref: "dataset://synthetic/v2".to_owned(),
-            training_config_hash: training_config_hash.clone(),
-            reproducibility_hash: reproducibility_hash.clone(),
-            provenance_attestation_hash: provenance_attestation_hash.clone(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
         };
         let encoded = encode_model_weight_register_signature_payload(&payload)
             .expect("encode signature payload");
@@ -13251,7 +13253,7 @@ mod tests {
             model_name: "model-1".to_owned(),
             weight_version: "1.0.0".to_owned(),
             gate_approved: true,
-            gate_report_hash: gate_report_hash.clone(),
+            gate_report_hash,
         };
         let encoded = encode_model_weight_promote_signature_payload(&payload)
             .expect("encode signature payload");

@@ -34,12 +34,12 @@ fn native_current_predecessor_and_replacement_retain_all_five_groups() {
         let mut tx = block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
         let mut nft = old_nft.clone();
         nft.owned_by = BOB_ID.clone();
-        tx.insert_nft_entry(nft_id(), nft);
+        tx.insert_nft_entry(&(nft_id()), nft);
         let mut rwa = old_rwa.clone();
         rwa.owned_by = BOB_ID.clone();
         rwa.status = Some("active".parse().unwrap());
         rwa.is_frozen = true;
-        tx.insert_rwa_entry(rwa_id(), rwa);
+        tx.insert_rwa_entry(&(rwa_id()), rwa);
         tx.apply();
         block.commit();
     }

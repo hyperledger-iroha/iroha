@@ -172,7 +172,7 @@ use crate::privacy_engines::{
 };
 use crate::{
     privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
-    privacy_state::{PrivacyZkX509AuthoritativeStateV1, compute_privacy_pgc_account_state_root_v1},
+    privacy_state::{PrivacyZkX509AuthoritativeStateV1, derive_privacy_pgc_account_state_root_v1},
     privacy_verifier::{
         PrivacyVerificationContextV1, PrivacyVerificationErrorV1, PrivacyZkX509VerificationStateV1,
         VerifiedPrivacyLedgerEffectsV1, validate_vega_authoritative_issuer_binding_v1,
@@ -200,16 +200,16 @@ use iroha_data_model::{
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
         BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
         IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1, IrohaZkAmsStatementV1,
-        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyActiveLifecycleV1,
-        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
-        PrivacyEngineIdV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterIdV1,
-        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-        PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyChallengeV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1, PrivacyIssuerIdV1,
+        PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLimitsV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
         PrivacyStatementContextV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVegaIssuerRecordLifecycleV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
@@ -247,7 +247,7 @@ use p256::ecdsa::{
 };
 use p256::elliptic_curve::PrimeField as _;
 use rand::{SeedableRng as _, rngs::StdRng};
-use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
+
 use sha2::{Digest, Sha256};
 /// Evidence schema version. Any incompatible change requires a new version.
 pub const PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1: u16 = 1;
@@ -1708,7 +1708,7 @@ fn run_fcmp_plus_plus_stage_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let new_outputs = output_openings
         .iter()
-        .map(|opening| opening.output())
+        .map(iroha_core_privacy::privacy_engines::fcmp_plus_plus::FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -1772,10 +1772,10 @@ fn run_fcmp_plus_plus_stage_v1(
             let first_input = changed_key_image
                 .first_mut()
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-            first_input.key_image = if first_input.key_image != first_input.pseudo_out {
-                first_input.pseudo_out
-            } else {
+            first_input.key_image = if first_input.key_image == first_input.pseudo_out {
                 first_input.output_key_tilde
+            } else {
+                first_input.pseudo_out
             };
             if verify_fcmp_transaction_v1(
                 context_hash,
@@ -2124,7 +2124,7 @@ fn run_anonymous_pgc_stage_v1(
         &current_balances,
         recipient_count,
         pool_invariant,
-        binding,
+        &binding,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let witness = AnonymousPgcPaymentWitnessV1 {
@@ -2171,7 +2171,7 @@ fn run_anonymous_pgc_stage_v1(
         .initial_epoch
         .checked_add(1)
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let successor_root = compute_privacy_pgc_account_state_root_v1(
+    let successor_root = derive_privacy_pgc_account_state_root_v1(
         bootstrap.namespace,
         successor_epoch,
         total_supply,
@@ -2235,7 +2235,7 @@ fn run_anonymous_pgc_stage_v1(
                 &current_balances,
                 recipient_count,
                 pool_invariant,
-                mutated_binding,
+                &mutated_binding,
             )
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
             if verify_payment_encoded(&mutated, &proof_bytes).is_ok() {
@@ -2357,7 +2357,7 @@ fn anonymous_pgc_bootstrap_material_v1(
         }),
     );
     let accounts = anonymous_pgc_account_table_v1(public_keys, encrypted_balances)?;
-    let initial_root = compute_privacy_pgc_account_state_root_v1(
+    let initial_root = derive_privacy_pgc_account_state_root_v1(
         namespace,
         PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
         total_supply,
@@ -2405,7 +2405,7 @@ fn anonymous_pgc_bootstrap_material_v1(
         total_supply,
         public_keys,
         encrypted_balances,
-        binding,
+        &binding,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let witness = AnonymousPgcBootstrapWitnessV1 {
@@ -2426,7 +2426,7 @@ fn anonymous_pgc_bootstrap_material_v1(
     let bootstrap_proof_digest = proof
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let recomputed_root = compute_privacy_pgc_account_state_root_v1(
+    let recomputed_root = derive_privacy_pgc_account_state_root_v1(
         bootstrap.namespace,
         bootstrap.initial_epoch,
         bootstrap.total_supply,
@@ -2617,9 +2617,7 @@ fn run_bootle_lantern_stage_v1(
     )?);
     let authorization = issuer_authorize_blind_issuance_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         [0xA1; 32],
         10,
         20,
@@ -2676,9 +2674,7 @@ fn run_bootle_lantern_stage_v1(
     )?);
     let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         &authorization,
         &issuance_request_wire,
         10,
@@ -2698,9 +2694,7 @@ fn run_bootle_lantern_stage_v1(
     let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
     let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
-        &context,
-        GENESIS_HASH,
-        &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash: GENESIS_HASH, policy: &policy },
         &authorization,
         &issuance_request_wire,
         21,
@@ -2932,7 +2926,7 @@ fn run_zk_ams_stage_v1(
     let mut random_source =
         EvidenceRng06::new(stage_seed_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, case_kind));
     let prepared = prepare_zk_ams_provision_privacy_action_with_rng_v1(
-        provision_context,
+        &provision_context,
         governance,
         provision_action,
         signer_index,
@@ -2985,10 +2979,8 @@ fn run_zk_ams_stage_v1(
     let (public_statement_material, proof_artifacts, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => {
-            if provision.admitted_seed_key_ring.len() != ZK_AMS_MAX_RING_SIZE_V1 {
-                if maximum {
-                    return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
-                }
+            if provision.admitted_seed_key_ring.len() != ZK_AMS_MAX_RING_SIZE_V1 && maximum {
+                return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
             }
             if admission.anchor_count != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -3644,7 +3636,7 @@ fn zk_ams_admission_lineage_material_v1(
             let signature: P256Signature = issuer_signing_key
                 .sign_prehash(credential.digest().as_bytes())
                 .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             Ok(<[u8; 64]>::from(signature.to_bytes()))
         })
         .collect::<Result<Vec<_>, PrivacyReleaseEvidenceErrorClassV1>>()?;
@@ -3710,7 +3702,7 @@ fn zk_ams_admission_lineage_material_v1(
         &proof_purpose,
     )?);
     let prepared = prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
-        zk_ams_admission_transaction_context_v1()?,
+        &zk_ams_admission_transaction_context_v1()?,
         governance,
         action,
         &witnesses,
@@ -3849,7 +3841,7 @@ fn zk_ams_provision_transaction_context_v1()
 fn zk_ams_issuer_key_v1() -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
     let signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -3946,13 +3938,7 @@ fn verify_zk_ams_release_production_envelope_v1(
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -3975,7 +3961,8 @@ fn verify_zk_ams_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,
@@ -4072,7 +4059,7 @@ fn run_jindo_stage_v1(
         case_kind,
     ));
     let prepared = prepare_jindo_privacy_action_with_rng_v1(
-        context,
+        &context,
         witness,
         JINDO_RELEASE_GENESIS_HASH_V1,
         &mut rng,
@@ -4292,13 +4279,7 @@ fn verify_jindo_release_production_envelope_v1(
     let profile =
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -4312,7 +4293,8 @@ fn verify_jindo_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,
@@ -4439,7 +4421,7 @@ fn run_orchard_stage_v1(
                 Scope::External,
                 u32::from(seed),
                 value,
-                [seed; 512],
+                &[seed; 512],
             )],
             0,
             -i64::try_from(value)
@@ -4495,9 +4477,8 @@ fn run_orchard_stage_v1(
         &consensus_limits,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let proved =
-        authorize_orchard_bundle_v1(prepared, consensus_binding.clone(), &consensus_limits)
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let proved = authorize_orchard_bundle_v1(prepared, &consensus_binding, &consensus_limits)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let proof_bytes = proved.authorization;
     let public = proved.public;
     verify_orchard_bundle_v1(&public, &proof_bytes, &consensus_limits)
@@ -4772,7 +4753,7 @@ fn orchard_maximum_spend_fixture_v1()
             anchor = Some(derived_anchor);
         }
         spends.push(OrchardSpendProverInputV1::new(
-            spending_key,
+            spending_key.clone(),
             note,
             merkle_path,
         ));

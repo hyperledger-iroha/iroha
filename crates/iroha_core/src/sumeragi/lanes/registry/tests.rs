@@ -333,7 +333,7 @@ impl Fixture {
         drop(publication);
     }
 
-    fn lane_state(&self) -> SumeragiLaneState {
+    fn lane_state() -> SumeragiLaneState {
         let mut committee: Vec<_> = (1..=4)
             .map(|seed| {
                 let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
@@ -663,7 +663,7 @@ fn retired_failed_openings_release_original_funding_and_lock_but_keep_replay_fra
                 .io_kind(),
             io::ErrorKind::WouldBlock
         );
-        let mut lanes = f.lane_state();
+        let mut lanes = Fixture::lane_state();
         f.stores.release_retired(&lanes);
         assert_eq!(f.stores.budget.reserved_bytes(), baseline + original.len());
         assert!(matches!(
@@ -705,7 +705,7 @@ fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
     let f = Fixture::new(true);
     f.publish();
     let reader = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
-    f.stores.release_retired(&f.lane_state());
+    f.stores.release_retired(&Fixture::lane_state());
     assert!(Arc::ptr_eq(
         &reader,
         &f.stores.store(LANE, &INCARNATION).unwrap()
@@ -1474,6 +1474,9 @@ impl crate::sumeragi::driver::traits::Net for RetirementNoFrames {
 
 #[test]
 fn original_runtime_retirement_refunds_after_registry_and_runner_unlock() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use crate::{
         state::{World, WorldReadOnly},
         sumeragi::{
@@ -2335,15 +2338,15 @@ pub struct RetiredSyncGate {
     release: Mutex<Option<std::sync::mpsc::SyncSender<()>>>,
 }
 impl RetiredSyncGate {
-    /// Identity of the physical thread which entered the original native SyncDir.
+    /// Identity of the physical thread which entered the original native `SyncDir`.
     pub fn synchronizer(&self) -> Option<std::thread::ThreadId> {
         self.synchronizer.get().copied()
     }
 
-    /// Observe the exact native SyncDir boundary without changing its original deadline.
+    /// Observe the exact native `SyncDir` boundary without changing its original deadline.
     ///
     /// # Errors
-    /// The original observation times out or its sender disconnects before entering SyncDir.
+    /// The original observation times out or its sender disconnects before entering `SyncDir`.
     pub fn wait_entered(&self) -> Result<(), std::sync::mpsc::RecvTimeoutError> {
         self.observed.lock().recv_timeout(Duration::from_secs(5))
     }
@@ -2427,7 +2430,7 @@ impl RetiredSyncObservation<'_> {
     }
 }
 
-/// Exercise original retired SyncDir alongside an already active independent lane.
+/// Exercise original retired `SyncDir` alongside an already active independent lane.
 pub fn observe_retired_sync_for_test<R>(
     observe: impl FnOnce(RetiredSyncObservation<'_>) -> R,
 ) -> R {

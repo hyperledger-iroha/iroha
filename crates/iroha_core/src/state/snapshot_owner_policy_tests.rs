@@ -16,10 +16,10 @@ state_test! { sync startup_sumeragi_key_policy_matches_canonical_state_without_m
     assert_eq!(norito::json::to_value(&state).expect("State after validation"), before);
     let hash = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     {
-        let mut parameters = state.world.parameters.block();
-        let mut consensus = parameters.sumeragi().clone();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).expect("fund original parameter Cell acquisition");
+        let mut consensus = parameters.get().sumeragi().clone();
         consensus.key_allowed_algorithms.reverse();
-        parameters.set_sumeragi(consensus);
+        crate::state::set_sumeragi_cell_for_testing(&mut parameters, consensus, state.world.sccp_committee_generations.allocation_budget()).expect("valid fixture consensus parameters");
         parameters.commit();
     }
     let before = norito::json::to_value(&state).expect("equivalent algorithm order");
@@ -151,6 +151,19 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .set_nexus_from_config(configured.clone())
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
+    // This structural component never executes genesis. Author its explicit
+    // registration policy before the first block; native replay uses fresh Worlds.
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original fixture parameter cell");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        crate::sumeragi::test_chain::crypto_fixture_policy()
+            .into_parameter()
+            .expect("canonical fixture crypto policy"),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture crypto policy");
+    parameters.commit();
     let (validator, keypair) = bls_account_in("snapshot-owner");
     let npos = SumeragiNposParameters::default();
     assert_eq!(
@@ -287,7 +300,7 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .clone();
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (component, projected_nexus) =
         snapshot_runtime_component(&value, &state, Some(&configured))
@@ -375,7 +388,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     state.canonical_runtime.replace_current_preserving_predecessor(current_runtime);
     {
         let mut world = state.world.block();
-        world.parameters.get_mut().set_parameter(
+        world.set_parameter_for_testing(
             iroha_data_model::parameter::Parameter::Custom(
                 runtime.into_custom_parameter().expect("valid protected catalog"),
             ),
@@ -386,7 +399,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     let value: norito::json::Value = norito::json::from_json(&snapshot).unwrap();
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&state.kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (_, restored_nexus) = snapshot_runtime_component(&value, &state, Some(&configured))
         .expect("full configured baseline validates the retained runtime catalog component");
@@ -552,7 +565,7 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
     let snapshot = norito::json::to_value(&state).expect("complete State snapshot");
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     let (restored, _) = snapshot_runtime_component(&snapshot, &state, None)
         .expect("decode complete typed runtime component with both cuts");
@@ -648,7 +661,7 @@ state_test! { sync snapshot_owner_policy_native_replay_retains_original_configur
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(norito::json::to_value(replay.state().as_ref()).unwrap(),
             Arc::clone(replay.kura())),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
     ));
     assert!(!replay.state().nexus_runtime_restored_from_snapshot());
 }

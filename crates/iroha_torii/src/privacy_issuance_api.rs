@@ -1286,8 +1286,8 @@ fn committed_snapshot_v1(
             return Err(BootleLanternIssuanceApiErrorV1::PolicyUnavailable);
         }
     };
-    let activation = view
-        .qualified_privacy_activation_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+    let admitted = view
+        .admitted_privacy_protocol_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
         .map_err(|_| BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
     let committed_height = capabilities.committed_height;
     if committed_height == 0
@@ -1325,11 +1325,11 @@ fn committed_snapshot_v1(
             canonical_genesis_hash,
             policy.record_digest.as_bytes(),
         )?),
-        parameter_id: activation.parameter_id,
-        parameter_digest: activation.parameter_digest,
-        verifier_digest: activation.verifier_digest,
-        statement_schema_digest: activation.statement_schema_digest,
-        engine_manifest_digest: activation.engine_manifest_digest,
+        parameter_id: admitted.profile().parameter_id,
+        parameter_digest: admitted.profile().parameter_digest,
+        verifier_digest: admitted.profile().verifier_digest,
+        statement_schema_digest: admitted.profile().statement_schema_digest,
+        engine_manifest_digest: admitted.profile().engine_manifest_digest,
     };
     if profile.parameter_id != context.parameter_id
         || profile.parameter_digest != context.parameter_digest
@@ -1597,12 +1597,11 @@ fn parse_bearer_v1(
     // a valid secret prefix is explicitly erased instead of being dropped in
     // an opaque base64-owned temporary.
     let mut decoded = vec![0_u8; BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1];
-    let written = match URL_SAFE_NO_PAD.decode_slice(encoded, &mut decoded) {
-        Ok(written) => written,
-        Err(_) => {
-            erase_bytes_v1(&mut decoded);
-            return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
-        }
+    let written = if let Ok(written) = URL_SAFE_NO_PAD.decode_slice(encoded, &mut decoded) {
+        written
+    } else {
+        erase_bytes_v1(&mut decoded);
+        return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     };
     decoded.truncate(written);
     if decoded.is_empty() {
@@ -1613,12 +1612,11 @@ fn parse_bearer_v1(
     // round trip below rejects alternate trailing-bit representations. The
     // re-encoded credential is secret too, so erase its scratch allocation on
     // both success and failure.
-    let canonical_len = match encoded_len(decoded.len(), false) {
-        Some(canonical_len) => canonical_len,
-        None => {
-            erase_bytes_v1(&mut decoded);
-            return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
-        }
+    let canonical_len = if let Some(canonical_len) = encoded_len(decoded.len(), false) {
+        canonical_len
+    } else {
+        erase_bytes_v1(&mut decoded);
+        return Err(BootleLanternIssuanceApiErrorV1::Unauthorized);
     };
     let mut canonical = vec![0_u8; canonical_len];
     let canonical_matches = URL_SAFE_NO_PAD
@@ -1794,7 +1792,7 @@ fn error_response_v1(error: BootleLanternIssuanceApiErrorV1) -> Response {
     };
     let envelope = iroha_torii_shared::ErrorEnvelope::new(code, code);
     let mut response =
-        crate::utils::respond_with_status_and_format(status, envelope, response_format);
+        crate::utils::respond_with_status_and_format(status, &(envelope), response_format);
     if status == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
@@ -1914,7 +1912,6 @@ mod tests {
         BootleLanternAttributeValueV1, PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use std::{
         collections::VecDeque,
         sync::{
@@ -1948,32 +1945,29 @@ mod tests {
             Self(seed)
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for TestRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_le_bytes(bytes))
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible deterministic test RNG");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 self.0 ^= self.0 << 13;
                 self.0 ^= self.0 >> 7;
                 self.0 ^= self.0 << 17;
-                *byte = self.0 as u8;
+                *byte = self.0.to_le_bytes()[0];
             }
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     fn valid_config() -> BootleLanternIssuanceRuntimeConfigV1 {
         BootleLanternIssuanceRuntimeConfigV1 {
             state_dir: PathBuf::from("/var/lib/iroha/privacy-bootle-lantern"),
@@ -2047,9 +2041,7 @@ mod tests {
             let mut authorization_rng = TestRng::seeded(0x510e_527f_ade6_82d1);
             let authorization = issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
                 &issuer,
-                &context,
-                canonical_genesis_hash,
-                &policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &context, canonical_genesis_hash, policy: &policy },
                 raw(0x71),
                 10,
                 26,
@@ -2177,9 +2169,7 @@ mod tests {
             }
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &self.issuer,
-                context,
-                canonical_genesis_hash,
-                policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context, canonical_genesis_hash, policy },
                 authorization,
                 request_bytes,
                 current_height,
@@ -2818,6 +2808,7 @@ mod tests {
     }
     #[test]
     fn cross_sdk_fixture_bodies_bind_exact_lengths_magics_and_hashes() {
+        type FixtureBodyCase<'a> = (&'a str, &'a str, usize, &'a [(usize, &'a [u8])]);
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
             "../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json"
         ))
@@ -2830,7 +2821,7 @@ mod tests {
             bodies.get("pattern").and_then(norito::json::Value::as_str),
             Some("byte-at-index-equals-index-modulo-256-with-canonical-wire-magics"),
         );
-        let cases: [(&str, &str, usize, &[(usize, &[u8])]); 3] = [
+        let cases: [FixtureBodyCase<'_>; 3] = [
             (
                 "authorization_response",
                 "ILA1",
@@ -3027,9 +3018,7 @@ mod tests {
         let second_authorization =
             issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
                 &fixture.issuer,
-                &fixture.snapshot.context,
-                fixture.snapshot.canonical_genesis_hash,
-                &fixture.snapshot.policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &fixture.snapshot.context, canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash, policy: &fixture.snapshot.policy },
                 fixture.authorization.requester_authorization_digest(),
                 fixture.authorization.issued_at_height(),
                 fixture.authorization.expires_at_height(),
@@ -3392,7 +3381,7 @@ mod tests {
         let expired_snapshot = CommittedIssuanceSnapshotV1 {
             committed_height: fixture.authorization.expires_at_height() + 100,
             canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash,
-            context: fixture.snapshot.context.clone(),
+            context: fixture.snapshot.context,
             policy: fixture.snapshot.policy.clone(),
         };
         let retry = issue_registered_request_v1(
@@ -3638,9 +3627,7 @@ mod tests {
         let mut substituted_response =
             issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
                 &fixture.issuer,
-                &fixture.snapshot.context,
-                fixture.snapshot.canonical_genesis_hash,
-                &fixture.snapshot.policy,
+iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 { context: &fixture.snapshot.context, canonical_genesis_hash: fixture.snapshot.canonical_genesis_hash, policy: &fixture.snapshot.policy },
                 &fixture.authorization,
                 &fixture.request_bytes,
                 fixture.snapshot.committed_height,

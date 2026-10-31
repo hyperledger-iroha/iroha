@@ -39,11 +39,16 @@ pub fn export_race_kernels_json_v1() -> String {
         if index != 0 {
             output.push(',');
         }
-        write!(output, "\"{name}\":\"{:x}\"", Sha256::digest(bytes)).expect("string write");
+        write!(
+            output,
+            "\"{name}\":\"{}\"",
+            hex::encode(Sha256::digest(bytes))
+        )
+        .expect("string write");
     }
     let profile_sources = super::proof::RACE_PROFILE_SOURCES_V1
         .iter()
-        .map(|(name, bytes)| ((*name).to_owned(), format!("{:x}", Sha256::digest(bytes))))
+        .map(|(name, bytes)| ((*name).to_owned(), hex::encode(Sha256::digest(bytes))))
         .collect::<std::collections::BTreeMap<_, _>>();
     let environment = [RaceTrackV1::NeonTokyo, RaceTrackV1::Harbor, RaceTrackV1::Sakura].into_iter().map(|track| {
         use super::environment as env;
@@ -192,7 +197,11 @@ pub fn export_race_parity_json_v1() -> Result<norito::json::Value, RaceSimulatio
                         };
                         1 | 16
                             | steer
-                            | if (state.tick + slot as u32 * 11) % 90 < 25 {
+                            | if (state.tick
+                                + u32::try_from(slot).expect("validated player or port count") * 11)
+                                % 90
+                                < 25
+                            {
                                 32
                             } else {
                                 0
@@ -219,7 +228,7 @@ pub fn export_race_parity_json_v1() -> Result<norito::json::Value, RaceSimulatio
     Ok(json!({
         "rulesHash":(super::race_rules_hash_v1().to_string()),
         "generator":"Native Iroha RaceV1 reference, canonical in-tree export; snapshots after current-tick consensus DNF phase before controls",
-        "kernelSha256":(format!("{:x}",Sha256::digest(include_bytes!("race.rs")))),
+        "kernelSha256":(hex::encode(Sha256::digest(include_bytes!("race.rs")))),
         "fixtures":fixtures,
     }))
 }
@@ -251,7 +260,7 @@ mod tests {
                 profile_sources
                     .get(*name)
                     .and_then(norito::json::Value::as_str),
-                Some(format!("{:x}", Sha256::digest(bytes)).as_str()),
+                Some(hex::encode(Sha256::digest(bytes)).as_str()),
                 "profile source {name} must come from the actual committed inventory",
             );
         }

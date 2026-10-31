@@ -20,7 +20,7 @@ directly.
 
 ## Prerequisites
 
-- Android Studio with AGP 9.0.1 support (the canonical SDK uses Gradle 9.3.0).
+- Android Studio with AGP 9.4.1 support (the canonical SDK uses Gradle 9.8.2).
 - Android SDK Platform 35.
 - JDK 21+ on your PATH or via `JAVA_HOME`.
 

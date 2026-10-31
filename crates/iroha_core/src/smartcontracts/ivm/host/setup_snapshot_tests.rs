@@ -47,7 +47,7 @@ fn complete_account_snapshot(world: &impl WorldReadOnly) -> Vec<AccountId> {
         .collect()
 }
 
-fn queued_instructions<QS>(host: &CoreHostImpl<QS>) -> Vec<InstructionBox> {
+fn queued_instructions<QS>(host: &CoreHostImpl<'_, '_, QS>) -> Vec<InstructionBox> {
     QueuedEffect::instructions(&host.queued).cloned().collect()
 }
 
@@ -133,7 +133,7 @@ fn transaction_account_snapshot_stays_bounded_and_pinned_to_its_first_setup() {
     // An account that sorts into the observable prefix after the first host
     // setup of this transaction stays invisible to its later setups, exactly
     // as with the complete snapshot cache.
-    let late = (FIXTURE_ACCOUNTS..)
+    let late = (FIXTURE_ACCOUNTS..=u32::MAX)
         .map(seeded_account)
         .find(|candidate| candidate < pinned.last().expect("bounded prefix"))
         .expect("a fresh account sorts into the prefix");
@@ -195,7 +195,7 @@ fn zk_root_snapshot_reads_trees_in_place_like_the_owned_projection() {
         .expect("hydrate ZK snapshots");
     let mut owned = CoreHost::new(seeded_account(1));
     owned
-        .set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), zk_state.clone())]))
+        .set_zk_roots_snapshot(&(BTreeMap::from([(asset.clone(), zk_state.clone())])))
         .expect("owned root snapshot");
     assert_eq!(borrowed.zk_roots, owned.zk_roots);
     let snapshot = &borrowed.zk_roots[&asset];
@@ -264,7 +264,7 @@ fn signed_fixture_pulses(
 }
 
 /// A committed State holding `pulses`, canonical hashes up to `height` and
-/// NPoS epochs of [`FIXTURE_EPOCH_LENGTH`] blocks.
+/// `NPoS` epochs of [`FIXTURE_EPOCH_LENGTH`] blocks.
 fn vrf_fixture_state(
     key_record: &crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     pulses: impl IntoIterator<Item = FinalizedGlobalThresholdBeaconPulseV1>,
@@ -298,10 +298,11 @@ fn vrf_fixture_state(
         .rebuild_global_beacon_pulse_slots()
         .expect("unique fixture pulse slots");
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(
                 SumeragiNposParameters {
                     epoch_length_blocks: NonZeroU64::new(FIXTURE_EPOCH_LENGTH)
                         .expect("non-zero fixture epoch"),
@@ -311,8 +312,10 @@ fn vrf_fixture_state(
                     ..SumeragiNposParameters::default()
                 }
                 .into_custom_parameter(),
-            ))
-            .expect("valid fixture NPoS parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture NPoS parameters");
         parameters.commit();
     }
     let mut state = State::new_with_chain_and_network_id_for_testing(
@@ -390,7 +393,7 @@ fn eager_vrf_epoch_seed_oracle(state: &impl StateReadOnly) -> BTreeMap<u64, [u8;
 
 /// Read one epoch through the syscall pair, returning quote, gas and seed.
 fn read_vrf_epoch_seed<QS: QueryStateAccess + Default>(
-    host: &mut CoreHostImpl<QS>,
+    host: &mut CoreHostImpl<'_, '_, QS>,
     epoch: u64,
 ) -> (u64, u64, Option<[u8; 32]>) {
     let mut vm = IVM::new(10_000);
@@ -625,6 +628,18 @@ fn mean_micros(iterations: u32, mut run: impl FnMut()) -> u128 {
     start.elapsed().as_micros() / u128::from(iterations)
 }
 
+/// Iterations for cached reads, which take too little time to time in microseconds.
+const CACHED_ITERATIONS: u32 = 10_000;
+
+/// Mean wall time of `run` over `iterations` calls, in nanoseconds.
+fn mean_nanos(iterations: u32, mut run: impl FnMut()) -> u128 {
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        run();
+    }
+    start.elapsed().as_nanos() / u128::from(iterations)
+}
+
 /// One canonical native verifying-key registry entry.
 fn canonical_transfer_key_entry() -> (VerifyingKeyId, VerifyingKeyRecord) {
     let backend = "pipa-r/pasta";
@@ -652,6 +667,66 @@ fn canonical_transfer_key_entry() -> (VerifyingKeyId, VerifyingKeyRecord) {
     )
 }
 
+/// Print uncached and cached confidential-root costs for `assets` copies of `template`.
+///
+/// Each copy retains the newest `retained` roots of the template's history.
+fn zk_roots_scaling_diagnostic(template: &ZkAssetState, assets: usize, retained: usize) {
+    let mut tree = template.clone();
+    tree.root_history
+        .drain(..tree.root_history.len() - retained);
+    let mut world = World::new();
+    for index in 0..assets {
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("setupcost", "universal").expect("fixture domain"),
+            format!("asset{index}").parse().expect("fixture asset name"),
+        );
+        world.zk_assets.insert(asset, tree.clone());
+    }
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let view = state.view();
+    let uncached = mean_micros(5, || {
+        std::hint::black_box(
+            crate::state::ivm_zk_roots::project(view.world().zk_assets().iter()).expect("roots"),
+        );
+    });
+    view.ivm_zk_roots_snapshot()
+        .expect("warm the view projection");
+    let cached_view = mean_nanos(CACHED_ITERATIONS, || {
+        std::hint::black_box(view.ivm_zk_roots_snapshot().expect("cached roots"));
+    });
+    let mut host = CoreHost::new(seeded_account(1));
+    let uncached_hydration = mean_micros(5, || {
+        host.set_zk_snapshots_from_world(view.world(), &view.zk)
+            .expect("uncached hydration");
+    });
+    let cached_hydration = mean_nanos(CACHED_ITERATIONS, || {
+        host.set_zk_snapshots_from_state(&view)
+            .expect("cached hydration");
+    });
+    drop(view);
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).expect("first block height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let transaction = block.transaction();
+    transaction
+        .ivm_zk_roots_snapshot()
+        .expect("warm the block projection");
+    let cached_transaction = mean_nanos(CACHED_ITERATIONS, || {
+        std::hint::black_box(transaction.ivm_zk_roots_snapshot().expect("cached roots"));
+    });
+    println!(
+        "zk roots scaling ({assets} assets x {retained} roots): projection uncached {uncached} us, cached view {cached_view} ns, cached transaction {cached_transaction} ns; host ZK hydration uncached {uncached_hydration} us, cached {cached_hydration} ns"
+    );
+}
+
 #[test]
 #[ignore = "timing diagnostic for host-setup snapshots; run with --ignored --nocapture"]
 fn host_setup_snapshot_cost_diagnostic() {
@@ -668,7 +743,7 @@ fn host_setup_snapshot_cost_diagnostic() {
         DomainId::try_new("setupcost", "universal").expect("fixture domain"),
         "asset".parse().expect("fixture asset name"),
     );
-    let mut zk_state = ZkAssetState::default();
+    let mut full_history = ZkAssetState::default();
     let leaves = (0_u32..1_024)
         .map(|index| {
             // Small outer bytes keep the leaf canonical in either byte order.
@@ -679,12 +754,15 @@ fn host_setup_snapshot_cost_diagnostic() {
             leaf
         })
         .collect::<Vec<_>>();
-    zk_state
+    full_history
         .push_commitments(
             &leaves,
-            NonZeroUsize::new(64).expect("non-zero root history cap"),
+            NonZeroUsize::new(leaves.len()).expect("non-zero root history cap"),
         )
         .expect("canonical confidential tree");
+    // A 64-root cap retains exactly the newest 64 roots of the same appends.
+    let mut zk_state = full_history.clone();
+    zk_state.root_history.drain(..leaves.len() - 64);
     for index in 0..NULLIFIERS {
         let mut nullifier = [0_u8; 32];
         nullifier[..4].copy_from_slice(&index.to_le_bytes());
@@ -713,16 +791,24 @@ fn host_setup_snapshot_cost_diagnostic() {
             .iter()
             .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
             .collect::<BTreeMap<_, _>>();
-        std::hint::black_box(CoreHost::validated_zk_roots_snapshot(&owned).expect("roots"));
+        std::hint::black_box(crate::state::ivm_zk_roots::project(&owned).expect("roots"));
     });
     let roots_after = mean_micros(20, || {
         std::hint::black_box(
-            CoreHost::validated_zk_roots_snapshot(view.world().zk_assets().iter()).expect("roots"),
+            crate::state::ivm_zk_roots::project(view.world().zk_assets().iter()).expect("roots"),
         );
     });
+    view.ivm_zk_roots_snapshot()
+        .expect("warm the view projection");
+    let roots_cached = mean_nanos(CACHED_ITERATIONS, || {
+        std::hint::black_box(view.ivm_zk_roots_snapshot().expect("cached roots"));
+    });
     println!(
-        "zk roots (1024 leaves, {NULLIFIERS} nullifiers): before {roots_before} us, after {roots_after} us"
+        "zk roots (1024 leaves, 64 roots, {NULLIFIERS} nullifiers): before {roots_before} us, after {roots_after} us, cached {roots_cached} ns"
     );
+    for (assets, retained) in [(1, 64), (1, 1_024), (16, 1_024), (64, 1_024)] {
+        zk_roots_scaling_diagnostic(&full_history, assets, retained);
+    }
 
     let (id, record) = canonical_transfer_key_entry();
     CoreHost::prepare_verifying_key(&id, &record).expect("prepare the canonical key");
@@ -839,4 +925,153 @@ fn shared_election_hydration_preserves_tally_bytes_and_gas() {
         assert_eq!(read(&mut eager), read(&mut cached));
         assert_eq!(read(&mut eager), read(&mut sibling));
     }
+}
+
+/// Quote, executed gas or error, and response bytes of one `ZK_ROOTS_GET` call.
+type RootsRead = (Result<u64, String>, Result<u64, String>, Option<Vec<u8>>);
+
+fn read_roots(host: &mut CoreHost, asset_id: &str, max: u32) -> RootsRead {
+    let mut vm = IVM::new(1_000_000);
+    let payload = norito::to_bytes(&ivm::zk_verify::RootsGetRequest {
+        asset_id: asset_id.to_owned(),
+        max,
+    })
+    .unwrap();
+    let ptr = super::tests::store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+    vm.set_register(10, ptr);
+    let quote = host
+        .prepare_syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &vm)
+        .map_err(|error| format!("{error:?}"));
+    let gas = host
+        .syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &mut vm)
+        .map_err(|error| format!("{error:?}"));
+    let response = gas
+        .is_ok()
+        .then(|| vm.validate_tlv(vm.register(10)).unwrap().payload.to_vec());
+    (quote, gas, response)
+}
+
+fn shared_roots_asset(name: &str) -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("sharedroots", "universal").expect("fixture domain"),
+        name.parse().expect("fixture asset name"),
+    )
+}
+
+fn shared_roots_tree(leaves: &[[u8; 32]]) -> ZkAssetState {
+    let mut tree = ZkAssetState::default();
+    tree.push_commitments(
+        leaves,
+        NonZeroUsize::new(2).expect("non-zero root history cap"),
+    )
+    .expect("canonical confidential tree");
+    tree
+}
+
+/// Every request shape reads identical quotes, gas, errors and bytes from both hosts.
+fn assert_identical_root_reads(expected: &mut CoreHost, actual: &mut CoreHost) {
+    let requests = ["filled", "empty", "added", "missing"]
+        .into_iter()
+        .map(|name| shared_roots_asset(name).to_string())
+        .chain(["not-an-asset-definition".to_owned()]);
+    for asset_id in requests {
+        for max in [0, 1, 2, u32::MAX] {
+            assert_eq!(
+                read_roots(expected, &asset_id, max),
+                read_roots(actual, &asset_id, max),
+                "ZK_ROOTS_GET {asset_id} max={max}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_root_hydration_preserves_root_bytes_and_gas() {
+    let mut world = World::new();
+    world.zk_assets.insert(
+        shared_roots_asset("filled"),
+        shared_roots_tree(&[[0x21; 32], [0x22; 32], [0x23; 32]]),
+    );
+    world
+        .zk_assets
+        .insert(shared_roots_asset("empty"), ZkAssetState::default());
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let view = state.view();
+    let mut eager = CoreHost::new(seeded_account(1));
+    eager
+        .set_zk_snapshots_from_world(view.world(), &view.zk)
+        .expect("standalone projection");
+    let mut cached = CoreHost::new(seeded_account(1));
+    cached
+        .set_zk_snapshots_from_state(&view)
+        .expect("cached projection");
+    let mut sibling = CoreHost::new(seeded_account(1));
+    sibling
+        .set_zk_snapshots_from_state(&view)
+        .expect("shared projection");
+    assert!(Arc::ptr_eq(&cached.zk_roots, &sibling.zk_roots));
+    assert_eq!(eager.zk_roots, cached.zk_roots);
+    assert_identical_root_reads(&mut eager, &mut cached);
+    assert_identical_root_reads(&mut eager, &mut sibling);
+    drop(view);
+
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).expect("first block height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut baseline = CoreHost::new(seeded_account(1));
+    baseline
+        .set_zk_snapshots_from_state(&block)
+        .expect("block projection");
+    assert_identical_root_reads(&mut eager, &mut baseline);
+    {
+        let mut transaction = block.transaction();
+        transaction.world.zk_assets.insert(
+            shared_roots_asset("filled"),
+            shared_roots_tree(&[[0x21; 32], [0x24; 32]]),
+        );
+        transaction.world.zk_assets.insert(
+            shared_roots_asset("added"),
+            shared_roots_tree(&[[0x25; 32]]),
+        );
+        let mut eager_edit = CoreHost::new(seeded_account(1));
+        eager_edit
+            .set_zk_snapshots_from_world(transaction.world(), transaction.zk())
+            .expect("standalone edited projection");
+        let mut cached_edit = CoreHost::new(seeded_account(1));
+        cached_edit
+            .set_zk_snapshots_from_state(&transaction)
+            .expect("edited projection");
+        assert!(!Arc::ptr_eq(&baseline.zk_roots, &cached_edit.zk_roots));
+        assert_eq!(eager_edit.zk_roots, cached_edit.zk_roots);
+        assert_identical_root_reads(&mut eager_edit, &mut cached_edit);
+
+        // An invalid edit is rejected without replacing the installed snapshot.
+        let mut invalid = shared_roots_tree(&[[0x21; 32]]);
+        invalid.root_history.insert(0, [0x66; 32]);
+        transaction
+            .world
+            .zk_assets
+            .insert(shared_roots_asset("empty"), invalid);
+        let installed = Arc::clone(&cached_edit.zk_roots);
+        assert!(matches!(
+            cached_edit.set_zk_snapshots_from_state(&transaction),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert!(Arc::ptr_eq(&installed, &cached_edit.zk_roots));
+        // Dropping the transaction rolls every tree edit back.
+    }
+    let mut restored = CoreHost::new(seeded_account(1));
+    restored
+        .set_zk_snapshots_from_state(&block)
+        .expect("restored block projection");
+    assert!(Arc::ptr_eq(&baseline.zk_roots, &restored.zk_roots));
+    assert_identical_root_reads(&mut eager, &mut restored);
 }

@@ -74,7 +74,12 @@ impl Campaign {
     }
 
     fn finish(self, expected: &str) {
-        let digest = format!("{:x}", self.digest.finalize());
+        let digest: String = self
+            .digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         println!(
             "ballot seed={SEED:#x} cases={} true_outcomes={} false_outcomes={} sha3_256={digest}",
             self.cases,

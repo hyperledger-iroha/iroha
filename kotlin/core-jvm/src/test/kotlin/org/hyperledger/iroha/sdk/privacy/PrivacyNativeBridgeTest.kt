@@ -45,7 +45,7 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun exactClosedRegistryIsStable() {
-        assertEquals(31, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(33, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(expected, PrivacyNativeBridge.protocolsV1().map { it.canonicalLabel })
         assertEquals(12, PrivacyNativeBridge.protocolsV1().size)
         assertEquals(0, PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal)
@@ -202,7 +202,7 @@ class PrivacyNativeBridgeTest {
         val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
             available,
-            "ABI-31 connect_norito_bridge with compiled-profile catalog JNI exports is required",
+            "ABI-33 connect_norito_bridge with compiled-profile catalog JNI exports is required",
         )
 
         val canonical = PrivacyNativeBridge.compiledProfileCatalogV1()
@@ -217,6 +217,13 @@ class PrivacyNativeBridgeTest {
         assertContentEquals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1())
         val typed = PrivacyNativeBridge.compiledProfileCatalogTypedV1()
         assertEquals(12, typed.protocols.size)
+        val x509 = typed.protocols[PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal]
+            .compiledProfile as PrivacyCompiledProfileResultV1.Unavailable
+        assertEquals(
+            PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+            x509.reason,
+        )
+        assertEquals(null, x509.statementSchemaError)
         assertContentEquals(
             canonical,
             PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(typed),
@@ -285,7 +292,7 @@ class PrivacyNativeBridgeTest {
         val available = PrivacyNativeBridge.isNativeAvailable()
         assertTrue(
             available,
-            "ABI-31 connect_norito_bridge with exact-12 fixture JNI exports is required",
+            "ABI-33 connect_norito_bridge with exact-12 fixture JNI exports is required",
         )
 
         val fetched = PrivacyNativeBridge.exact12FixtureBundleV1()

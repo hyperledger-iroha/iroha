@@ -8,7 +8,7 @@
 use super::{Error, Kura, PublicationGuard, PublicationMutex};
 
 /// A local physical refusal, independent of the decided block's validity.
-pub(crate) enum KuraPublicationPreparationError {
+pub enum KuraPublicationPreparationError {
     /// An actual storage owner must release before another acquisition attempt.
     Busy {
         /// Original Kura mutex which prevented the joint acquisition.
@@ -45,7 +45,7 @@ impl From<Error> for KuraPublicationPreparationError {
 /// acquisition and unwind. This is not a receipt or State publication authority.
 /// Kura methods which reacquire these locks must not be called while retained.
 #[must_use = "retain the physical boundary through the authorized operation"]
-pub(crate) struct KuraPublicationLease<'kura> {
+pub struct KuraPublicationLease<'kura> {
     kura: &'kura Kura,
     pending_canonical_bytes: u64,
     fences: AcquiredKuraPublicationFences<'kura>,
@@ -62,7 +62,7 @@ struct AcquiredKuraPublicationFences<'kura> {
 
 /// Original notifications after every physical Kura owner has unlocked.
 #[must_use = "retain Kura cleanup through every enclosing physical owner"]
-pub(crate) struct KuraPublicationCleanup {
+pub struct KuraPublicationCleanup {
     fences: [Option<iroha_allocation::release::DeferredRelease>; 4],
     claims: super::lane_geometry::RawGeometryReleases,
 }
@@ -82,7 +82,7 @@ impl AcquiredKuraPublicationFences<'_> {
         let claims = self
             .claims
             .take()
-            .map(|gate| gate.end_publication())
+            .map(crate::kura::lane_geometry::RawGeometryClaimGate::end_publication)
             .unwrap_or_default();
         KuraPublicationCleanup {
             claims,
@@ -237,11 +237,11 @@ impl KuraPublicationLease<'_> {
 mod tests;
 
 mod retained;
-pub(crate) use retained::KuraPublicationSlot;
+pub use retained::KuraPublicationSlot;
 
 /// Original source-bound notices that can outlive their Kura borrow.
 /// Empty custody never defers an unrelated lease or another publication attempt.
-pub(crate) struct KuraPublicationReleases {
+pub struct KuraPublicationReleases {
     source: super::KuraInstanceIdentity,
     fences: [iroha_allocation::release::DeferredReleaseBatch; 4],
     claims: super::lane_geometry::RawGeometryReleases,
@@ -273,7 +273,7 @@ impl KuraPublicationReleases {
 }
 
 /// A standalone geometry lease transfers every notice to its original caller.
-pub(crate) struct ScopedKuraPublicationLease<'kura, 'releases> {
+pub struct ScopedKuraPublicationLease<'kura, 'releases> {
     lease: Option<KuraPublicationLease<'kura>>,
     releases: &'releases mut KuraPublicationReleases,
 }

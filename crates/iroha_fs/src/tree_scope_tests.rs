@@ -809,7 +809,6 @@ fn root_tree_reader_entry_and_explicit_anchor_reads_keep_full_native_custody() {
             self.0.set(true);
         }
     }
-
     let (_temporary, root, first, _second) = store();
     root.write_atomic("record", b"root", PublishMode::CreateNew)
         .unwrap();

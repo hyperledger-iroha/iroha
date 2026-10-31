@@ -31,6 +31,10 @@ pub(super) fn fixture() -> (Set, HashOf<IvmBytecode>) {
     .collect();
     (set, key)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 fn checked(set: &Set) -> Result<(), TriggerContractError> {
     let pool = AllocationBudget::new(16 * 1024 * 1024);
     let result = super::super::CheckedContracts::capture(set, u64::MAX, &pool);

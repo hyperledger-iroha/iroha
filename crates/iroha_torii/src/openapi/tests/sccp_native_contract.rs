@@ -1,4 +1,4 @@
-//! Current SCCP native read and governance OpenAPI contracts.
+//! Current SCCP native read and governance `OpenAPI` contracts.
 
 use super::*;
 use iroha_data_model::sccp::generation::SccpGenerationCauseV1;

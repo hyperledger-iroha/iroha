@@ -1,7 +1,7 @@
 // Native controls included inside negotiation::tests: real pools and seven-byte
 // duplex I/O, with the same central arbitration owner. No node is started.
 fn authenticated_candidate(
-    peer: &iroha_data_model::peer::Peer,
+    peer: &iroha_model_base::peer::Peer,
     id: ConnectionId,
     session: [u8; 32],
 ) -> (

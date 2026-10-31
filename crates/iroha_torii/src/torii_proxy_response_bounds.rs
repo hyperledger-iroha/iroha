@@ -18,11 +18,13 @@ const TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1: usize = 64 * 1024;
 fn bound_retained_retryable_torii_proxy_snapshot(
     snapshot: ToriiProxyHttpResponseV1,
 ) -> ToriiProxyHttpResponseV1 {
+    const MESSAGE: &[u8] =
+        b"proxied retryable response body exceeded the retained diagnostic limit";
+
     if snapshot.body.len() <= TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 {
         return snapshot;
     }
-    const MESSAGE: &[u8] =
-        b"proxied retryable response body exceeded the retained diagnostic limit";
+
     let mut body = Vec::new();
     if body.try_reserve_exact(MESSAGE.len()).is_ok() {
         body.extend_from_slice(MESSAGE);

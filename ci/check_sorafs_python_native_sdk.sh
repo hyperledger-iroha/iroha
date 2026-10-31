@@ -41,7 +41,7 @@ TRACKED_NATIVE_EXTENSIONS="$(
     'python/iroha_native/src/iroha_native/*.dll'
 )"
 if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
-  echo "error: Python native SDK artifacts must be rebuilt in the ABI-31 lane, not tracked:" >&2
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-33 lane, not tracked:" >&2
   printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
   exit 1
 fi
@@ -150,7 +150,7 @@ export PYTHONPATH
 
 NATIVE_TARGET="$(capture_python "${VENV_PYTHON}" -I -c \
   'import platform, sys; print(f"{platform.system().lower()}-{platform.machine().lower()}-python{sys.version_info.major}{sys.version_info.minor}")')"
-NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi31.json"
+NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi33.json"
 "${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_artifact.py" \
   record \
   --artifact "${NATIVE_EXTENSION}" \

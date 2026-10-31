@@ -12,10 +12,8 @@ use super::{
     },
 };
 use sha2::{Digest, Sha256};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use std::sync::OnceLock;
 const CRS_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs.v1";
 const INNER_MATRIX_LABEL_V1: &[u8] = b"inner-msis-A";
@@ -133,7 +131,7 @@ fn uniform_polynomial(
             *coefficient = sample_uniform_modulus(&mut reader, prime.modulus());
         }
     }
-    JindoRnsPolynomialV1::from_residues(residues, moduli)
+    JindoRnsPolynomialV1::from_residues(&residues, moduli)
         .expect("rejection sampler emits canonical residues")
 }
 fn absorb(state: &mut Shake256, bytes: &[u8]) {

@@ -29,7 +29,7 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletAbandonmentV1, KagemushaWalletLedgerControlV1, KagemushaWalletMarkerStateV1,
     KagemushaWalletSigningDomainV1, KagemushaWalletTerminalReasonV1,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use super::{
     KagemushaWalletProviderErrorV1,
@@ -241,7 +241,7 @@ where
             .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData { object: "intent" })?;
         let challenge_digest = intent.challenge.challenge_digest();
         let mut nonce = [0_u8; 32];
-        rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
+        rand::rngs::SysRng.try_fill_bytes(&mut nonce).map_err(|_| {
             KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
         })?;
         let body =

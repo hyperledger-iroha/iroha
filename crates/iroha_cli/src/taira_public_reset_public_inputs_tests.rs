@@ -4,7 +4,7 @@ use super::*;
 use iroha_crypto::HashOf;
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
-use crate::deployment_genesis_fixture::{Fixture, key};
+use crate::deployment_genesis_fixture::{Fixture, fixture_staking_policy, key};
 
 fn line(value: impl std::fmt::Display) -> Vec<u8> {
     format!("{value}\n").into_bytes()
@@ -614,4 +614,31 @@ fn public_bundle_refuses_a_network_that_cannot_seat_the_parliament() {
     assert!(error.contains("does not share"), "{error}");
     fs::remove_file(args.localnet_dir.join("peer1.toml")).unwrap();
     prepare(&args, &mut Vec::new()).unwrap();
+}
+
+#[test]
+fn fixture_staking_policy_matches_executed_npos_fees_and_deployment_custody() {
+    use iroha_data_model::block::consensus::{PublicLaneStakingPolicy, RootFeePolicy};
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+    let _author = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let fixture = Fixture::new();
+    let parameters = fixture.manifest.effective_parameters().unwrap();
+    let staking = PublicLaneStakingPolicy::from_parameters(&parameters).unwrap();
+    let expected = fixture_staking_policy();
+    let fees = RootFeePolicy::from_parameters(&parameters)
+        .unwrap()
+        .unwrap();
+    let npos = SumeragiNposParameters::from_custom_parameter(
+        parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(staking, expected);
+    assert_eq!(staking.stake_asset_id, fees.fee_asset_id);
+    assert_eq!(staking.stake_asset_id, npos.xor_asset_definition_id);
+    assert_eq!(staking.stake_escrow_account_id, fees.fee_sink_account_id);
+    assert_eq!(staking.slash_sink_account_id, fees.fee_sink_account_id);
 }

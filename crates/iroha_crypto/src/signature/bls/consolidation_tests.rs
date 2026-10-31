@@ -64,13 +64,13 @@ fn specified_point_cases(valid: &[u8]) -> Vec<PointCase> {
     }
     let flag_key = [
         KEY_FLAGS,
+        INVALID_KEY,
         KEY_FLAGS,
-        KEY_FLAGS,
-        KEY_FLAGS,
+        INVALID_KEY,
         Expected::Valid,
         Expected::Valid,
-        KEY_NONCANONICAL,
-        KEY_NONCANONICAL,
+        INVALID_KEY,
+        INVALID_KEY,
     ];
     let flag_signature = [
         INVALID_SIGNATURE,
@@ -79,8 +79,8 @@ fn specified_point_cases(valid: &[u8]) -> Vec<PointCase> {
         INVALID_SIGNATURE,
         Expected::Valid,
         Expected::Valid,
-        SIGNATURE_NONCANONICAL,
-        SIGNATURE_NONCANONICAL,
+        INVALID_SIGNATURE,
+        INVALID_SIGNATURE,
     ];
     assert!(
         valid[1..].iter().any(|byte| *byte != 0),
@@ -99,7 +99,9 @@ fn specified_point_cases(valid: &[u8]) -> Vec<PointCase> {
         Expected::Parse("BLS signature is identity"),
     );
     identity[0] = 0xe0;
-    add(identity, KEY_NONCANONICAL, SIGNATURE_NONCANONICAL);
+    // Arkworks 0.5 rejects an infinity sort bit and dirty infinity coordinates
+    // inside checked decoding, before Iroha's canonical re-encoding comparison.
+    add(identity, INVALID_KEY, INVALID_SIGNATURE);
     let modulus = hex_literal::hex!(
         "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab"
     );
@@ -107,7 +109,7 @@ fn specified_point_cases(valid: &[u8]) -> Vec<PointCase> {
         let mut dirty = vec![0; valid.len()];
         dirty[0] = 0xc0;
         dirty[(coordinate + 1) * 48 - 1] = 1;
-        add(dirty, KEY_NONCANONICAL, SIGNATURE_NONCANONICAL);
+        add(dirty, INVALID_KEY, INVALID_SIGNATURE);
         for last in [0xab, 0xac] {
             let mut bytes = valid.to_vec();
             bytes[coordinate * 48..(coordinate + 1) * 48].copy_from_slice(&modulus);
@@ -115,7 +117,13 @@ fn specified_point_cases(valid: &[u8]) -> Vec<PointCase> {
             bytes[0] |= 0x80;
             add(bytes.clone(), INVALID_KEY, INVALID_SIGNATURE);
             bytes[0] &= 0x7f;
-            add(bytes, KEY_FLAGS, INVALID_SIGNATURE);
+            // A sort bit on an uncompressed encoding is rejected as invalid data.
+            let expected = if bytes[0] & 0x20 == 0 {
+                KEY_FLAGS
+            } else {
+                INVALID_KEY
+            };
+            add(bytes, expected, INVALID_SIGNATURE);
         }
         let mut invalid = valid.to_vec();
         invalid[coordinate * 48..(coordinate + 1) * 48].fill(0xff);

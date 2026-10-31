@@ -87,6 +87,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import inspect
 import json
 import math
 import re
@@ -2457,6 +2458,9 @@ def proof_work_block() -> dict:
             if plan["fits"]:
                 entries[family] = execution_relation_block(p, plan["total"][UNITS])
         execution[name] = entries
+    # cleandoc yields the same text whether or not the compiler already dedented the docstring
+    # (Python 3.13 and later do), so the layout does not depend on the interpreter.
+    layout = inspect.cleandoc(input_relation_block.__doc__).split("\n\n", 1)[1].strip()
     return {
         "status": "projection only: no input, execution or opening proof exists (tasks R.11, R.3, R.7, R.8)",
         "limb_model": (
@@ -2464,7 +2468,7 @@ def proof_work_block() -> dict:
             " a product of two residues is 16 limb products, and its quotient and remainder are range-checked"
             " limb by limb"
         ),
-        "input_relation_layout": input_relation_block.__doc__.split("\n\n", 1)[1].strip().replace("\n    ", " "),
+        "input_relation_layout": layout.replace("\n", " "),
         "input_relation": {
             config: input_relation_block(profile(name, shape)) for config, name, shape in INPUT_RELATION_CONFIGS
         },

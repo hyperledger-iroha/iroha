@@ -101,15 +101,31 @@ impl InternalInvocation {
         Ok(())
     }
 
-    // Called only after the failed overlay is dropped and the rejected row fits.
-    // Persistent action identity, not a transaction-local generation, authenticates
-    // the separate quarantine/retry transaction after rollback.
+    // The existing V1 caller has already fitted its rejected row. Preserve that
+    // order while making the separately owned policy overlay disposable.
     fn apply_failure_policy(
         &self,
         state: &mut StateBlock<'_>,
         height: u64,
         now: u64,
     ) -> Result<(), String> {
+        if let Some(policy) = self.prepare_failure_policy(state, height, now)? {
+            policy.apply()?;
+        }
+        Ok(())
+    }
+
+    // Prepare only after the failed business overlay has been dropped. Persistent
+    // action identity authenticates this separate quarantine/retry transaction.
+    // Drop rolls the policy and witness back; preparation never commits them.
+    // TODO: capture and fund the complete policy trace and applying-State ceilings
+    // before connecting this disposable seam to a lifecycle output owner.
+    fn prepare_failure_policy<'block, 'state>(
+        &self,
+        state: &'block mut StateBlock<'state>,
+        height: u64,
+        now: u64,
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, String> {
         self.authenticate(state, height)?;
         let id = &self.trigger().trigger_id;
         match self {
@@ -134,7 +150,7 @@ impl InternalInvocation {
                 {
                     return Err("quarantine action disappeared".into());
                 }
-                policy.apply()?;
+                Ok(Some(policy))
             }
             Self::Time(_) => {
                 let action = state
@@ -144,7 +160,7 @@ impl InternalInvocation {
                     .get(id)
                     .ok_or("retry action disappeared")?;
                 let Some(retry_policy) = action.retry_policy else {
-                    return Ok(());
+                    return Ok(None);
                 };
                 let used = action
                     .retry_state
@@ -169,14 +185,17 @@ impl InternalInvocation {
                 ) {
                     return Err("retry action disappeared".into());
                 }
-                policy.apply()?;
+                Ok(Some(policy))
             }
         }
-        Ok(())
     }
 }
 
 impl ExecutionOutputProducer<'_, '_, '_> {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Applying consumes the authenticated invocation owner exactly once"
+    )]
     pub(super) fn try_apply_internal(
         &mut self,
         invocation: InternalInvocation,
@@ -192,7 +211,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if self.rows.len() >= self.rows.capacity() {
             return Err("internal row storage exhausted".into());
         }
-        let maximum = self.state.callback_output_byte_limit()?;
+        let maximum = self.state.callback_output_byte_limit();
         let reservation = self
             .budget
             .as_mut()
@@ -243,8 +262,25 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             // Genesis callbacks belong to the authenticated complete genesis result.
             // Every later invocation must be coherent before publishing its overlay.
             execution = execution.and_then(|()| {
-                crate::resource_coherence::validate_final_policy(&tx.world, height)
-                    .map_err(|error| (error.into_transaction_rejection(), None))
+                crate::resource_coherence::validate_final_policy(&tx.world, height).map_err(
+                    |error| {
+                        let rejection = match error {
+                            ExecutionAttemptError::Rejected(error) => {
+                                error.into_transaction_rejection()
+                            }
+                            ExecutionAttemptError::Deferred(original) => {
+                                tx.world.record_execution_deferral(original);
+                                TransactionRejectionReason::Validation(
+                                    ValidationFail::InternalError(
+                                        "local private-settlement policy read did not complete"
+                                            .into(),
+                                    ),
+                                )
+                            }
+                        };
+                        (rejection, None)
+                    },
+                )
             });
         }
         if tx.fastpq_source_quota.intrinsic_rejected()? {
@@ -394,7 +430,7 @@ fn rejected_row(
             }
             ExecutableRef::Batch(items) => {
                 let mut bytes = 0_usize;
-                for item in items.iter() {
+                for item in items {
                     if let iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                         instruction,
                     ) = item
@@ -417,23 +453,28 @@ fn rejected_row(
     } else {
         None
     };
-    let (reason, root, diagnostic) = if let Some(diagnostic) = diagnostic {
-        let root = match returned {
-            Some(step) => TriggerFailureRootV1::ReturnedBeforeRollback(step),
-            None => TriggerFailureRootV1::DeclaredInstructionProjection(
-                StateTransaction::execution_step_from_executable(executable),
-            ),
-        };
-        (reason, root, diagnostic)
-    } else {
-        (
-            TransactionRejectionReason::LimitCheck(TransactionLimitError {
-                reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
-            }),
-            TriggerFailureRootV1::OmittedAfterRejection,
-            INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
-        )
-    };
+    let (reason, root, diagnostic) = diagnostic.map_or_else(
+        || {
+            (
+                TransactionRejectionReason::LimitCheck(TransactionLimitError {
+                    reason: INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
+                }),
+                TriggerFailureRootV1::OmittedAfterRejection,
+                INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.to_owned(),
+            )
+        },
+        |diagnostic| {
+            let root = returned.map_or_else(
+                || {
+                    TriggerFailureRootV1::DeclaredInstructionProjection(
+                        StateTransaction::execution_step_from_executable(executable),
+                    )
+                },
+                TriggerFailureRootV1::ReturnedBeforeRollback,
+            );
+            (reason, root, diagnostic)
+        },
+    );
     Ok(invocation.row(
         TransactionResult::new(Err(reason)),
         Some(root),
@@ -533,3 +574,7 @@ fn capture_internal_root_dataspace(
 #[cfg(test)]
 #[path = "output_internal_root_scope_tests.rs"]
 mod root_scope_tests;
+
+#[cfg(test)]
+#[path = "output_time_policy_tests.rs"]
+mod time_policy_tests;

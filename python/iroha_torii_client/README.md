@@ -1,5 +1,7 @@
 # Iroha Torii client
 
+Python 3.10 or newer is required for the supported HTTP and build dependencies.
+
 ## Collection queries
 
 `iroha_torii_client.list_query` is the single Python implementation of the
@@ -473,6 +475,14 @@ Parliament requests reject ambient session auth headers, cookies, and
 `Session.auth`, and suppress Requests' environment/netrc credential fallback
 during preparation.
 
+The governance reader validates all 18 SCCP action bodies, their numeric and
+network bounds, and the exact ordered set of subject revisions before retaining
+an immutable proposal. Route registrations reject repeated destination words;
+parameter changes check both individual bounds and their joint constraints.
+`release_stranded` uses the mandatory native account codec for its recipient.
+The node still checks the live network identity, authorization, authenticated
+committee/bootstrap evidence and committed state at admission and enactment.
+
 Attempt reads whose certificate contains a private-jury body (`policy-jury` or
 `confirmation-jury`) are rejected: the anonymous-ballot result binding is not
 supported yet, so this client admits no certificate that covers a private-jury
@@ -518,6 +528,6 @@ and derives the expected network from its local signing context.
 
 Account identity construction, canonical parsing, and controller checks require the
 separate `iroha-native` wheel (`pip install iroha-torii-client[native]`). These
-operations use its ABI-30 Rust owner for all eleven curves and full weighted
+operations use its ABI-33 Rust owner for all eleven curves and full weighted
 multisig policies. Missing native validation is an explicit error; anonymous HTTP
 transport can operate without loading the native package.

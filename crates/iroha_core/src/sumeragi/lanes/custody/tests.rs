@@ -95,9 +95,7 @@ fn malformed_original_deadline_cannot_release_retained_custody() {
 fn parameters(world: &mut WorldBlock<'_>, horizon: u64, delay: u64) {
     use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters {
                 evidence_horizon_blocks: horizon,
                 slashing_delay_blocks: delay,
@@ -253,8 +251,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         None,
         10,
         &custody_budget(),
@@ -271,8 +268,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
             &mut state,
             &world,
             &Nexus::default(),
-            &network,
-            "custody-test",
+            (&network, "custody-test"),
             None,
             10,
             &custody_budget(),
@@ -284,8 +280,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         None,
         11,
         &custody_budget(),
@@ -674,6 +669,10 @@ fn original_signer_state_constructor_refuses_before_cloning_unfunded_world() {
     // before admission so the original lane cause wins after pool preflight.
     let pool = world.sccp_committee_generations.allocation_budget().clone();
     let generations = original_world_generation_bytes(&world);
+    let parameters = world.parameters.view().get().clone();
+    assert!(parameters.same_version(world.parameters.view().get()));
+    assert!(parameters.belongs_to(&pool));
+    assert!(world.parameters.predecessor_view().get().is_none());
     pool.set_limit_bytes(0);
     let retirement_pin = crossbeam_epoch::pin();
     let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -691,13 +690,19 @@ fn original_signer_state_constructor_refuses_before_cloning_unfunded_world() {
         Err(crate::state::MergeLedgerCommitError::NativeLaneCustodyAdmission(_))
     ));
     retirement_pin.flush();
-    assert_eq!(
-        pool.reserved_bytes(),
-        generations,
-        "consuming refusal retains exactly the original World generations while pinned"
-    );
+    let pinned_bytes = pool.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    collect_constructor_world_generations(&pool);
+    collect_constructor_world_generations(&pool, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - pool.reserved_bytes(),
+        generations,
+        "consuming refusal refunds every independently counted World Cell shell after its epoch pin releases"
+    );
+    // This exact original graph outlives the consumed World and its Cell shells.
+    // Its final owner must refund the complete remaining payload custody.
+    drop(parameters);
     assert_eq!(pool.reserved_bytes(), 0);
     assert_eq!(source.as_slice().as_ptr(), pointer);
 }
@@ -726,12 +731,13 @@ fn sample_state_admission_refuses_unfunded_source() {
 
 #[test]
 fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
+    use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
+
     if crate::unit_test_support::run_in_isolated_harness(
         "sumeragi::lanes::custody::tests::original_sample_state_constructor_refuses_with_typed_sample_cause",
     ) {
         return;
     }
-    use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
     let mut world = World::default();
     world.sumeragi_lanes = mv::cell::Cell::new(SumeragiLaneState {
         samples: vec![SumeragiLaneSample {
@@ -750,6 +756,10 @@ fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
     // before admission so the original lane cause wins after pool preflight.
     let pool = world.sccp_committee_generations.allocation_budget().clone();
     let generations = original_world_generation_bytes(&world);
+    let parameters = world.parameters.view().get().clone();
+    assert!(parameters.same_version(world.parameters.view().get()));
+    assert!(parameters.belongs_to(&pool));
+    assert!(world.parameters.predecessor_view().get().is_none());
     pool.set_limit_bytes(0);
     let retirement_pin = crossbeam_epoch::pin();
     let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -771,13 +781,19 @@ fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
         )
     ));
     retirement_pin.flush();
-    assert_eq!(
-        pool.reserved_bytes(),
-        generations,
-        "consuming refusal retains exactly the original World generations while pinned"
-    );
+    let pinned_bytes = pool.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    collect_constructor_world_generations(&pool);
+    collect_constructor_world_generations(&pool, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - pool.reserved_bytes(),
+        generations,
+        "consuming refusal refunds every independently counted World Cell shell after its epoch pin releases"
+    );
+    // This exact original graph outlives the consumed World and its Cell shells.
+    // Its final owner must refund the complete remaining payload custody.
+    drop(parameters);
     assert_eq!(pool.reserved_bytes(), 0);
     assert_eq!(
         source.as_ptr(),
@@ -943,8 +959,9 @@ fn lane_pool_refusal_adapters_preserve_exact_original_release_and_nonwaiting_dem
 /// controls only and do not claim a forced physical-allocation or successful-admission test.
 #[test]
 fn lane_admission_invariants_never_masquerade_as_allocator_or_semantic_failures() {
-    use iroha_allocation::{ChargedShared, PrepaidBufferError};
     use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
+
+    use iroha_allocation::{ChargedShared, PrepaidBufferError};
     let pool = AllocationBudget::new(0);
     let mut empty = pool.try_reserve_bytes(0).unwrap();
     let backing_shortage = ChargedBuffer::<SumeragiLaneSample>::from_reservation(1, &mut empty)
@@ -1178,8 +1195,7 @@ fn original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_cha
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         Some(&policy),
         10,
         &pool,
@@ -1219,8 +1235,7 @@ fn original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_cha
         &mut state,
         &world,
         &Nexus::default(),
-        &network,
-        "custody-test",
+        (&network, "custody-test"),
         Some(&policy),
         10,
         &pool,
@@ -1250,6 +1265,7 @@ fn original_world_generation_bytes(world: &World) -> usize {
             .sum()
     }
     pair(&world.sumeragi_amx_participant)
+        + pair(&world.parameters)
         + pair(&world.musubi_replication_shortfall_releases)
         + pair(&world.sccp_committee_current)
         + pair(&world.sccp_liability_clock)
@@ -1258,12 +1274,12 @@ fn original_world_generation_bytes(world: &World) -> usize {
         + pair(&world.sccp_forgery_max_generation)
 }
 
-fn collect_constructor_world_generations(pool: &AllocationBudget) {
+fn collect_constructor_world_generations(pool: &AllocationBudget, retained_graph_bytes: usize) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while pool.reserved_bytes() != 0 {
+    while pool.reserved_bytes() != retained_graph_bytes {
         assert!(
-            std::time::Instant::now() < deadline,
-            "consumed original World generations did not retire"
+            pool.reserved_bytes() >= retained_graph_bytes && std::time::Instant::now() < deadline,
+            "consumed original World generations did not retire to the retained graph custody"
         );
         crossbeam_epoch::pin().flush();
         std::thread::yield_now();

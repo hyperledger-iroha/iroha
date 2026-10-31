@@ -51,27 +51,25 @@ fn snapshot_error(error: iroha_core::state::WorldStateSnapshotError) -> Error {
         {
             crate::native_projection_response::capacity()
         }
-        WorldStateSnapshotError::RootScopeRead(_) => crate::native_projection_response::capacity(),
-        WorldStateSnapshotError::View(StateViewError::Busy(_)) => {
-            crate::native_projection_response::capacity()
-        }
         WorldStateSnapshotError::Acquisition(ref cause)
             if cause.release_wait().is_some()
                 || matches!(cause, mv::storage::AdmittedStorageError::Allocator { .. }) =>
         {
             crate::native_projection_response::capacity()
         }
-        WorldStateSnapshotError::Allocation(iroha_allocation::AllocationRefusal::Capacity {
+        WorldStateSnapshotError::RootScopeRead(_)
+        | WorldStateSnapshotError::View(StateViewError::Busy(_))
+        | WorldStateSnapshotError::Allocation(iroha_allocation::AllocationRefusal::Capacity {
             ..
         })
-        | WorldStateSnapshotError::Buffer(iroha_allocation::ChargedBufferError::Admission(
-            iroha_allocation::AllocationRefusal::Capacity { .. },
-        ))
-        | WorldStateSnapshotError::Buffer(iroha_allocation::ChargedBufferError::Allocator {
-            ..
-        })
-        | WorldStateSnapshotError::Allocator(_) => crate::native_projection_response::capacity(),
-        WorldStateSnapshotError::DecodeControl(
+        | WorldStateSnapshotError::Buffer(
+            iroha_allocation::ChargedBufferError::Admission(
+                iroha_allocation::AllocationRefusal::Capacity { .. },
+            )
+            | iroha_allocation::ChargedBufferError::Allocator { .. },
+        )
+        | WorldStateSnapshotError::Allocator(_)
+        | WorldStateSnapshotError::DecodeControl(
             iroha_allocation::PrepaidSharedError::Allocator { .. },
         ) => crate::native_projection_response::capacity(),
         WorldStateSnapshotError::Amx(iroha_data_model::sumeragi_amx::AmxError::Resource(
@@ -228,10 +226,6 @@ fn with_approval<R>(
     consume(&approval)
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
-)]
 fn relay(
     app: &SharedAppState,
     headers: &HeaderMap,
@@ -393,7 +387,7 @@ pub async fn handler(
         Err(response) => return Ok(response),
     };
     let binding = capacity_request_binding(&headers, &body, height);
-    let result = read_approval(app, height, headers, method, uri, remote, body, format).await;
+    let result = read_approval(app, height, headers, (method, uri), remote, body, format).await;
     capacity_observation(binding, result, format)
 }
 
@@ -401,8 +395,7 @@ async fn read_approval(
     app: SharedAppState,
     height: u64,
     headers: HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    (method, uri): (axum::http::Method, axum::http::Uri),
     remote: std::net::SocketAddr,
     body: Bytes,
     format: ResponseFormat,

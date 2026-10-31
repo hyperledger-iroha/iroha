@@ -31,12 +31,13 @@ pub fn startup_failure(restart_required: bool, status: Option<&SumeragiStatus>) 
 pub fn build_failure(error: BuildError, status_committed_height: u64) -> Reason {
     match error {
         BuildError::EmptyState if status_committed_height == 0 => Reason::GenesisUncommitted,
-        BuildError::EmptyState => Reason::ConflictingState,
+        BuildError::EmptyState | BuildError::InvalidStatus | BuildError::InvalidBody(_) => {
+            Reason::ConflictingState
+        }
         BuildError::HeightIsNotDurableTip { .. } | BuildError::StatusHeightMismatch => {
             Reason::TipChanged
         }
         BuildError::RestartRequired => Reason::RestartRequired,
-        BuildError::InvalidStatus | BuildError::InvalidBody(_) => Reason::ConflictingState,
         BuildError::FinalityProof(error) | BuildError::GenesisFinalityProof(error) => match error {
             ProofError::Chain(
                 ChainReadError::NotCommitted { .. }
@@ -44,14 +45,16 @@ pub fn build_failure(error: BuildError, status_committed_height: u64) -> Reason 
                 | ChainReadError::MissingCertificate { .. }
                 | ChainReadError::Committee { .. },
             )
-            | ProofError::UnverifiedCommittee(_) => Reason::FinalityUnavailable,
-            ProofError::NativeExecution(QueryExecutionFail::CanonicalHistory(
+            | ProofError::UnverifiedCommittee(_)
+            | ProofError::NativeExecution(QueryExecutionFail::CanonicalHistory(
                 CanonicalHistoryError::BodyUnavailable { .. }
                 | CanonicalHistoryError::HeightOutsideSnapshot { .. },
-            )) => Reason::FinalityUnavailable,
+            ))
+            // An attached retained authority that is warming up, lagging, expired or
+            // withdrawn recovers on its own; only its poison is a conflict.
+            | ProofError::RetainedUnavailable(_) => Reason::FinalityUnavailable,
             // The original execution owner has rejected the captured history or its
             // selected certificate. No diagnostic string grants startup progress.
-            ProofError::NativeExecution(_) => Reason::ConflictingState,
             _ => Reason::ConflictingState,
         },
         BuildError::HeightOverflow
@@ -269,7 +272,7 @@ mod tests {
                             envelope.message = "private signer implementation detail".to_owned();
                             let mut response = crate::utils::respond_with_status_and_format(
                                 StatusCode::INTERNAL_SERVER_ERROR,
-                                envelope,
+                                &(envelope),
                                 format,
                             );
                             response.headers_mut().insert(
@@ -358,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_boundary_rejects_mismatched_finality_details_and_preserves_generic_errors() {
-        for case in 0..4 {
+        for case in 0..5 {
             let router = axum::Router::new()
                 .route(
                     "/test",
@@ -375,6 +378,11 @@ mod tests {
                         if case == 3 {
                             failure.reason = Reason::TipChanged;
                         }
+                        if case == 4 {
+                            // A valid conflict body cannot be promoted to an
+                            // availability response by changing only its status.
+                            failure.reason = Reason::ConflictingState;
+                        }
                         let mut envelope = failure.into_error_envelope();
                         if case == 2 {
                             envelope.code = "query_validation_failed".into();
@@ -385,7 +393,7 @@ mod tests {
                             } else {
                                 axum::http::StatusCode::SERVICE_UNAVAILABLE
                             },
-                            envelope,
+                            &(envelope),
                             crate::utils::ResponseFormat::Norito,
                         )
                     }),
@@ -594,6 +602,47 @@ mod tests {
                 Reason::ConflictingState,
             );
         }
+    }
+
+    #[test]
+    fn temporary_retained_authority_refusals_are_unavailable_and_poison_conflicts() {
+        use iroha_core::sumeragi::finality::RetainedUnavailable;
+        for refusal in [
+            RetainedUnavailable::NotMinted,
+            RetainedUnavailable::CoverageExpired,
+            RetainedUnavailable::NotCovered,
+            RetainedUnavailable::Changed,
+        ] {
+            let reason = build_failure(BuildError::FinalityProof(refusal.into()), 12);
+            assert_eq!(reason, Reason::FinalityUnavailable, "{refusal}");
+            let response = failure_response(
+                reason,
+                [0x5A; 32],
+                12,
+                None,
+                crate::utils::ResponseFormat::Norito,
+            );
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        let poisoned = ProofError::NativeExecution(QueryExecutionFail::Conversion(
+            "retained attestation authority is poisoned".into(),
+        ));
+        let reason = build_failure(BuildError::FinalityProof(poisoned), 12);
+        assert_eq!(reason, Reason::ConflictingState);
+        assert_eq!(
+            failure_response(
+                reason,
+                [0x5A; 32],
+                12,
+                None,
+                crate::utils::ResponseFormat::Norito
+            )
+            .status(),
+            axum::http::StatusCode::CONFLICT
+        );
     }
 
     #[tokio::test]

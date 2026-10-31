@@ -137,10 +137,12 @@ fn chain(node: Option<Zk>, policy: Option<ZkValidityPolicyV1>) -> CertifiedTestC
     CertifiedTestChain::from_prepared(prepared).expect("genesis applies")
 }
 
+type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
+
 /// What consensus certifies for every committed height: the result `R`, the
 /// core block hash, the complete execution commitment and the canonical
 /// result-bearing block wire.
-fn certified_history(chain: &CertifiedTestChain) -> Vec<(Vec<u8>, Vec<u8>, String, Vec<u8>)> {
+fn certified_history(chain: &CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     (1..=chain.height())
         .map(|height| {
             let committed = chain.committed(height);
@@ -159,7 +161,7 @@ fn certified_history(chain: &CertifiedTestChain) -> Vec<(Vec<u8>, Vec<u8>, Strin
 
 /// Commit two blocks of ordinary work (the fixture's own signed `Log`
 /// transactions) and return the certified history.
-fn ordinary_history(chain: &mut CertifiedTestChain) -> Vec<(Vec<u8>, Vec<u8>, String, Vec<u8>)> {
+fn ordinary_history(chain: &mut CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     chain.commit(Vec::new());
     chain.commit(Vec::new());
     certified_history(chain)
@@ -273,8 +275,8 @@ fn committed_policy_decides_validity_identically_under_different_node_configurat
     // digests differ), so equality above is not vacuous.
     let mut default_chain = chain(None, None);
     assert_ne!(ordinary_history(&mut default_chain), first_history);
-    let default_header = default_chain.committed(3).block().header().clone();
-    let policy_header = first.committed(3).block().header().clone();
+    let default_header = default_chain.committed(3).block().header();
+    let policy_header = first.committed(3).block().header();
     assert_ne!(
         default_header.confidential_features(),
         policy_header.confidential_features(),
@@ -297,9 +299,7 @@ fn state_with(node: Option<Zk>, policy: Option<&ZkValidityPolicyV1>) -> State {
     if let Some(policy) = policy {
         let mut block = world.block();
         block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.clone().into_custom_parameter()))
             .expect("valid fixture parameters");
         block.commit();
     }
@@ -502,8 +502,11 @@ fn set_parameter_installs_and_changes_the_policy_and_rejects_invalid_payloads() 
         observed[4..],
         "genesis and later blocks agree"
     );
-    assert!(
-        observed[0].contains("not a canonical V1 policy"),
+    // The funded parameter reader rejects a JSON string at its object boundary,
+    // before semantic ZK policy validation can run.
+    assert_eq!(
+        observed[0],
+        r#"InvalidParameter(SmartContract("json error: JSON error: expected object start at byte 0 (line 1, col 1)"))"#,
         "{observed:?}"
     );
     assert!(
@@ -660,10 +663,11 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         let mut transaction = block.transaction();
         // The migrated executor declares the parameter.
         let mut declares = ExecutorDataModel::default();
-        declares
-            .parameters
-            .insert(ZkValidityPolicyV1::parameter_id(), attacker.clone());
-        transaction.world.apply_executor_data_model(declares);
+        declares.parameters.insert(attacker.clone());
+        transaction
+            .world
+            .apply_executor_data_model(declares)
+            .expect("executor reconciliation succeeds");
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed.clone())),
@@ -682,7 +686,8 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         // A later migration stops declaring it.
         transaction
             .world
-            .apply_executor_data_model(ExecutorDataModel::default());
+            .apply_executor_data_model(ExecutorDataModel::default())
+            .expect("executor reconciliation succeeds");
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed.clone())),
@@ -694,11 +699,13 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
     let mut block = state.block(header(2));
     let mut transaction = block.transaction();
     let mut declares = ExecutorDataModel::default();
-    declares.parameters.insert(
-        ZkValidityPolicyV1::parameter_id(),
-        committed_policy().into_custom_parameter(),
-    );
-    transaction.world.apply_executor_data_model(declares);
+    declares
+        .parameters
+        .insert(committed_policy().into_custom_parameter());
+    transaction
+        .world
+        .apply_executor_data_model(declares)
+        .expect("executor reconciliation succeeds");
     assert_eq!(committed(transaction.world.parameters.get()), Ok(None));
     assert!(
         crate::state::consensus_owned_custom_parameter_ids()

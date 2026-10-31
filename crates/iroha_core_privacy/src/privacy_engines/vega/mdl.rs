@@ -12,9 +12,9 @@ use iroha_data_model::privacy::{
 };
 use iroha_zkp_halo2::vega::{VegaMdlFigure9WitnessV1, validate_vega_mdl_figure9_encoding_v1};
 use p256::{
-    EncodedPoint, PublicKey, Scalar,
+    PublicKey, Scalar, Sec1Point,
     ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier},
-    elliptic_curve::{PrimeField, sec1::ToEncodedPoint},
+    elliptic_curve::{PrimeField, sec1::ToSec1Point},
 };
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -142,7 +142,7 @@ impl fmt::Debug for VegaMdlWitnessV1 {
                 &self.birth_date_issuer_signed_item.len(),
             )
             .field("private_values", &"[REDACTED]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 /// Canonical Figure 9 ECDSA witness `(r, s^-1 mod n)`.
@@ -304,7 +304,7 @@ impl fmt::Debug for VegaMdlValidatedWitnessV1 {
             .debug_struct("VegaMdlValidatedWitnessV1")
             .field("lookup_entries", &self.lookup.addresses.len())
             .field("private_values", &"[REDACTED]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 /// Parse and preflight the complete Figure 9 witness.
@@ -645,11 +645,10 @@ fn parse_device_key(
     let mut y_bytes = [0_u8; 32];
     x_bytes.copy_from_slice(x);
     y_bytes.copy_from_slice(y);
-    let encoded =
-        EncodedPoint::from_affine_coordinates((&x_bytes).into(), (&y_bytes).into(), false);
+    let encoded = Sec1Point::from_affine_coordinates((&x_bytes).into(), (&y_bytes).into(), false);
     let public_key = PublicKey::from_sec1_bytes(encoded.as_bytes())
         .map_err(|_| VegaMdlError::InvalidP256PublicKey { field: "deviceKey" })?;
-    let compressed = public_key.to_encoded_point(true);
+    let compressed = public_key.to_sec1_point(true);
     let mut compressed_bytes = [0_u8; 33];
     compressed_bytes.copy_from_slice(compressed.as_bytes());
     Ok((PrivacyP256PointV1::new(compressed_bytes), x_bytes, y_bytes))
@@ -662,7 +661,7 @@ fn validate_signature(
 ) -> Result<VegaEcdsaWitnessV1, VegaMdlError> {
     let signature = Signature::from_slice(signature_bytes)
         .map_err(|_| VegaMdlError::InvalidSignatureEncoding { role })?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(VegaMdlError::NonCanonicalHighSSignature { role });
     }
     verifying_key
@@ -940,7 +939,7 @@ mod tests {
     }
     fn cbor_tag(tag: u64, value: Vec<u8>) -> Vec<u8> {
         let mut encoded = cbor_head(6, tag);
-        encoded.extend_from_slice(&value);
+        encoded.extend(value);
         encoded
     }
     fn signing_key(seed: u8) -> SigningKey {
@@ -948,7 +947,7 @@ mod tests {
         SigningKey::from_bytes((&bytes).into()).expect("fixed non-zero test signing key")
     }
     fn compressed_key(signing_key: &SigningKey) -> PrivacyP256PointV1 {
-        let encoded = signing_key.verifying_key().to_encoded_point(true);
+        let encoded = signing_key.verifying_key().to_sec1_point(true);
         let mut bytes = [0_u8; 33];
         bytes.copy_from_slice(encoded.as_bytes());
         PrivacyP256PointV1::new(bytes)
@@ -978,7 +977,7 @@ mod tests {
     ) -> Fixture {
         let issuer_signing_key = signing_key(1);
         let device_signing_key = signing_key(2);
-        let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
+        let device_uncompressed = device_signing_key.verifying_key().to_sec1_point(false);
         let device_x = device_uncompressed.x().expect("uncompressed x");
         let device_y = device_uncompressed.y().expect("uncompressed y");
         let birth_inner = cbor_map(vec![
@@ -1060,11 +1059,11 @@ mod tests {
         let issuer_signature: Signature = issuer_signing_key
             .sign_prehash(&issuer_digest)
             .expect("issuer signature");
-        let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+        let issuer_signature = issuer_signature.normalize_s();
         let device_signature: Signature = device_signing_key
             .sign_prehash(statement.device_authentication_digest.as_bytes())
             .expect("device signature");
-        let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
+        let device_signature = device_signature.normalize_s();
         let witness = VegaMdlWitnessV1::new(
             sig_structure,
             mso_payload,
@@ -1337,13 +1336,13 @@ mod tests {
             let low_s =
                 Signature::from_slice(&signature_bytes[..]).expect("canonical fixture signature");
             assert!(
-                low_s.normalize_s().is_none(),
+                low_s.normalize_s() == low_s,
                 "fixture must use the sole canonical low-s representative"
             );
             let (r, s) = low_s.split_scalars();
             let high_s = Signature::from_scalars(r.to_repr(), (-*s).to_repr())
                 .expect("high-s counterpart remains a valid scalar pair");
-            assert!(high_s.normalize_s().is_some());
+            assert!(high_s.normalize_s() != high_s);
             **signature_bytes = high_s.to_bytes().into();
             assert_eq!(
                 validate_mdl_witness(

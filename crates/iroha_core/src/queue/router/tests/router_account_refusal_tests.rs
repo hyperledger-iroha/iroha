@@ -64,9 +64,9 @@ fn assert_original_sns_refusal<W: WorldReadOnly>(world: &W, alias: &AccountAlias
     );
 }
 
-fn assert_route_deferred(result: Result<RoutingDecision, RoutingResolveError>) {
+fn assert_route_deferred(result: &Result<RoutingDecision, RoutingResolveError>) {
     assert!(
-        matches!(result, Err(RoutingResolveError::Deferred(ref reason))
+        matches!(result, Err(RoutingResolveError::Deferred(reason))
         if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
         "an unfinished original account read published a routing outcome: {result:?}"
     );
@@ -100,7 +100,7 @@ fn original_account_target_refusal_never_selects_the_default_route() {
     );
     assert_eq!(view.smart_contract_state().get(&key), Some(&original));
     assert_eq!(route().unwrap(), RoutingDecision::default());
-    assert_route_deferred(refused);
+    assert_route_deferred(&refused);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn original_signed_account_matcher_refusal_is_not_a_mismatch_or_panic() {
     );
     assert_eq!(route().unwrap(), expected);
     assert_route_deferred(
-        refused.expect("account formatting must not panic on local read refusal"),
+        &refused.expect("account formatting must not panic on local read refusal"),
     );
 }
 
@@ -182,7 +182,7 @@ fn original_canonical_account_matcher_preserves_decode_refusal_and_retry() {
     let refused = catch_unwind(AssertUnwindSafe(|| without_decode_allocation(route)));
     assert_eq!(route().unwrap(), expected);
     assert_route_deferred(
-        refused.expect("canonical account matching must return the read refusal"),
+        &refused.expect("canonical account matching must return the read refusal"),
     );
     for malformed in ["", "not-an-encoded-account", "0x00"] {
         assert_eq!(
@@ -448,7 +448,7 @@ fn original_native_policy_account_matcher_retains_refusal_before_route_selection
         .expect("completed signed routing snapshot before matcher refusal");
     assert_eq!(snapshot.policy(), Some(&policy));
     let mut builder = TransactionBuilder::new(
-        chain.state().network_id_ref().clone(),
+        *chain.state().network_id_ref(),
         owner,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -464,7 +464,10 @@ fn original_native_policy_account_matcher_retains_refusal_before_route_selection
         chain.state().network_id_ref(),
         core::time::Duration::from_secs(30),
         TransactionParameters::default(),
-        &view.crypto(),
+        view.world()
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original fixture policy"),
         &time_source,
     )
     .expect("canonical signature and original signed network admission");

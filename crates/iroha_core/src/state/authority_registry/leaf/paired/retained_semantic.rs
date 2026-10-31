@@ -53,6 +53,10 @@ impl RetainedSemanticError {
 
 /// Completed materializer stages and monotonic successful/attempted work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "This progress snapshot exposes independently completed retained materializer stages"
+)]
 pub(in crate::state) struct RetainedSemanticProgress {
     pub rows: usize,
     pub pending_key: bool,
@@ -75,10 +79,18 @@ const ITERATOR_STEP: usize = 4 * (usize::BITS as usize + 1) + 8;
 const SORT_BOUND_STEP: usize = 2 * usize::BITS as usize + 2;
 const LOOKUP_STEP: usize = 3 * 257 * (4 * Hash::LENGTH + 32);
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn add(left: usize, right: usize) -> Result<usize, RetainedSemanticError> {
     left.checked_add(right)
         .ok_or(RetainedSemanticError::Overflow)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn mul(left: usize, right: usize) -> Result<usize, RetainedSemanticError> {
     left.checked_mul(right)
         .ok_or(RetainedSemanticError::Overflow)
@@ -104,6 +116,10 @@ const REGISTRY_GEOMETRY: usize = registry_geometry(STATE_FIELDS);
 // The retained native entry points are closed to the actual three source
 // producers. Their generated nominal identities are literal fast paths, not
 // arbitrary dynamic NoritoSchema callbacks or caller-provided funding tokens.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn closed_setup_literal(
     table: &str,
 ) -> Result<(&'static str, &'static str), RetainedSemanticError> {
@@ -129,11 +145,19 @@ fn closed_setup_literal(
     };
     Ok((pair.0.ok_or(RetainedSemanticError::Phase)?, pair.1))
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn setup_selector_work(table: &str) -> Result<usize, RetainedSemanticError> {
     // Four literal matches and their scalar generated static-name callbacks.
     // The input length is O(1); its bytes are not inspected until admission.
     add(mul(8, table.len())?, 128)
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn setup_registry_work(key: &str, value: &str) -> Result<usize, RetainedSemanticError> {
     // All registry walk/search comparisons, bitset visits, two literal-name
     // callbacks, schema/start framing and the final key-name geometry lookup.
@@ -145,6 +169,10 @@ fn setup_registry_work(key: &str, value: &str) -> Result<usize, RetainedSemantic
         512,
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn admit_work(work: &mut usize, demand: usize, limit: usize) -> Result<(), RetainedSemanticError> {
     let required = add(*work, demand)?;
     if required > limit {
@@ -162,6 +190,10 @@ fn admit_work(work: &mut usize, demand: usize, limit: usize) -> Result<(), Retai
 /// Generic consuming leaf helpers retain their separate metadata setup obligation;
 /// retained native source operations additionally pre-admit their literal setup prefix.
 /// It grants no additional allocation, row, payload or semantic-validation bound.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(super) fn finite_work_bound(limits: LeafLimits, framing: usize) -> Result<usize, LeafError> {
     let rows = usize::try_from(limits.max_rows.min(MAX_NORITO_TREE_ENTRIES as u64))
         .map_err(|_| LeafError::RowLimit)?;
@@ -216,6 +248,10 @@ pub(super) struct RetainedSemanticTable {
     sort_plan: Option<usize>,
     scope: Option<OwnedAllocationScope>,
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl RetainedSemanticTable {
     fn new(
         table: &str,
@@ -544,6 +580,10 @@ pub(in crate::state) struct RetainedSemanticOrdinalRows {
     // All physical children retire before the final original refund scope.
     scope: OwnedAllocationScope,
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl RetainedSemanticOrdinalRows {
     /// Admit exact source cardinality before any canonical backing allocation.
     pub(in crate::state) fn new(
@@ -705,6 +745,10 @@ where
     exhausted: bool,
     builder: RetainedSemanticTable,
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<'row, K: Encode + NoritoSchema + 'row, V: 'row, S: Encode, I>
     RetainedSemanticRows<'row, K, V, S, I>
 where

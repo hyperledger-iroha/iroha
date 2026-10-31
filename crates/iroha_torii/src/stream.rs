@@ -201,9 +201,8 @@ impl WebSocketNorito {
         loop {
             match self.ws.next().await {
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
-                None => return Ok(()),
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) => return Ok(()),
+                None | Some(Ok(Message::Close(_))) => return Ok(()),
                 Some(Ok(Message::Binary(_))) => {
                     return Err(Error::UnexpectedFrame {
                         expected: "ping, pong, or close",

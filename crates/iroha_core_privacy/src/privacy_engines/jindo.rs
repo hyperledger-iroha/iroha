@@ -30,7 +30,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::metadata::Metadata;
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 #[cfg(test)]
 fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
@@ -436,6 +437,10 @@ impl JindoPreparedPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -540,6 +545,10 @@ impl SignedJindoPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> JindoPrivacyActionEffectV1 {
         JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -701,14 +710,18 @@ fn derive_canonical_transaction_intent_digest_v1(
 ///
 /// Returns a closed error for non-canonical context or witness input, native
 /// proving failure, binding drift, or resource-limit violation.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The proving boundary consumes the secret witness so it is zeroized on every return and unwind."
+)]
 pub fn prepare_jindo_privacy_action_with_rng_v1<R>(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     rng: &mut R,
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(JindoPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -716,7 +729,7 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(JindoPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    validate_transaction_context_v1(&context)?;
+    validate_transaction_context_v1(context)?;
     witness.validate()?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
@@ -764,7 +777,7 @@ where
     let draft_statement =
         PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(native_statement.clone());
     let transaction_intent_digest =
-        derive_canonical_transaction_intent_digest_v1(&context, draft_statement)?;
+        derive_canonical_transaction_intent_digest_v1(context, draft_statement)?;
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let typed_statement =
@@ -815,7 +828,7 @@ where
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
-    let final_payload = transaction_payload_v1(&context, final_envelope)?;
+    let final_payload = transaction_payload_v1(context, final_envelope)?;
     let validated_intent = final_payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::FinalIntentBinding)?;
@@ -842,11 +855,11 @@ where
 ///
 /// Returns the same closed failures as [`prepare_jindo_privacy_action_with_rng_v1`].
 pub fn prepare_jindo_privacy_action_v1(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1> {
-    prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, &mut OsRng)
+    prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, &mut SysRng)
 }
 /// Sign a payload returned by the canonical pure Jindo prover.
 ///
@@ -915,14 +928,14 @@ pub fn sign_prepared_jindo_privacy_action_v1(
 ///
 /// Returns a closed validation, proving, binding, or signing error.
 pub fn build_signed_privacy_action_with_rng_v1<R>(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     private_key: &PrivateKey,
     rng: &mut R,
 ) -> Result<SignedJindoPrivacyActionV1, JindoPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_signing_authority_v1(&context.authority, private_key)?;
     let prepared =
@@ -938,7 +951,7 @@ where
 ///
 /// Returns the same closed failures as [`build_signed_privacy_action_with_rng_v1`].
 pub fn build_signed_privacy_action_v1(
-    context: JindoPrivacyActionTransactionContextV1,
+    context: &JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
     private_key: &PrivateKey,
@@ -948,7 +961,7 @@ pub fn build_signed_privacy_action_v1(
         witness,
         canonical_genesis_hash,
         private_key,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 #[cfg(test)]
@@ -962,53 +975,55 @@ mod tests {
         transaction::{Executable, FeePaymentIntent},
     };
     use iroha_model_base::metadata::Metadata;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct TestRng(u64);
     impl TestRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            self.next_u64() as u32
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::try_from(self.try_next_u64()? & u64::from(u32::MAX))
+                .expect("low word fits u32"))
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut value = self.0;
-            value ^= value >> 12;
-            value ^= value << 25;
-            value ^= value >> 27;
-            self.0 = value;
-            value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut value = self.0;
+                value ^= value >> 12;
+                value ^= value << 25;
+                value ^= value >> 27;
+                self.0 = value;
+                value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            for chunk in destination.chunks_mut(8) {
-                let bytes = self.next_u64().to_le_bytes();
-                chunk.copy_from_slice(&bytes[..chunk.len()]);
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                for chunk in destination.chunks_mut(8) {
+                    let bytes = self.try_next_u64()?.to_le_bytes();
+                    chunk.copy_from_slice(&bytes[..chunk.len()]);
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("invalid boundary input reached native randomness")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     fn field(value: u64) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         encoding[..8].copy_from_slice(&value.to_le_bytes());
@@ -1093,7 +1108,7 @@ mod tests {
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
         coefficients[0] = delta;
         polynomial.add_assign(
-            &ring::JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli),
+            &ring::JindoRnsPolynomialV1::from_balanced_coefficients(&coefficients, moduli),
             moduli,
         );
     }
@@ -1119,7 +1134,9 @@ mod tests {
         for count in [1, 3] {
             assert!(matches!(
                 witness_error(
-                    (0..count).map(|i| vec![field(i as u64 + 1)]).collect(),
+                    (0..count)
+                        .map(|i| vec![field(u64::try_from(i).expect("fixture index") + 1)])
+                        .collect(),
                     field(1)
                 ),
                 JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount { .. }
@@ -1204,7 +1221,7 @@ mod tests {
     #[test]
     fn action_builder_rejects_public_boundary_errors_before_randomness() {
         let zero_genesis = prepare_jindo_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0; 32],
             &mut PanicRng,
@@ -1216,7 +1233,7 @@ mod tests {
         let mut oversized_time = action_context();
         oversized_time.creation_time = Duration::from_secs(u64::MAX);
         let oversized_time = prepare_jindo_privacy_action_with_rng_v1(
-            oversized_time,
+            &oversized_time,
             action_witness(),
             [0xA7; 32],
             &mut PanicRng,
@@ -1226,7 +1243,7 @@ mod tests {
             Err(JindoPrivacyActionBuildErrorV1::CreationTimeOutOfRange)
         ));
         let wrong_key = build_signed_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0xA7; 32],
             &foreign_private_key(),
@@ -1240,7 +1257,7 @@ mod tests {
     #[test]
     fn deterministic_action_api_builds_one_bound_signed_component_action() {
         let prepared = prepare_jindo_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_witness(),
             [0xA7; 32],
             &mut TestRng::new(0x6a6a_29d0_0044_0001),
@@ -1248,7 +1265,10 @@ mod tests {
         .expect("deterministic Jindo action proving");
         assert_eq!(prepared.polynomial_count(), 4);
         assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
-        assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
+        assert_eq!(
+            prepared.proof_bytes(),
+            u32::try_from(JINDO_NATIVE_PROOF_BYTES_V1).expect("fixed proof size fits u32")
+        );
 
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);

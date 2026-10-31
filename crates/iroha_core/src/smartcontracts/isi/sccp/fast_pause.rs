@@ -32,7 +32,7 @@ use iroha_data_model::{
 };
 
 pub(super) mod certification;
-pub(crate) mod draw;
+pub mod draw;
 
 const MAX_DRAW: usize = 27;
 const MAX_SEATS: usize = 18;
@@ -40,7 +40,7 @@ fn refuse(reason: impl core::fmt::Display) -> Error {
     Error::InvariantViolation(format!("SCCP fast pause: {reason}").into())
 }
 
-/// Original local graph failures poison the enclosing carrier, never a replicated NoResult.
+/// Original local graph failures poison the enclosing carrier, never a replicated `NoResult`.
 fn construction_error(state: &mut StateTransaction<'_, '_>, error: PauseRecordError) -> Error {
     use crate::state::{
         EvidencePreparationError as Preparation, StateStorageAdmissionError as Storage,
@@ -53,12 +53,13 @@ fn construction_error(state: &mut StateTransaction<'_, '_>, error: PauseRecordEr
         PauseRecordError::Account(error) => error.local_refusal().map(Preparation::DecodeResource),
         PauseRecordError::Invalid(_) => None,
     };
-    if let Some(local) = local {
-        state.arm_local_storage_refusal(Storage::SccpEvidence(local));
-        refuse("original pause graph admission did not complete")
-    } else {
-        refuse(error)
-    }
+    local.map_or_else(
+        || refuse(error),
+        |local| {
+            state.arm_local_storage_refusal(Storage::SccpEvidence(local));
+            refuse("original pause graph admission did not complete")
+        },
+    )
 }
 
 /// Current seats are fixed-size indices into the original immutable draw.
@@ -244,7 +245,7 @@ fn check_current_endorsement(
 /// Recheck direct signed public panel instructions before ordinary queue fee admission.
 /// # Errors
 /// Refuses stale state, invalid membership, and unavailable external eligibility.
-pub(crate) fn admit(
+pub fn admit(
     world: &(impl WorldReadOnly + ?Sized),
     network: NetworkId,
     payload: &TransactionPayload,
@@ -253,7 +254,7 @@ pub(crate) fn admit(
     let Executable::Instructions(instructions) = &payload.instructions else {
         return Ok(());
     };
-    for instruction in instructions.iter() {
+    for instruction in instructions {
         if let Some(accept) = instruction
             .as_any()
             .downcast_ref::<AcceptSccpPausePanelSeatV1>()
@@ -580,7 +581,7 @@ pub(super) fn lift(
 }
 
 /// Borrowed current seats; every index points into this exact retained panel graph.
-pub(crate) struct SeatProjection<'a> {
+pub struct SeatProjection<'a> {
     /// Original immutable draw and acceptances.
     pub(crate) panel: &'a RetainedSccpPausePanel,
     /// Primary indices then backup indices; only `2 * seats_per_panel` entries are live.
@@ -590,7 +591,7 @@ pub(crate) struct SeatProjection<'a> {
 }
 /// Read-only current-seat projection for a retained committed observation.
 /// Missing eligibility is an error, never an empty successful seat list.
-pub(crate) fn current_seats(
+pub fn current_seats(
     world: &(impl WorldReadOnly + ?Sized),
     time: u64,
 ) -> Result<Option<SeatProjection<'_>>, Error> {

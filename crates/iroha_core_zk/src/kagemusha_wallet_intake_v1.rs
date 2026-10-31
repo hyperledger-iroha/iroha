@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{account::AccountId, kagemusha::kagemusha_wallet_v1::*};
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use crate::{
     kagemusha_wallet_advance_v1::{
@@ -32,6 +32,20 @@ use crate::{
     },
     kagemusha_wallet_preparation_v1::PreparationV1,
 };
+
+type AdmittedParts<F, P> = (
+    KagemushaWalletProviderV1<F, P>,
+    Arc<InstalledVerifierPackV1>,
+    Arc<QualifiedWalletSourcesV1>,
+    KagemushaWalletSlotIdV1,
+    KagemushaWalletCredentialV1,
+    AccountId,
+    KagemushaWalletAssetScopeV1,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+);
 
 /// Bounded original single-key account frame, before canonical decoding.
 pub const ACCOUNT_ORIGINAL_MAX_BYTES_V1: usize = 4096;
@@ -63,10 +77,9 @@ pub enum Error {
 
 impl Error {
     fn decode_attempt(error: norito::core::DecodeAttemptError, invalid: &'static str) -> Self {
-        match error.into_local_refusal() {
-            Ok(original) => Self::DecodeResource(original),
-            Err(_) => Self::Authority(invalid),
-        }
+        error
+            .into_local_refusal()
+            .map_or_else(|_| Self::Authority(invalid), Self::DecodeResource)
     }
 
     fn preparation(error: crate::kagemusha_wallet_proofs_v1::Error, invalid: &'static str) -> Self {
@@ -202,10 +215,7 @@ fn open_message(
     manifest: &[u8; 32],
     slot: &KagemushaWalletSlotIdV1,
     marker_file_digest: &[u8; 32],
-    credential_original: &[u8],
-    certificate_set_original: &[u8],
-    account_original: &[u8],
-    asset_scope_original: &[u8],
+    originals: [&[u8]; 4],
 ) -> Vec<u8> {
     // Provider-local SHA framing, not a monetary G1 signature domain. Length-delimited
     // originals prevent cross-role/cross-incarnation reuse of the existing account loan.
@@ -214,12 +224,7 @@ fn open_message(
     transcript.extend_from_slice(manifest);
     transcript.extend_from_slice(&slot.0);
     transcript.extend_from_slice(marker_file_digest);
-    for original in [
-        credential_original,
-        certificate_set_original,
-        account_original,
-        asset_scope_original,
-    ] {
+    for original in originals {
         transcript.extend_from_slice(&(original.len() as u64).to_le_bytes());
         transcript.extend_from_slice(original);
     }
@@ -241,7 +246,7 @@ fn retain_originals(originals: [&[u8]; 4]) -> Option<[Vec<u8>; 4]> {
     {
         return None;
     }
-    Some(originals.map(|original| original.to_vec()))
+    Some(originals.map(<[u8]>::to_vec))
 }
 
 // Move-only check boundary used by both genuine begin and finish. Checks may reconcile
@@ -315,6 +320,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> WalletOpenBeginFailur
     /// previous pending challenge is replaced and no enrollment side effect is dispatched.
     /// # Errors
     /// The new refusal retains this exact original custody again, including source/IO errors.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     pub fn retry(self) -> Result<PendingWalletOpenV1<F, P>, Self> {
         PendingWalletOpenV1::begin_retained(self.intake)
     }
@@ -454,7 +463,11 @@ fn source<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
         || provider.credential(slot, 0),
     )?;
     let after = provider.status(slot)?;
-    if after.marker().map(|r| r.marker_file_digest()) != Some(marker.marker_file_digest()) {
+    if after
+        .marker()
+        .map(crate::kagemusha_wallet_advance_v1::KagemushaWalletMarkerRecordV1::marker_file_digest)
+        != Some(marker.marker_file_digest())
+    {
         return Err(Error::SourceChanged);
     }
     Ok(marker)
@@ -473,13 +486,13 @@ pub(crate) fn select_enrolled_source<F: KagemushaWalletFsV1, P: KagemushaWalletP
     for slot in provider.slots()? {
         // Enrollment originals can identify retained custody of another scheme without
         // reconciling it as this provider's wallet. A pinned source may never be excluded.
-        if let Some(intent) = provider.read_intent_for_enrollment_search(&slot)? {
-            if &intent.challenge.scheme_id != provider.scheme_id() {
-                if pinned.is_some_and(|(selected, _)| selected == slot) {
-                    return Err(Error::SourceChanged);
-                }
-                continue;
+        if let Some(intent) = provider.read_intent_for_enrollment_search(&slot)?
+            && &intent.challenge.scheme_id != provider.scheme_id()
+        {
+            if pinned.is_some_and(|(selected, _)| selected == slot) {
+                return Err(Error::SourceChanged);
             }
+            continue;
         }
         let status = match provider.status(&slot) {
             Ok(status) => status,
@@ -516,6 +529,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     /// # Errors
     /// Every invalid original, unknown storage/key, changed source or nonce refusal returns
     /// the SAME exclusive provider, installation and source owners in an opaque failure.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     pub fn begin(
         provider: KagemushaWalletProviderV1<F, P>,
         installed: Arc<InstalledVerifierPackV1>,
@@ -525,15 +542,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         account_original: &[u8],
         asset_scope_original: &[u8],
     ) -> Result<Self, WalletOpenBeginFailureV1<F, P>> {
-        let (originals, rejected_bound) = match retain_originals([
+        let (originals, rejected_bound) = retain_originals([
             credential_original,
             certificate_set_original,
             account_original,
             asset_scope_original,
-        ]) {
-            Some(originals) => (originals, false),
-            None => (std::array::from_fn(|_| Vec::new()), true),
-        };
+        ])
+        .map_or_else(
+            || (std::array::from_fn(|_| Vec::new()), true),
+            |originals| (originals, false),
+        );
         Self::begin_retained(WalletOpenIntakeV1 {
             provider,
             installed,
@@ -544,6 +562,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     fn begin_retained(
         intake: WalletOpenIntakeV1<F, P>,
     ) -> Result<Self, WalletOpenBeginFailureV1<F, P>> {
@@ -586,7 +608,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             // cannot silently reselect another marker/source on retry.
             pin_selected_source(&mut intake.selected_source, (slot, marker_file_digest))?;
             let mut nonce = [0; 32];
-            rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
+            rand::rngs::SysRng.try_fill_bytes(&mut nonce).map_err(|_| {
                 KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(
                     0,
                 ))
@@ -599,10 +621,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
                 &installed.verifier().manifest_digest(),
                 &slot,
                 &marker_file_digest,
-                credential_original,
-                certificate_set_original,
-                account_original,
-                asset_scope_original,
+                [
+                    credential_original,
+                    certificate_set_original,
+                    account_original,
+                    asset_scope_original,
+                ],
             );
             Ok((
                 slot,
@@ -670,6 +694,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     /// Every refusal returns the SAME pending owner, preserving its exact original challenge.
     /// # Errors
     /// Wrong account signature, stale/changed source, unknown key/storage or lost custody.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact original custody owner on refusal without allocating a replacement"
+    )]
     pub fn finish(
         self,
         account_signature: &[u8],
@@ -741,21 +769,7 @@ impl<F: KagemushaWalletFsV1, P> AdmittedWalletV1<F, P> {
 
     /// Move the real admission into Native's operation owner, keeping exclusive custody
     /// and every exact owner original. This is crate-private and grants no foreign open.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        KagemushaWalletProviderV1<F, P>,
-        Arc<InstalledVerifierPackV1>,
-        Arc<QualifiedWalletSourcesV1>,
-        KagemushaWalletSlotIdV1,
-        KagemushaWalletCredentialV1,
-        AccountId,
-        KagemushaWalletAssetScopeV1,
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-    ) {
+    pub(crate) fn into_parts(self) -> AdmittedParts<F, P> {
         (
             self.provider,
             self.installed,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";

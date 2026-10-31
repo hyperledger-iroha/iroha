@@ -34,7 +34,7 @@ pub(super) fn evidence_matches_policy(
 }
 
 /// The single key profile of a platform.
-pub(crate) fn platform_key_profile(
+pub fn platform_key_profile(
     platform: &KagemushaWalletEnrollmentPlatformV1,
 ) -> KagemushaWalletKeyProfileV1 {
     match platform {
@@ -209,7 +209,7 @@ mod credential_retry_tests {
                     .unwrap()
             })
             .find(|key| {
-                key.verifying_key().to_encoded_point(false).as_bytes()
+                key.verifying_key().to_sec1_point(false).as_bytes()
                     == issuer.body.key.as_sec1_bytes()
             })
             .expect("public original Enrollment fixture signer");
@@ -261,7 +261,7 @@ mod credential_retry_tests {
                 _ => {
                     let another = SigningKey::from_slice(&[0x73; 32]).unwrap();
                     changed.payment_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                        another.verifying_key().to_encoded_point(false).as_bytes(),
+                        another.verifying_key().to_sec1_point(false).as_bytes(),
                     )
                     .unwrap();
                 }

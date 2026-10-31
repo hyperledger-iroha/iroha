@@ -1,7 +1,7 @@
 //! Total incoming accumulator decoding, source normalization and deciding dummies.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{Ep, Eq, PastaCurve, PastaField, msm::MemoryBudget};
 use iroha_plonk::{
     check::{CheckMode, check_circuit},

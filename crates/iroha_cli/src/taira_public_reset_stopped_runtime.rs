@@ -92,7 +92,7 @@ fn prior_inrou_enabled(validator: &ValidatorV1) -> Result<bool> {
         "stopped prior validator config",
         file,
         &snapshot,
-        MAX_TOML_SOURCE_BYTES as u64,
+        MAX_TOML_SOURCE_BYTES,
     )?);
     if sha256_hex(&bytes) != entry.sha256 {
         return Err(eyre!(
@@ -195,7 +195,7 @@ fn stopped_owner_deadline(deadline: Instant) -> Result<()> {
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn stopped_cgroup_custody(path: &Path) -> Result<()> {
     require_root_directory(path, false, "stopped Inrou cgroup")?;
-    if rustix::fs::statfs(path)?.f_type as u64 != 0x6367_7270 {
+    if u64::try_from(rustix::fs::statfs(path)?.f_type).ok() != Some(0x6367_7270) {
         return Err(eyre!(
             "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
         ));
@@ -320,7 +320,9 @@ fn acquire_slot_lock(path: &Path, owner: u32, create: bool) -> Result<File> {
         .write(true)
         .create(create)
         .mode(0o600)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32)
+        .custom_flags(
+            ((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits()).cast_signed(),
+        )
         .open(path)?;
     let opened = file.metadata()?;
     let named = fs::symlink_metadata(path)?;
@@ -910,7 +912,7 @@ fn reconcile_firewall_with(
             vec!["-X".to_owned(), chain.clone()]
         };
         if operation[0] == "-A" {
-            operation[0] = "-D".to_owned();
+            "-D".clone_into(&mut operation[0]);
         }
         let mut arguments = vec!["-w".to_owned(), "5".to_owned()];
         arguments.extend(operation);
@@ -933,6 +935,18 @@ fn reconcile_firewall_with(
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
+
+    #[test]
+    fn stopped_cgroup_custody_rejects_an_ordinary_root_owned_filesystem() -> Result<()> {
+        let directory = Path::new("/usr");
+        require_root_directory(directory, false, "ordinary root-owned directory")?;
+        let error = stopped_cgroup_custody(directory).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
+        );
+        Ok(())
+    }
 
     fn custody(path: &Path) -> Result<()> {
         let metadata = fs::symlink_metadata(path)?;
@@ -1215,7 +1229,9 @@ mod tests {
             absent.to_string_lossy()
         );
         let path = directory.path().join("admitted.toml");
-        assert!(!iroha_config::parameters::defaults::soracloud_runtime::INROU_ENABLED);
+        assert!(!std::hint::black_box(
+            iroha_config::parameters::defaults::soracloud_runtime::INROU_ENABLED
+        ));
         assert!(!prior_inrou_owner_from_config(
             "taira-validator-1",
             &path,
@@ -1410,7 +1426,6 @@ mod tests {
             };
             reconcile_firewall_with(2, true, &mut run)?;
             reconcile_firewall_with(2, true, &mut run)?;
-            drop(run);
             assert!(snapshot.contains(foreign));
             assert!(!parse_stopped_firewall(2, snapshot.as_bytes())?.present);
             assert_eq!(
@@ -1422,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn stopped_firewall_stops_after_command_failure_or_snapshot_drift() -> Result<()> {
+    fn stopped_firewall_stops_after_command_failure_or_snapshot_drift() {
         for failure in ["command", "snapshot"] {
             let initial = firewall_snapshot(2, true, true, Some(43291), true);
             let mut mutations = 0;
@@ -1447,7 +1462,6 @@ mod tests {
             assert_eq!(mutations, 1);
             assert_eq!(scans, if failure == "command" { 1 } else { 2 });
         }
-        Ok(())
     }
 
     #[test]

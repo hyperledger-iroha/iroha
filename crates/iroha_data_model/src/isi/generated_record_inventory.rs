@@ -3,18 +3,16 @@
 use super::check;
 use crate::{
     account::Account,
-    asset::AssetDefinitionId,
-    asset::{Asset, AssetDefinition},
+    asset::{Asset, AssetDefinition, AssetDefinitionId},
     domain::Domain,
     isi::{Burn, Grant, Mint, Register, RemoveKeyValue, Revoke, SetKeyValue, Transfer, Unregister},
     nft::{Nft, NftId},
-    peer::Peer,
     permission::Permission,
     role::{Role, RoleId},
     rwa::Rwa,
     trigger::Trigger,
 };
-use iroha_model_base::domain::DomainId;
+use iroha_model_base::{domain::DomainId, peer::Peer};
 use iroha_primitives::numeric::Quantity;
 
 macro_rules! record {
@@ -659,16 +657,6 @@ record!(
     "iroha_data_model::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1"
 );
 record!(
-    privacy_register_privacy_exact12_qualification_v1,
-    crate::isi::privacy::RegisterPrivacyExact12QualificationV1,
-    "iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1"
-);
-record!(
-    privacy_register_privacy_protocol_activation_v1,
-    crate::isi::privacy::RegisterPrivacyProtocolActivationV1,
-    "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1"
-);
-record!(
     privacy_register_privacy_vega_issuer_v1,
     crate::isi::privacy::RegisterPrivacyVegaIssuerV1,
     "iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1"
@@ -754,14 +742,14 @@ record!(
     "iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1"
 );
 record!(
-    privacy_schedule_privacy_consensus_policy_tightening_v1,
-    crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1,
-    "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1"
+    privacy_schedule_privacy_consensus_policy_update_v1,
+    crate::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1"
 );
 record!(
-    privacy_schedule_privacy_protocol_limits_tightening_v1,
-    crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1,
-    "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1"
+    privacy_schedule_privacy_protocol_limits_update_v1,
+    crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1"
 );
 record!(
     privacy_submit_privacy_proof_v1,
@@ -769,9 +757,9 @@ record!(
     "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
 );
 record!(
-    privacy_transition_privacy_protocol_lifecycle_v1,
-    crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
-    "iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1"
+    privacy_submit_privacy_zk_x509_certificate_v1,
+    crate::isi::privacy::SubmitPrivacyZkX509CertificateV1,
+    "iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1"
 );
 record!(
     private_settlement_abort_atomic_private_settlement_v1,
@@ -939,19 +927,14 @@ record!(
     "iroha_data_model::isi::repo::ReverseRepoIsi"
 );
 record!(
-    runtime_upgrade_activate_runtime_upgrade,
-    crate::isi::runtime_upgrade::ActivateRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade"
+    runtime_upgrade_attest_runtime_support_v1,
+    crate::isi::runtime_upgrade::AttestRuntimeSupportV1,
+    "iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1"
 );
 record!(
-    runtime_upgrade_cancel_runtime_upgrade,
-    crate::isi::runtime_upgrade::CancelRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade"
-);
-record!(
-    runtime_upgrade_propose_runtime_upgrade,
-    crate::isi::runtime_upgrade::ProposeRuntimeUpgrade,
-    "iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade"
+    runtime_upgrade_contain_runtime_v1,
+    crate::isi::runtime_upgrade::ContainRuntimeV1,
+    "iroha_data_model::isi::runtime_upgrade::ContainRuntimeV1"
 );
 record!(
     rwa_force_transfer_rwa,
@@ -1810,8 +1793,23 @@ record!(
 );
 
 record!(
+    asset_fi_context_assert_current_v1,
+    crate::isi::asset_fi_context::AssertAssetFiContextV1,
+    "iroha_data_model::isi::asset_fi_context::AssertAssetFiContextV1"
+);
+record!(
+    asset_fi_context_assert_receipt_v1,
+    crate::isi::asset_fi_context::AssertAssetFiTransferReceiptV1,
+    "iroha_data_model::isi::asset_fi_context::AssertAssetFiTransferReceiptV1"
+);
+record!(
     asset_fi_transfer_to_linked_fi_v1,
     crate::isi::asset_fi::TransferToLinkedFiV1,
     "iroha_data_model::isi::asset_fi::TransferToLinkedFiV1"
+);
+record!(
+    asset_escrow_scope_initialize_v1,
+    crate::isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1,
+    "iroha_data_model::isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1"
 );
 }

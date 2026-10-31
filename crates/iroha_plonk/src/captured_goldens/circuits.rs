@@ -7,7 +7,7 @@
 use ff::Field;
 use iroha_pasta::PastaField;
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{RngCore, SeedableRng};
+use rand_core::{Rng, SeedableRng};
 
 use crate::{
     cs::{Advice, Column, ConstraintSystem, Expression, Fixed, Instance, Rotation, TableColumn},

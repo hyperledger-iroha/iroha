@@ -139,7 +139,14 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
         query_fanout_candidate_snapshot_overhead_bytes()?,
     ])
 }
-/// Deterministic phase geometry for one signed-query fanout.
+/// Original admission geometry selected before acquiring a request's byte permit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryMemoryProfile {
+    Fanout,
+    NativeFinality,
+}
+
+/// Deterministic phase geometry for one admitted query.
 ///
 /// This is logical admission accounting, not an estimate of allocator internals. The request and
 /// fixed allowance remain live for the operation. The remaining bytes are divided into seven equal
@@ -156,12 +163,15 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
 ///
 /// Application collection reads also use these phase ceilings for retained rows and merge
 /// scratch, with their own admission accounting. Signed iterable queries never fan out.
+/// Native finality selects its separate closed frame/graph profile only on original GET
+/// admission; it never reinterprets an inherited signed-query envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,
     reason = "Byte units are explicit for every independently admitted allocation phase."
 )]
 struct QueryFanoutMemoryEnvelope {
+    profile: QueryMemoryProfile,
     working_set_bytes: usize,
     request_bytes: usize,
     request_decode_allocated_bytes: usize,
@@ -231,10 +241,10 @@ impl QueryFanoutMemoryEnvelope {
         let phase_bytes = Self::body_admission_unit(working_set_bytes)?;
         Self::with_phase_bytes(working_set_bytes, 0, phase_bytes)
     }
-    /// Original admission for local finality GETs, which decode no request body
-    /// and retain no signed-query representations. Cold source and response caps
-    /// stay unchanged; only genuinely absent request phases are released to the
-    /// producer. This must never reinterpret an already admitted outer request.
+    /// Bodyless native reads using the ordinary query geometry retain no signed
+    /// request representations. Cold source and response caps stay unchanged;
+    /// only genuinely absent request phases are released to the producer. The
+    /// full-native proof GETs select their explicit profile below instead.
     #[expect(
         clippy::result_large_err,
         reason = "Capacity rejections retain the complete Axum response inline without adding a box allocation."
@@ -243,6 +253,58 @@ impl QueryFanoutMemoryEnvelope {
         let mut envelope = Self::for_body_admission(working_set_bytes)?;
         envelope.request_decode_allocated_bytes = 0;
         Ok(envelope)
+    }
+
+    /// Original finite admission for the full-native single/interval GETs.
+    /// The same pool funds accumulated proofs, held payload, one source frame
+    /// and final encoding; this factory never changes an inherited envelope.
+    /// Prepared native children still charge this pool; the selected profile
+    /// does not guarantee that every legal native block shape will fit.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Original HTTP capacity refusal stays inline."
+    )]
+    fn for_native_finality(
+        working_set_bytes: usize,
+        response_bytes: usize,
+    ) -> Result<Self, Response> {
+        let refuse = || crate::native_projection_response::capacity().into_response();
+        let maximum_wire = iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+        let frames = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+            response_bytes,
+            maximum_wire,
+            64,
+        )
+        .ok_or_else(refuse)?;
+        let metadata = crate::history_producer::ProducerBudget::native_finality_metadata_bytes()
+            .ok_or_else(refuse)?;
+        let graph_floor = iroha_core::sumeragi::finality::native_finality_graph_floor_bytes()
+            .ok_or_else(refuse)?;
+        let available_graphs = working_set_bytes
+            .checked_sub(query_fanout_fixed_overhead_bytes().ok_or_else(refuse)?)
+            .and_then(|bytes| bytes.checked_sub(metadata))
+            .and_then(|bytes| bytes.checked_sub(frames))
+            .filter(|bytes| *bytes >= graph_floor)
+            .ok_or_else(refuse)?;
+        let envelope = Self {
+            profile: QueryMemoryProfile::NativeFinality,
+            working_set_bytes,
+            request_bytes: 0,
+            request_decode_allocated_bytes: 0,
+            accumulator_retained_bytes: 0,
+            route_body_bytes: frames,
+            // Element count is independently finite; the complete graph corridor
+            // is derived from the remaining original reservation below.
+            decode_allocated_bytes: maximum_wire.min(available_graphs),
+            candidate_allocation_bytes: 0,
+            candidate_encoded_bytes: metadata,
+            final_body_bytes: response_bytes,
+        };
+        if envelope.phases_fit() {
+            Ok(envelope)
+        } else {
+            Err(refuse())
+        }
     }
     #[expect(
         clippy::result_large_err,
@@ -327,6 +389,7 @@ impl QueryFanoutMemoryEnvelope {
             )
         })?;
         let envelope = Self {
+            profile: QueryMemoryProfile::Fanout,
             working_set_bytes,
             request_bytes,
             request_decode_allocated_bytes: phase_bytes,
@@ -348,6 +411,43 @@ impl QueryFanoutMemoryEnvelope {
         }
     }
     fn phases_fit(self) -> bool {
+        if self.profile == QueryMemoryProfile::NativeFinality {
+            let Some(fixed) = query_fanout_fixed_overhead_bytes() else {
+                return false;
+            };
+            let Some(metadata) =
+                crate::history_producer::ProducerBudget::native_finality_metadata_bytes()
+            else {
+                return false;
+            };
+            let maximum_wire = iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+            let Some(frames) = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+                self.final_body_bytes,
+                maximum_wire,
+                64,
+            ) else {
+                return false;
+            };
+            let Some(graph_floor) =
+                iroha_core::sumeragi::finality::native_finality_graph_floor_bytes()
+            else {
+                return false;
+            };
+            let graph = self
+                .working_set_bytes
+                .checked_sub(fixed)
+                .and_then(|bytes| bytes.checked_sub(metadata))
+                .and_then(|bytes| bytes.checked_sub(frames));
+            return self.request_bytes == 0
+                && self.request_decode_allocated_bytes == 0
+                && self.accumulator_retained_bytes == 0
+                && self.candidate_allocation_bytes == 0
+                && self.route_body_bytes == frames
+                && self.candidate_encoded_bytes == metadata
+                && graph.is_some_and(|bytes| {
+                    bytes >= graph_floor && self.decode_allocated_bytes == maximum_wire.min(bytes)
+                });
+        }
         let Some(fixed_overhead) = query_fanout_fixed_overhead_bytes() else {
             return false;
         };
@@ -706,6 +806,7 @@ mod query_ingress_json_decode_limit_tests {
 struct QueryMemoryGeometry {
     ingress: QueryIngressMemoryEnvelope,
     ingress_slots: NonZeroUsize,
+    routed_read_body_pool_bytes: usize,
     fanout_pool_bytes: usize,
     fanout_working_set_bytes: usize,
     fanout_slots: NonZeroUsize,
@@ -740,8 +841,27 @@ fn query_memory_geometry(
     let provisional_fanout =
         QueryFanoutMemoryEnvelope::for_body_admission(fanout_working_set_bytes).ok()?;
     let ingress_slots = NonZeroUsize::new(QUERY_INGRESS_SLOT_COUNT)?;
-    let ingress_slot_bytes = ingress_pool_bytes / ingress_slots.get();
+    // Retry bodies outlive individual execution owners. Give them independent
+    // credit from the ingress quarter, shared by routed reads and fee quotes. Grow
+    // retention only from slack beyond the original signed-query ingress phases, so
+    // a smaller pool keeps every existing request/decode limit and remains valid.
     let ingress_unit_cap = max_content_bytes.min(provisional_fanout.route_body_bytes);
+    let original_slot_bytes =
+        ingress_pool_bytes.checked_sub(provisional_fanout.route_body_bytes)? / ingress_slots.get();
+    let original_ingress =
+        QueryIngressMemoryEnvelope::from_slot_bytes(original_slot_bytes, ingress_unit_cap)?;
+    let required_slot_bytes = query_ingress_fixed_overhead_bytes()?.checked_add(
+        original_ingress
+            .body_bytes
+            .checked_mul(QUERY_INGRESS_PHASE_UNITS)?,
+    )?;
+    let retention_capacity =
+        ingress_pool_bytes.checked_sub(required_slot_bytes.checked_mul(ingress_slots.get())?)?;
+    let routed_read_body_pool_bytes = provisional_fanout
+        .route_body_bytes
+        .max(max_content_bytes.min(retention_capacity));
+    let ingress_slot_bytes =
+        ingress_pool_bytes.checked_sub(routed_read_body_pool_bytes)? / ingress_slots.get();
     let ingress =
         QueryIngressMemoryEnvelope::from_slot_bytes(ingress_slot_bytes, ingress_unit_cap)?;
     let fanout_slots = query_fanout_slot_count(
@@ -753,10 +873,12 @@ fn query_memory_geometry(
     let fanout_reserved = fanout_working_set_bytes.checked_mul(fanout_slots.get())?;
     ingress_reserved
         .checked_add(fanout_reserved)
+        .and_then(|reserved| reserved.checked_add(routed_read_body_pool_bytes))
         .filter(|reserved| *reserved <= aggregate_bytes)?;
     Some(QueryMemoryGeometry {
         ingress,
         ingress_slots,
+        routed_read_body_pool_bytes,
         fanout_pool_bytes,
         fanout_working_set_bytes,
         fanout_slots,
@@ -1068,7 +1190,7 @@ async fn acquire_query_ingress_memory(
             .map_err(|_| capacity_response());
     }
     tokio::time::timeout(
-        app.query_queue_timeout,
+        query_admission_remaining(app),
         app.query_ingress_inflight.clone().acquire_owned(),
     )
     .await
@@ -1192,6 +1314,20 @@ fn try_acquire_bodyless_finality_memory(
         QueryFanoutMemoryEnvelope::for_bodyless_finality(app.query_fanout_working_set_bytes)?;
     try_acquire_query_memory_envelope(app, envelope)
 }
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Original HTTP capacity refusal stays inline."
+)]
+fn try_acquire_native_finality_memory(
+    app: &SharedAppState,
+) -> Result<QueryFanoutMemoryReservation, Response> {
+    let envelope = QueryFanoutMemoryEnvelope::for_native_finality(
+        app.finality_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )?;
+    try_acquire_query_memory_envelope(app, envelope)
+}
 #[expect(
     clippy::result_large_err,
     reason = "Capacity rejections retain the complete Axum response inline without adding a box allocation."
@@ -1200,16 +1336,27 @@ fn try_acquire_query_memory_envelope(
     app: &SharedAppState,
     envelope: QueryFanoutMemoryEnvelope,
 ) -> Result<QueryFanoutMemoryReservation, Response> {
+    try_acquire_query_memory_weight(app, envelope, envelope.working_set_bytes)
+}
+/// Admit `envelope` with `weight_bytes` of pool credit: the complete working set, or
+/// less for an owner whose read never uses part of its fixed allowance.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capacity rejections retain the complete Axum response inline without adding a box allocation."
+)]
+fn try_acquire_query_memory_weight(
+    app: &SharedAppState,
+    envelope: QueryFanoutMemoryEnvelope,
+    weight_bytes: usize,
+) -> Result<QueryFanoutMemoryReservation, Response> {
     app.query_fanout_inflight
-        .try_acquire_parts([
-            u64::try_from(app.query_fanout_working_set_bytes).map_err(|_| {
-                torii_proxy_error_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "query_capacity_exceeded",
-                    "cross-dataspace query fanout memory weight is not representable",
-                )
-            })?,
-        ])
+        .try_acquire_parts([u64::try_from(weight_bytes).map_err(|_| {
+            torii_proxy_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "query_capacity_exceeded",
+                "cross-dataspace query fanout memory weight is not representable",
+            )
+        })?])
         .map(|permit| {
             QueryFanoutMemoryReservation::from_admitted_fanout(
                 permit,
@@ -1225,22 +1372,121 @@ fn try_acquire_query_memory_envelope(
             )
         })?
 }
-/// Queue a bodyless HTTP read before polling its body or decoding its query. The
+/// Phase units of the smaller routed-read owners, smallest first. The configured
+/// complete working set (`torii.query_fanout_max_working_set_bytes`) follows them.
+const ROUTED_READ_OWNER_PHASE_UNITS: [usize; 3] = [256 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024];
+/// Candidate routed-read working sets, smallest first, ending with the configured one.
+///
+/// Each smaller owner is the complete pre-body envelope of one phase unit
+/// (`fixed + 15 × unit`), so every limit derived from it bounds that read for real.
+/// A read starts with the smallest owner that admits its target and declared body
+/// and moves to the next one only when a limit derived from its owner refuses it.
+fn routed_read_owner_working_sets(app: &AppState) -> impl Iterator<Item = usize> {
+    let ceiling = app.query_fanout_working_set_bytes;
+    let fixed = query_fanout_fixed_overhead_bytes();
+    ROUTED_READ_OWNER_PHASE_UNITS
+        .into_iter()
+        .filter_map(move |unit| {
+            unit.checked_mul(QUERY_FANOUT_PREBODY_UNITS)?
+                .checked_add(fixed?)
+        })
+        .filter(move |working_set| *working_set < ceiling)
+        .chain(core::iter::once(ceiling))
+}
+/// Wait within the query admission queue for `bytes` of query-pool credit.
+///
+/// Proof-style reads meter their own allocations against the bytes they book. Waiting
+/// here, bounded like every other query admission, keeps a momentary shortage of pool
+/// credit from turning into a refusal; a zero queue timeout still tries once.
+async fn acquire_query_pool_credit(
+    app: &AppState,
+    bytes: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    acquire_query_pool_credit_from(app, &app.query_fanout_inflight, bytes).await
+}
+
+/// Acquire from one independently bounded query pool using the request's deadline.
+async fn acquire_query_pool_credit_from(
+    app: &AppState,
+    pool: &ByteWeightedMemoryPool,
+    bytes: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let permits = pool.permits_for_parts([u64::try_from(bytes).ok()?])?;
+    let semaphore = pool.semaphore.clone();
+    if app.query_queue_timeout.is_zero() {
+        return semaphore.try_acquire_many_owned(permits.get()).ok();
+    }
+    let _waiter = app
+        .app_routed_read_waiters
+        .clone()
+        .try_acquire_owned()
+        .ok()?;
+    tokio::time::timeout(
+        query_admission_remaining(app),
+        semaphore.acquire_many_owned(permits.get()),
+    )
+    .await
+    .ok()?
+    .ok()
+}
+/// Smallest owner whose source frame and decode phase both cover `unit_bytes`, the
+/// largest representation an authentication read decodes; an unknown size takes the
+/// configured owner.
+fn authentication_owner_working_set(app: &AppState, unit_bytes: Option<usize>) -> usize {
+    let ceiling = app.query_fanout_working_set_bytes;
+    let Some(unit_bytes) = unit_bytes else {
+        return ceiling;
+    };
+    routed_read_owner_working_sets(app)
+        .find(|&working_set| {
+            QueryFanoutMemoryEnvelope::for_body_admission(working_set).is_ok_and(|envelope| {
+                envelope.route_body_bytes >= unit_bytes
+                    && envelope.decode_allocated_bytes >= unit_bytes
+            })
+        })
+        .unwrap_or(ceiling)
+}
+/// Pool credit for a routed-read owner of `working_set_bytes`, and whether it is local-only.
+///
+/// An owner below the configured working set serves its read on this node: it never
+/// builds the proxy candidate list its fixed allowance reserves for up to 256 manifest
+/// validators, so it does not book that allowance. `execute_torii_read_via_proxy`
+/// refuses such an owner, which moves the read to the configured owner before any
+/// candidate is resolved.
+fn routed_read_owner_weight(app: &AppState, working_set_bytes: usize) -> Option<(usize, bool)> {
+    if working_set_bytes >= app.query_fanout_working_set_bytes {
+        return Some((working_set_bytes, false));
+    }
+    let weight = working_set_bytes.checked_sub(query_fanout_candidate_snapshot_overhead_bytes()?)?;
+    Some((weight, true))
+}
+/// Queue an HTTP routed read before polling its body or decoding its query. The
 /// listener already bounds its raw HTTP head; the separate waiter count bounds
 /// how many of those heads remain here. No signed-query ingress permit or decoded
-/// request is pinned while waiting for the complete fanout working set.
+/// request is pinned while waiting for the working set: a body stays unread in
+/// its connection until this read owns `working_set_bytes`.
 async fn acquire_app_routed_read_http_memory(
     app: &SharedAppState,
-    accepts_body: bool,
+    working_set_bytes: usize,
 ) -> Result<QueryFanoutMemoryReservation, Response> {
-    if accepts_body || app.query_queue_timeout.is_zero() {
-        return try_acquire_new_query_fanout_memory(app);
+    let envelope = QueryFanoutMemoryEnvelope::for_body_admission(working_set_bytes)?;
+    let (weight, local_only) =
+        routed_read_owner_weight(app, working_set_bytes).ok_or_else(|| {
+            torii_proxy_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "query_capacity_exceeded",
+                "routed-read owner weight is not representable",
+            )
+        })?;
+    if app.query_queue_timeout.is_zero() {
+        return try_acquire_query_memory_weight(app, envelope, weight)
+            .map(|owner| owner.local_only(local_only));
     }
     let unavailable = || {
         torii_proxy_error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "query_capacity_exceeded",
-            "bodyless query capacity did not become available within the bounded admission queue",
+            "query capacity did not become available within the bounded admission queue",
         )
     };
     let _waiter = app
@@ -1248,13 +1494,13 @@ async fn acquire_app_routed_read_http_memory(
         .clone()
         .try_acquire_owned()
         .map_err(|_| unavailable())?;
-    let bytes = u64::try_from(app.query_fanout_working_set_bytes).map_err(|_| unavailable())?;
+    let bytes = u64::try_from(weight).map_err(|_| unavailable())?;
     let permits = app
         .query_fanout_inflight
         .permits_for_parts([bytes])
         .ok_or_else(unavailable)?;
     let acquired = tokio::time::timeout(
-        app.query_queue_timeout,
+        query_admission_remaining(app),
         app.query_fanout_inflight
             .semaphore
             .clone()
@@ -1265,9 +1511,24 @@ async fn acquire_app_routed_read_http_memory(
     .map_err(|_| unavailable())?;
     QueryFanoutMemoryReservation::from_admitted_fanout(
         acquired,
-        QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)?,
+        envelope,
         app.query_fanout_inflight.generation(),
     )
+    .map(|owner| owner.local_only(local_only))
+}
+/// Refuse to send a read to another validator under a local-only owner, as a limit of
+/// that owner, so the routed-read admission serves it again with the configured owner.
+#[cfg(feature = "app_api")]
+fn local_only_owner_refusal(app: &AppState) -> Option<Response> {
+    current_query_fanout_memory_for_state(app)
+        .is_some_and(|owner| owner.is_local_only())
+        .then(|| {
+            torii_proxy_error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "query_capacity_exceeded",
+                "This read is served by another validator; its local-only memory owner does not cover proxy candidates.",
+            )
+        })
 }
 fn hold_query_fanout_memory_in_response_body(
     response: Response,
@@ -1311,9 +1572,24 @@ struct AdmittedQueryFanoutMemory {
     envelope: QueryFanoutMemoryEnvelope,
     /// Prevent task-local ownership from being borrowed by another app's pool.
     pool_generation: u64,
+    /// Admitted without the proxy-candidate allowance: the read must stay on this node.
+    local_only: bool,
 }
 
 impl QueryFanoutMemoryReservation {
+    /// Mark an owner admitted without the proxy-candidate allowance.
+    fn local_only(mut self, local_only: bool) -> Self {
+        if let Some(admission) = &mut self.admission {
+            admission.local_only = local_only;
+        }
+        self
+    }
+
+    /// Whether this owner must serve its read on this node.
+    fn is_local_only(&self) -> bool {
+        self.admission.is_some_and(|admission| admission.local_only)
+    }
+
     /// Retain response custody without granting query-pool admission.
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         Self {
@@ -1362,6 +1638,7 @@ impl QueryFanoutMemoryReservation {
             admission: Some(AdmittedQueryFanoutMemory {
                 envelope,
                 pool_generation,
+                local_only: false,
             }),
             producer: Some(producer),
         })
@@ -1371,6 +1648,13 @@ impl QueryFanoutMemoryReservation {
         self.admission.is_some_and(|admission| {
             admission.pool_generation == app.query_fanout_inflight.generation()
         })
+    }
+
+    /// Whether a limit derived from this owner refused its read.
+    fn owner_limit_refused(&self) -> bool {
+        self.producer
+            .as_ref()
+            .is_some_and(|producer| producer.owner_limit_refused())
     }
 
     #[expect(
@@ -1457,12 +1741,14 @@ fn hold_query_fanout_memory_reservation_in_response_body(
     mut response: Response,
     reservation: QueryFanoutMemoryReservation,
 ) -> Response {
+    use http_body_util::BodyExt as _;
+
     if reservation.admission.is_some() {
         return response_memory_custody::hold(response, reservation);
     }
     // Native proof producers already attach their original physical memory token to
     // EncodedBody-owned Bytes. Body-only custody never promotes those tokens to query admission.
-    use http_body_util::BodyExt as _;
+
     response.extensions_mut().insert(reservation.clone());
     let (parts, body) = response.into_parts();
     let guarded_body = body.map_frame(move |frame| {
@@ -1604,14 +1890,16 @@ impl SingularRoutedQueryErrors {
                     norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
                 match utils::encode_norito_bounded(&error, envelope.final_body_bytes) {
                     Ok(bytes) => signed_query_fanout_response_from_norito_bytes(bytes),
-                    Err(error) => return bounded_signed_query_fanout_encode_error_response(error),
+                    Err(error) => {
+                        return bounded_signed_query_fanout_encode_error_response(&(error));
+                    }
                 }
             }
             ResponseFormat::Json => {
                 match utils::encode_json_bounded(&error, envelope.final_body_bytes) {
                     Ok(json) => signed_query_fanout_response_from_json(json),
                     Err(error) => {
-                        return bounded_signed_query_fanout_json_encode_error_response(error);
+                        return bounded_signed_query_fanout_json_encode_error_response(&(error));
                     }
                 }
             }

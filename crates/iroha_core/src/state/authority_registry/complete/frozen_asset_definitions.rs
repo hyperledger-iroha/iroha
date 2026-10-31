@@ -1,7 +1,7 @@
 //! Frozen definition/reference/group/policy owners and exact direct-home authority.
 //!
 //! This encodes a scoped original table, not complete State or private settlement.
-//! TODO: join all other relations/cells/history to sole StatePublication and Kura.
+//! TODO: join all other relations/cells/history to sole `StatePublication` and Kura.
 
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
@@ -105,6 +105,10 @@ impl<'frozen> Original<'frozen> {
 /// Exact source targets/modes and original State pool remain borrowed through
 /// encoding. Incomplete/foreign/mixed/released originals refuse without refresh;
 /// every local error leaves the caller's same immutable block available for retry.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,
@@ -116,11 +120,8 @@ pub(in crate::state) fn capture(
     validate_original_asset_definitions(
         &original.rows,
         &original.domains,
-        &original.contexts,
-        &original.by_domain,
-        &original.by_owner,
-        &original.transitions,
-        &original.counts,
+        (&original.contexts, &original.by_domain, &original.by_owner),
+        (&original.transitions, &original.counts),
         &original.homes,
         &original.incarnations,
         max_work,

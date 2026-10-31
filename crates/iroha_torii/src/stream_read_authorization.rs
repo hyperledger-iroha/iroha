@@ -7,7 +7,9 @@
 //! committed state), when the stream's periodic authorization tick fires, or
 //! once the decision is older than the authorization interval. A revoked reader
 //! is therefore cut off no later than one authorization interval after the
-//! revocation.
+//! revocation. This includes scopes granted after admission: buffered output
+//! may already contain their data, so losing any observed scope ends the
+//! stream. A revoked stream cannot regain authorization on the same connection.
 //!
 //! Event visibility also needs the dataspace scope of every transaction event.
 //! The scopes of all signed transactions in a block are resolved once, when the
@@ -34,10 +36,10 @@ use crate::{
 };
 
 /// Result of a read that may need canonical event history.
-pub(crate) type EventHistoryResult<T> = Result<T, ExecutionAttemptError<iroha_core::kura::Error>>;
+pub type EventHistoryResult<T> = Result<T, ExecutionAttemptError<iroha_core::kura::Error>>;
 
 /// Authorization owned by exactly one long-lived stream.
-pub(crate) trait StreamAuthorization: Send + 'static {
+pub trait StreamAuthorization: Send + 'static {
     /// Whether the admitted reader may still receive the next item.
     ///
     /// Implementations may reuse a recent decision; see the module docs for
@@ -50,7 +52,7 @@ pub(crate) trait StreamAuthorization: Send + 'static {
 }
 
 /// Authorization and visibility owned by exactly one event subscription.
-pub(crate) trait EventStreamScope: StreamAuthorization {
+pub trait EventStreamScope: StreamAuthorization {
     /// Restrict one received event to the reader's current visibility.
     ///
     /// # Errors
@@ -88,7 +90,7 @@ impl StreamReadDecision {
 }
 
 /// A stream's reader with its cached authorization and visibility.
-pub(crate) struct ToriiStreamReadAuthorization {
+pub struct ToriiStreamReadAuthorization {
     context: ToriiDataspaceReadContext,
     decision: StreamReadDecision,
     transactions: Option<BlockTransactionScopes>,
@@ -172,7 +174,7 @@ impl ToriiStreamReadAuthorization {
             .decision
             .is_current_at(committed_height, tokio::time::Instant::now())
         {
-            self.decision = StreamReadDecision::read(&self.context);
+            self.revalidate();
         }
     }
 }
@@ -184,7 +186,15 @@ impl StreamAuthorization for ToriiStreamReadAuthorization {
     }
 
     fn revalidate(&mut self) -> bool {
-        self.decision = StreamReadDecision::read(&self.context);
+        let mut decision = StreamReadDecision::read(&self.context);
+        // A buffered projection may use a grant acquired after admission.
+        // Retain every scope observed by this stream, and never revive it
+        // after revocation even if another refresh sees a replacement grant.
+        decision.authorized &= self.decision.authorized
+            && decision
+                .visibility
+                .retains_authorized_scope(&self.decision.visibility);
+        self.decision = decision;
         self.decision.authorized
     }
 }
@@ -235,7 +245,7 @@ impl ExplorerStreamReadAuthorization {
 }
 
 /// Event subscription whose transaction scopes come from an explicit block store.
-pub(crate) struct ScopedEventStream {
+pub struct ScopedEventStream {
     authorization: ToriiStreamReadAuthorization,
     kura: Arc<Kura>,
 }
@@ -269,7 +279,7 @@ impl EventStreamScope for ScopedEventStream {
 
 /// Admission-free subscription for fixtures: every event is delivered.
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) struct UnscopedEventStream;
+pub struct UnscopedEventStream;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl StreamAuthorization for UnscopedEventStream {
@@ -292,7 +302,7 @@ impl EventStreamScope for UnscopedEventStream {
 /// The complete authorization scope of one event, resolved before any
 /// subscriber-controlled filtering or projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ScopedEventScope {
+pub enum ScopedEventScope {
     /// Block lifecycle notices are public and carry no transaction body.
     Public,
     /// Every named dataspace must be visible to the current reader.
@@ -340,7 +350,7 @@ fn pipeline_event_scope(
 /// # Errors
 /// Returns the original Kura refusal; a capacity refusal is never reported as
 /// an absent block or a global-reader-only scope.
-pub(crate) fn transaction_event_scope(
+pub fn transaction_event_scope(
     kura: &Kura,
     transaction: &TransactionEvent,
     budget: &AllocationBudget,
@@ -367,14 +377,16 @@ pub(crate) fn transaction_event_scope(
     Ok(transactions.insert(scopes).scope(transaction.hash()))
 }
 
-/// Dataspace scopes of the signed transactions committed in one block.
-pub(crate) struct BlockTransactionScopes {
+type TransactionDataSpaceScope = (HashOf<SignedTransaction>, Option<BTreeSet<DataSpaceId>>);
+
+/// Data space scopes of the signed transactions committed in one block.
+pub struct BlockTransactionScopes {
     height: NonZeroUsize,
     /// Signed-transaction hashes with their entrypoint's complete committed
     /// route (`None` when the context is missing, stale or malformed), sorted
     /// by hash. `None` when an entrypoint is not a signed transaction: such a
     /// block attributes no transaction event to a dataspace.
-    transactions: Option<Vec<(HashOf<SignedTransaction>, Option<BTreeSet<DataSpaceId>>)>>,
+    transactions: Option<Vec<TransactionDataSpaceScope>>,
 }
 
 impl BlockTransactionScopes {
@@ -588,6 +600,55 @@ mod tests {
         );
         assert_eq!(authorization.visibility(), &hidden);
         assert!(!authorization.authorization_is_current());
+    }
+    #[test]
+    fn stream_revokes_later_grants_and_never_revives_buffered_output() {
+        let baseline = DataspaceReadVisibility::new(BTreeSet::from([DataSpaceId::new(1)]), false);
+        let expanded = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::new(1), DataSpaceId::new(2)]),
+            false,
+        );
+        for periodic in [false, true] {
+            let mut context = ToriiDataspaceReadContext::all_for_tests();
+            context.admitted_visibility = baseline.clone();
+            context.fixed_visibility = Some(baseline.clone());
+            let mut authorization = ToriiStreamReadAuthorization::new(context);
+            assert!(authorization.authorization_is_current());
+
+            authorization.context.fixed_visibility = Some(expanded.clone());
+            assert!(
+                authorization.revalidate(),
+                "a new grant expands the live stream"
+            );
+            assert!(
+                authorization
+                    .visibility()
+                    .allows_dataspace(DataSpaceId::new(2))
+            );
+
+            authorization.context.fixed_visibility = Some(baseline.clone());
+            assert!(baseline.retains_authorized_scope(&authorization.context.admitted_visibility));
+            if periodic {
+                assert!(
+                    !authorization.revalidate(),
+                    "the periodic tick observes revocation"
+                );
+            } else {
+                authorization.decision.decided_at =
+                    tokio::time::Instant::now() - STREAM_AUTHORIZATION_CHECK_INTERVAL;
+                assert!(
+                    !authorization.authorization_is_current(),
+                    "the emission check observes revocation of an added grant"
+                );
+            }
+
+            authorization.context.fixed_visibility = Some(expanded.clone());
+            assert!(
+                !authorization.revalidate(),
+                "regranting cannot revive buffered output"
+            );
+            assert!(!authorization.authorization_is_current());
+        }
     }
     #[test]
     fn explorer_authorization_reuses_scope_until_height_or_deadline_changes() {

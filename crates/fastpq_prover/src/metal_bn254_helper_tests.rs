@@ -84,7 +84,7 @@ fn stage_bn254_twiddles_matches_expected_size() {
     let buffer = super::stage_bn254_twiddles(&device, log_size).expect("twiddles");
     let expected_twiddles = super::bn254_fft_twiddle_len(log_size).unwrap();
     let expected_bytes = expected_twiddles * BN254_LIMBS * std::mem::size_of::<u64>();
-    assert_eq!(buffer.length() as usize, expected_bytes);
+    assert_eq!(usize::try_from(buffer.length()).unwrap(), expected_bytes);
 }
 #[test]
 fn bn254_status_runs_smoke_checks() {
@@ -94,7 +94,7 @@ fn bn254_status_runs_smoke_checks() {
     let _gpu_lane = crate::backend::acquire_gpu_lane();
     match super::bn254_status() {
         Ok(()) => {}
-        Err(GpuError::Unsupported(_)) => return,
+        Err(GpuError::Unsupported(_)) => (),
         Err(err) => panic!("BN254 status smoke test failed: {err}"),
     }
 }

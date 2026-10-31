@@ -123,6 +123,10 @@ fn parse(args: &[OsString]) -> Result<Arguments<'_>, ()> {
 }
 
 #[derive(JsonSerialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the external report preserves independent enforcement and qualification flags"
+)]
 struct StagingReport {
     outcome: &'static str,
     verifier_stage: &'static str,

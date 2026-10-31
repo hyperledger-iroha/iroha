@@ -1044,8 +1044,7 @@ fn configured_fee_asset_quote_rejects_stale_policy_without_retargeting_state() {
         &catalog,
         &alias,
         &owner(),
-        2,
-        None,
+        (2, None),
         100,
         &payment_asset_literal,
     )
@@ -1091,8 +1090,7 @@ fn configured_fee_asset_quote_rejects_stale_policy_without_retargeting_state() {
         &catalog,
         &alias,
         &owner(),
-        2,
-        None,
+        (2, None),
         100,
         &payment_asset_literal,
     )

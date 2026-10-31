@@ -90,7 +90,7 @@ pub fn open(
 /// Refuses a closed window, invalid source proof or payload binding, a genuine or repeated
 /// message id, or forged-supply overflow. Original local resource refusals abort publication.
 pub fn execute_prove(
-    instruction: ProveSccpForgedMintV1,
+    instruction: &ProveSccpForgedMintV1,
     _authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -152,12 +152,8 @@ pub fn execute_prove(
     bind_finalization(
         &deployment,
         &emitter,
-        message_id,
-        payload.nonce,
-        payload.amount,
-        proven_id,
-        nonce,
-        amount,
+        (message_id, payload.nonce, payload.amount),
+        (proven_id, nonce, amount),
     )?;
     records::prove(state, key, message_id, payload.amount)?;
     record.forged_supply = next_supply;
@@ -177,12 +173,8 @@ pub fn execute_prove(
 fn bind_finalization(
     deployment: &iroha_data_model::sccp::deployment::SccpDeploymentV1,
     emitter: &iroha_sccp::light_client::proof::SccpSourceEmitterV1,
-    message_id: [u8; 32],
-    payload_nonce: u64,
-    payload_amount: u128,
-    proven_id: [u8; 32],
-    nonce: u64,
-    amount: Option<u128>,
+    (message_id, payload_nonce, payload_amount): ([u8; 32], u64, u128),
+    (proven_id, nonce, amount): ([u8; 32], u64, Option<u128>),
 ) -> Result<(), Error> {
     if !cfg!(all(test, sumeragi_core_mutation = "HC287"))
         && (!emitter.matches(deployment)

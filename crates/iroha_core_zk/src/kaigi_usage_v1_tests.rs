@@ -5,22 +5,25 @@ use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use kaigi_zk::native::NativeRelationV1;
 use kaigi_zk::{
     authorization_v1::KaigiAuthorizationWitnessV1,
-    usage_v1::{KaigiUsageContextV1, KaigiUsagePublicInputsV1, compute_usage_v1},
+    usage_v1::{
+        KAIGI_USAGE_INSTANCE_ROWS_V1, KaigiUsageContextV1, KaigiUsagePublicInputsV1,
+        compute_usage_v1,
+    },
 };
 use std::sync::OnceLock;
 
 struct Fixture {
     vk_bytes: Vec<u8>,
     proof: Vec<u8>,
-    instance: [kaigi_zk::Scalar; 25],
+    instance: [kaigi_zk::Scalar; kaigi_zk::usage_v1::KAIGI_USAGE_INSTANCE_ROWS_V1],
 }
 fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let context = KaigiUsageContextV1 {
             network_id: [0x21; 32],
-            call_id: [1, 2, 3, 4, 5, 6],
-            host_id: [11, 12, 13, 14, 15, 16],
+            call_id: [1, 2, 3, 4],
+            host_id: [11, 12, 13, 14],
             pre_roster_root: [0x43; 32],
             segment_index: 3,
             duration_ms: 1200,
@@ -86,13 +89,13 @@ fn envelope(
 }
 
 /// Canonical real proof shared by the exact-registry positive regression.
-pub(super) fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
+pub fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
     let fixture = fixture();
     envelope(backend, fixture.vk_bytes.clone(), &[&fixture.instance])
 }
 
 #[test]
-fn final_usage_real_proof_binds_all_25_rows_and_both_admission_routes() {
+fn final_usage_real_proof_binds_all_public_rows_and_both_admission_routes() {
     let fixture = fixture();
     for backend in [ZK_BACKEND_NATIVE_PIPA_R, KAIGI_USAGE_BACKEND_V1] {
         let (proof, vk) = valid_envelope(backend);
@@ -109,7 +112,7 @@ fn final_usage_real_proof_binds_all_25_rows_and_both_admission_routes() {
     }
     // Both entry points delegate to the same exact relation. Mutate every
     // network/call/host/root/metric limb and C/U through its generic entry point.
-    for row in 0..25 {
+    for row in 0..kaigi_zk::usage_v1::KAIGI_USAGE_INSTANCE_ROWS_V1 {
         let mut instance = fixture.instance;
         instance[row] += kaigi_zk::Scalar::ONE;
         let (proof, vk) = envelope(
@@ -130,10 +133,12 @@ fn final_usage_rejects_old_single_output_and_all_nonexact_shapes() {
     let fixture = fixture();
     let mut trailing_zero = fixture.instance.to_vec();
     trailing_zero.push(kaigi_zk::Scalar::ZERO);
+    let retired_shape = [kaigi_zk::Scalar::ZERO; 25];
     let shapes = [
         vec![],
-        vec![&fixture.instance[24..]],
-        vec![&fixture.instance[..24]],
+        vec![&fixture.instance[KAIGI_USAGE_INSTANCE_ROWS_V1 - 1..]],
+        vec![&fixture.instance[..KAIGI_USAGE_INSTANCE_ROWS_V1 - 1]],
+        vec![retired_shape.as_slice()],
         vec![trailing_zero.as_slice()],
         vec![&fixture.instance[..], &fixture.instance[..]],
         fixture.instance.chunks_exact(1).collect(),

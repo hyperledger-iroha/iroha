@@ -3,6 +3,7 @@
 //! Selene/Helios arithmetic and the exact Blake2b transcript remain here so the IFC1 consensus
 //! codec stays byte-for-byte pinned. The proof equations, IPA, generators container, and MSM
 //! implementation live in `iroha_zkp_halo2::generalized_bulletproof`.
+type CommitmentVectors<P> = (Vec<P>, Vec<P>);
 use super::{
     FcmpNativeErrorV1,
     field::{
@@ -28,7 +29,7 @@ pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
 };
 use p256::elliptic_curve::bigint::U256;
 use p256::elliptic_curve::subtle::Choice;
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use std::{
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     sync::OnceLock,
@@ -327,7 +328,7 @@ impl<'a, R> FcmpProofRandomSource<'a, R> {
         Self { rng }
     }
 }
-impl<R: RngCore + CryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> {
+impl<R: TryRng + TryCryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), GeneralizedBulletproofErrorV1> {
         self.rng
             .try_fill_bytes(destination)
@@ -339,7 +340,7 @@ pub(super) fn random_scalar_from_fcmp_rng<F, R>(
 ) -> Result<Option<SecretScalar<F>>, FcmpNativeErrorV1>
 where
     F: ProofScalar,
-    R: RngCore + CryptoRng,
+    R: TryRng + TryCryptoRng,
 {
     F::random(&mut FcmpProofRandomSource::new(rng)).map_err(Into::into)
 }
@@ -384,7 +385,7 @@ impl ProverTranscript {
         &mut self,
         vector: Vec<S::Point>,
         scalar: Vec<S::Point>,
-    ) -> Result<(Vec<S::Point>, Vec<S::Point>), GeneralizedBulletproofErrorV1>
+    ) -> Result<CommitmentVectors<S::Point>, GeneralizedBulletproofErrorV1>
     where
         Self: SharedProverTranscript<S>,
     {
@@ -493,7 +494,7 @@ impl<'a> VerifierTranscript<'a> {
         &mut self,
         vector_count: usize,
         scalar_count: usize,
-    ) -> Result<(Vec<S::Point>, Vec<S::Point>), FcmpNativeErrorV1> {
+    ) -> Result<CommitmentVectors<S::Point>, FcmpNativeErrorV1> {
         self.digest.update(
             u32::try_from(vector_count)
                 .map_err(|_| FcmpNativeErrorV1::TreeFull)?
@@ -622,23 +623,22 @@ mod tests {
     struct ZeroRandomV1 {
         calls: usize,
     }
-    impl RngCore for ZeroRandomV1 {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRandomV1 {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.calls += 1;
             destination.fill(0);
             Ok(())
         }
     }
-    impl CryptoRng for ZeroRandomV1 {}
+    impl rand::TryCryptoRng for ZeroRandomV1 {}
     #[test]
     fn fcmp_random_adapter_forwards_the_one_attempt_owner() {
         fn require_owner_result<F: ProofScalar>(

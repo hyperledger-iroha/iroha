@@ -9,7 +9,7 @@ use base64::{
 };
 use iroha_crypto::{PrivateKey, Signature as EdSignature};
 use norito::json::Value;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use zeroize::Zeroizing;
 
 #[derive(JsonDeserialize)]
@@ -254,7 +254,7 @@ fn uuid(value: &str) -> bool {
 fn random_uuid() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     checked(
-        rand::rngs::OsRng.try_fill_bytes(&mut bytes),
+        rand::rngs::SysRng.try_fill_bytes(&mut bytes),
         "nonce entropy",
     )?;
     bytes[6] = (bytes[6] & 15) | 64;
@@ -282,6 +282,9 @@ fn compact_input(header: &Value, payload: &Value, maximum: usize) -> io::Result<
         URL_SAFE_NO_PAD.encode(p.as_bytes())
     )))
 }
+/// Zeroized session token and device proof.
+type SessionCredentials = (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>);
+
 fn issue(
     scope: &Scope,
     request: &Request,
@@ -289,7 +292,7 @@ fn issue(
     dpop: &SigningKey,
     now: u64,
     jti: &str,
-) -> io::Result<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>)> {
+) -> io::Result<SessionCredentials> {
     if !text_valid(&request.subject, 512)
         || !uuid(&request.registered_device_id)
         || !uuid(jti)
@@ -318,7 +321,7 @@ fn issue(
     {
         return Err(invalid("issuer custody differs from pinned runtime"));
     }
-    let point = dpop.verifying_key().to_encoded_point(false);
+    let point = dpop.verifying_key().to_sec1_point(false);
     if point.as_bytes() != point_from_request(request)?.as_sec1_bytes() {
         return Err(invalid("DPoP custody differs from selected device binding"));
     }
@@ -369,7 +372,7 @@ fn issue(
 fn point_from_request(request: &Request) -> io::Result<KagemushaDevicePublicKeyV1> {
     point(&request.dpop_public_key_hex)
 }
-pub(super) fn run(path: &str) -> io::Result<()> {
+pub fn run(path: &str) -> io::Result<()> {
     let source = Original::open(path, REQUEST_MAX, None)?;
     parse(&source.bytes, REQUEST_MAX, false)?;
     let request: Request = checked(json::from_slice(&source.bytes), "closed session request")?;

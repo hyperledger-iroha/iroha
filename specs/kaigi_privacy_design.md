@@ -16,7 +16,11 @@ billing amounts, or attestation of an encrypted media log.
 
 The circuit uses the same deterministic Pasta Poseidon construction on every
 host. Its canonical identity adapter hashes complete canonical Norito identities
-with the shared six-lane Goldilocks construction. It includes every multisig
+with the shared native BLAKE3-256 canonical frame owner and frozen
+`native.commitment.blake3-256.frame-v1` semantic profile. The identity type
+retains exactly 32 raw bytes as four full u64 words, without field reduction
+or a ledger Hash marker. The Kaigi protocol and distinct account/call roles are
+explicit frame fields. It includes every multisig
 member, weight and threshold; display prefixes, aliases, low-word projections
 and field reduction are not identity adapters.
 
@@ -39,19 +43,19 @@ marker bit. JSON uses exact 32-byte arrays. The removed alias and issuance-time
 fields are rejected, including empty or zero-valued instances.
 
 The authorization circuit ID is `pipa-r/pasta/kaigi-authorization-v1`, with
-schema `kaigi-authorization-v1`, domain size `k = 13`, and exactly one instance
-column containing these 31 rows:
+schema `kaigi-authorization-v1`, domain size `k = 12`, and exactly one instance
+column containing these 25 rows:
 
 | Rows | Meaning |
 | --- | --- |
 | 0–3 | Genesis-derived network bytes as four little-endian u64 limbs |
-| 4–9 | All six canonical call-identity Goldilocks limbs |
-| 10–15 | All six original host-identity Goldilocks limbs |
-| 16–21 | All six original subject-identity Goldilocks limbs |
-| 22 | Ledger-owned participation sequence |
-| 23 | Closed action: host create 0, join 1, leave 2, host end 3 |
-| 24–27 | Authenticated pre-roster root as four little-endian u64 limbs |
-| 28–30 | Commitment C, action nullifier N, authorization A |
+| 4–7 | Complete native call identity as four u64 words |
+| 8–11 | Complete native original host identity as four u64 words |
+| 12–15 | Complete native original subject identity as four u64 words |
+| 16 | Ledger-owned participation sequence |
+| 17 | Closed action: host create 0, join 1, leave 2, host end 3 |
+| 18–21 | Authenticated pre-roster root as four little-endian u64 words |
+| 22–24 | Commitment C, action nullifier N, authorization A |
 
 Host actions require subject = original host and sequence zero. Join and leave
 require a different subject and a positive sequence. C binds network, call,
@@ -59,13 +63,13 @@ host, subject, sequence and private blinding. N binds the same identities and se
 action, without a blinding or caller-selected nullifier seed. A binds the entire context,
 including action and pre-root, to C, N and the same blinding. The framed sponge
 constrains domain, length, terminator, padding and persistent capacity state.
-All integer limbs are range checked; identity limbs are strictly below the
-Goldilocks modulus.
+All integer words are range checked to their complete u64 range. Each native
+digest bit is retained by the injective u64-to-Pasta representation.
 
 The usage circuit ID is `pipa-r/pasta/kaigi-usage-v1`, with schema
-`kaigi-usage-v1`, domain size `k = 12`, and one 25-row column: network 0–3, call
-4–9, original host 10–15, pre-root 16–19, ledger segment 20, positive duration
-21, billed gas 22, stored host C 23 and usage commitment U 24. Segment is u32;
+`kaigi-usage-v1`, domain size `k = 12`, and one 21-row column: network 0–3, call
+4–7, original host 8–11, pre-root 12–15, ledger segment 16, positive duration
+17, billed gas 18, stored host C 19 and usage commitment U 20. Segment is u32;
 other integer limbs are u64. It proves the same host C opening established by
 host create. U binds this complete context and private opening. Core compares
 every row against trusted state and the signed usage instruction.
@@ -127,12 +131,44 @@ unique registered endpoints; independent components receive independent lineage
 work bounds. End releases active dependencies while retaining permanent call
 history. Full rekey/undo/lifecycle qualification remains a release gate.
 
+## Client flow
+
+The ledger owns every public input, so a client reads them before proving.
+`GET /v1/kaigi/calls/{call_id}/participation` is signed by the caller's account and
+reports only that account's standing, from one committed state: the retained
+original subject, the sequence, any live commitment, the roster root and the usage
+segment. It cannot be used to probe another account's membership. It reveals the
+original host only to the host and to retained participants, so a first join takes
+the host from the invitation. A private create binds the deterministic empty roster
+root and sequence zero, so it needs no read.
+
+`iroha app kaigi` runs this flow with `--secret-file` and proves locally. The file holds
+one owner-only scalar, is created on first use, and is required again to leave or
+end the call. Comparing the computed commitment with the stored one lets a wrong
+secret fail before any proof work or fee. `iroha_core_zk::kaigi_client_v1` owns the
+same construction for other Rust clients. JavaScript exposes
+`generateKaigiBlindingV1`, `KAIGI_EMPTY_ROSTER_ROOT_HEX_V1` and the two proof builders.
+
+A proof binds the exact pre-action roster root, so roster changes serialize per
+call: of several joins proved against one root, only the first to execute succeeds,
+and the rest are rejected with `KAIGI_STALE_ROSTER_ROOT_ERROR_V1`. That rejection
+changes no state, and a client recovers by reading its standing and proving again.
+The public status route carries no rejection reason: the signer reads it through the
+signed transaction-details route, or sees that the standing's root moved. The CLI
+reads the reason and retries automatically. Usage proofs recover the same way from
+`KAIGI_STALE_USAGE_CONTEXT_ERROR_V1`.
+
 ## Bounds and accounting
 
 V1 allows at most 4,096 concurrent participants, 4,096 retained private subjects,
 8,194 action nullifiers, and 4,096 usage commitments. Counts are upper bounds:
 the encoded record must also fit the 1-MiB protocol JSON ceiling and configured
-metadata limit. History is never evicted to permit proof replay.
+metadata limit, and for a private call that ceiling comes first. Each participant's
+commitment, ledger entry, join nullifier and departure reservation take about 770 JSON
+bytes with an Ed25519 account, so a private call fills at about 1,350 live participants,
+or about 200 with ML-DSA accounts, whose literals are far longer. Rejoining and recorded
+usage lower that further. A join past that point is rejected with "Kaigi call record is
+full". History is never evicted to permit proof replay.
 
 Admission reserves one nullifier for every live departure and one for host end.
 Every active private record also reserves 256 JSON bytes per live departure and
@@ -146,17 +182,32 @@ separate qualification requirements.
 ## Relay scope and remaining qualification
 
 A manifest contains 3–8 unique ordered relays with positive weights and future
-expiry. Relay descriptors require nonempty keys of at most 4 KiB and positive
-bandwidth class. V1 bounds registry and allowlist membership at 500 identities;
+expiry. A relay descriptor has a positive bandwidth class and a suite-tagged HPKE
+key: a two-byte little-endian suite identifier followed by the exact public key.
+The identifiers are those of `norito::streaming::HpkeSuite`: `0x0001` is
+ML-KEM-768 AuthPsk with a 1,184-byte key and `0x0002` is ML-KEM-1024 AuthPsk with a
+1,568-byte key. Native admission and restoration reject any other framing, so the
+relay fingerprint, which hashes the whole descriptor, also commits to the suite.
+`KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1` remains the 4-KiB wire bound that SDKs
+check locally. V1 bounds registry and allowlist membership at 500 identities;
 restoration rejects an over-cap registry. Registration, rotation, health reports
 and removal authenticate the relevant active account lineage. Exact repeated
 descriptors produce no mutation event. A relay's registered HPKE key cannot rotate
-or be removed while a live call references it. Host-authorized end releases the
+or be removed while a live call's unexpired manifest references it. An expired
+manifest cannot route traffic, so it stops pinning the relay; an abandoned call
+therefore cannot hold a compromised key in place. Host-authorized end releases the
 call's live dependencies. Historical manifests remain self-contained after
 retirement; future admission requires live registered descriptors.
 
-The current opaque HPKE key carrier still needs its final explicit suite tag and
-actual three-hop interoperability/transport recovery qualification. Circuit
+A host recovers from a failed relay by reporting its health and rotating the call's
+manifest. Both are host-signed, and a replacement manifest is admitted only from
+live registered descriptors. Participants learn of the rotation from the call event
+stream's `relay_manifest_updated`, then re-read the manifest from the call view.
+
+Nothing consumes the relay keys yet: routing over SoraNet remains disabled and its
+trust model undecided, as [kaigi_over_soranet.md](soranet/kaigi_over_soranet.md)
+records. Actual three-hop interoperability and transport recovery remain to be
+qualified with that work. Circuit
 and SDK unit results do not establish relay anonymity, hardware parity, an
 external cryptographic audit, pricing/settlement assurance, or four-validator
 release readiness. These gates remain open until their concrete evidence is

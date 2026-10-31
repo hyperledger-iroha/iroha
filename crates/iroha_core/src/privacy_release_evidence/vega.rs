@@ -111,7 +111,7 @@ pub(super) fn run_vega_stage_v1(
     )?;
     let mut proof_rng = EvidenceRng06::new(proof_seed);
     let prepared = prepare_vega_privacy_action_with_rng_v1(
-        vega_release_transaction_context_v1()?,
+        &vega_release_transaction_context_v1()?,
         public_input,
         witness_material,
         &device_signing_key,
@@ -158,13 +158,13 @@ pub(super) fn run_vega_stage_v1(
     let device_signature: P256Signature = device_signing_key
         .sign_prehash(statement.device_authentication_digest.as_bytes())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
+    let device_signature = device_signature.normalize_s();
     let (device_r, device_s) = device_signature.split_scalars();
     let device_high_s_signature =
         P256Signature::from_scalars(device_r.to_repr(), (-*device_s).to_repr())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    if issuer_high_s_signature.normalize_s().is_none()
-        || device_high_s_signature.normalize_s().is_none()
+    if issuer_high_s_signature.normalize_s() == issuer_high_s_signature
+        || device_high_s_signature.normalize_s() == device_high_s_signature
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
@@ -585,13 +585,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
         _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
     })?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -605,7 +599,8 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,
@@ -665,7 +660,7 @@ pub(super) fn vega_release_fixture_v1()
         PrivacyVegaIssuerRecordLifecycleV1::Active,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
+    let device_uncompressed = device_signing_key.verifying_key().to_sec1_point(false);
     let device_x = device_uncompressed
         .x()
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -684,7 +679,7 @@ pub(super) fn vega_release_fixture_v1()
             vega_cbor_text_v1("1980-06-15"),
         ),
     ]);
-    let birth_item = vega_cbor_tag_v1(24, vega_cbor_bytes_v1(&birth_inner));
+    let birth_item = vega_cbor_tag_v1(24, &(vega_cbor_bytes_v1(&birth_inner)));
     let birth_digest: [u8; 32] = Sha256::digest(&birth_item).into();
     let device_key = vega_cbor_map_v1(vec![
         (vega_cbor_unsigned_v1(1), vega_cbor_unsigned_v1(2)),
@@ -695,15 +690,15 @@ pub(super) fn vega_release_fixture_v1()
     let validity_info = vega_cbor_map_v1(vec![
         (
             vega_cbor_text_v1("signed"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2025-01-01T00:00:00Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2025-01-01T00:00:00Z")),
         ),
         (
             vega_cbor_text_v1("validFrom"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2025-01-01T00:00:00Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2025-01-01T00:00:00Z")),
         ),
         (
             vega_cbor_text_v1("validUntil"),
-            vega_cbor_tag_v1(0, vega_cbor_text_v1("2035-08-17T12:34:56Z")),
+            vega_cbor_tag_v1(0, &vega_cbor_text_v1("2035-08-17T12:34:56Z")),
         ),
     ]);
     let value_digests = vega_cbor_map_v1(vec![(
@@ -730,7 +725,7 @@ pub(super) fn vega_release_fixture_v1()
         ),
         (vega_cbor_text_v1("validityInfo"), validity_info),
     ]);
-    let mso_payload = vega_cbor_tag_v1(24, vega_cbor_bytes_v1(&mso_inner));
+    let mso_payload = vega_cbor_tag_v1(24, &(vega_cbor_bytes_v1(&mso_inner)));
     let sig_structure = vega_cbor_array_v1(vec![
         vega_cbor_text_v1("Signature1"),
         vega_cbor_bytes_v1(&[0xa1, 0x01, 0x26]),
@@ -753,12 +748,12 @@ pub(super) fn vega_release_fixture_v1()
     let issuer_signature: P256Signature = issuer_signing_key
         .sign_prehash(&issuer_digest)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+    let issuer_signature = issuer_signature.normalize_s();
     let (issuer_r, issuer_s) = issuer_signature.split_scalars();
     let issuer_high_s_signature =
         P256Signature::from_scalars(issuer_r.to_repr(), (-*issuer_s).to_repr())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    if issuer_high_s_signature.normalize_s().is_none() {
+    if issuer_high_s_signature.normalize_s() == issuer_high_s_signature {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     Ok(VegaReleaseFixtureV1 {
@@ -776,7 +771,7 @@ pub(super) fn vega_release_fixture_v1()
 fn vega_compressed_public_key_v1(
     signing_key: &P256SigningKey,
 ) -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -860,8 +855,8 @@ fn vega_cbor_map_v1(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
     }
     encoded
 }
-fn vega_cbor_tag_v1(tag: u64, value: Vec<u8>) -> Vec<u8> {
+fn vega_cbor_tag_v1(tag: u64, value: &[u8]) -> Vec<u8> {
     let mut encoded = vega_cbor_head_v1(6, tag);
-    encoded.extend_from_slice(&value);
+    encoded.extend_from_slice(value);
     encoded
 }

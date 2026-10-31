@@ -47,14 +47,15 @@ use iroha_zkp_halo2::vega::{
     VegaT256ScalarV1, prove_vega_mdl_figure9_v1, verify_vega_mdl_figure9_v1,
 };
 use p256::{
-    EncodedPoint, PublicKey as P256PublicKey,
+    PublicKey as P256PublicKey, Sec1Point,
     ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey,
         signature::hazmat::PrehashSigner as _,
     },
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::sec1::ToSec1Point,
 };
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
@@ -153,7 +154,7 @@ impl fmt::Debug for VegaPrivacyActionWitnessMaterialV1 {
                 &self.birth_date_issuer_signed_item.len(),
             )
             .field("private_values", &"[REDACTED]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl VegaPrivacyActionWitnessMaterialV1 {
@@ -302,6 +303,10 @@ impl VegaPreparedPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> VegaPrivacyActionEffectV1 {
         VegaPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -392,6 +397,10 @@ impl SignedVegaPrivacyActionV1 {
     }
     /// This component action has no inferred ledger mutation.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "The effect is queried through a validated action receipt, whose type certifies the fixed effect."
+    )]
     pub const fn effect(&self) -> VegaPrivacyActionEffectV1 {
         VegaPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
@@ -835,7 +844,7 @@ struct CoreVegaRandomSource<'a, R> {
 }
 impl<'a, R> CoreVegaRandomSource<'a, R>
 where
-    R: RngCore + CryptoRng,
+    R: TryRng + TryCryptoRng,
 {
     fn new(source: &'a mut R) -> Result<Self, VegaMdlError> {
         let source = HealthCheckedCryptoRngV1::new(source).map_err(|error| match error {
@@ -845,7 +854,7 @@ where
         Ok(Self { source })
     }
 }
-impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
+impl<R: TryRng + TryCryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
         self.source
             .try_fill_bytes(destination)
@@ -863,7 +872,7 @@ impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> 
 ///
 /// Fails closed on malformed consensus context, a stale or malformed credential, invalid ES256
 /// authentication, random-source failure, an unsatisfied circuit, or proof-system failure.
-pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
+pub fn prove_mdl_figure9_v1<R: TryRng + TryCryptoRng>(
     statement: &VegaExistingCredentialStatementV1,
     binding: &VegaMdlConsensusBindingV1<'_>,
     trusted_block_timestamp_ms: u64,
@@ -1146,7 +1155,7 @@ fn validate_vega_payload_integrity_v1(
 /// document witness, device key, trusted timestamp, native proof, resource
 /// limit, canonical encoding, or final binding drift.
 pub fn prepare_vega_privacy_action_with_rng_v1<R>(
-    context: VegaPrivacyActionTransactionContextV1,
+    context: &VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: &P256SigningKey,
@@ -1155,7 +1164,7 @@ pub fn prepare_vega_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -1163,7 +1172,7 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(VegaPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    validate_vega_transaction_context_v1(&context)?;
+    validate_vega_transaction_context_v1(context)?;
     validate_vega_public_input_v1(input)?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
@@ -1174,28 +1183,31 @@ where
         input,
         witness_material,
         device_signing_key,
-        canonical_genesis_hash,
-        trusted_block_timestamp_ms,
+        (canonical_genesis_hash, trusted_block_timestamp_ms),
         profile,
         rng,
     )
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The proving operation consumes and clears witness material on success, failure, and unwind."
+)]
 fn prepare_vega_privacy_action_with_profile_and_rng_v1<R>(
-    context: VegaPrivacyActionTransactionContextV1,
+    context: &VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: &P256SigningKey,
-    canonical_genesis_hash: [u8; 32],
-    trusted_block_timestamp_ms: u64,
+    chain_state: ([u8; 32], u64),
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
     rng: &mut R,
 ) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
+    let (canonical_genesis_hash, trusted_block_timestamp_ms) = chain_state;
     let draft_statement = vega_statement_v1(
         vega_statement_context_v1(
-            &context,
+            context,
             profile,
             PrivacyTransactionIntentDigestV1::new([0; 32]),
         ),
@@ -1203,7 +1215,7 @@ where
         PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]),
     );
     let transaction_intent_digest =
-        derive_vega_transaction_intent_digest_v1(&context, draft_statement.clone())?;
+        derive_vega_transaction_intent_digest_v1(context, draft_statement.clone())?;
     let mut final_statement = draft_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let device_authentication_digest = {
@@ -1218,11 +1230,7 @@ where
         let signature: P256Signature = device_signing_key
             .sign_prehash(device_authentication_digest.as_bytes())
             .map_err(|_| VegaPrivacyActionBuildErrorV1::DeviceAuthenticationSigning)?;
-        signature
-            .normalize_s()
-            .unwrap_or(signature)
-            .to_bytes()
-            .into()
+        signature.normalize_s().to_bytes().into()
     });
     let witness = witness_material
         .witness_with_device_signature(device_signature)
@@ -1270,7 +1278,7 @@ where
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let proof_envelope_hash = *Hash::new(&envelope_encoding).as_ref();
-    let final_payload = vega_transaction_payload_v1(&context, final_envelope)?;
+    let final_payload = vega_transaction_payload_v1(context, final_envelope)?;
     let validated_intent = final_payload
         .validate_privacy_transaction_intent_binding_v1()
         .map_err(|_| VegaPrivacyActionBuildErrorV1::FinalIntentBinding)?;
@@ -1352,7 +1360,7 @@ pub fn sign_prepared_vega_privacy_action_v1(
 /// Returns a closed validation, proving, binding, or signing error.
 #[allow(clippy::too_many_arguments)]
 pub fn build_signed_vega_privacy_action_with_rng_v1<R>(
-    context: VegaPrivacyActionTransactionContextV1,
+    context: &VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: &P256SigningKey,
@@ -1362,9 +1370,9 @@ pub fn build_signed_vega_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<SignedVegaPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
-    validate_vega_transaction_context_v1(&context)?;
+    validate_vega_transaction_context_v1(context)?;
     validate_vega_signing_authority_v1(&context.authority, private_key)?;
     let prepared = prepare_vega_privacy_action_with_rng_v1(
         context,
@@ -1385,7 +1393,7 @@ where
 /// Returns the same closed failures as [`build_signed_vega_privacy_action_with_rng_v1`].
 #[allow(clippy::too_many_arguments)]
 pub fn build_signed_vega_privacy_action_v1(
-    context: VegaPrivacyActionTransactionContextV1,
+    context: &VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
     witness_material: VegaPrivacyActionWitnessMaterialV1,
     device_signing_key: &P256SigningKey,
@@ -1401,7 +1409,7 @@ pub fn build_signed_vega_privacy_action_v1(
         canonical_genesis_hash,
         trusted_block_timestamp_ms,
         private_key,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 /// Construct the exact length-delimited device-authentication consensus frame.
@@ -1607,7 +1615,7 @@ fn p256_affine_coordinates(
             field: "issuer_public_key",
         }
     })?;
-    let uncompressed: EncodedPoint = public_key.to_encoded_point(false);
+    let uncompressed: Sec1Point = public_key.to_sec1_point(false);
     let x = uncompressed.x().ok_or(VegaMdlError::InvalidP256PublicKey {
         field: "issuer_public_key",
     })?;
@@ -1642,23 +1650,22 @@ mod tests {
             PrivacyVegaMdlSignatureAlgorithmV1,
         },
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("invalid Vega action boundary reached proof randomness")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     #[derive(Clone, Copy)]
     enum VegaEntropyModeV1 {
         Healthy,
@@ -1695,17 +1702,16 @@ mod tests {
             }
         }
     }
-    impl RngCore for VegaEntropySourceV1 {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for VegaEntropySourceV1 {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("Vega must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("Vega must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("Vega must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests.push(destination.len());
             let request = self.requests.len();
             let partial_error = matches!(
@@ -1725,22 +1731,23 @@ mod tests {
             } else {
                 destination.len()
             };
-            for offset in 0..written {
-                destination[offset] = self.stream_byte(self.cursor);
+            for byte in destination.iter_mut().take(written) {
+                *byte = self.stream_byte(self.cursor);
                 self.cursor += 1;
             }
-            if panicking {
-                panic!("injected Vega entropy panic after a partial write")
-            }
+            assert!(
+                !panicking,
+                "injected Vega entropy panic after a partial write"
+            );
             if partial_error {
-                return Err(RngError::new(
+                return Err(RngError::other(
                     "injected Vega entropy failure after a partial write",
                 ));
             }
             Ok(())
         }
     }
-    impl CryptoRng for VegaEntropySourceV1 {}
+    impl rand::TryCryptoRng for VegaEntropySourceV1 {}
     fn transaction_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixed Vega transaction key")
@@ -1762,7 +1769,7 @@ mod tests {
     ) -> VegaPrivacyActionPublicInputV1 {
         let issuer_signing_key =
             P256SigningKey::from_bytes((&[1_u8; 32]).into()).expect("fixed issuer key");
-        let encoded = issuer_signing_key.verifying_key().to_encoded_point(true);
+        let encoded = issuer_signing_key.verifying_key().to_sec1_point(true);
         let issuer_public_key = PrivacyP256PointV1::new(
             encoded
                 .as_bytes()
@@ -1956,7 +1963,7 @@ mod tests {
     #[test]
     fn action_builder_rejects_public_boundaries_before_proof_randomness() {
         let zero_genesis = prepare_vega_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
             witness_material(),
             &device_signing_key(),
@@ -1971,7 +1978,7 @@ mod tests {
         let mut oversized_creation_time = action_context();
         oversized_creation_time.creation_time = Duration::from_secs(u64::MAX);
         let oversized_creation_time = prepare_vega_privacy_action_with_rng_v1(
-            oversized_creation_time,
+            &oversized_creation_time,
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
             witness_material(),
             &device_signing_key(),
@@ -1986,7 +1993,7 @@ mod tests {
         let mut oversized_ttl = action_context();
         oversized_ttl.time_to_live = Some(Duration::from_secs(u64::MAX));
         let oversized_ttl = prepare_vega_privacy_action_with_rng_v1(
-            oversized_ttl,
+            &oversized_ttl,
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
             witness_material(),
             &device_signing_key(),
@@ -2006,7 +2013,7 @@ mod tests {
             MultisigPolicy::new(1, vec![multisig_member]).expect("fixed multisig policy"),
         );
         let multisig = prepare_vega_privacy_action_with_rng_v1(
-            multisig_context,
+            &multisig_context,
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
             witness_material(),
             &device_signing_key(),
@@ -2019,7 +2026,7 @@ mod tests {
             Err(VegaPrivacyActionBuildErrorV1::UnsupportedAuthority)
         ));
         let revoked_issuer = prepare_vega_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Revoked),
             witness_material(),
             &device_signing_key(),
@@ -2039,7 +2046,7 @@ mod tests {
         tampered_issuer_input.issuer_record.record_digest =
             PrivacyVegaIssuerRecordDigestV1::new(tampered_record_digest);
         let tampered_issuer = prepare_vega_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             tampered_issuer_input,
             witness_material(),
             &device_signing_key(),
@@ -2053,7 +2060,7 @@ mod tests {
         ));
         let foreign_key = transaction_key(0x42);
         let wrong_transaction_key = build_signed_vega_privacy_action_with_rng_v1(
-            action_context(),
+            &action_context(),
             action_public_input(PrivacyVegaIssuerRecordLifecycleV1::Active),
             witness_material(),
             &device_signing_key(),

@@ -2,7 +2,7 @@ name: Pull Request CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, optimizations]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,14 +15,19 @@ env:
   NEXTEST_PROFILE: ci
 
 jobs:
+  ci_image:
+    uses: ./.github/workflows/ci_image_preflight.yml
+    permissions:
+      contents: read
+
   ivm_only:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - run: python3 -m pip install -r scripts/requirements.txt
@@ -37,8 +42,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - run: python3 -m pip install -r scripts/requirements.txt
@@ -52,21 +57,21 @@ jobs:
 
   pre_build:
     if: needs.rust_changes.outputs.has_binaries == 'true'
-    needs: rust_changes
+    needs: [rust_changes, ci_image]
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Build selected release binaries
@@ -77,7 +82,7 @@ jobs:
             --binaries "$REQUIRED_BINARIES" \
             --output-dir target/release/pre_build
       - name: Upload binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: bins
           path: target/release/pre_build
@@ -87,12 +92,12 @@ jobs:
     if: needs.rust_changes.outputs.run_consistency == 'true'
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    needs: [rust_changes, pre_build]
+      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes, pre_build, ci_image]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Download binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bins
           path: bins
@@ -108,16 +113,16 @@ jobs:
     if: needs.rust_changes.outputs.run_kotodama_docs == 'true'
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    needs: [rust_changes, pre_build]
+      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes, pre_build, ci_image]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Download canonical koto driver
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bins
           path: bins
@@ -139,28 +144,29 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           components: "rustfmt"
       - name: Format
         run: cargo fmt --all -- --check
 
   sumeragi:
+    needs: ci_image
     name: Sumeragi core, simulator and node lanes
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Core, simulator, specification traceability and quorums (default seeds)
@@ -172,14 +178,15 @@ jobs:
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
   # the foundation lane (`ci/rust_lanes.toml`).
   zk_phase_tree_measurement:
+    needs: ci_image
     name: ZK phase-tree measurement on a FASTPQ workload
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: FASTPQ prove and verify under the shared phase and resource recorder
@@ -199,18 +206,19 @@ jobs:
   # coherence, maximum gossip and Sumeragi frames, admission and proposer bounds, and the
   # genesis and daemon startup frame checks) are default tests; the steps below name them.
   x2_maximum_proof_transport:
+    needs: ci_image
     name: Maximum-proof transport bounds (X.2)
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Complete canonical envelopes and exact/one-over contract bounds
@@ -240,12 +248,13 @@ jobs:
             privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent
 
   norito_rpc_verify:
+    needs: ci_image
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Norito-RPC fixture parity
@@ -264,11 +273,11 @@ jobs:
           - macos-14
           - windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
           shared-key: numeric-v1-${{ matrix.runner }}
@@ -286,8 +295,8 @@ jobs:
   android_fixture_compat:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: "temurin"
           java-version: "21"
@@ -319,15 +328,15 @@ jobs:
       run_pytests: ${{ steps.classify.outputs.run_pytests }}
       run_sora_parliament_lifecycle: ${{ steps.classify.outputs.run_sora_parliament_lifecycle }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Install pinned router-test dependency
@@ -436,7 +445,7 @@ jobs:
             > target/ci/rust-classification.log
       - name: Upload Rust classification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rust-classification
           path: |
@@ -447,26 +456,26 @@ jobs:
   rust_affected:
     name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_free_rust == 'true'
-    needs: rust_changes
+    needs: [rust_changes, ci_image]
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_free_matrix) }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: rust-lane-1.93.1-${{ matrix.lane }}
+          shared-key: rust-lane-1.99.1-${{ matrix.lane }}
       - name: Enforce data-model compile-unit budget
         if: matrix.lane == 'execution'
         run: >-
@@ -482,7 +491,7 @@ jobs:
           --json-out target/ci/iroha-data-model-compile-units.json
       - name: Upload data-model compile-unit evidence
         if: always() && matrix.lane == 'execution'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: compile-units-${{ matrix.lane }}
           path: target/ci/iroha-data-model-compile-units.json
@@ -496,10 +505,10 @@ jobs:
   rust_network:
     name: Rust network ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_rust == 'true'
-    needs: [rust_changes, pre_build]
+    needs: [rust_changes, pre_build, ci_image]
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -510,19 +519,19 @@ jobs:
       TEST_NETWORK_BIN_IROHA: bins/iroha
       TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: rust-network-1.93.1-${{ matrix.lane }}
+          shared-key: rust-network-1.99.1-${{ matrix.lane }}
       - name: Download test-network binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bins
           path: bins
@@ -535,7 +544,7 @@ jobs:
           --checks clippy,build,test,doc
       - name: Upload failed test-network artifacts
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: test-network-${{ matrix.lane }}
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
@@ -592,13 +601,13 @@ jobs:
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: 3.11.12
-      - uses: abatilo/actions-poetry@0dd19c9498c3dc8728967849d0d2eae428a8a3d8
+      - uses: abatilo/actions-poetry@3765cf608f2d4a72178a9fc5b918668e542b89b1
       - name: Download binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: bins
           path: bins
@@ -618,7 +627,7 @@ jobs:
         working-directory: pytests/iroha_cli_tests
         run: poetry install --no-root
       - name: Run client pytests
-        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
         env:
           # created by test_env.py
           TMP_DIR: ../../test
@@ -642,7 +651,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Check conventional commits
-        uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50
         id: lint_pr_title
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -651,7 +660,7 @@ jobs:
           validateSingleCommitMatchesPrTitle: true
 
       - name: Post error comment
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88
         if: always() && (steps.lint_pr_title.outputs.error_message != null)
         with:
           header: pr-title-lint-error
@@ -669,7 +678,7 @@ jobs:
       # Delete a previous comment when the issue has been resolved
       - name: Delete error comment
         if: ${{ steps.lint_pr_title.outputs.error_message == null }}
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88
         with:
           header: pr-title-lint-error
           delete: true
@@ -677,9 +686,9 @@ jobs:
   check_links:
     runs-on: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Restore lychee cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: .lycheecache
           key: cache-lychee-${{ github.ref_name }}
@@ -698,8 +707,8 @@ jobs:
     env:
       CARGO_NET_OFFLINE: "true"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: '17'
@@ -948,14 +957,14 @@ jobs:
           PY
       - name: Upload atomic private settlement formal evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: atomic-private-settlement-formal-pr
           path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/atomic_private_settlement
           if-no-files-found: error
       - name: Upload SORA Parliament formal evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sora-parliament-formal-pr
           path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sora_parliament
@@ -963,17 +972,17 @@ jobs:
 
   sora_parliament_lifecycle:
     if: needs.rust_changes.outputs.run_sora_parliament_lifecycle == 'true'
-    needs: rust_changes
+    needs: [rust_changes, ci_image]
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
       SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
       SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Install pinned Parliament benchmark checker dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Create fresh private Parliament crypto evidence layout
@@ -1039,12 +1048,12 @@ jobs:
             > "$SORA_PARLIAMENT_ALERT_EVIDENCE_DIR/SHA256SUMS"
       - name: Upload Parliament alert-rule evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sora-parliament-alert-rules
           path: ${{ env.SORA_PARLIAMENT_ALERT_EVIDENCE_DIR }}
           if-no-files-found: error
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
           shared-key: sora-parliament-lifecycle
@@ -1199,7 +1208,7 @@ jobs:
           PY
       - name: Upload Parliament crypto benchmark evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sora-parliament-crypto-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR }}

@@ -59,14 +59,8 @@ impl StorePhase {
         address: u64,
         vm: u8,
         clocks: [u32; 4],
-        gas: u64,
-        pc: u64,
-        cycles: u64,
-        stack_top: u64,
-        output_before: u64,
-        zk: bool,
-        vector: bool,
-        base_private: bool,
+        (gas, pc, cycles, stack_top, output_before): (u64, u64, u64, u64, u64),
+        (zk, vector, base_private): (bool, bool, bool),
         outcome: MemoryOutcome,
     ) -> Option<Self> {
         let wide = match wide::opcode(instruction) {
@@ -88,16 +82,17 @@ impl StorePhase {
         {
             return None;
         }
-        let mut output_after = output_before;
-        if address >= ivm::Memory::OUTPUT_START
+        let output_after = if address >= ivm::Memory::OUTPUT_START
             && end <= ivm::Memory::OUTPUT_START + ivm::Memory::OUTPUT_SIZE
         {
             let offset = address - ivm::Memory::OUTPUT_START;
             if outcome == MemoryOutcome::Ready && offset < output_before {
                 return None;
             }
-            output_after = output_before.max(offset + length);
-        }
+            output_before.max(offset + length)
+        } else {
+            output_before
+        };
         Some(Self {
             vm,
             address,
@@ -160,8 +155,10 @@ pub(super) fn append_residues(
             read,
             Space::Register,
             phase,
-            slot,
-            phase.registers[slot] as u32,
+            (
+                slot,
+                u32::try_from(phase.registers[slot]).expect("validated player or port count"),
+            ),
             enabled,
             F::ZERO,
         );
@@ -225,8 +222,14 @@ pub(super) fn append_residues(
         memory,
         Space::Memory,
         phase,
-        3,
-        (phase.address >> 4) as u32,
+        (
+            3,
+            u32::from_le_bytes(
+                u64::to_le_bytes(phase.address >> 4)[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
+        ),
         committed,
         committed,
     );
@@ -316,12 +319,16 @@ pub(super) fn payload_limb(before: F, low: F, high: F, high_half: F, wide: bool,
 
 fn header(
     out: &mut Vec<F>,
+
     port: &[F; packet::WIDTH],
+
     space: packet::Space,
+
     phase: StorePhase,
-    slot: usize,
-    index: u32,
+    (slot, index): (usize, u32),
+
     enabled: F,
+
     write: F,
 ) {
     use packet::*;

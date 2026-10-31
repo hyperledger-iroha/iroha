@@ -17,7 +17,7 @@ use crate::fastpq::quantity_statement::quantity_statement_frame_len_from_finaliz
 
 /// Exact measured complete-bundle dimensions, independent of owned execution-entry scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FastpqSourceTranscriptUsage {
+pub struct FastpqSourceTranscriptUsage {
     /// Whole original transcript occurrences, including identical repeated occurrences.
     pub transcripts: usize,
     /// Original transfer deltas; every occurrence retains both participant rows.
@@ -121,7 +121,7 @@ impl FastpqSourceTranscriptUsage {
 /// Rejects malformed or non-finalized transcripts, public preparation failures, arithmetic
 /// overflow, or any of the six explicit construction caps. Inputs are never mutated.
 #[cfg(test)]
-pub(crate) fn measure_fastpq_source_statement_usage(
+pub fn measure_fastpq_source_statement_usage(
     executed_entry_count: u32,
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
     limits: FastpqSourceStatementBuildLimits,

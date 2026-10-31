@@ -267,7 +267,7 @@ mod tests {
                 "coordinate {coordinate}"
             );
         }
-        let mut malformed = proof.clone();
+        let mut malformed = proof;
         malformed.proof.z_s[0] ^= 1;
         assert!(
             verify_global_threshold_beacon_seat_readiness_v1(

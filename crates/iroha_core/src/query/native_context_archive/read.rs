@@ -100,6 +100,9 @@ pub(super) struct RecordRead {
     file: Option<ArchiveFile>,
     length: Option<usize>,
     bytes: Option<ChargedBuffer<u8>>,
+    // A packed context record is rebuilt into `bytes`; its pieces' descriptors stay pinned here.
+    packed: Option<super::packed::Expansion>,
+    inspected: bool,
     completed: bool,
 }
 impl RecordRead {
@@ -112,6 +115,8 @@ impl RecordRead {
             file: None,
             length: None,
             bytes: None,
+            packed: None,
+            inspected: false,
             completed: false,
         }
     }
@@ -129,17 +134,16 @@ impl RecordRead {
             self.file = Some(open_named_record(&archive.directory, &self.name)?);
         }
         let file = self.file.as_mut().expect("selected original descriptor");
-        let length = match self.length {
-            Some(length) => length,
-            None => {
-                let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
-                    NativeContextArchiveError::Source("record length exceeds address space")
-                })?;
-                // Pin even a refused finite length. Reconfiguration cannot rebind the original
-                // descriptor or bless an in-place rewrite with a different allocation geometry.
-                self.length = Some(length);
-                length
-            }
+        let length = if let Some(length) = self.length {
+            length
+        } else {
+            let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
+                NativeContextArchiveError::Source("record length exceeds address space")
+            })?;
+            // Pin even a refused finite length. Reconfiguration cannot rebind the original
+            // descriptor or bless an in-place rewrite with a different allocation geometry.
+            self.length = Some(length);
+            length
         };
         if length == 0 || length > archive.maximum.get() {
             return Err(NativeContextArchiveError::Limit {
@@ -147,10 +151,34 @@ impl RecordRead {
                 actual: length,
             });
         }
-        if file.metadata()?.len() != u64::try_from(length).expect("file length fits u64") {
+        let stored = u64::try_from(length).expect("file length fits u64");
+        if file.metadata()?.len() != stored {
             return Err(NativeContextArchiveError::Source(
                 "record length changed during exact read",
             ));
+        }
+        if !self.inspected {
+            if self.name.is_context() {
+                self.packed = super::packed::Expansion::start(file, length, archive.maximum.get())?;
+            }
+            self.inspected = true;
+        }
+        if let Some(expansion) = self.packed.as_mut() {
+            if self.bytes.is_none() {
+                self.bytes = Some(ChargedBuffer::new(expansion.length(), &archive.budget)?);
+            }
+            let bytes = self.bytes.as_mut().expect("original exact allocation");
+            if !expansion.step(&archive.directory, file, stored, bytes)? {
+                return Ok(None);
+            }
+            if file.metadata()?.len() != stored {
+                return Err(NativeContextArchiveError::Source(
+                    "record changed during exact read",
+                ));
+            }
+            archive.recheck_namespace()?;
+            self.completed = true;
+            return Ok(self.bytes.take());
         }
         if self.bytes.is_none() {
             self.bytes = Some(ChargedBuffer::new(length, &archive.budget)?);

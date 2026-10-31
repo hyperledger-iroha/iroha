@@ -131,9 +131,8 @@ async fn handle(
     // request. The pre-admitted bound covers bounded body collection, canonical
     // decode backing and validation's transient native re-encoding; none escapes.
     let bytes = app.query_fanout_working_set_bytes;
-    let memory = app
-        .query_fanout_inflight
-        .try_acquire_parts([u64::try_from(bytes).map_err(|_| capacity())?])
+    let memory = crate::acquire_query_pool_credit(&app, bytes)
+        .await
         .ok_or_else(capacity)?;
     let memory = QueryFanoutMemoryReservation::new(memory);
     let budget = AllocationBudget::new(bytes);
@@ -190,11 +189,10 @@ async fn handle(
     let max_response = app
         .torii_proxy_max_response_bytes
         .min(NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1);
-    let response = routing::run_admitted_blocking(
+    let (response, release) = routing::run_admitted_blocking(
         admission,
         "native authority originals worker failed",
         move || {
-            let _memory = memory;
             let intake = intake;
             let view = state.view();
             let height = u64::try_from(view.height()).map_err(|_| unavailable())?;
@@ -241,16 +239,17 @@ async fn handle(
             let _proof_charge = budget
                 .try_reserve_bytes(proof_bytes)
                 .map_err(|_| capacity())?;
-            let attestation = iroha_core::sumeragi::finality::build_attestation(
-                &view,
-                status,
-                &identity,
-                fingerprint,
-                height,
-                challenge,
-                &signer,
-            )
-            .map_err(|_| unavailable())?;
+            let (attestation, release) =
+                iroha_core::sumeragi::finality::build_attestation_with_release(
+                    &view,
+                    status,
+                    &identity,
+                    fingerprint,
+                    height,
+                    challenge,
+                    &signer,
+                )
+                .map_err(|_| unavailable())?;
             drop(chain);
             drop(view);
             let mut encoded = match &intake.request.selector {
@@ -384,7 +383,7 @@ async fn handle(
                     )
                     .map_err(|_| unavailable())?,
             };
-            encoded.memory = Some(_memory);
+            encoded.memory = Some(memory);
             let mut response = AxResponse::new(Body::from(Bytes::from_owner(encoded)));
             response.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,
@@ -393,7 +392,7 @@ async fn handle(
                     ResponseFormat::Json => "application/json",
                 }),
             );
-            Ok(response)
+            Ok((response, release))
         },
     )
     .await?;
@@ -408,6 +407,10 @@ async fn handle(
     )
     .await?;
     require_permission(&app, &account)?;
+    // The embedded attestation's retained authority must still hold as it leaves.
+    if !iroha_core::sumeragi::finality::retained_attestation_releasable(&app.state, &release) {
+        return Err(unavailable());
+    }
     Ok(response)
 }
 

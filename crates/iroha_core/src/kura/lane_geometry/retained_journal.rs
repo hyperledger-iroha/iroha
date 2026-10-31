@@ -352,10 +352,10 @@ impl RetainedGeometryJournal {
             }
             return Ok(());
         }
-        if !self.renamed {
-            self.verify_current()?;
-        } else {
+        if self.renamed {
             self.verify_namespace()?;
+        } else {
+            self.verify_current()?;
         }
         if self.pending.is_none()
             && self.current.is_some()
@@ -480,7 +480,7 @@ impl RetainedGeometryJournal {
                 writer
                     .seek(SeekFrom::Start(0))
                     .and_then(|_| writer.write_all(bytes))
-                    .and_then(|_| writer.set_len(bytes.len() as u64))
+                    .and_then(|()| writer.set_len(bytes.len() as u64))
                     .map_err(|error| Error::IO(error, self.namespace.index_path.clone()))?;
             }
             Self::verify_bytes(original, bytes, &self.namespace.index_path)?;

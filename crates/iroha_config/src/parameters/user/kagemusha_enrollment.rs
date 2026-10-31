@@ -49,6 +49,9 @@ pub struct KagemushaEnrollmentProvider {
     pub observation_endpoint: String,
     /// Existing private transport credential file; raw secrets are not configuration leaves.
     pub observation_credential: PathBuf,
+    /// Optional private file containing exactly one DER TLS trust anchor, at most 16 KiB.
+    /// Native system roots and hostname verification remain enabled; absence adds no root.
+    pub observation_tls_root: Option<PathBuf>,
     /// Exact operator-selected local private verifier installation.
     pub worker: KagemushaEnrollmentWorker,
     /// Existing private file containing exactly one canonical 32-byte big-endian P-256 scalar.
@@ -174,6 +177,9 @@ impl KagemushaEnrollmentProvider {
         let worker = self.worker.checked(&enrollment.platform)?;
         absolute_path(&self.signer_private_key)?;
         absolute_path(&self.observation_credential)?;
+        if let Some(root) = &self.observation_tls_root {
+            absolute_path(root)?;
+        }
         Ok(actual::KagemushaEnrollmentProvider {
             eligibility,
             scheme,
@@ -185,6 +191,7 @@ impl KagemushaEnrollmentProvider {
             service_origin_digest: digest(&self.service_origin_digest_hex)?,
             observation_endpoint: endpoint(&self.observation_endpoint)?,
             observation_credential: self.observation_credential,
+            observation_tls_root: self.observation_tls_root,
             worker,
             signer_private_key: self.signer_private_key,
         })

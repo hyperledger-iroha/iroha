@@ -6,7 +6,7 @@ use iroha_data_model::fastpq::TransferDeltaTranscript;
 /// One non-cloneable original idle-batch source. No public constructor exists.
 /// The ordered original receipt commitment, moved deltas and opaque journal identity
 /// stay together until State admission; no receipt byte vectors are cloned.
-pub(crate) struct RetailNativeMaintenancePermit {
+pub struct RetailNativeMaintenancePermit {
     source: crate::state::native_maintenance::RetailMaintenanceSource,
     entries: Vec<(AccountId, Hash, TransferDeltaTranscript)>,
     receipt_commitment: Hash,

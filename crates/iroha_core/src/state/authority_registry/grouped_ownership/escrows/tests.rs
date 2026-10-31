@@ -30,7 +30,8 @@ fn optional_buyer_changes_and_rollback_preserve_exact_original_images() {
             let mut block = world.block();
             let mut tx =
                 block.transaction_without_telemetry(crate::state::LaneConfig::default(), 0);
-            tx.insert_asset_escrow_entry(replacement.clone());
+            tx.insert_asset_escrow_entry(&(replacement.clone()))
+                .expect("escrow fixture insert");
             tx.apply();
             block.commit();
         }
@@ -111,7 +112,7 @@ fn absent_buyers_cannot_have_foreign_or_deleted_source_membership() {
             };
             world
                 .asset_escrows_by_buyer
-                .insert((BOB_ID.clone(), member.clone()), ());
+                .insert((BOB_ID.clone(), member), ());
             if previous {
                 let mut block = world.asset_escrows_by_buyer.block();
                 block.remove((BOB_ID.clone(), member));

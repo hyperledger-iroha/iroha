@@ -42,7 +42,7 @@ pub struct Args {
     format: String,
 }
 
-pub(crate) fn run(args: Args) -> Result<ExitCode, CliError> {
+pub fn run(args: &Args) -> Result<ExitCode, CliError> {
     if args.format != "json" {
         return Err(CliError::Config(
             "release-manifest-receipt supports only JSON output".into(),
@@ -234,7 +234,7 @@ mod tests {
         super::super::tests::parse_args(args)
     }
     fn run(args: &[String]) -> Result<ExitCode, CliError> {
-        parse(args).and_then(super::run)
+        parse(args).and_then(|args| super::run(&args))
     }
 
     fn all_args() -> Vec<String> {

@@ -263,6 +263,55 @@ final class IrohaPeerNfcCheckpointBoxV1: @unchecked Sendable {
         self.data = Data(data)
         lock.unlock()
     }
+
+    func storePreparedIfAbsent(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        // A late preparation publisher must never replace retained ACK bytes.
+        if self.data == nil { self.data = Data(data) }
+    }
+}
+
+/// The public reader action owns preparation across fully closed RF sessions.
+/// Cancellation retires the entire action, including a gap between sessions.
+final class IrohaPeerNfcReaderOperationContextV1: @unchecked Sendable {
+    let checkpoints: IrohaPeerNfcCheckpointBoxV1
+    let preparation = IrohaPeerNfcReaderPreparationV1<Data>()
+    let acknowledgement = IrohaPeerNfcReaderPreparationV1<Data>(timeoutNanoseconds: 35_000_000_000)
+    let progress: IrohaPeerNfcReaderProgressReporterV1
+    let budget = IrohaPeerNfcReaderContinuationBudgetV1(
+        startedAtNanoseconds: DispatchTime.now().uptimeNanoseconds)
+    private let lock = NSLock()
+    private var cancelled = false
+    private var completionPending = false
+
+    init(checkpoint: Data?, onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)?) {
+        checkpoints = .init(checkpoint)
+        progress = .init(handler: onTypedProgress)
+    }
+
+    func requireActive() throws {
+        try Task.checkCancellation()
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+    }
+
+    var mayContinue: Bool {
+        checkpoints.load() != nil || preparation.currentTask != nil
+    }
+
+    /// The reader selected this operation's finished payment. Its `.complete` still has to be
+    /// published, so a cancellation arriving now leaves the reporter to `finishPayment`.
+    func reservePaymentCompletion() {
+        lock.lock(); completionPending = true; lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock(); cancelled = true; let pending = completionPending; lock.unlock()
+        preparation.cancel()
+        acknowledgement.cancel()
+        if !pending { progress.invalidate() }
+    }
 }
 
 /// A successful final READ_REQUEST response observes handover, including exact replay.
@@ -297,6 +346,7 @@ public enum IrohaPeerNfcCoreNFCErrorV1: Error, Equatable, LocalizedError, Sendab
     case operationInProgress
     case retryExhausted
     case readerOperationTimedOut
+    case invalidReaderBudget
     case cardSessionTimedOut
     case platformCallTimedOut
 
@@ -326,6 +376,8 @@ public enum IrohaPeerNfcCoreNFCErrorV1: Error, Equatable, LocalizedError, Sendab
             return "The NFC contact could not be restored within the retry limit."
         case .readerOperationTimedOut:
             return "No NFC peer was detected before the reader timed out."
+        case .invalidReaderBudget:
+            return "The NFC reader session budget cannot fit its durable response deadline."
         case .cardSessionTimedOut:
             return "NFC card emulation did not become ready in time."
         case .platformCallTimedOut:
@@ -443,9 +495,11 @@ public enum IrohaPeerNfcCoreNFCAdapterV1 {
 /// Info.plist reader `select-identifiers` must both list it, and both phones of
 /// an exchange must use the same one. A mismatch fails closed.
 public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
-    public static let maximumDurabilityTimeoutMilliseconds: UInt64 = 5_000
+    public static let maximumDurabilityTimeoutMilliseconds: UInt64 = 30_000
     public static let maximumReaderOperationTimeoutMilliseconds: UInt64 = 60_000
     public static let maximumPlatformCallTimeoutMilliseconds: UInt64 = 10_000
+    public static let maximumDurableResponseTimeoutMilliseconds: UInt64 =
+        IrohaPeerNfcReaderCallDeadlinesV1.maximumDurableResponseTimeoutMilliseconds
     public static let maximumCardSessionStartupTimeoutMilliseconds: UInt64 = 15_000
     public let cardAlertMessage: String
     public let readerAlertMessage: String
@@ -454,6 +508,7 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
     public let durabilityTimeoutMilliseconds: UInt64
     public let readerOperationTimeoutMilliseconds: UInt64
     public let platformCallTimeoutMilliseconds: UInt64
+    public let durableResponseTimeoutMilliseconds: UInt64
     public let cardSessionStartupTimeoutMilliseconds: UInt64
 
     public init(
@@ -461,14 +516,17 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
         readerAlertMessage: String,
         completionAlertMessage: String,
         applicationIdentifier: IrohaPeerNfcApplicationIdentifierV1 = .protocolDefault,
-        durabilityTimeoutMilliseconds: UInt64 = 5_000,
-        readerOperationTimeoutMilliseconds: UInt64 = 30_000,
+        durabilityTimeoutMilliseconds: UInt64 = 30_000,
+        readerOperationTimeoutMilliseconds: UInt64 = 60_000,
         platformCallTimeoutMilliseconds: UInt64 = 3_000,
-        cardSessionStartupTimeoutMilliseconds: UInt64 = 10_000
+        cardSessionStartupTimeoutMilliseconds: UInt64 = 10_000,
+        durableResponseTimeoutMilliseconds: UInt64 = 35_000
     ) {
         precondition(Self.isValidDurabilityTimeout(durabilityTimeoutMilliseconds))
         precondition(Self.isValidReaderOperationTimeout(readerOperationTimeoutMilliseconds))
         precondition(Self.isValidPlatformCallTimeout(platformCallTimeoutMilliseconds))
+        let durableTimeout = durableResponseTimeoutMilliseconds
+        precondition(Self.isValidDurableResponseTimeout(durableTimeout))
         precondition(Self.isValidCardSessionStartupTimeout(
             cardSessionStartupTimeoutMilliseconds
         ))
@@ -479,6 +537,7 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
         self.durabilityTimeoutMilliseconds = durabilityTimeoutMilliseconds
         self.readerOperationTimeoutMilliseconds = readerOperationTimeoutMilliseconds
         self.platformCallTimeoutMilliseconds = platformCallTimeoutMilliseconds
+        self.durableResponseTimeoutMilliseconds = durableTimeout
         self.cardSessionStartupTimeoutMilliseconds = cardSessionStartupTimeoutMilliseconds
     }
 
@@ -492,6 +551,17 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
 
     static func isValidPlatformCallTimeout(_ milliseconds: UInt64) -> Bool {
         (1...maximumPlatformCallTimeoutMilliseconds).contains(milliseconds)
+    }
+
+    static func isValidDurableReaderBudget(readerMilliseconds: UInt64,
+                                          durableMilliseconds: UInt64) -> Bool {
+        durableMilliseconds <= readerMilliseconds
+            && readerMilliseconds - durableMilliseconds >=
+                IrohaPeerNfcReaderContinuationBudgetV1.sessionMarginNanoseconds / 1_000_000
+    }
+
+    static func isValidDurableResponseTimeout(_ milliseconds: UInt64) -> Bool {
+        (1...maximumDurableResponseTimeoutMilliseconds).contains(milliseconds)
     }
 
     static func isValidCardSessionStartupTimeout(_ milliseconds: UInt64) -> Bool {
@@ -508,6 +578,11 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
 
     var platformCallTimeoutNanoseconds: UInt64 {
         platformCallTimeoutMilliseconds * 1_000_000
+    }
+
+    var readerCallDeadlines: IrohaPeerNfcReaderCallDeadlinesV1 {
+        .init(platformCallMilliseconds: platformCallTimeoutMilliseconds,
+              durableResponseMilliseconds: durableResponseTimeoutMilliseconds)
     }
 }
 
@@ -1462,7 +1537,7 @@ private enum IrohaPeerNfcReaderOutcomeV1: Sendable {
 /// The guarded transport handed to one contact of a reader operation.
 private struct IrohaPeerNfcReaderContactV1: @unchecked Sendable {
     let limits: IrohaPeerNfcLimitsV1
-    let progressReporter: IrohaPeerNfcReaderProgressReporterV1
+    let progressReporter: IrohaPeerNfcReaderProgressRelayV1
     let validate: () throws -> Void
     let transceive: IrohaPeerNfcReaderExchangeV1.Transceive
 }
@@ -1488,14 +1563,20 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         NFCTagReaderSession
     ) async throws -> IrohaPeerNfcReaderOutcomeV1)?
     private var exchangeTask: Task<Void, Never>?
-    private var progressReporter: IrohaPeerNfcReaderProgressReporterV1?
+    private var progressReporter: IrohaPeerNfcReaderProgressRelayV1?
     private var platformCallGate: IrohaPeerNfcReaderPlatformCallGateV1?
     private var retryLimitsBox: IrohaPeerNfcRetryLimitsBoxV1?
     private var retryGate: IrohaPeerNfcRetryGateV1?
     private var retryTimeoutTask: Task<Void, Never>?
+    /// The armed recovery deadline. A detection or a newer restart retires it, so an
+    /// already-woken timer cannot end the contact that replaced it.
+    private var recoveryWait: UInt64?
+    private var recoveryWaitGeneration: UInt64 = 0
+    private var retryPollingGate: IrohaPeerNfcReaderPlatformCallGateV1?
     private var operationTimeoutTask: Task<Void, Never>?
     private var operationGate = IrohaPeerNfcReaderOperationGateV1()
     private var completed = false
+    private var logicalOperation: IrohaPeerNfcReaderOperationContextV1?
     private var invalidation = IrohaPeerNfcReaderInvalidationV1<IrohaPeerNfcReaderOutcomeV1>()
     private var invalidationTimeoutTask: Task<Void, Never>?
 
@@ -1504,7 +1585,8 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         super.init()
     }
 
-    /// Delivers a durable Payment and reads its ACK in one CoreNFC session.
+    /// Delivers a durable Payment and reads its ACK, renewing an exhausted
+    /// CoreNFC session from the same durable checkpoint when necessary.
     /// Read a new Request with `readRequest()`, complete hardware confirmation
     /// in the application after that session closes, and pass the resulting
     /// durable checkpoint as `restoredCheckpoint`. A resumed contact delivers
@@ -1520,84 +1602,183 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         updateDurableCheckpoint: @escaping
             IrohaPeerNfcReaderExchangeV1.UpdateDurableCheckpoint
     ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
-        let checkpointBox = IrohaPeerNfcCheckpointBoxV1(restoredCheckpoint)
+        // Request-only readers and card mode may use shorter configurations.
+        // Payment readers must be able to dispatch a complete durable command.
+        guard IrohaPeerNfcCoreNFCConfigurationV1.isValidDurableReaderBudget(
+            readerMilliseconds: configuration.readerOperationTimeoutMilliseconds,
+            durableMilliseconds: configuration.durableResponseTimeoutMilliseconds) else {
+            throw IrohaPeerNfcCoreNFCErrorV1.invalidReaderBudget
+        }
+        let owner = try claimLogicalOperation(checkpoint: restoredCheckpoint, onTypedProgress: onTypedProgress)
+        defer { releaseLogicalOperation(owner) }
+        let checkpointBox = owner.checkpoints
         let applicationIdentifier = configuration.applicationIdentifier
-        let outcome = try await perform(
-            limits: limits,
-            retryPolicy: retryPolicy,
-            onTypedProgress: onTypedProgress
-        ) { contact in
-            let prepare: IrohaPeerNfcReaderExchangeV1.LoadOrCreateDurableCheckpoint = {
-                info, request in
-                try contact.validate()
-                contact.progressReporter.emit(
-                    .requestRead,
-                    bytes: request.encoded.count
-                )
-                let checkpoint = try await irohaPeerNfcGuardedAwaitV1(
-                    validate: contact.validate,
-                    operation: {
-                        try await loadOrCreateDurableCheckpoint(info, request)
-                    }
-                )
-                // The application contract guarantees this value is
-                // already durable. Cache it only after the boundary
-                // returns so a CoreNFC reconnect can resume without
-                // invoking value creation again.
-                checkpointBox.store(checkpoint.encoded)
-                return checkpoint
-            }
-            let update: IrohaPeerNfcReaderExchangeV1.UpdateDurableCheckpoint = { encoded in
-                try contact.validate()
-                let checkpoint = try IrohaPeerNfcSenderCheckpointV1.decode(
-                    encoded,
-                    profilePolicy: profilePolicy,
-                    limits: contact.limits
-                )
-                guard checkpoint.durableAcknowledgement != nil else {
-                    throw IrohaPeerNfcErrorV1.continuityMismatch
+        do {
+            while true {
+                try owner.requireActive()
+                guard owner.budget.mayStartSession(nowNanoseconds: DispatchTime.now().uptimeNanoseconds) else {
+                    throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
                 }
-                // A validated acknowledgement can only be read after
-                // the receiver durably commits the payment. Publish
-                // this before the app persists that ACK so the two
-                // durability boundaries retain their order.
-                contact.progressReporter.emit(
-                    .paymentCommitted,
-                    bytes: checkpoint.payment.encoded.count
-                )
-                _ = try await irohaPeerNfcGuardedAwaitV1(
-                    validate: contact.validate,
-                    operation: {
-                        try await updateDurableCheckpoint(encoded)
+                do {
+                    let outcome = try await perform(
+                        owner: owner,
+                        limits: limits,
+                        retryPolicy: retryPolicy
+                    ) { contact in
+                        let prepare: IrohaPeerNfcReaderExchangeV1.LoadOrCreateDurableCheckpoint = {
+                            info, request in
+                            try contact.validate()
+                            contact.progressReporter.emit(
+                                .requestRead,
+                                bytes: request.encoded.count
+                            )
+                            let checkpoint = try await irohaPeerNfcGuardedAwaitV1(
+                                validate: contact.validate,
+                                operation: {
+                                    // The factory belongs to the logical action, not this RF
+                                    // waiter. Closing a reader never dispatches it again.
+                                    _ = try owner.preparation.begin(
+                                        binding: info.identity.sessionID + request.encoded
+                                    ) {
+                                        let prepared = try await loadOrCreateDurableCheckpoint(info, request)
+                                        try owner.requireActive()
+                                        checkpointBox.storePreparedIfAbsent(prepared.encoded)
+                                        return prepared.encoded
+                                    }
+                                    guard let encoded = try await owner.preparation.value() else {
+                                        throw IrohaPeerNfcErrorV1.stateMismatch
+                                    }
+                                    try owner.requireActive()
+                                    return try IrohaPeerNfcSenderCheckpointV1.decode(
+                                        encoded, profilePolicy: profilePolicy, limits: contact.limits)
+                                }
+                            )
+                                // The logical preparation task already cached this
+                                // durable value. A retired RF waiter must not write
+                                // its older Payment over a successor's saved ACK.
+                            contact.progressReporter.checkpointRetained(
+                                paymentBytes: checkpoint.payment.encoded.count,
+                                acknowledgementBytes: checkpoint.durableAcknowledgement?.encoded.count
+                            )
+                            return checkpoint
+                        }
+                        let update: IrohaPeerNfcReaderExchangeV1.UpdateDurableCheckpoint = { encoded in
+                            try contact.validate()
+                            let checkpoint = try IrohaPeerNfcSenderCheckpointV1.decode(
+                                encoded,
+                                profilePolicy: profilePolicy,
+                                limits: contact.limits
+                            )
+                            guard checkpoint.durableAcknowledgement != nil else {
+                                throw IrohaPeerNfcErrorV1.continuityMismatch
+                            }
+                            // A validated acknowledgement can only be read after
+                            // the receiver durably commits the payment. Publish
+                            // this before the app persists that ACK so the two
+                            // durability boundaries retain their order.
+                            contact.progressReporter.emit(
+                                .paymentCommitted,
+                                bytes: checkpoint.payment.encoded.count
+                            )
+                            _ = try await irohaPeerNfcGuardedAwaitV1(
+                                validate: contact.validate,
+                                operation: {
+                                    _ = try owner.acknowledgement.begin(binding: encoded) {
+                                        try await updateDurableCheckpoint(encoded)
+                                        try owner.requireActive()
+                                        checkpointBox.store(encoded)
+                                        return encoded
+                                    }
+                                    _ = try await owner.acknowledgement.value()
+                                }
+                            )
+                            contact.progressReporter.emit(
+                                .ackPersisted,
+                                bytes: checkpoint.durableAcknowledgement?.encoded.count ?? 0
+                            )
+                        }
+                        return .payment(try await irohaPeerNfcWithPersistenceReplayV1(
+                            hasDurableCheckpoint: { checkpointBox.load() != nil },
+                            sleep: { nanoseconds in
+                                try contact.validate()
+                                try await Task.sleep(nanoseconds: nanoseconds)
+                                try contact.validate()
+                            },
+                            operation: {
+                                let restoredBytes = checkpointBox.load()
+                                let restored = try restoredBytes.map {
+                                    try IrohaPeerNfcSenderCheckpointV1.decode(
+                                        $0, profilePolicy: profilePolicy, limits: contact.limits
+                                    )
+                                }
+                                return try await IrohaPeerNfcReaderExchangeV1.run(
+                                    restoredCheckpoint: restoredBytes,
+                                    applicationIdentifier: applicationIdentifier,
+                                    profilePolicy: profilePolicy,
+                                    limits: contact.limits,
+                                    transceive: { command in
+                                        try contact.validate()
+                                        // GET_STATUS follows the exchange's same-peer validation.
+                                        // Restore known progress without inventing another debit or
+                                        // another COMMIT when only retained-ACK cleanup remains.
+                                        if case .getStatus = command, let restored {
+                                            contact.progressReporter.checkpointRetained(
+                                                paymentBytes: restored.payment.encoded.count,
+                                                acknowledgementBytes: restored.durableAcknowledgement?.encoded.count
+                                            )
+                                        }
+                                        return try await contact.transceive(command)
+                                    },
+                                    loadOrCreateDurableCheckpoint: prepare,
+                                    updateDurableCheckpoint: update
+                                )
+                            }
+                        ))
                     }
-                )
-                checkpointBox.store(encoded)
-            }
-            return .payment(try await irohaPeerNfcWithPersistenceReplayV1(
-                hasDurableCheckpoint: { checkpointBox.load() != nil },
-                sleep: { nanoseconds in
-                    try contact.validate()
-                    try await Task.sleep(nanoseconds: nanoseconds)
-                    try contact.validate()
-                },
-                operation: {
-                    try await IrohaPeerNfcReaderExchangeV1.run(
-                        restoredCheckpoint: checkpointBox.load(),
-                        applicationIdentifier: applicationIdentifier,
-                        profilePolicy: profilePolicy,
-                        limits: contact.limits,
-                        transceive: contact.transceive,
-                        loadOrCreateDurableCheckpoint: prepare,
-                        updateDurableCheckpoint: update
-                    )
+                    guard case .payment(let result) = outcome else {
+                        throw IrohaPeerNfcErrorV1.stateMismatch
+                    }
+                    // The acknowledgement is durable and `.complete` is published. A
+                    // cancellation arriving after that cannot make this payment fail.
+                    return result
+                } catch IrohaPeerNfcReaderContinuationErrorV1.renewSession {
+                    // perform returns this only after matching platform invalidation.
+                    // A preparation already dispatched may finish outside the RF field.
+                    try owner.requireActive()
+                    guard owner.mayContinue else {
+                        throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
+                    }
+                    if owner.acknowledgement.currentTask != nil {
+                        do { _ = try await owner.acknowledgement.value() }
+                        catch is IrohaPeerNfcOperationDeadlineErrorV1 {
+                            throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
+                        }
+                    }
+                    if checkpointBox.load() == nil {
+                        do { _ = try await owner.preparation.value() }
+                        catch is IrohaPeerNfcOperationDeadlineErrorV1 {
+                            throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
+                        }
+                    }
+                    try owner.requireActive()
+                    guard checkpointBox.load() != nil else {
+                        throw IrohaPeerNfcErrorV1.acknowledgementNotDurable
+                    }
+                    // The exact semantic ACK is already durable. RF renewal is
+                    // cleanup only and cannot make the payment fail merely
+                    // because the admission window closed during its save.
+                    if let complete = try Self.completeRenewalFromDurableAcknowledgement(
+                        owner, profilePolicy: profilePolicy, limits: limits) {
+                        return complete
+                    }
+                    // The next run receives restored bytes; its exchange never invokes
+                    // the factory or authorizes a second Send.
                 }
-            ))
+            }
+        } catch {
+            owner.progress.finish(error: error)
+            throw error
         }
-        guard case .payment(let result) = outcome else {
-            throw IrohaPeerNfcErrorV1.stateMismatch
-        }
-        try Task.checkCancellation()
-        return result
     }
 
     /// Tap 1 of a payment over two sessions: reads the receiver card's `IOI1`
@@ -1614,11 +1795,13 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         retryPolicy: IrohaPeerNfcReaderRetryPolicyV1 = .default,
         onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)? = nil
     ) async throws -> IrohaPeerNfcRequestReadV1 {
+        let owner = try claimLogicalOperation(checkpoint: nil, onTypedProgress: onTypedProgress)
+        defer { releaseLogicalOperation(owner) }
         let applicationIdentifier = configuration.applicationIdentifier
         let outcome = try await perform(
+            owner: owner,
             limits: limits,
-            retryPolicy: retryPolicy,
-            onTypedProgress: onTypedProgress
+            retryPolicy: retryPolicy
         ) { contact in
             let read = try await IrohaPeerNfcReaderExchangeV1.readRequest(
                 applicationIdentifier: applicationIdentifier,
@@ -1637,20 +1820,18 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
     }
 
     private func perform(
+        owner: IrohaPeerNfcReaderOperationContextV1,
         limits: IrohaPeerNfcLimitsV1,
         retryPolicy: IrohaPeerNfcReaderRetryPolicyV1,
-        onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)?,
         body: @escaping @Sendable (IrohaPeerNfcReaderContactV1) async throws -> IrohaPeerNfcReaderOutcomeV1
     ) async throws -> IrohaPeerNfcReaderOutcomeV1 {
-        let progressReporter = IrohaPeerNfcReaderProgressReporterV1(
-            handler: onTypedProgress
-        )
+        let progressReporter = IrohaPeerNfcReaderProgressRelayV1(owner.progress)
         guard Self.isAvailable else {
             progressReporter.finish(error: IrohaPeerNfcCoreNFCErrorV1.unavailable)
             throw IrohaPeerNfcCoreNFCErrorV1.unavailable
         }
         return try await withTaskCancellationHandler {
-            do { try Task.checkCancellation() }
+            do { try owner.requireActive() }
             catch {
                 progressReporter.finish(error: error)
                 throw error
@@ -1662,6 +1843,12 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                 return
             }
             lock.lock()
+            guard (try? owner.requireActive()) != nil, self.logicalOperation === owner else {
+                lock.unlock()
+                progressReporter.finish(error: CancellationError())
+                continuation.resume(throwing: CancellationError())
+                return
+            }
             guard self.continuation == nil else {
                 lock.unlock()
                 progressReporter.finish(error: IrohaPeerNfcCoreNFCErrorV1.operationInProgress)
@@ -1679,13 +1866,16 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
             let retryLimitsBox = IrohaPeerNfcRetryLimitsBoxV1(limits)
             self.retryLimitsBox = retryLimitsBox
             self.retryGate = IrohaPeerNfcRetryGateV1(retryPolicy)
+            let sessionBudget = IrohaPeerNfcDeadlineBudgetV1(
+                timeoutMilliseconds: configuration.readerOperationTimeoutMilliseconds,
+                nowNanoseconds: DispatchTime.now().uptimeNanoseconds)
             self.exchange = { [weak self] tag, capturedEpoch, capturedSession in
                 guard let self else { throw CancellationError() }
                 let tagBox = IrohaPeerNfcISO7816TagBoxV1(tag)
-                let platformCallTimeout = self.configuration
-                    .platformCallTimeoutNanoseconds
+                let callDeadlines = self.configuration.readerCallDeadlines
                 let validate = { [weak self] in
                     guard let self else { throw CancellationError() }
+                    try owner.requireActive()
                     try self.validateCurrentOperation(
                         capturedEpoch: capturedEpoch,
                         expectedSession: capturedSession
@@ -1694,13 +1884,29 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                 try validate()
                 let exchangeLimits = retryLimitsBox.load()
                 let transceive: IrohaPeerNfcReaderExchangeV1.Transceive = { command in
+                    try validate()
+                    let instant = DispatchTime.now().uptimeNanoseconds
+                    switch owner.budget.decision(
+                        for: command.operation, nowNanoseconds: instant,
+                        sessionRemainingNanoseconds: sessionBudget.remainingNanoseconds(nowNanoseconds: instant),
+                        durableCallNanoseconds: callDeadlines.nanoseconds(for: command.operation)
+                    ) {
+                    case .proceed: break
+                    case .renewSession:
+                        guard owner.mayContinue else {
+                            throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
+                        }
+                        throw IrohaPeerNfcReaderContinuationErrorV1.renewSession
+                    case .expired:
+                        throw IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut
+                    }
                     progressReporter.record(operation: command.operation)
                     do {
                         let response = try await irohaPeerNfcGuardedAwaitV1(
                             validate: validate,
                             operation: {
                                 try await irohaPeerNfcWithDeadlineV1(
-                                    timeoutNanoseconds: platformCallTimeout,
+                                    timeoutNanoseconds: callDeadlines.nanoseconds(for: command.operation),
                                     operation: {
                                         try await IrohaPeerNfcCoreNFCAdapterV1
                                             .transceive(
@@ -1728,7 +1934,7 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                         throw CancellationError()
                     } catch is IrohaPeerNfcOperationDeadlineErrorV1 {
                         try validate()
-                        throw IrohaPeerNfcCoreNFCErrorV1.platformCallTimedOut
+                        throw Self.responseDeadlineFailure(for: command.operation)
                     } catch let error as IrohaPeerNfcCoreNFCErrorV1 {
                         try validate()
                         if case .invalidCommandAPDU = error,
@@ -1786,7 +1992,9 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                 }
                 guard let self, let readerSession else { return }
                 self.finish(
-                    .failure(IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut),
+                    .failure(owner.mayContinue
+                        ? IrohaPeerNfcReaderContinuationErrorV1.renewSession
+                        : IrohaPeerNfcCoreNFCErrorV1.readerOperationTimedOut),
                     invalidating: true,
                     expectedEpoch: operationEpoch,
                     expectedSession: readerSession
@@ -1799,12 +2007,36 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
             }
             }
         } onCancel: { [weak self] in
-            self?.cancel()
+            self?.cancel(expectedOwner: owner)
         }
     }
 
     public func cancel() {
-        finish(.failure(IrohaPeerNfcCoreNFCErrorV1.cancelled), invalidating: true, cancelling: true)
+        lock.lock(); let owner = logicalOperation; lock.unlock()
+        if let owner { cancel(expectedOwner: owner) }
+    }
+
+    func cancel(expectedOwner owner: IrohaPeerNfcReaderOperationContextV1) {
+        owner.cancel()
+        finish(.failure(IrohaPeerNfcCoreNFCErrorV1.cancelled), invalidating: true,
+               cancelling: true, expectedOwner: owner)
+    }
+
+    func claimLogicalOperation(checkpoint: Data?,
+                                       onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)?) throws -> IrohaPeerNfcReaderOperationContextV1 {
+        lock.lock(); defer { lock.unlock() }
+        guard logicalOperation == nil, continuation == nil else {
+            throw IrohaPeerNfcCoreNFCErrorV1.operationInProgress
+        }
+        let owner = IrohaPeerNfcReaderOperationContextV1(checkpoint: checkpoint, onTypedProgress: onTypedProgress)
+        logicalOperation = owner
+        return owner
+    }
+
+    func releaseLogicalOperation(_ owner: IrohaPeerNfcReaderOperationContextV1) {
+        owner.cancel()
+        lock.lock(); defer { lock.unlock() }
+        if logicalOperation === owner { logicalOperation = nil }
     }
 
     /// Replaces the scan sheet's message while this reader's session is active,
@@ -1839,10 +2071,13 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         let shouldFinish = !completed
             && self.session === session
             && operationGate.mayMutate(capturedEpoch: operationEpoch)
+        let mayContinue = logicalOperation?.mayContinue == true
         lock.unlock()
         if shouldFinish {
+            let timedOut = (error as? NFCReaderError)?.code == .readerSessionInvalidationErrorSessionTimeout
             finish(
-                .failure(Self.mapInvalidation(error)),
+                .failure(timedOut && mayContinue
+                    ? IrohaPeerNfcReaderContinuationErrorV1.renewSession : Self.mapInvalidation(error)),
                 invalidating: false,
                 expectedEpoch: operationEpoch,
                 expectedSession: session
@@ -1861,6 +2096,7 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
             let operationEpoch = operationGate.activeEpoch
             guard !completed,
                   self.session === session,
+                  exchangeTask == nil, !operationGate.connectInFlight,
                   operationGate.mayMutate(capturedEpoch: operationEpoch) else {
                 lock.unlock()
                 return
@@ -1869,9 +2105,13 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
             let platformCallGate = self.platformCallGate
             let retryTimeoutTask = self.retryTimeoutTask
             self.retryTimeoutTask = nil
+            recoveryWait = nil
+            let pollingGate = retryPollingGate
+            retryPollingGate = nil
             let reporter = progressReporter
             lock.unlock()
             retryTimeoutTask?.cancel()
+            pollingGate?.invalidate()
             reporter?.emit(.tagDetected)
             switch disposition {
             case .retry:
@@ -1912,9 +2152,14 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         }
         let retryTimeoutTask = self.retryTimeoutTask
         self.retryTimeoutTask = nil
+        recoveryWait = nil
+        let connectGeneration = operationGate.connectGeneration
+        let pollingGate = retryPollingGate
+        retryPollingGate = nil
         let reporter = progressReporter
         lock.unlock()
         retryTimeoutTask?.cancel()
+        pollingGate?.invalidate()
         reporter?.emit(.tagDetected)
         let connectTimeout = configuration.platformCallTimeoutNanoseconds
         let connectTimeoutTask = Task { [weak self, weak session] in
@@ -1924,11 +2169,14 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                 return
             }
             guard let self, let session else { return }
+            // Owns only this connect: once its callback ran, or a later contact
+            // claimed the connect slot, this woken timer finishes nothing.
             self.finish(
                 .failure(IrohaPeerNfcCoreNFCErrorV1.platformCallTimedOut),
                 invalidating: true,
                 expectedEpoch: operationEpoch,
-                expectedSession: session
+                expectedSession: session,
+                expectedConnect: connectGeneration
             )
         }
         let didStartConnect = platformCallGate.performIfActive {
@@ -2044,20 +2292,32 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         _ result: Result<IrohaPeerNfcReaderOutcomeV1, Error>,
         invalidating: Bool,
         cancelling: Bool = false,
+        expectedOwner: IrohaPeerNfcReaderOperationContextV1? = nil,
         expectedEpoch: UInt64? = nil,
-        expectedSession: NFCTagReaderSession? = nil
+        expectedSession: NFCTagReaderSession? = nil,
+        expectedConnect: UInt64? = nil,
+        expectedRecoveryWait: UInt64? = nil
     ) {
         lock.lock()
+        if let expectedOwner, logicalOperation !== expectedOwner {
+            lock.unlock()
+            return
+        }
         if cancelling { invalidation.cancel(with: IrohaPeerNfcCoreNFCErrorV1.cancelled) }
         let operationEpoch = expectedEpoch ?? operationGate.activeEpoch
         guard !completed,
               operationGate.mayMutate(capturedEpoch: operationEpoch),
-              expectedSession.map({ self.session === $0 }) ?? true else {
+              expectedSession.map({ self.session === $0 }) ?? true,
+              expectedConnect.map({ operationGate.isConnecting(generation: $0) }) ?? true,
+              expectedRecoveryWait.map({ recoveryWait == $0 }) ?? true else {
             lock.unlock()
             return
         }
         completed = true
         _ = operationGate.finishOperation(capturedEpoch: operationEpoch)
+        // Chosen together with the result: a Cancel landing before `finishPayment` below
+        // cannot retire the progress that reports this payment complete.
+        if Self.isFinishedPayment(result) { logicalOperation?.reservePaymentCompletion() }
         let session = session
         let awaitInvalidation = invalidating && session != nil
         let continuation = awaitInvalidation ? nil : self.continuation
@@ -2071,12 +2331,18 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         retryGate = nil
         let retryTimeoutTask = self.retryTimeoutTask
         self.retryTimeoutTask = nil
+        recoveryWait = nil
+        let pollingGate = retryPollingGate
+        retryPollingGate = nil
         let operationTimeoutTask = self.operationTimeoutTask
         self.operationTimeoutTask = nil
         let task = exchangeTask
         exchangeTask = nil
         if let session, awaitInvalidation {
-            invalidation.begin(session: ObjectIdentifier(session), result: result)
+            // A finished payment publishes `.complete` below. Its durable result must
+            // stay the returned result while the sheet closes.
+            invalidation.begin(session: ObjectIdentifier(session), result: result,
+                               retainsSuccess: Self.isFinishedPayment(result))
             invalidationTimeoutTask = Task { [weak self, session] in
                 do { try await Task.sleep(nanoseconds: 5_000_000_000) }
                 catch { return }
@@ -2087,11 +2353,16 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         }
         lock.unlock()
         retryTimeoutTask?.cancel()
+        pollingGate?.invalidate()
         operationTimeoutTask?.cancel()
         platformCallGate?.invalidate()
         switch result {
+        case .failure(is IrohaPeerNfcReaderContinuationErrorV1):
+            progressReporter?.emit(.contactLost)
+            progressReporter?.invalidate()
         case .failure(let error): progressReporter?.finish(error: error)
-        case .success: progressReporter?.invalidate()
+        case .success(.payment): progressReporter?.finishPayment()
+        case .success(.request): progressReporter?.invalidate()
         }
         task?.cancel()
         if invalidating { session?.invalidate() }
@@ -2132,23 +2403,61 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
             lock.unlock()
             return
         }
+        _ = gate.mayRedetect()
         retryTimeoutTask?.cancel()
+        recoveryWaitGeneration &+= 1
+        let waitToken = recoveryWaitGeneration
+        recoveryWait = waitToken
+        let oldPollingGate = retryPollingGate
+        let pollingGate = IrohaPeerNfcReaderPlatformCallGateV1()
+        retryPollingGate = pollingGate
         let timeout = gate.redetectionTimeoutNanoseconds
+        let delay = gate.restartDelayNanoseconds
         let task = Task { [weak self, weak session] in
-            try? await Task.sleep(nanoseconds: timeout)
+            if delay > 0 {
+                do { try await Task.sleep(nanoseconds: min(delay, timeout)) }
+                catch { return }
+                guard let self, let session,
+                      (try? self.validateCurrentOperation(capturedEpoch: operationEpoch,
+                                                         expectedSession: session)) != nil else { return }
+                if gate.redetectionTimeoutNanoseconds > 0 {
+                    pollingGate.performIfActive {
+                        platformCallGate.performIfActive {
+                            gate.recordRestart()
+                            session.restartPolling()
+                        }
+                    }
+                }
+            }
+            let remaining = gate.redetectionTimeoutNanoseconds
+            if remaining > 0 {
+                do { try await Task.sleep(nanoseconds: remaining) }
+                catch { return }
+            }
             guard !Task.isCancelled, let self, let session else { return }
+            // Checked under the service lock with the terminal transition, so a
+            // detection that retired this wait cannot be ended by it.
             self.finish(
                 .failure(IrohaPeerNfcCoreNFCErrorV1.retryExhausted),
                 invalidating: true,
                 expectedEpoch: operationEpoch,
-                expectedSession: session
+                expectedSession: session,
+                expectedRecoveryWait: waitToken
             )
         }
         retryTimeoutTask = task
         let reporter = progressReporter
         lock.unlock()
+        oldPollingGate?.invalidate()
         reporter?.emit(.contactLost)
-        platformCallGate.performIfActive { session.restartPolling() }
+        if delay == 0 && timeout > 0 {
+            pollingGate.performIfActive {
+                platformCallGate.performIfActive {
+                    gate.recordRestart()
+                    session.restartPolling()
+                }
+            }
+        }
     }
 
     private func validateCurrentOperation(
@@ -2172,6 +2481,40 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         default:
             return error
         }
+    }
+
+    static func completeRenewalFromDurableAcknowledgement(
+        _ owner: IrohaPeerNfcReaderOperationContextV1,
+        profilePolicy: IrohaPeerNfcProfilePolicyV1,
+        limits: IrohaPeerNfcLimitsV1
+    ) throws -> IrohaPeerNfcReaderExchangeResultV1? {
+        try owner.requireActive()
+        guard let encoded = owner.checkpoints.load() else { return nil }
+        let checkpoint = try IrohaPeerNfcSenderCheckpointV1.decode(
+            encoded, profilePolicy: profilePolicy, limits: limits)
+        guard let acknowledgement = checkpoint.durableAcknowledgement else { return nil }
+        try owner.requireActive()
+        owner.progress.checkpointRetained(paymentBytes: checkpoint.payment.encoded.count,
+                                         acknowledgementBytes: acknowledgement.encoded.count)
+        owner.progress.finishPayment()
+        return IrohaPeerNfcReaderExchangeResultV1(
+            checkpoint: checkpoint, acknowledgement: acknowledgement,
+            confirmationState: .responseUnknown)
+    }
+
+    private static func isFinishedPayment(_ result: Result<IrohaPeerNfcReaderOutcomeV1, Error>) -> Bool {
+        if case .success(.payment) = result { return true }
+        return false
+    }
+
+    static func responseDeadlineFailure(for operation: IrohaPeerNfcOperationV1) -> Error {
+        // CONFIRM_ACK is cleanup after the exact acknowledgement is durable.
+        // The core permits ambiguous completion only when that ACK is retained;
+        // other commands keep their normal actionable deadline failure.
+        if operation == .confirmAcknowledgement {
+            return IrohaPeerNfcRetryableTransportErrorV1()
+        }
+        return IrohaPeerNfcCoreNFCErrorV1.platformCallTimedOut
     }
 
     private static func isRetryableContactError(_ error: Error) -> Bool {

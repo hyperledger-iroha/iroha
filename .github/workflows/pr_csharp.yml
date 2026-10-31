@@ -78,16 +78,17 @@ jobs:
       GIT_CONFIG_KEY_1: core.symlinks
       GIT_CONFIG_VALUE_1: "false"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           target: ${{ matrix.target }}
+          build-warnings: warn
 
       - name: Preflight Windows native source manifest
         if: runner.os == 'Windows'
@@ -111,13 +112,13 @@ jobs:
           fi
           cargo build --locked --release -p connect_norito_bridge --target "$target"
 
-      - name: Authenticate and stage exact ABI-31 C# native bridge
+      - name: Authenticate and stage exact ABI-33 C# native bridge
         shell: bash
         run: |
           target="${{ matrix.target }}"
           library_name="${{ matrix.library_name }}"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi31.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi33.json"
           mkdir -p "$(dirname "$artifact")"
           cp "target/$target/release/$library_name" "$artifact"
           python scripts/check_native_sdk_artifact.py record \
@@ -134,7 +135,7 @@ jobs:
       - name: Upload authenticated target-native input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-${{ matrix.target }}
           path: ${{ runner.temp }}/csharp-native-upload
@@ -143,7 +144,7 @@ jobs:
 
       - name: Retry authenticated target-native input upload once
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-${{ matrix.target }}
           path: ${{ runner.temp }}/csharp-native-upload
@@ -160,16 +161,17 @@ jobs:
       CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           target: aarch64-unknown-linux-gnu
+          build-warnings: warn
 
       - name: Test the Linux ARM cross-build handoff contract
         run: python -I scripts/tests/csharp_linux_arm_cross_handoff_test.py
@@ -221,7 +223,7 @@ jobs:
       - name: Upload immutable Linux ARM cross-build candidate
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           # This deliberately does not match the final csharp-native-* pattern.
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
@@ -232,7 +234,7 @@ jobs:
 
       - name: Retry immutable Linux ARM candidate upload once
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
@@ -252,19 +254,19 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
       - name: Download immutable Linux ARM cross-build candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
 
-      - name: Authenticate and stage exact ABI-31 C# Linux ARM bridge natively
+      - name: Authenticate and stage exact ABI-33 C# Linux ARM bridge natively
         shell: bash
         run: |
           machine="$(uname -m)"
@@ -276,7 +278,7 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi31.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi33.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
@@ -296,7 +298,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -307,7 +309,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -333,19 +335,19 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
       - name: Download immutable Linux ARM cross-build candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
 
-      - name: Authenticate and stage exact ABI-31 C# Linux ARM bridge natively
+      - name: Authenticate and stage exact ABI-33 C# Linux ARM bridge natively
         shell: bash
         run: |
           machine="$(uname -m)"
@@ -357,7 +359,7 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi31.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi33.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
@@ -377,7 +379,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -389,7 +391,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -414,19 +416,19 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
       - name: Download immutable Linux ARM cross-build candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
 
-      - name: Authenticate and stage exact ABI-31 C# Linux ARM bridge natively
+      - name: Authenticate and stage exact ABI-33 C# Linux ARM bridge natively
         shell: bash
         run: |
           machine="$(uname -m)"
@@ -438,7 +440,7 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi31.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi33.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
@@ -458,7 +460,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -470,7 +472,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -504,13 +506,13 @@ jobs:
       run:
         working-directory: csharp
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.403
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -525,7 +527,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Download all authenticated target-native inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: csharp-native-*
           path: ${{ runner.temp }}/csharp-native-inputs
@@ -584,7 +586,7 @@ jobs:
           cp -R "$RUNNER_TEMP/csharp-native-package" "$bundle/native-package"
 
       - name: Upload five-RID C# SDK package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-sdk-native-package-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-package-bundle
@@ -620,18 +622,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.403
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
       - name: Download five-RID C# SDK package
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: csharp-sdk-native-package-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-sdk-package

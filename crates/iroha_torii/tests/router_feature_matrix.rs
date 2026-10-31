@@ -132,8 +132,7 @@ async fn router_builds_under_current_features() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx; // keep channel alive
     let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = iroha_torii::Torii::new(
-        build_identity_test_fixture::build_identity(),
+    let torii = iroha_torii::Torii::new_with_handle(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -145,6 +144,14 @@ async fn router_builds_under_current_features() {
         state,
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
+        None,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
+        ),
     )
     .expect("valid Torii route-matrix fixture");
     let runtime = torii
@@ -444,8 +451,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
             state.clone(),
             kura.clone(),
             queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
+            (peers_rx.clone(), local_peer_id),
             ts,
             false,
         )
@@ -467,9 +473,12 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            iroha_torii::MaybeTelemetry::from_profile(Some(telemetry), telemetry_profile),
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::from_profile(Some(telemetry), telemetry_profile),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid Torii route-matrix fixture");

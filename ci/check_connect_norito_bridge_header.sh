@@ -27,6 +27,8 @@ SELF_TESTS=(
   --self-test-unknown-wallet-rust-symbol
   --self-test-bad-wallet-header-width
   --self-test-bad-wallet-rust-width
+  --self-test-bad-wallet-exchange-header-width
+  --self-test-bad-wallet-exchange-rust-width
   --self-test-bad-wallet-setup-header-request
   --self-test-bad-wallet-setup-rust-request
   --self-test-bad-wallet-open-header-request
@@ -38,6 +40,10 @@ SELF_TESTS=(
   --self-test-bad-wallet-installation-close-owner
   --self-test-bad-wallet-enrollment-rust-result
   --self-test-bad-wallet-review-header-request
+  --self-test-bad-wallet-review-header-layout
+  --self-test-bad-wallet-review-rust-layout
+  --self-test-retired-wallet-reviewed-execute-request-id
+  --self-test-bad-wallet-review-jni-request-id
   --self-test-bad-wallet-observe-selector
   --self-test-bad-wallet-account-original-length
   --self-test-bad-wallet-account-display-prefix
@@ -111,7 +117,7 @@ wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
 rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
-for relative in ("review.rs", "installed/exports.rs", "observation.rs"):
+for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs"):
     rust += "\n" + (jni_path.parent / "kagemusha_wallet_ffi" / relative).read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
@@ -173,6 +179,8 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_open_cancel_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
+    "connect_norito_kagemusha_wallet_begin_exchange_v1",
+    "connect_norito_kagemusha_wallet_end_exchange_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
     "connect_norito_kagemusha_wallet_load_original_validate_v1",
@@ -197,7 +205,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "review", "executeReviewed", "discardReview", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "review", "executeReviewed", "discardReview", "snapshot")
 } | {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
@@ -454,6 +462,48 @@ def c_parameter_names(name: str) -> list[str]:
     return parameter_names(match.group(1), False)
 
 
+# Bind the review struct itself as well as its pointer-bearing function signature.
+# The request ID and comparison DATA are mandatory at issuance, never execution.
+review_fields = (
+    ("selector", "u32", "uint32_t"),
+    ("expectation", "u32", "uint32_t"),
+    ("amount", "WalletU128", "connect_norito_kagemusha_wallet_u128_v1"),
+    ("request_id32", "*const u8", "const uint8_t *"),
+    ("expected_projection", "*const u8", "const uint8_t *"),
+    ("expected_projection_length", "usize", "size_t"),
+    ("first", "*const u8", "const uint8_t *"),
+    ("first_length", "usize", "size_t"),
+    ("second", "*const u8", "const uint8_t *"),
+    ("second_length", "usize", "size_t"),
+)
+review_rust = re.search(r"pub\s+struct\s+WalletReviewRequest\s*\{([^}]+)\}", rust, re.S)
+review_c = re.search(
+    r"typedef\s+struct\s+connect_norito_kagemusha_wallet_review_request_v1\s*\{([^}]+)\}",
+    header, re.S,
+)
+for language, declaration, expected in (
+    ("Rust", review_rust, "".join(f"pub {name}: {kind}," for name, kind, _ in review_fields)),
+    ("C", review_c, "".join(f"{kind} {name};" for name, _, kind in review_fields)),
+):
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", declaration.group(1), flags=re.S) if declaration else ""
+    if re.sub(r"\s+", "", body) != re.sub(r"\s+", "", expected):
+        raise SystemExit(f"{language} request-bound review layout mismatch")
+
+reviewed_execute = "connect_norito_kagemusha_wallet_execute_reviewed_v1"
+if c_parameter_names(reviewed_execute) != ["handle", "exchange_id", "token", "out"]:
+    raise SystemExit("retired execute-time reviewed request ID or parameter drift")
+for method, expected in (
+    ("review", ["handle:jlong", "exchange_id:jlong", "request_id:JByteArray<'_>",
+                "selector:jint", "amount_low:jlong", "amount_high:jlong", "expectation:jint",
+                "expected_projection:JByteArray<'_>", "first:JByteArray<'_>", "second:JByteArray<'_>"]),
+    ("executeReviewed", ["handle:jlong", "exchange_id:jlong", "token:jlong"]),
+):
+    name = "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
+    declaration = re.search(rf"fn\s+{name}\s*\((.*?)\)\s*->\s*jobject", native_rust, re.S)
+    actual = [re.sub(r"\s+", "", value) for value in split_parameters(declaration.group(1))[2:]] if declaration else []
+    if actual != expected:
+        raise SystemExit(f"request-bound review JNI {method} signature mismatch")
+
 # The wallet has one current ABI; every other KAGEMUSHA C export is retired.
 native_c_exports = set(re.findall(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
@@ -558,8 +608,8 @@ require_signature_parity(
     | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
 )
 
-require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+31\b", header, "C bridge ABI version")
-require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*31\s*;", privacy, "Rust bridge ABI version")
+require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+33\b", header, "C bridge ABI version")
+require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*33\s*;", privacy, "Rust bridge ABI version")
 require(
     r"const\s+CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*PRIVACY_BRIDGE_ABI_VERSION_V1\s*;",
     rust,
@@ -648,7 +698,7 @@ if umbrella_contract(umbrella) != [
     raise SystemExit("[connect-norito-header] umbrella header drift")
 
 print(
-    "[connect-norito-header] ABI 31 synchronized: "
+    "[connect-norito-header] ABI 33 synchronized: "
     f"{len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(RETAIL_EXPORTS)} retail-fee, "
@@ -855,10 +905,21 @@ if [[ "${MODE}" == --self-test-* ]]; then
         $'connect_norito_kagemusha_wallet_execute_v1(\n    handle: u32,'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_execute_v1"
       ;;
+    --self-test-bad-wallet-exchange-header-width)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, uint64_t exchange_id," \
+        "connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, uint32_t exchange_id,"
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_execute_v1"
+      ;;
+    --self-test-bad-wallet-exchange-rust-width)
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/exchange.rs" \
+        '(fn connect_norito_kagemusha_wallet_end_exchange_v1\(.*?exchange_id: )u64' '\1u32'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_end_exchange_v1"
+      ;;
     --self-test-bad-wallet-setup-header-request)
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request," \
-        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request,"
+        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, uint64_t exchange_id, const connect_norito_kagemusha_wallet_setup_request_v1* request," \
+        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, uint64_t exchange_id, const connect_norito_kagemusha_wallet_operation_request_v1* request,"
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_setup_v1"
       ;;
     --self-test-bad-wallet-setup-rust-request)
@@ -921,6 +982,27 @@ if [[ "${MODE}" == --self-test-* ]]; then
         'const connect_norito_kagemusha_wallet_open_request_v1 *request,'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_review_v1"
       ;;
+    --self-test-bad-wallet-review-header-layout)
+      replace_once "${tmp_header}" \
+        'uint32_t expectation;' 'uint64_t expectation;'
+      expected_diagnostic="C request-bound review layout mismatch"
+      ;;
+    --self-test-bad-wallet-review-rust-layout)
+      replace_once "${tmp}/kagemusha_wallet_ffi/review.rs" \
+        'pub request_id32: *const u8,' 'pub request_id32: *mut u8,'
+      expected_diagnostic="Rust request-bound review layout mismatch"
+      ;;
+    --self-test-retired-wallet-reviewed-execute-request-id)
+      replace_once "${tmp_header}" \
+        'uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);' \
+        'uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);'
+      expected_diagnostic="retired execute-time reviewed request ID or parameter drift"
+      ;;
+    --self-test-bad-wallet-review-jni-request-id)
+      replace_once "${tmp}/platform_jni/kagemusha_wallet_review.rs" \
+        "request_id: JByteArray<'_>," 'request_id: jlong,'
+      expected_diagnostic="request-bound review JNI review signature mismatch"
+      ;;
     --self-test-retired-kagemusha-jni-symbol)
       printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni.rs"
       expected_diagnostic="retired JNI KAGEMUSHA inventory mismatch"
@@ -957,7 +1039,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 31" \
+        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 33" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
     --self-test-bad-wallet-memory-rust-status)

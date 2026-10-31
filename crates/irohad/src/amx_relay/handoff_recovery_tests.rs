@@ -215,11 +215,12 @@ impl Source for NativeSource {
     fn locate(&self, _: HashOf<SignedTransaction>) -> WorkflowFuture<'_, Result<Location>> {
         panic!("independent handoff effect recovery cannot use status as authority");
     }
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
         Box::pin(async move {
             self.0
                 .get(&height.get())
                 .cloned()
+                .map(|proof| ProofInput::Fixture(Box::new(proof)))
                 .ok_or_else(|| eyre!("no successor"))
         })
     }
@@ -326,32 +327,34 @@ fn recovery_ledger(target: &CertifiedTestChain, max_reads: usize) -> RelayLedger
     let proofs = (1..=target.height())
         .map(|height| (height, build_proof(&view, height).unwrap()))
         .collect();
+    let verifier = SumeragiFinalityVerifier::new(
+        target.genesis(),
+        "native-amx-private-root",
+        target
+            .validators()
+            .iter()
+            .map(|(peer, pop)| FinalityValidator {
+                public_key: peer.public_key().clone(),
+                proof_of_possession: pop.clone(),
+            })
+            .collect(),
+    )
+    .unwrap();
     RelayLedger {
         source: Arc::new(NativeSource(proofs)),
         dispatch: Arc::new(NoEffects),
-        verifier: Mutex::new(
-            SumeragiFinalityVerifier::new(
-                target.genesis(),
-                "native-amx-private-root",
-                target
-                    .validators()
-                    .iter()
-                    .map(|(peer, pop)| FinalityValidator {
-                        public_key: peer.public_key().clone(),
-                        proof_of_possession: pop.clone(),
-                    })
-                    .collect(),
-            )
-            .unwrap(),
-        ),
+        custody: PendingCustody::for_test(&verifier, account(&receiver())),
+        original: verifier.into_genesis_verifier(),
         network: target.network_id(),
         authority: account(&receiver()),
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-        instruction: Mutex::new(None),
-        approval: Mutex::new(None),
-        handoff_scan: Mutex::new(HandoffScan::default()),
+        instruction: Mutex::new(None).into(),
+        approval: Mutex::new(None).into(),
+        source_plan: Mutex::new(None).into(),
+        handoff: Mutex::new(None).into(),
+        test_lease: Mutex::new(None).into(),
         max_reads,
-        reads: AtomicUsize::new(max_reads),
+        reads: AtomicUsize::new(max_reads).into(),
     }
 }
 
@@ -430,39 +433,61 @@ async fn fresh_relayer_recovers_independent_native_handoffs_after_two_epochs_and
     // A fresh owner has no local successful carrier/journal. It independently verifies
     // the exact earlier successful effects and never dispatches the rejected old proof.
     let ledger = recovery_ledger(&restored, 2);
-    ledger
-        .begin_observation(instruction_digest(&first).unwrap(), None)
-        .unwrap();
+    ledger.begin_test_handoff(&first).unwrap();
     assert!(
         ledger.recover_handoff(&first).await.unwrap(),
         "fresh relayer must recover the original independent successful handoff after its source epoch is no longer tracked"
     );
-    // Discard all recovery cursors and verifier caches as on process restart.
-    let restarted = recovery_ledger(&restored, 2);
-    restarted
-        .begin_observation(instruction_digest(&first).unwrap(), None)
-        .unwrap();
+    // Reopen original signed custody with independently reconstructed genesis.
+    ledger.test_lease.lock().unwrap().take();
+    let mut restarted = recovery_ledger(&restored, 2);
+    restarted.custody = ledger.custody.reopen_for_test();
+    restarted.begin_test_handoff(&first).unwrap();
     assert!(restarted.recover_handoff(&first).await.unwrap());
-    restarted
-        .begin_observation(instruction_digest(&second).unwrap(), None)
-        .unwrap();
+    {
+        let lease = restarted
+            .test_lease
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        restarted.finish_observation(&lease).await.unwrap();
+    }
+    let mut second_complete = false;
+    for _ in 0..restored.height() {
+        restarted.begin_test_handoff(&second).unwrap();
+        if let Ok(found) = restarted.recover_handoff(&second).await {
+            second_complete = found;
+            break;
+        }
+    }
     assert!(
-        restarted.recover_handoff(&second).await.unwrap(),
+        second_complete,
         "later route authority work must progress after authenticated recovery"
     );
-    restarted
-        .begin_observation(instruction_digest(&corrupted).unwrap(), None)
-        .unwrap();
+    {
+        let lease = restarted
+            .test_lease
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        restarted.finish_observation(&lease).await.unwrap();
+    }
+    // This deliberately rejected public lookup remains unresolved in its own custody.
+    // It cannot consume or retire the original source's separate handoff admission.
+    let corrupted_ledger = recovery_ledger(&restored, 2);
+    corrupted_ledger.begin_test_handoff(&corrupted).unwrap();
     assert!(
-        restarted.recover_handoff(&corrupted).await.is_err(),
+        corrupted_ledger.recover_handoff(&corrupted).await.is_err(),
         "bounded unfinished scan is never effect absence or completion"
     );
     let mut completed = false;
     for _ in 0..restored.height() {
-        restarted
-            .begin_observation(instruction_digest(&corrupted).unwrap(), None)
-            .unwrap();
-        match restarted.recover_handoff(&corrupted).await {
+        corrupted_ledger.begin_test_handoff(&corrupted).unwrap();
+        match corrupted_ledger.recover_handoff(&corrupted).await {
             Ok(found) => {
                 assert!(
                     !found,
@@ -481,11 +506,10 @@ async fn fresh_relayer_recovers_independent_native_handoffs_after_two_epochs_and
         completed,
         "bounded scan must retain progress across observations"
     );
-    restarted
-        .begin_observation(instruction_digest(&first).unwrap(), None)
-        .unwrap();
+    restarted.begin_test_handoff(&first).unwrap();
     assert!(restarted.recover_handoff(&first).await.unwrap());
-    // A retained match is only a locator: replacing its proof by a foreign root refuses.
+    // Original signed custody authenticates the retained prefix independently of
+    // later HTTP substitution; a fresh owner must still reject the foreign proof.
     let mut foreign =
         iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::start(
             "foreign-native-handoff",
@@ -494,18 +518,19 @@ async fn fresh_relayer_recovers_independent_native_handoffs_after_two_epochs_and
     let bad = foreign.certify(body);
     assert_eq!(bad.height(), 2);
     let mut substituted = recovery_ledger(&restored, 8);
-    substituted
-        .begin_observation(instruction_digest(&first).unwrap(), None)
-        .unwrap();
+    substituted.begin_test_handoff(&first).unwrap();
     assert!(substituted.recover_handoff(&first).await.unwrap());
-    substituted.source = Arc::new(NativeSource([(2, bad)].into()));
-    substituted
-        .begin_observation(instruction_digest(&first).unwrap(), None)
-        .unwrap();
+    substituted.source = Arc::new(NativeSource([(2, bad.clone())].into()));
+    substituted.begin_test_handoff(&first).unwrap();
     assert!(
-        substituted.recover_handoff(&first).await.is_err(),
-        "cached successful height cannot replace original destination authentication"
+        substituted.recover_handoff(&first).await.unwrap(),
+        "authenticated local native custody does not borrow authority from a substituted peer"
     );
+    let mut fresh = recovery_ledger(&restored, 8);
+    let genesis = build_proof(&restored.state().view(), 1).unwrap();
+    fresh.source = Arc::new(NativeSource([(1, genesis), (2, bad)].into()));
+    fresh.begin_test_handoff(&first).unwrap();
+    assert!(fresh.recover_handoff(&first).await.is_err());
     assert_eq!(global.height(), 20);
     assert_eq!(
         restored.height(),

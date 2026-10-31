@@ -12,14 +12,62 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class PrivacyExact12CapabilityManifestV1Test {
     @Test
-    fun decodedArchivesNeverGrantAdmissionIncludingClaimedQualifiedRows() {
+    fun runtimeManifestRejectsDocumentaryQualificationFields() {
+        val canonical = inspection()
+        parseInspection(canonical)
+        for (evidence in listOf("null", qualification(), qualification(pgcActivationHeight = 4, convergenceHeight = 5))) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replace("\"protocols\":[", "\"qualification\":$evidence,\"protocols\":["))
+            }
+        }
+        for (field in listOf("release_manifest", "deployment_qualification", "production_qualification")) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replace("\"protocols\":[", "\"$field\":null,\"protocols\":["))
+            }
+        }
+    }
+
+    @Test
+    fun retiredDocumentaryCatalogMutationsCannotEnterRuntimeManifest() {
+        val canonical = "5bcf366fb18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb0"
+            .chunked(2).map { it.toInt(16) }
+        assertEquals(32, canonical.size)
+        val original = inspection().replace(
+            "\"protocols\":[", "\"qualification\":${qualification()},\"protocols\":[",
+        )
+        val hostile = listOf(
+            canonical.dropLast(1), canonical + 0, canonical + List(16) { 0 },
+            "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff"
+                .chunked(2).map { it.toInt(16) },
+        ) + canonical.indices.map { index ->
+            canonical.toMutableList().also { it[index] = it[index] xor 1 }
+        }
+        val needle = "\"catalog_commitment\":" + catalogCommitment()
+        for (bytes in hostile) {
+            val replacement = "\"catalog_commitment\":" + bytes.joinToString(",", "[", "]")
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(original.replaceFirst(needle, replacement))
+            }
+            val first = original.indexOf(needle)
+            val second = original.indexOf(needle, first + needle.length)
+            check(first >= 0 && second > first)
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(original.substring(0, second) +
+                    original.substring(second).replaceFirst(needle, replacement))
+            }
+        }
+    }
+
+    @Test
+    fun decodedArchivesNeverGrantAdmissionIncludingAvailableRows() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         for (manifest in listOf(
             parseInspection(inspection()),
-            parseInspection(inspection(mapOf(protocol to qualifiedAvailableRow()), qualification())),
+            parseInspection(inspection(mapOf(protocol to availablePolicyRow()))),
         )) {
             val error = assertFailsWith<IllegalArgumentException> {
                 PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(manifest, protocol)
@@ -32,19 +80,28 @@ class PrivacyExact12CapabilityManifestV1Test {
     }
 
     @Test
-    fun deploymentRequiresAnExactCanonicalNetworkIdentity() {
-        val qualified = inspection(qualification = qualification())
-        val literal = NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal
-        val parsed = parseInspection(qualified)
-        assertEquals(literal, parsed.qualification!!.deploymentQualification.networkId.literal)
-        for (invalid in listOf("kotlin-test-network", literal.lowercase(), "")) {
+    fun authoritativeNetworkIsMandatoryEvenWhenEveryProtocolIsUnavailable() {
+        val expected = NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() })
+        val other = NetworkId.fromBytes(ByteArray(32) { 0xD3.toByte() })
+        for (input in listOf(inspection(), inspection(mapOf(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 to availablePolicyRow())))) {
+            val parsed = parseInspection(input)
+            assertEquals(expected, parsed.networkId)
+            parsed.requireNetwork(expected)
+            assertFailsWith<IllegalArgumentException> { parsed.requireNetwork(other) }
+            for (invalid in listOf("kotlin-test-network", expected.literal.lowercase(), "")) {
+                assertFailsWith<IllegalArgumentException> { parseInspection(input.replace(expected.literal, invalid)) }
+            }
             assertFailsWith<IllegalArgumentException> {
-                parseInspection(qualified.replace(literal, invalid))
+                parseInspection(input.replace("\"network_id\":\"${expected.literal}\",", ""))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(input.replace("\"network_id\":\"${expected.literal}\"", "\"network_id\":null"))
             }
         }
     }
+
     @Test
-    fun pendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights() {
+    fun pendingUpdateAcceptsNextBlockAndRejectsInvalidSnapshotHeights() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val cases = listOf(
             listOf("42", "43", "42", "true"),
@@ -70,19 +127,19 @@ class PrivacyExact12CapabilityManifestV1Test {
                     """{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":32,"max_recipient_count":8}}"""
                 val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next}"""
                 var input = inspection(mapOf(protocol to availableRow(
-                    "missing-production-qualification", activeLifecycle(),
+                    "available", policy(),
                 ))).replace("\"committed_height\":42", "\"committed_height\":$committed")
-                val field = if (consensus) "pending_tightening" else "pending_protocol_limits_tightening"
-                input = input.replace("\"$field\":null", "\"$field\":$pending")
+                input = if (consensus) input.replaceFirst("\"pending_update\":null", "\"pending_update\":$pending")
+                    else input.replace("\"policy\":${policy()}", "\"policy\":${policy(pending = pending)}")
                 if (accepted == "true") {
                     val manifest = parseInspection(input)
                     assertEquals(committed.toBigInteger(), manifest.committedHeight)
                     val parsedSchedule = if (consensus) {
-                        manifest.consensusPolicy.pendingTightening?.let {
+                        manifest.consensusPolicy.pendingUpdate?.let {
                             it.scheduledAtHeight to it.effectiveAtHeight
                         }
                     } else {
-                        manifest.rowFor(protocol).activation?.pendingProtocolLimitsTightening?.let {
+                        manifest.rowFor(protocol).policy?.pendingUpdate?.let {
                             it.scheduledAtHeight to it.effectiveAtHeight
                         }
                     }
@@ -106,7 +163,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         assertEquals(2048, manifest.consensusPolicy.currentLimits.retainedRootCount)
         assertEquals(PrivacyProtocolIdV1.values().toList(), manifest.protocols.map { it.protocolId })
         assertEquals(7, exactRowKeys().size)
-        assertNull(manifest.qualification)
+        assertEquals(NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }), manifest.networkId)
 
         val readiness = assertIs<PrivacyCapabilityReadinessV1.Unavailable>(
             manifest.protocols.first().readiness,
@@ -118,118 +175,102 @@ class PrivacyExact12CapabilityManifestV1Test {
             PrivacyCompiledProfileUnavailableReasonV1.ENGINE_UNAVAILABLE,
             reason.failure.reason,
         )
-        assertNull(manifest.protocols.first().activation)
+        assertNull(manifest.protocols.first().policy)
         assertFalse(manifest.protocols.first().isNetworkAvailable())
     }
 
     @Test
-    fun readinessUsesOnlyClosedEvidenceDerivedReasons() {
-        val cases = listOf(
-            availableRow("not-registered", null) to PrivacyCapabilityUnavailableReasonV1.NotRegistered,
-            availableRow("proposed", proposedLifecycle()) to PrivacyCapabilityUnavailableReasonV1.Proposed,
-            availableRow("suspended", suspendedLifecycle()) to PrivacyCapabilityUnavailableReasonV1.Suspended,
-            availableRow("retired", retiredLifecycle()) to PrivacyCapabilityUnavailableReasonV1.Retired,
-            availableRow("missing-production-qualification", activeLifecycle()) to
-                PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-        )
-
-        for ((row, expectedReason) in cases) {
-            val manifest = parseInspection(
-                inspection(mapOf(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 to row)),
-            )
-            val readiness = assertIs<PrivacyCapabilityReadinessV1.Unavailable>(
-                manifest.rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1).readiness,
-            )
-            assertSame(expectedReason, readiness.reason)
+    fun absenceOfPolicyUsesCanonicalLimitsAtEveryCommittedHeight() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        for (height in listOf("0", "1", "42", "18446744073709551615")) {
+            val row = parseInspection(inspection(mapOf(protocol to availableRow("available", null)))
+                .replace("\"committed_height\":42", "\"committed_height\":$height")).rowFor(protocol)
+            assertNull(row.policy)
+            assertTrue(row.isNetworkAvailable())
+            assertEquals(64, row.effectiveProtocolLimits()!!.values!!.getValue("max_anonymity_set_size"))
         }
-
-        val active = parseInspection(
-            inspection(
-                mapOf(
-                    PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 to
-                        availableRow("missing-production-qualification", activeLifecycle()),
-                ),
-            ),
-        ).rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)
-        assertFalse(active.isNetworkAvailable())
     }
 
     @Test
-    fun proposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight() {
+    fun retiredLifecycleAndRegistrationReasonsHaveNoDecodeFallback() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        for (committedHeight in listOf("1", "42", "18446744073709551615")) {
-            val candidate = inspection(mapOf(protocol to availableRow("proposed", proposedLifecycle())))
-                .replace("\"committed_height\":42", "\"committed_height\":$committedHeight")
-            val row = parseInspection(candidate).rowFor(protocol)
-            assertSame(
-                PrivacyCapabilityUnavailableReasonV1.Proposed,
-                assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness).reason,
-            )
-            assertEquals(PrivacyProtocolLifecycleStateV1.PROPOSED, row.activation!!.lifecycle.state)
-            assertFalse(row.isNetworkAvailable())
+        for (reason in listOf("not-registered", "proposed", "active", "suspended", "retired")) {
             assertFailsWith<IllegalArgumentException> {
-                parseInspection(candidate.replace(
-                    unavailableReadiness("proposed"),
-                    unavailableReadiness("missing-production-qualification"),
-                ))
+                parseInspection(inspection(mapOf(protocol to availableRow(reason, null))))
+            }
+        }
+        val canonical = inspection(mapOf(protocol to availableRow("available", null)))
+        for (state in listOf("proposed", "active", "suspended", "retired")) {
+            val old = "{\"state\":\"$state\",\"record\":{\"proposed_at_height\":1,\"activated_at_height\":1,\"state_since_height\":2}}"
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replaceFirst("\"policy\":null", "\"activation\":$old"))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replaceFirst("\"policy\":null", "\"policy\":$old"))
             }
         }
     }
 
     @Test
-    fun sameHeightActivationRetainsQualificationAndHistoryRequirements() {
+    fun policyAllowsIncreasesWithinCanonicalBoundsAndNeverEnablesUnavailableRows() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        for ((state, since, reason) in listOf(
-            Triple("active", 1, "missing-production-qualification"),
-            Triple("suspended", 2, "suspended"),
-            Triple("retired", 2, "retired"),
+        val current = protocolLimits().replace(":64", ":32")
+        val pending = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${protocolLimits()}}"
+        val ordinary = policy(current, pending)
+        val row = parseInspection(inspection(mapOf(protocol to availableRow("available", ordinary)))).rowFor(protocol)
+        assertTrue(row.isNetworkAvailable())
+        assertEquals(32, row.effectiveProtocolLimits()!!.values!!.getValue("max_anonymity_set_size"))
+        assertEquals(64, row.policy!!.pendingUpdate!!.nextLimits.values!!.getValue("max_anonymity_set_size"))
+        val unavailable = unavailableRow(protocol).replace("\"policy\":null", "\"policy\":$ordinary")
+        val closed = parseInspection(inspection(mapOf(protocol to unavailable))).rowFor(protocol)
+        assertFalse(closed.isNetworkAvailable())
+        assertNull(closed.effectiveProtocolLimits())
+        for (bad in listOf(
+            policy(protocolLimits(), pending),
+            ordinary.replace("\"max_recipient_count\":8", "\"max_recipient_count\":9"),
+            ordinary.replace("\"max_anonymity_set_size\":32", "\"max_anonymity_set_size\":48"),
         )) {
-            val lifecycle = """{"state":"$state","record":{"proposed_at_height":1,"activated_at_height":1,"state_since_height":$since}}"""
-            val row = parseInspection(
-                inspection(mapOf(protocol to availableRow(reason, lifecycle))),
-            ).rowFor(protocol)
-            assertEquals(1.toBigInteger(), row.activation!!.lifecycle.activatedAtHeight)
-            assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness)
-            assertFalse(row.isNetworkAvailable())
+            assertFailsWith<IllegalArgumentException> { parseInspection(inspection(mapOf(protocol to availableRow("available", bad)))) }
         }
+        val lowered = consensusLimits().replace("2048", "1024")
+        val update = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${consensusLimits()}}"
+        val input = inspection().replace("\"current_limits\":${consensusLimits()},\"pending_update\":null",
+            "\"current_limits\":$lowered,\"pending_update\":$update")
+        assertEquals(2048, parseInspection(input).consensusPolicy.pendingUpdate!!.nextLimits.retainedRootCount)
     }
 
     @Test
-    fun rejectsRemovedScheduleAndReversedOrFutureLifecycleHistory() {
+    fun policyWireRejectsCrossProtocolMissingFieldsAndRetiredUpdateLayouts() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        val cases = listOf(
-            "proposed" to """{"proposed_at_height":1,"activate_at_height":100}""",
-            "proposed" to """{}""",
-            "proposed" to """{"proposed_at_height":0}""",
-            "proposed" to """{"proposed_at_height":43}""",
-            "active" to """{"proposed_at_height":2,"activated_at_height":1,"state_since_height":2}""",
-            "active" to """{"proposed_at_height":1,"activated_at_height":2,"state_since_height":1}""",
-            "active" to """{"proposed_at_height":1,"activated_at_height":43,"state_since_height":43}""",
-            "suspended" to """{"proposed_at_height":1,"activated_at_height":1,"state_since_height":1}""",
-            "retired" to """{"proposed_at_height":1,"activated_at_height":1,"state_since_height":1}""",
-            "retired" to """{"proposed_at_height":1,"activated_at_height":null,"state_since_height":1}""",
-        )
-        for ((state, record) in cases) {
-            val lifecycle = """{"state":"$state","record":$record}"""
-            val reason = if (state == "active") "missing-production-qualification" else state
-            assertFailsWith<IllegalArgumentException>("hostile lifecycle: $lifecycle") {
-                parseInspection(inspection(mapOf(protocol to availableRow(reason, lifecycle))))
+        val ordinary = policy()
+        val other = PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1
+        for (bad in listOf(
+            ordinary.replace(protocolTag(protocol), protocolTag(other)),
+            ordinary.replace("\"current_limits\":${protocolLimits()},", ""),
+            ordinary.replace("\"pending_update\":null", "\"pending_protocol_limits_tightening\":null"),
+            ordinary.replace("\"pending_update\":null", "\"pending_update\":null,\"lifecycle\":null"),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(inspection(mapOf(protocol to availableRow("available", bad))))
             }
         }
+        assertFailsWith<IllegalArgumentException> {
+            parseInspection(inspection().replaceFirst("\"pending_update\":null", "\"pending_tightening\":null"))
+        }
     }
 
     @Test
-    fun rejectsPreHardCutRowReadinessAndActivationShapes() {
+    fun rejectsRetiredRowReadinessAndActivationShapes() {
         val canonical = inspection()
         val readiness = compiledUnavailableReadiness()
         val hostile = listOf(
             canonical.replaceFirst(
-                "\"activation\":null}",
-                "\"activation\":null,\"activation_state\":{\"activation_state\":\"not-registered\",\"detail\":null}}",
+                "\"policy\":null}",
+                "\"policy\":null,\"activation_state\":{\"activation_state\":\"not-registered\",\"detail\":null}}",
             ),
             canonical.replaceFirst(
-                "\"activation\":null}",
-                "\"activation\":null,\"limitation\":null}",
+                "\"policy\":null}",
+                "\"policy\":null,\"limitation\":null}",
             ),
             canonical.replaceFirst(readiness, "{\"readiness\":\"available\",\"detail\":null}"),
             canonical.replaceFirst(
@@ -239,13 +280,13 @@ class PrivacyExact12CapabilityManifestV1Test {
             inspection(
                 mapOf(
                     PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 to
-                        availableRow("missing-production-qualification", activeLifecycle()),
+                        availableRow("available", policy()),
                 ),
             ).replaceFirst(
-                "\"pending_protocol_limits_tightening\":null}",
-                "\"pending_protocol_limits_tightening\":null,\"production_qualification\":null}",
+                "\"pending_update\":null}",
+                "\"pending_update\":null,\"production_qualification\":null}",
             ),
-            canonical.replaceFirst("\"qualification\":null,", ""),
+            canonical.replaceFirst("\"version\":1,", "\"version\":1,\"qualification\":null,"),
         )
 
         hostile.forEachIndexed { index, candidate ->
@@ -256,60 +297,102 @@ class PrivacyExact12CapabilityManifestV1Test {
     }
 
     @Test
-    fun activeWithoutQualificationCannotClaimProductionReadiness() {
-        val row = availableRow("missing-production-qualification", activeLifecycle())
-        val forged = row.replace(
-            unavailableReadiness("missing-production-qualification"),
-            "{\"readiness\":\"production-qualified\",\"detail\":null}",
-        )
-
-        assertFailsWith<IllegalArgumentException> {
-            parseInspection(
-                inspection(mapOf(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 to forged)),
-            )
+    fun implementationAvailabilityDoesNotAcceptRetiredDocumentaryReadiness() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        val active = availablePolicyRow()
+        assertTrue(parseInspection(inspection(mapOf(protocol to active))).rowFor(protocol).isNetworkAvailable())
+        for (retired in listOf("production-qualified", "available-experimental")) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(inspection(mapOf(protocol to active.replace("\"readiness\":\"available\"", "\"readiness\":\"$retired\""))))
+            }
+        }
+        for (reason in listOf("missing-production-qualification", "invalid-production-qualification")) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(inspection(mapOf(protocol to availableRow(reason, policy()))))
+            }
         }
     }
 
     @Test
-    fun singletonQualificationAloneDerivesProductionAndInvalidReadiness() {
+    fun oneSupportedProtocolIsAvailableWithoutMakingOtherRowsAvailable() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        val qualified = parseInspection(
-            inspection(
-                mapOf(protocol to qualifiedAvailableRow()),
-                qualification(pgcActivationHeight = 2, convergenceHeight = 3),
-            ),
-        )
-        assertIs<PrivacyExact12QualificationRecordV1>(qualified.qualification)
-        assertIs<PrivacyCapabilityReadinessV1.ProductionQualified>(
-            qualified.rowFor(protocol).readiness,
-        )
-
-        val invalid = parseInspection(
-            inspection(
-                mapOf(
-                    protocol to availableRow(
-                        "invalid-production-qualification",
-                        activeLifecycle(),
-                    ),
-                ),
-                qualification(pgcActivationHeight = 4, convergenceHeight = 5),
-            ),
-        )
-        val invalidReadiness = assertIs<PrivacyCapabilityReadinessV1.Unavailable>(
-            invalid.rowFor(protocol).readiness,
-        )
-        assertSame(
-            PrivacyCapabilityUnavailableReasonV1.InvalidProductionQualification,
-            invalidReadiness.reason,
-        )
-
+        val manifest = parseInspection(inspection(mapOf(protocol to availablePolicyRow())))
+        assertIs<PrivacyCapabilityReadinessV1.Available>(manifest.rowFor(protocol).readiness)
+        assertTrue(manifest.rowFor(protocol).isNetworkAvailable())
+        for (row in manifest.protocols.filter { it.protocolId != protocol }) {
+            assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness)
+            assertFalse(row.isNetworkAvailable())
+        }
+        val x509 = manifest.rowFor(PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1)
+        assertIs<PrivacyCompiledProfileResultV1.Unavailable>(x509.compiledProfile)
+        assertFalse(x509.isNetworkAvailable())
+        assertEquals(12, manifest.protocols.size)
         assertFailsWith<IllegalArgumentException> {
-            parseInspection(
-                inspection(
-                    mapOf(protocol to qualifiedAvailableRow()),
-                    qualification(pgcActivationHeight = 4, convergenceHeight = 5),
-                ),
-            )
+            PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(manifest, protocol)
+        }
+    }
+
+    @Test
+    fun x509JointSecurityReductionRemainsUnavailableAndClosed() {
+        val protocol = PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1
+        val rowJson = unavailableRow(protocol)
+            .replace("engine-unavailable", "joint-security-reduction-incomplete")
+        val manifest = parseInspection(inspection(mapOf(protocol to rowJson)))
+        val row = manifest.rowFor(protocol)
+        val compiled = assertIs<PrivacyCompiledProfileResultV1.Unavailable>(row.compiledProfile)
+        assertEquals(
+            PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+            compiled.reason,
+        )
+        assertNull(compiled.statementSchemaError)
+        val readiness = assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness)
+        assertEquals(compiled, assertIs<PrivacyCapabilityUnavailableReasonV1.CompiledProfile>(readiness.reason).failure)
+        assertFalse(row.isNetworkAvailable())
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(manifest, protocol)
+        }
+        for (reason in listOf("unsupported", "joint-security-reduction-complete", "unknown")) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(inspection(mapOf(protocol to rowJson.replace("joint-security-reduction-incomplete", reason))))
+            }
+        }
+        val extraDetail = rowJson.replace(
+            "\"reason\":\"joint-security-reduction-incomplete\",\"detail\":null",
+            "\"reason\":\"joint-security-reduction-incomplete\",\"detail\":{}",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            parseInspection(inspection(mapOf(protocol to extraDetail)))
+        }
+        val forgedAvailable = rowJson.replace(
+            compiledUnavailableReadiness().replace("engine-unavailable", "joint-security-reduction-incomplete"),
+            "{\"readiness\":\"available\",\"detail\":null}",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            parseInspection(inspection(mapOf(protocol to forgedAvailable)))
+        }
+    }
+
+    @Test
+    fun exactTwelveRowsAndLocalMatchCardinalityRemainWireRequirements() {
+        val canonical = inspection()
+        val rows = PrivacyProtocolIdV1.values().map { unavailableRow(it) }
+        val rowList = rows.joinToString(",")
+        val matches = List(12) { "false" }.joinToString(",")
+        for (hostileRows in listOf(rows.dropLast(1), rows + rows.last(), rows.reversed())) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replace(rowList, hostileRows.joinToString(",")))
+            }
+        }
+        for (hostileMatches in listOf(
+            List(11) { "false" }, List(13) { "false" }, List(11) { "false" } + "null",
+            List(11) { "false" } + "0",
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(canonical.replace(
+                    "\"local_compiled_tuple_matches\":[$matches]",
+                    "\"local_compiled_tuple_matches\":[${hostileMatches.joinToString(",")}]",
+                ))
+            }
         }
     }
 
@@ -321,34 +404,30 @@ class PrivacyExact12CapabilityManifestV1Test {
 
     private fun inspection(
         overrides: Map<PrivacyProtocolIdV1, String> = emptyMap(),
-        qualification: String? = null,
     ): String {
         val rows = PrivacyProtocolIdV1.values().joinToString(",") { protocol ->
             overrides[protocol] ?: unavailableRow(protocol)
         }
         val matches = PrivacyProtocolIdV1.values().joinToString(",") { "false" }
-        return """{"manifest":{"version":1,"committed_height":42,"consensus_policy":{"current_limits":${consensusLimits()},"pending_tightening":null},"qualification":${qualification ?: "null"},"protocols":[$rows],"manifest_digest":${bytes(9, 32)}},"local_compiled_tuple_matches":[$matches]}"""
+        return """{"manifest":{"version":1,"network_id":"${NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal}","committed_height":42,"consensus_policy":{"current_limits":${consensusLimits()},"pending_update":null},"protocols":[$rows],"manifest_digest":${bytes(9, 32)}},"local_compiled_tuple_matches":[$matches]}"""
     }
 
     private fun unavailableRow(protocol: PrivacyProtocolIdV1): String =
-        """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":${compiledUnavailable()},"readiness":${compiledUnavailableReadiness()},"activation":null}"""
+        """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":${compiledUnavailable()},"readiness":${compiledUnavailableReadiness()},"policy":null}"""
 
-    private fun availableRow(reason: String, lifecycle: String?): String {
+    private fun availableRow(reason: String, policy: String?): String {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val profile = profileFields(protocol)
-        val activation = lifecycle?.let {
-            "{$profile,\"lifecycle\":$it,\"pending_protocol_limits_tightening\":null}"
-        } ?: "null"
-        return """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":{"status":"available","value":{$profile}},"readiness":${unavailableReadiness(reason)},"activation":$activation}"""
+        return """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":{"status":"available","value":{$profile}},"readiness":${if (reason == "available") "{\"readiness\":\"available\",\"detail\":null}" else unavailableReadiness(reason)},"policy":${policy ?: "null"}}"""
     }
 
-    private fun qualifiedAvailableRow(): String {
-        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        val profile = profileFields(protocol)
-        val activation = "{$profile,\"lifecycle\":${activeLifecycle()}," +
-            "\"pending_protocol_limits_tightening\":null}"
-        return """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":{"status":"available","value":{$profile}},"readiness":{"readiness":"production-qualified","detail":null},"activation":$activation}"""
-    }
+    private fun availablePolicyRow(): String = availableRow("available", policy())
+
+    private fun protocolLimits(): String =
+        """{"protocol":"${PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1.canonicalLabel}","limits":{"max_anonymity_set_size":64,"max_recipient_count":8}}"""
+
+    private fun policy(current: String = protocolLimits(), pending: String = "null"): String =
+        """{"protocol_id":${protocolTag(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)},"current_limits":$current,"pending_update":$pending}"""
 
     private fun profileFields(protocol: PrivacyProtocolIdV1): String =
         """"protocol_id":${protocolTag(protocol)},"proof_system_id":{"proof_system":"${protocol.expectedProofSystem.canonicalLabel}","value":null},"engine_id":{"engine":"${protocol.expectedEngine.canonicalLabel}","value":null},"parameter_id":${bytes(1, 32)},"parameter_digest":${bytes(2, 32)},"verifier_digest":${bytes(3, 32)},"statement_schema_digest":${bytes(4, 32)},"engine_manifest_digest":${bytes(5, 32)},"protocol_limits":{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":64,"max_recipient_count":8}}"""
@@ -365,18 +444,6 @@ class PrivacyExact12CapabilityManifestV1Test {
     private fun protocolTag(protocol: PrivacyProtocolIdV1): String =
         """{"protocol":"${protocol.canonicalLabel}","value":null}"""
 
-    private fun proposedLifecycle(): String =
-        """{"state":"proposed","record":{"proposed_at_height":1}}"""
-
-    private fun activeLifecycle(): String =
-        """{"state":"active","record":{"proposed_at_height":1,"activated_at_height":2,"state_since_height":2}}"""
-
-    private fun suspendedLifecycle(): String =
-        """{"state":"suspended","record":{"proposed_at_height":1,"activated_at_height":2,"state_since_height":3}}"""
-
-    private fun retiredLifecycle(): String =
-        """{"state":"retired","record":{"proposed_at_height":1,"activated_at_height":2,"state_since_height":3}}"""
-
     private fun exactRowKeys(): Set<String> = setOf(
         "protocol_id",
         "operation_schema",
@@ -384,7 +451,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         "privacy_feature_mask",
         "compiled_profile",
         "readiness",
-        "activation",
+        "policy",
     )
 
     private fun qualification(pgcActivationHeight: Int = 2, convergenceHeight: Int = 3): String {
@@ -417,8 +484,7 @@ class PrivacyExact12CapabilityManifestV1Test {
     }
 
     private fun catalogCommitment(): String {
-        val hex = "e037f13904a0307c00db15d85cfb406bd79772d20144a949" +
-            "def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff"
+        val hex = "5bcf366fb18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb0"
         return hex.chunked(2).map { it.toInt(16) }.joinToString(",", "[", "]")
     }
 

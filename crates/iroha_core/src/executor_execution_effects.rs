@@ -1,6 +1,6 @@
 //! Actual signed-root instruction admission before business effects apply.
 //!
-//! The agreed limits count InstructionBox entries and their individual fixed V1
+//! The agreed limits count `InstructionBox` entries and their individual fixed V1
 //! bare encodings. They do not bound durable state, AXT, callbacks or host memory.
 //! Every authored group and consumed VM/replay group debits one retained owner.
 
@@ -9,11 +9,15 @@ use std::io::{self, Write};
 
 /// Private state of the sole instruction budget for one signed execution.
 #[derive(Default)]
-pub(crate) struct ExecutionEffects {
+pub struct ExecutionEffects {
     state: EffectState,
 }
 
 #[derive(Default)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The root execution budget remains inline in its state machine without an extra allocation on instruction admission"
+)]
 enum EffectState {
     #[default]
     Idle,
@@ -257,11 +261,11 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Admit the actual authored signed instruction set, exactly once.
-    pub(crate) fn admit_authored_execution_effects(
+    pub(crate) fn admit_authored_execution_effects<'a>(
         &mut self,
-        instructions: &[InstructionBox],
+        instructions: impl ExactSizeIterator<Item = &'a InstructionBox> + 'a,
     ) -> Result<(), ValidationFail> {
-        self.admit_execution_effect_group(instructions.iter(), false, false)
+        self.admit_execution_effect_group(instructions, false, false)
     }
 
     /// Admit an authenticated replay's actual queued instructions before applying it.
@@ -272,7 +276,7 @@ impl StateTransaction<'_, '_> {
         self.admit_execution_effect_group(instructions, true, false)
     }
 
-    /// Called only by the consuming actual HostExecutionArtifacts apply boundary.
+    /// Called only by the consuming actual `HostExecutionArtifacts` apply boundary.
     pub(crate) fn admit_host_execution_effects<'a>(
         &mut self,
         instructions: impl ExactSizeIterator<Item = &'a InstructionBox> + 'a,

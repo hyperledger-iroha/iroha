@@ -1,6 +1,6 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use norito::columnar;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 fn gen_rows(n: usize) -> Vec<(u64, String, bool)> {
     let mut rng = StdRng::seed_from_u64(42);
     let mut rows = Vec::with_capacity(n);

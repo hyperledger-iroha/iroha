@@ -9,21 +9,23 @@ import { validateNodeEngineContract } from "../scripts/node-engine-contract.mjs"
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-const hashes = "node_modules/@scure/bip39/node_modules/@noble/hashes";
+const hashes = "node_modules/@noble/hashes";
 function copies() { return [structuredClone(pkg), structuredClone(lock)]; }
 
-test("published exact floor covers all nine locked production dependency locations", () => {
-  assert.equal(pkg.engines.node, ">=20.19.0");
-  assert.equal(lock.packages[""].engines.node, ">=20.19.0");
+test("published exact floor covers all seven locked production dependency locations", () => {
+  // Bip39 2.4 owns its base conversion and no longer depends on @scure/base.
+  assert.equal(Object.hasOwn(lock.packages, "node_modules/@scure/base"), false);
+  assert.equal(pkg.engines.node, ">=22.23.4");
+  assert.equal(lock.packages[""].engines.node, ">=22.23.4");
   assert.equal(lock.packages[hashes].engines.node, ">= 20.19.0");
-  for (const runtime of ["20.19.0", "20.20.0", "22.0.0", "24.0.0"]) {
+  for (const runtime of ["22.23.4", "22.24.0", "24.22.1", "26.12.1"]) {
     assert.deepEqual(validateNodeEngineContract(pkg, lock, runtime), {
-      minimum: "20.19.0", productionDependencies: 9,
+      minimum: "22.23.4", productionDependencies: 7,
     });
   }
 });
 
-for (const runtime of ["18.20.8", "20.0.0", "20.18.9", "20.19.0-rc.1", "020.19.0", "v20.19.0", "20.19", "9007199254740992.0.0"]) {
+for (const runtime of ["18.20.8", "20.0.0", "20.19.0", "20.20.0", "22.0.0", "22.23.3", "22.23.4-rc.1", "022.23.4", "v22.23.4", "20.19", "9007199254740992.0.0"]) {
   test(`current runtime ${runtime} cannot pass the floor`, () => {
     assert.throws(() => validateNodeEngineContract(pkg, lock, runtime), /below SDK|version spelling|exact integer/u);
   });
@@ -34,13 +36,13 @@ for (const [name, mutate, error] of [
   ["root advertises old major", (p, l) => { p.engines.node = l.packages[""].engines.node = ">=18"; }, /canonical/u],
   ["root omits floor", (p) => { delete p.engines.node; }, /declare/u],
   ["lock floor differs", (_p, l) => { l.packages[""].engines.node = ">=20.20.0"; }, /contracts differ/u],
-  ["transitive dependency raises minimum", (_p, l) => { l.packages[hashes].engines.node = ">=22.0.0"; }, /outside published/u],
+  ["transitive dependency raises minimum", (_p, l) => { l.packages[hashes].engines.node = ">=24.0.0"; }, /outside published/u],
   ["transitive dependency hides as dev", (_p, l) => { l.packages[hashes].dev = true; }, /development-only/u],
-  ["transitive dependency disappears", (_p, l) => { delete l.packages[hashes]; }, /does not match production selection/u],
+  ["transitive dependency disappears", (_p, l) => { delete l.packages[hashes]; }, /missing production dependency/u],
   ["wrong locked production version", (_p, l) => { l.packages[hashes].version = "1.8.0"; }, /does not match production selection/u],
   ["unreviewed selection grammar", (_p, l) => { l.packages["node_modules/@scure/bip39"].dependencies["@noble/hashes"] = "*"; }, /version spelling/u],
-  ["non-tail dependency range", (_p, l) => { l.packages[hashes].engines.node = "^20.19.0"; }, /outside published/u],
-  ["unknown comparator grammar", (_p, l) => { l.packages[hashes].engines.node = ">=20.19.0 <21"; }, /unreviewed/u],
+  ["non-tail dependency range", (_p, l) => { l.packages[hashes].engines.node = "^22.23.4"; }, /outside published/u],
+  ["unknown comparator grammar", (_p, l) => { l.packages[hashes].engines.node = ">=22.23.4 <21"; }, /unreviewed/u],
   ["malformed engine scalar", (_p, l) => { l.packages[hashes].engines = true; }, /engines must be an object/u],
   ["malformed engine node", (_p, l) => { l.packages[hashes].engines.node = true; }, /must be a string/u],
   ["missing production selection", (_p, l) => { delete l.packages[""].dependencies.buffer; }, /selections differ/u],
@@ -57,14 +59,20 @@ for (const [name, mutate, error] of [
 test("development-only tool minimum does not alter the published runtime closure", () => {
   const [p, l] = copies();
   l.packages["node_modules/typescript"].engines.node = ">=999.0.0";
-  assert.equal(validateNodeEngineContract(p, l, "20.19.0").productionDependencies, 9);
+  assert.equal(validateNodeEngineContract(p, l, "22.23.4").productionDependencies, 7);
 });
 
-test("a scoped nested dependency is checked even when the hoisted version accepts older Node", () => {
-  assert.equal(lock.packages["node_modules/@noble/hashes"].engines.node, "^14.21.3 || >=16");
+test("a scoped nested dependency is checked independently of a compatible hoisted owner", () => {
   const [p, l] = copies();
+  const nested = "node_modules/@scure/bip39/node_modules/@noble/hashes";
+  // The current graph deduplicates hashes; construct a nested owner to retain
+  // coverage for npm's nearest-ancestor resolution and its independent floor.
+  for (const row of Object.values(l.packages)) {
+    if (!row.dev && row.engines) row.engines.node = ">=20.0.0";
+  }
   p.engines.node = l.packages[""].engines.node = ">=20.18.9";
-  assert.throws(() => validateNodeEngineContract(p, l, "24.0.0"), new RegExp(hashes + " requires", "u"));
+  l.packages[nested] = { ...structuredClone(l.packages[hashes]), engines: { node: ">=22.23.4" } };
+  assert.throws(() => validateNodeEngineContract(p, l, "24.0.0"), new RegExp(nested + " requires", "u"));
 });
 
 test("publish and pack execute the guard before build or release actions", () => {
@@ -72,7 +80,21 @@ test("publish and pack execute the guard before build or release actions", () =>
   assert.equal(pkg.scripts.prepack, "npm run check:node-engine && npm run build:dist");
   assert.ok(pkg.scripts.prepublishOnly.startsWith("npm run check:node-engine && npm run check:changelog"));
   const bundle = readFileSync(new URL("../scripts/bundle-size-check.mjs", import.meta.url), "utf8");
-  assert.match(bundle, /platform: "node",\s*target: "node20\.19"/u);
+  assert.match(bundle, /platform: "node",\s*target: "node22\.23"/u);
+});
+
+test("Kotodama JavaScript CI pins a compatible runtime and checks it before installation", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/kotodama_perf.yml", import.meta.url), "utf8");
+  for (const job of ["sdk-and-codec-guards", "javascript-provenance-platforms"]) {
+    const section = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z][a-z-]+:\n/u)[0];
+    assert.ok(section, `missing ${job} job`);
+    const runtime = section.match(/node-version: "([0-9]+\.[0-9]+\.[0-9]+)"/u)?.[1];
+    assert.ok(runtime, `${job} must pin an exact Node release`);
+    validateNodeEngineContract(pkg, lock, runtime);
+    const guard = section.indexOf("run: node javascript/iroha_js/scripts/check-node-engine.mjs");
+    const install = section.indexOf("run: npm ci --ignore-scripts --prefix javascript/iroha_js");
+    assert.ok(guard >= 0 && install > guard, `${job} must check its runtime before installing dependencies`);
+  }
 });
 
 test("the fixed CLI reads its package and lock without SDK/native loading", () => {
@@ -80,7 +102,7 @@ test("the fixed CLI reads its package and lock without SDK/native loading", () =
     encoding: "utf8", env: {}, timeout: 10_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^Node >=20\.19\.0 covers 9 locked production dependencies; current /u);
+  assert.match(result.stdout, /^Node >=22\.23\.4 covers 7 locked production dependencies; current /u);
   const unexpected = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/check-node-engine.mjs", import.meta.url)), "--skip"], {
     encoding: "utf8", env: {}, timeout: 10_000,
   });
@@ -106,7 +128,7 @@ function cliFixture(t, floor) {
   metadata(original, floor);
   // A file alias with --preserve-symlinks-main must still read the real guard's
   // metadata, not this lower-floor metadata adjacent to its apparent pathname.
-  metadata(decoy, "20.19.0");
+  metadata(decoy, "22.23.4");
   const script = join(original, "scripts", "check-node-engine.mjs");
   writeFileSync(script, readFileSync(new URL("../scripts/check-node-engine.mjs", import.meta.url)));
   writeFileSync(join(original, "scripts", "node-engine-contract.mjs"),
@@ -131,7 +153,7 @@ for (const entry of ["normal", "file symlink", "ancestor directory symlink"]) {
     const label = `${entry}, preserve-symlinks-main=${preserve}`;
     for (const scenario of ["normal floor", "raised floor", "unexpected option"]) {
       test(`CLI ${label} enforces ${scenario}`, (t) => {
-        const f = cliFixture(t, scenario === "raised floor" ? "99.0.0" : "20.19.0");
+        const f = cliFixture(t, scenario === "raised floor" ? "99.0.0" : "22.23.4");
         const args = scenario === "unexpected option" ? ["--skip"] : [];
         const result = spawnSync(process.execPath, [...flags, f.paths[entry], ...args], {
           cwd: f.directory, encoding: "utf8", env: {}, timeout: 10_000, maxBuffer: 65_536,
@@ -140,7 +162,7 @@ for (const entry of ["normal", "file symlink", "ancestor directory symlink"]) {
         assert.equal(result.signal, null);
         if (scenario === "normal floor") {
           assert.equal(result.status, 0, result.stderr);
-          assert.match(result.stdout, /^Node >=20\.19\.0 covers 0 locked production dependencies; current /u);
+          assert.match(result.stdout, /^Node >=22\.23\.4 covers 0 locked production dependencies; current /u);
           assert.equal(result.stderr, "");
         } else {
           assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
@@ -182,6 +204,6 @@ for (const location of [
   test(`an unreviewed development-only lock location cannot hide an engine: ${location}`, () => {
     const [p, l] = copies();
     l.packages[location] = { version: "1.8.0", engines: { node: ">=99.0.0" }, dev: true };
-    assert.throws(() => validateNodeEngineContract(p, l, "20.19.0"), /unreviewed lock package location/u);
+    assert.throws(() => validateNodeEngineContract(p, l, "22.23.4"), /unreviewed lock package location/u);
   });
 }

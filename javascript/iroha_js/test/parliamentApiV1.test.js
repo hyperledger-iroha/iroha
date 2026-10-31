@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { sha256 } from "@noble/hashes/sha2";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import { crc64Xz } from "../src/crc64Xz.js";
 import {
@@ -345,6 +345,76 @@ test("effect-bound proposal drafts require an explicit canonical operator", () =
   }
 });
 
+test("runtime upgrade drafts carry exact change-set actions within the JSON integer range", () => {
+  const proposal = parliamentProposalFixtures()[1];
+  assert.deepEqual(buildParliamentAttemptDraftRequestV1(proposal, 0).proposal, proposal);
+
+  const cancel = structuredClone(proposal);
+  cancel.payload.action = { kind: "Cancel", content: ID(4) };
+  assert.deepEqual(buildParliamentAttemptDraftRequestV1(cancel, 0).proposal, cancel);
+
+  const boundary = structuredClone(proposal);
+  boundary.payload.action.content.effective_height = Number.MAX_SAFE_INTEGER;
+  boundary.payload.notice = {
+    blocks: Number.MAX_SAFE_INTEGER,
+    ms: Number.MAX_SAFE_INTEGER,
+    approval_cushion_ms: Number.MAX_SAFE_INTEGER,
+  };
+  boundary.payload.proposed_ms = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(buildParliamentAttemptDraftRequestV1(boundary, 0).proposal, boundary);
+
+  const opaque = structuredClone(proposal);
+  opaque.payload.action.content.publish = [{
+    kind: "Storage",
+    content: { namespace: "runtime.example", initial: null, limit: 1n << 60n },
+  }];
+  assert.equal(
+    buildParliamentAttemptDraftRequestV1(opaque, 0).proposal.payload.action.content
+      .publish[0].content.limit,
+    1n << 60n,
+  );
+
+  const inexact = 2 ** 53;
+  const cases = [
+    ["inexact effective height", (payload) => {
+      payload.action.content.effective_height = inexact;
+    }, /effective_height must be a positive JSON safe integer/u],
+    ["bigint effective height", (payload) => {
+      payload.action.content.effective_height = 1n << 53n;
+    }, /effective_height must be a positive JSON safe integer/u],
+    ["inexact notice blocks", (payload) => {
+      payload.notice.blocks = inexact;
+    }, /notice\.blocks must be a non-negative JSON safe integer/u],
+    ["inexact notice time", (payload) => {
+      payload.notice.ms = inexact;
+    }, /notice\.ms must be a non-negative JSON safe integer/u],
+    ["inexact approval cushion", (payload) => {
+      payload.notice.approval_cushion_ms = inexact;
+    }, /notice\.approval_cushion_ms must be a non-negative JSON safe integer/u],
+    ["inexact proposal time", (payload) => {
+      payload.proposed_ms = inexact;
+    }, /proposed_ms must be a non-negative JSON safe integer/u],
+    ["retired manifest", (payload) => {
+      delete payload.action;
+      payload.manifest = { name: "runtime-v1-refresh", abi_version: 1 };
+    }, /unsupported fields: manifest/u],
+    ["retired activation", (payload) => {
+      payload.action = { kind: "Activate", content: ID(4) };
+    }, /action\.kind must be Schedule or Cancel/u],
+    ["data space root", (payload) => {
+      payload.action.content.root = { kind: "DataSpace", content: 1 };
+    }, /root must be the universal root with null content/u],
+    ["fractional opaque content", (payload) => {
+      payload.action.content.transitions = [{ kind: "Restrict", content: { restriction: 0.5 } }];
+    }, /content\.restriction must contain only safe integer numbers or bigint/u],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const mutated = structuredClone(proposal);
+    mutate(mutated.payload);
+    assert.throws(() => buildParliamentAttemptDraftRequestV1(mutated, 0), pattern, label);
+  }
+});
+
 test("retired Kagemusha proposal kinds reject at the current draft boundary", () => {
   for (const proposal of retiredParliamentProposalFixtures()) {
     assert.ok(!PARLIAMENT_PROPOSAL_KINDS_V1.includes(proposal.kind));
@@ -435,7 +505,7 @@ test("contract lifecycle action inventory admits exactly six wire tags", () => {
 test("attempt drafts reject malformed nested fields and open proposal shapes", () => {
   const mutations = [
     (proposal) => { proposal.payload.future = null; },
-    (proposal) => { proposal.payload.manifest.future = null; },
+    (proposal) => { proposal.payload.action.content.future = null; },
     (proposal) => { proposal.payload.proposal.future = null; },
     (proposal) => { proposal.payload.policy.future = null; },
     (proposal) => { proposal.payload.payout_binding.future = null; },
@@ -962,19 +1032,21 @@ function parliamentProposalFixtures() {
       kind: "RuntimeUpgrade",
       payload: {
         proposal_operator: treasury,
-        manifest: {
-          name: "runtime-v1-refresh",
-          description: "Canonical V1 runtime image",
-          abi_version: 1,
-          abi_hash: Array(32).fill(0x11),
-          added_syscalls: [],
-          added_pointer_types: [],
-          start_height: 100,
-          end_height: 120,
-          sbom_digests: [{ algorithm: "sha256", digest: "AQID" }],
-          slsa_attestation: "BAUG",
-          provenance: [],
+        action: {
+          kind: "Schedule",
+          content: {
+            network: NETWORK_ID,
+            root: { kind: "Universal", content: null },
+            predecessor: ID(1),
+            successor: ID(2),
+            effective_height: 120,
+            publish: [],
+            transitions: [{ kind: "Activate", content: ID(10) }],
+            qualification: ID(3),
+          },
         },
+        notice: { blocks: 100, ms: 86_400_000, approval_cushion_ms: 3_600_000 },
+        proposed_ms: 1_700_000_000_000,
       },
     },
     {

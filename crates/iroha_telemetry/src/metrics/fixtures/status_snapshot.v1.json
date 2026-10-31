@@ -3,7 +3,7 @@
     "version": "2.0.0-rc.test",
     "git_commit_sha": "deadbeef",
     "dpn_validator_release_commit": "feedface",
-    "cargo_features": "telemetry,zk-halo2",
+    "cargo_features": "telemetry,zk-ipa-native",
     "target_triple": "aarch64-apple-darwin",
     "wire_schema_hash": "abababababababababababababababababababababababababababababababab"
   },
@@ -31,13 +31,11 @@
   "crypto": {
     "sm_helpers_available": true,
     "sm_openssl_preview_enabled": false,
-    "halo2": {
+    "trace": {
       "enabled": true,
-      "curve": "pasta",
-      "backend": "ipa",
-      "max_k": 21,
-      "verifier_budget_ms": 350,
-      "verifier_max_batch": 8
+      "max_batch": 8,
+      "worker_threads": 2,
+      "queue_cap": 64
     }
   },
   "stack": {

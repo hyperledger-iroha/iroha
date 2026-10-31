@@ -1637,7 +1637,7 @@ pub mod crypto {
         ChaCha20Poly1305, XChaCha20Poly1305,
         aead::{Aead, KeyInit, Payload},
     };
-    use hkdf::Hkdf;
+    use hkdf::SimpleHkdf;
     use sha3::Sha3_256;
     use thiserror::Error;
     const STS_SALT: &[u8] = b"nsc-sts";
@@ -1906,7 +1906,7 @@ pub mod crypto {
         }
     }
     fn hkdf_expand_with_label(
-        hk: &Hkdf<Sha3_256>,
+        hk: &SimpleHkdf<Sha3_256>,
         label: &[u8],
         suffix: &[u8],
         out: &mut [u8],
@@ -1916,9 +1916,9 @@ pub mod crypto {
         info.extend_from_slice(suffix);
         hk.expand(&info, out).map_err(|_| CryptoError::HkdfExpand)
     }
-    fn hkdf_from_prk(prk: &[u8; 32]) -> Hkdf<Sha3_256> {
+    fn hkdf_from_prk(prk: &[u8; 32]) -> SimpleHkdf<Sha3_256> {
         // `from_prk` panics only if length < hash_len; 32 bytes meets Sha3-256 requirements.
-        Hkdf::<Sha3_256>::from_prk(prk).expect("prk length must equal digest output")
+        SimpleHkdf::<Sha3_256>::from_prk(prk).expect("prk length must equal digest output")
     }
     fn suite_nonce_len(suite: &EncryptionSuite) -> usize {
         match suite {
@@ -1941,7 +1941,7 @@ pub mod crypto {
     /// handshake.
     pub fn derive_sts_root(shared_secret: &[u8]) -> Result<[u8; 32], CryptoError> {
         validate_shared_secret(shared_secret)?;
-        let hk = Hkdf::<Sha3_256>::new(Some(STS_SALT), shared_secret);
+        let hk = SimpleHkdf::<Sha3_256>::new(Some(STS_SALT), shared_secret);
         let mut root = [0u8; 32];
         hk.expand(STS_ROOT_LABEL, &mut root)
             .map_err(|_| CryptoError::HkdfExpand)?;

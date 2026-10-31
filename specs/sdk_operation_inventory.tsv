@@ -41,6 +41,8 @@ application.app_api_bindings_get	GET	/v1/app-api/bindings	public	torii_default	p
 application.app_api_cid_by_cid_by_path_get	GET	/v1/app-api/cid/{cid}/{*path}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
 application.app_api_cid_by_cid_by_path_post	POST	/v1/app-api/cid/{cid}/{*path}	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	false	false	true
 application.app_api_cid_by_cid_get	GET	/v1/app-api/cid/{cid}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
+application.assets_by_definition_id_movements_get	GET	/v1/assets/{definition_id}/movements	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.assets_by_definition_id_movements_query_post	POST	/v1/assets/{definition_id}/movements/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_by_asset_get	GET	/v1/assets/definitions/{asset}	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_get	GET	/v1/assets/definitions	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.assets_definitions_query_post	POST	/v1/assets/definitions/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
@@ -108,6 +110,7 @@ application.internal_accounts_by_account_id_get	GET	/v1/internal/accounts/{accou
 application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get	GET	/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}	public	torii_default	public	read	http	feature(app_api)	false	false	false	false
 application.kaigi_calls_by_call_id_events_get	GET	/v1/kaigi/calls/{call_id}/events	protocol	canonical_account_signature	authenticated_account	stream	sse	feature(app_api)	false	false	false	true
 application.kaigi_calls_by_call_id_get	GET	/v1/kaigi/calls/{call_id}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
+application.kaigi_calls_by_call_id_participation_get	GET	/v1/kaigi/calls/{call_id}/participation	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 application.kaigi_calls_by_call_id_signals_get	GET	/v1/kaigi/calls/{call_id}/signals	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	false	false	true
 application.kaigi_relays_by_relay_id_get	GET	/v1/kaigi/relays/{relay_id}	public	operator_signature	operator	read	http	feature(app_api)	true	true	false	true
 application.kaigi_relays_events_get	GET	/v1/kaigi/relays/events	protocol	canonical_account_signature	authenticated_account	stream	sse	feature(app_api)	false	true	false	true
@@ -507,7 +510,9 @@ operator.governance.protected_namespaces.update	POST	/v1/gov/protected-namespace
 operator.internal_torii_proxy	POST	/v1/internal/torii/proxy	operator	identity_bound_signature	operator	mutation	http	feature(connect)	false	false	false	false
 operator.node.query_projection.shard_catalog	GET	/v1/node/query/projection/catalog/{resource}	operator	operator_signature	operator	read	http	feature(app_api)	false	true	false	true
 operator.node.query_projection.shard_export	GET	/v1/node/query/projection/shards/{resource}/{partition_id}	operator	operator_signature	operator	read	http	feature(app_api)	false	true	false	true
-operator.runtime.upgrade.activate	POST	/v1/runtime/upgrades/activate/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
+operator.runtime.containment.list	GET	/v1/runtime/containments	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.release	GET	/v1/runtime/release	operator	operator_signature	operator	read	http	always	false	true	false	true
+operator.runtime.upgrade.attest	POST	/v1/runtime/upgrades/attest/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.upgrade.cancel	POST	/v1/runtime/upgrades/cancel/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.upgrade.list	GET	/v1/runtime/upgrades	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.upgrade.propose	POST	/v1/runtime/upgrades/propose	operator	operator_signature	operator	mutation	http	always	false	true	false	true

@@ -80,7 +80,7 @@ class KagemushaWalletOutputV1Test {
         val reply = KagemushaWalletObservationReplyV1(12,-1,0,0,0,0,maximum)
         maximum.fill(0)
         assertEquals(131_072, KagemushaWalletFoldMetricsV1.decode(reply.original(131_072)).length)
-        for (existingMaximum in listOf(5268,20_066,65_756)) invalid { reply.original(existingMaximum) }
+        for (existingMaximum in listOf(5268,20_134,65_756)) invalid { reply.original(existingMaximum) }
         for (malformed in listOf(byteArrayOf(), ByteArray(131_073),
             byteArrayOf(0xc0.toByte(),0xaf.toByte()), byteArrayOf(0xe2.toByte(),0x82.toByte()),
             byteArrayOf(0xed.toByte(),0xa0.toByte(),0x80.toByte()), byteArrayOf(0xff.toByte()))) {

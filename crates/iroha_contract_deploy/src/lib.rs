@@ -1070,7 +1070,29 @@ pub fn receipt_path(journal_dir: &Path) -> PathBuf {
 trait DeploymentTransport {
     fn submit(&self, transaction: &SignedTransaction) -> Result<()>;
     fn wait(&self, hash: HashOf<SignedTransaction>) -> Result<AppliedEvidence>;
+    /// Why a transaction that reached a fixed terminal failure was rejected, when readable.
+    fn rejection_reason(&self, _transaction: &SignedTransaction) -> Option<String> {
+        None
+    }
 }
+
+/// Committed details can lag the status that proved the failure by a block or so.
+fn read_rejection_reason(client: &Client, transaction: &SignedTransaction) -> Option<String> {
+    for attempt in 0..REJECTION_READ_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(REJECTION_READ_RETRY);
+        }
+        if let Ok(reason) = client
+            .client()
+            .get_transaction_rejection_reason(transaction)
+        {
+            return Some(iroha::client::rejection_summary(&reason));
+        }
+    }
+    None
+}
+const REJECTION_READ_ATTEMPTS: usize = 5;
+const REJECTION_READ_RETRY: std::time::Duration = std::time::Duration::from_millis(200);
 struct LiveTransport<'a> {
     service: &'a DeploymentService,
 }
@@ -1080,6 +1102,9 @@ impl DeploymentTransport for LiveTransport<'_> {
             .client
             .submit_transaction_and_wait(transaction)
             .map(|_| ())
+    }
+    fn rejection_reason(&self, transaction: &SignedTransaction) -> Option<String> {
+        read_rejection_reason(&self.service.client, transaction)
     }
     fn wait(&self, hash: HashOf<SignedTransaction>) -> Result<AppliedEvidence> {
         let outcome = self.service.client.wait_for_transaction_applied(

@@ -66,14 +66,15 @@ impl Lane {
             *slot = msg;
             return false;
         }
-        let mut dropped = false;
-        if queue.len() >= cap.max(1)
+        let dropped = if queue.len() >= cap.max(1)
             && let Some(oldest) = queue.iter().position(|m| !is_status(m))
         {
             queue.remove(oldest);
             self.len -= 1;
-            dropped = true;
-        }
+            true
+        } else {
+            false
+        };
         queue.push_back(msg);
         self.len += 1;
         dropped

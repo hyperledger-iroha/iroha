@@ -883,7 +883,7 @@ fn incremental_snapshot_reports_unspillable_hot_byte_overflow() {
     let (old_key, old_value) = dummy_state_entry(1);
     let old_handle = TieredKeyHandle::SmartContractState(old_key.clone());
     let old_budget = hot_budget_bytes(
-        old_handle.encode_key().expect("old key encodes").len(),
+        old_handle.encode_key().len(),
         MeasuredBytes::measured_bytes(&old_value),
     );
     world.smart_contract_state.insert(old_key, old_value);
@@ -894,7 +894,7 @@ fn incremental_snapshot_reports_unspillable_hot_byte_overflow() {
     let (new_key, new_value) = dummy_state_entry(2);
     let new_handle = TieredKeyHandle::SmartContractState(new_key.clone());
     let new_budget = hot_budget_bytes(
-        new_handle.encode_key().expect("new key encodes").len(),
+        new_handle.encode_key().len(),
         MeasuredBytes::measured_bytes(&new_value),
     );
     backend.reconfigure(true, 1, new_budget, 0, Some(root), None, 0, 0);

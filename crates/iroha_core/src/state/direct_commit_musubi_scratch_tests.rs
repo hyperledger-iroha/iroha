@@ -30,6 +30,7 @@ impl Wake for Wakes {
     }
 }
 
+#[derive(Clone, Copy)]
 enum MusubiFixture {
     Empty,
     Publication,
@@ -163,9 +164,9 @@ fn replacement_state_musubi_scratch_refusal_preserves_published_predecessor_then
 }
 
 fn check_direct_refusal(replacement: bool) {
-    // State construction replaces the World's initial AMX pair with newly admitted
-    // authority-free generations. Pin before construction so the old pair cannot
-    // retire unpredictably between our baseline and the publication assertions.
+    // State construction replaces the initial AMX pair, and the explicit free-fee
+    // fixture policy publishes a parameter Cell successor. Pin before construction
+    // so neither retired pair can disappear before its exact custody is counted.
     let constructor_retirement = crossbeam_epoch::pin();
     let (state, proposal) = fixture();
     let header = proposal.header();
@@ -189,20 +190,40 @@ fn check_direct_refusal(replacement: bool) {
             .is_none(),
         "the original constructor AMX pair has no predecessor graph"
     );
+    assert!(state.world.parameters.view().get().root_fees().is_some());
+    assert!(
+        state
+            .world
+            .parameters
+            .predecessor_view()
+            .get()
+            .as_ref()
+            .is_some_and(|parameters| parameters.root_fees().is_none()),
+        "the fixture fee policy replaces the original policy-free parameter pair"
+    );
     let retired_constructor_bytes = mv::cell::Cell::<
         crate::sumeragi::amx::RetainedNativeAmx,
         iroha_allocation::AllocationCharge,
     >::allocation_layouts()
-    .iter()
-    .map(std::alloc::Layout::size)
+    .into_iter()
+    .chain(mv::cell::Cell::<
+        crate::pipeline_gas_policy::RetainedStateParameters,
+        iroha_allocation::AllocationCharge,
+    >::allocation_layouts())
+    .map(|layout| layout.size())
     .sum::<usize>();
     let constructor_settled_bytes = budget
         .reserved_bytes()
         .checked_sub(retired_constructor_bytes)
-        .expect("the original retired AMX pair remains funded while pinned");
+        .expect("the original retired AMX and parameter pairs remain funded while pinned");
     constructor_retirement.flush();
     drop(constructor_retirement);
     collect_original_ebr_until(&budget, constructor_settled_bytes);
+    // Publication rotates parameter Cells as well as AMX. Keep the exact original
+    // current/undo graphs alive independently, so this shell census cannot also
+    // lose the old policy-free graph when its last Cell retires.
+    let parameter_graphs =
+        crate::state::initial_custody_test_support::retain_parameter_graphs(&state.world);
     let mut registration = crate::unit_test_support::release_registration(&budget);
     let initial_reserved = budget.reserved_bytes();
     let successor_bytes = original_cell_successor_bytes(&state);
@@ -396,6 +417,7 @@ fn check_direct_refusal(replacement: bool) {
     );
     drop(released);
     drop(registration);
+    drop(parameter_graphs);
     drop(state);
     collect_original_ebr_until(&budget, 0);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -417,6 +439,7 @@ fn original_funded_generations(state: &State) -> Vec<(usize, usize)> {
     }
     [
         pair(&state.world.sumeragi_amx_participant),
+        pair(&state.world.parameters),
         pair(&state.world.musubi_replication_shortfall_releases),
         pair(&state.world.sccp_committee_current),
         pair(&state.world.sccp_liability_clock),
@@ -731,7 +754,10 @@ fn retained_state_late_world_busy_recovers_all_original_cursors_before_retry() {
         assert_eq!(original.world.musubi_public_directory.len(), 1);
         // These actual acquisitions precede the held last World Cell in the
         // publication inventory and must have been recovered after its refusal.
-        drop(state.world.parameters.block());
+        drop(
+            crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded original parameter-only fixture block"),
+        );
         drop(state.canonical_runtime.block());
         drop(state.transactions.block());
         assert!(state.state_write_lock.try_lock().is_some());
@@ -767,7 +793,8 @@ fn retained_state_equal_value_component_advance_never_rebases_original_predecess
     let generation = state.state_view_generation();
     // A component-only test publication keeps its value and State scalar equal,
     // but replaces the exact lower predecessor. Equal values grant no authority.
-    let other = state.world.parameters.block();
+    let other = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block");
     other.commit();
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
@@ -1074,7 +1101,10 @@ fn retained_state_successful_musubi_validation_survives_late_writer_refusal() {
             assert!(state.state_commit_lock.try_lock().is_some());
             assert!(state.world.musubi_public_directory.view().is_empty());
             assert_eq!(state.transactions.latest_height(), 0);
-            drop(state.world.parameters.block());
+            drop(
+                crate::state::parameter_cell_block_for_testing(&state.world)
+                    .expect("funded original parameter-only fixture block"),
+            );
             drop(state.canonical_runtime.block());
             drop(state.transactions.block());
         }
@@ -1459,7 +1489,10 @@ fn retained_canonical_merge_cell_busy_recovers_original_cursors_before_retry() {
         assert_eq!(original.world.musubi_public_directory.len(), 1);
         // These actual acquisitions precede the held last World Cell in the
         // publication inventory and must have been recovered after its refusal.
-        drop(state.world.parameters.block());
+        drop(
+            crate::state::parameter_cell_block_for_testing(&state.world)
+                .expect("funded original parameter-only fixture block"),
+        );
         drop(state.canonical_runtime.block());
         drop(state.transactions.block());
         assert!(state.state_write_lock.try_lock().is_some());

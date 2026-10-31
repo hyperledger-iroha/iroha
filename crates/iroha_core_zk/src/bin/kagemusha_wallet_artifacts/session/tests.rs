@@ -37,7 +37,7 @@ fn fixture() -> (Scope, Request, PrivateKey, SigningKey, Vec<u8>) {
                     spki_sha256: [46; 32],
                     revocation_source: KagemushaWalletRevocationSourceV1::GoogleAttestationStatus,
                 }],
-                patch_floor_yyyymm: 202610,
+                patch_floor_yyyymm: 202_610,
             },
         ),
         (
@@ -83,7 +83,7 @@ fn fixture() -> (Scope, Request, PrivateKey, SigningKey, Vec<u8>) {
         token_lifetime_seconds: 300,
         issuer_custody_directory: "/test-only/issuer".into(),
         device_custody_directory: "/test-only/device".into(),
-        dpop_public_key_hex: hex::encode(dpop.verifying_key().to_encoded_point(false).as_bytes()),
+        dpop_public_key_hex: hex::encode(dpop.verifying_key().to_sec1_point(false).as_bytes()),
         output_parent: "/test-only/output".into(),
         output_name: "session".into(),
     };
@@ -295,10 +295,10 @@ fn full_private_session_command_publishes_complete_nonreplaceable_bundle() {
     );
     let complete: Value =
         json::from_slice(&std::fs::read(session.join("session-complete.json")).unwrap()).unwrap();
-    let issued = complete.get("issuedAtSeconds").unwrap().as_u64().unwrap();
+    let issued_at = complete.get("issuedAtSeconds").unwrap().as_u64().unwrap();
     assert_eq!(
         complete.get("proofExpiresBeforeSeconds").unwrap().as_u64(),
-        Some(issued + 61)
+        Some(issued_at + 61)
     );
     let mut changed = request_json(&request);
     changed.insert(1, b' '); // Unknown/retired policy is refused by the typed request.

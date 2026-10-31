@@ -878,7 +878,7 @@ fn kagami_and_nexus_source_templates_declare_complete_execution_output_limits() 
 }
 #[test]
 fn dev_source_template_prefunds_exact_canonical_staking_plans() {
-    use iroha_config::parameters::defaults::nexus::{fees, staking};
+    use iroha_config::parameters::defaults::nexus::fees;
     use iroha_data_model::nexus::PublicLaneMonetaryPlanV1;
 
     super::super::init_instruction_registry();
@@ -889,14 +889,19 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     let discriminant: u16 =
         norito::json::value::from_value(fields["chain_discriminant"].clone()).unwrap();
     let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
-    let definition: AssetDefinitionId = staking::stake_asset_id().parse().unwrap();
+    let definition = super::super::SumeragiNposParameters::default().xor_asset_definition_id;
     assert_eq!(definition.to_string(), fees::fee_asset_id());
     // The NPoS source leaves its XOR pin to the operator: materialize it with the dev XOR.
     let manifest = super::super::GenesisSourceTemplate::from_path(&path)
         .unwrap()
         .materialize(Some(definition.clone()))
         .unwrap();
-    let escrow = parse_account_id(&staking::stake_escrow_account_id(), "staking escrow").unwrap();
+    let staking = iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+        &manifest.effective_parameters().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(staking.stake_asset_id, definition);
+    let escrow = staking.stake_escrow_account_id;
     let mut registered = false;
     let mut prefunded = std::collections::BTreeMap::new();
     let mut registrations = 0;
@@ -969,6 +974,18 @@ fn parse_allows_null_executor_in_canonical_manifest() {
             .expect("serialize chain discriminant"),
     );
     manifest_fields.insert("executor".to_string(), Value::Null);
+    manifest_fields.insert(
+        "crypto_admission_policy".to_string(),
+        norito::json::value::to_value(
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical fixture policy"),
+        )
+        .expect("serialize authored crypto policy"),
+    );
     manifest_fields.insert(
         "wire_protocol_version".to_string(),
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
@@ -1050,9 +1067,8 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
     use iroha_data_model::{
         block::consensus::SumeragiGenesisContextParameters,
         parameter::{
-            ExecutionOutputPolicyV1, FastpqSourcePolicyV1,
-            custom::CustomParameter,
-            system::{confidential_metadata, crypto_metadata},
+            ExecutionOutputPolicyV1, FastpqSourcePolicyV1, custom::CustomParameter,
+            system::confidential_metadata,
         },
     };
     use iroha_model_base::chain::ChainId;
@@ -1082,9 +1098,28 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
                 chain,
                 root.join("defaults/executor.to"),
                 root.join("defaults"),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
             )
+            .with_staking_policy(crate::staking_policy_authoring::fixture_policy())
+            .expect("explicit fixture staking policy")
         } else {
-            super::super::GenesisBuilder::new_without_executor(chain, root.join("defaults"))
+            super::super::GenesisBuilder::new_without_executor(
+                chain,
+                root.join("defaults"),
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                    iroha_crypto::Algorithm::BlsNormal,
+                ])
+                .expect("explicit canonical genesis producer policy"),
+            )
+            .with_staking_policy(crate::staking_policy_authoring::fixture_policy())
+            .expect("explicit fixture staking policy")
         };
         let mut builder = builder
             .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended());
@@ -1150,7 +1185,7 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
             assert_eq!(
                 ids,
                 [
-                    crypto_metadata::manifest_meta_id(),
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::parameter_id(),
                     confidential_metadata::registry_root_id()
                 ]
             );

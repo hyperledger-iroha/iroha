@@ -33,8 +33,11 @@
 //!
 //! **Destination watch** (`[sccp.keeper].watch`) reads bounded EVM log ranges and TON
 //! transaction pages, including older-history backfill. Discovered certificate bytes pass
-//! the original-state forgery verifier and retained anchor roots before submission. Cursor
-//! storage has a finite allocation pool; local refusal retains the discovery position.
+//! the original-state forgery verifier and retained anchor roots before submission; evidence
+//! that the §4.9 step-7 predicate finds duplicate retires its discovery item. Its queue
+//! admission skips the node-wide pairing bucket that remote floods share, but still pays the
+//! pairing. Cursor storage has a finite allocation pool; local refusal retains the discovery
+//! position.
 //!
 //! # Task structure of the light-client duty
 //!
@@ -93,8 +96,7 @@ use iroha_core::{
         light_clients::{WorldLightClientView, admission_profiles, preverify_keeper_advance},
         store,
     },
-    state::{State, StateReadOnly, WorldReadOnly},
-    tx::AcceptedTransaction,
+    state::{State, StateReadOnly},
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -551,7 +553,8 @@ impl std::error::Error for RejectedSourceAdvance {}
 /// `instruction`.
 ///
 /// The keeper key's account is neither registered nor funded, so the transaction is submitted
-/// only when it is quoted fee-exempt (§4.19).
+/// only when it is quoted fee-exempt (§4.19). It enters the queue as this node's own keeper
+/// submission ([`Queue::push_local_keeper_with_state`]).
 fn submit_transaction(
     state: &State,
     queue: &Queue,
@@ -617,22 +620,15 @@ fn submit_transaction_at(
         .wrap_err("rebuild quoted SCCP transaction")?
         .try_sign(key.private_key())
         .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
-    let (max_clock_drift, transaction_params) = {
-        let world = state.world_view();
-        let params = world.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction())
-    };
-    let crypto = state.crypto();
-    let accepted = AcceptedTransaction::accept(
-        transaction,
-        state.network_id_ref(),
-        max_clock_drift,
-        transaction_params,
-        crypto.as_ref(),
-    )
+    let accepted = {
+        let parameters = state.transaction_admission_parameters();
+        crate::accept_internal_transaction(transaction, state.network_id_ref(), &parameters)
+    }
     .wrap_err("accept SCCP transaction")?;
+    // The keeper's own submissions: forgery evidence skips the pairing bucket that remote
+    // floods share, so forgers cannot delay it (§4.9 ingress).
     queue
-        .push_with_lane_with_state(accepted, state)
+        .push_local_keeper_with_state(accepted, state)
         .map(|_| ())
         .map_err(|failure| eyre::eyre!("enqueue SCCP transaction: {}", failure.err))
 }
@@ -1402,7 +1398,11 @@ mod tests {
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_config_base::WithOrigin;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{World, WorldReadOnly},
+    };
     use iroha_data_model::sccp::light_client::{SccpLcFreezeReasonV1, SccpLcParliamentFreezeV1};
 
     use super::{fakes::*, *};
@@ -1699,9 +1699,12 @@ mod tests {
         let (state, queue) = node();
         let key = KeyPair::random();
         let advance = empty_advance(SccpNetworkV1::BscMainnet);
-        assert!(
-            submit_transaction(&state, &queue, &key, InstructionBox::from(advance)).is_err(),
-            "an advance on a node without SCCP is refused"
+        let error = submit_transaction(&state, &queue, &key, InstructionBox::from(advance))
+            .expect_err("an uninitialized node cannot admit a keeper transaction");
+        assert_eq!(
+            format!("{error:#}"),
+            "quote SCCP transaction: Rejected(ConfigInvalid(\"fee admission requires immutable root scope\"))",
+            "an uninitialized root must fail fee admission before SCCP verification"
         );
         let host = NodeHost {
             state,
@@ -1758,12 +1761,20 @@ mod tests {
         {
             let mut block = world.block();
             block
-                .parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     consensus_metadata::handshake_meta_id(),
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
+            // Leave the crypto policy absent for the first admission probe; the
+            // subsequent probes install explicit disallowed and allowed policies.
+            block
+                .set_parameter_for_testing(Parameter::Custom(
+                    iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                        .into_custom_parameter()
+                        .expect("canonical root fee fixture"),
+                ))
+                .expect("install committed root fees before quoting");
             block.commit();
         }
         let state = Arc::new(State::new_for_testing(
@@ -1782,12 +1793,70 @@ mod tests {
                 .commit_world_overlay_for_testing()
                 .expect("commit SCCP parameters");
         }
-        let key = KeyPair::random();
+        let key = KeyPair::from_seed(vec![0x5c; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(key.public_key().clone());
         assert!(
             state.view().world().account(&authority).is_err(),
             "the keeper key has no account"
         );
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .crypto_policy()
+                .is_none(),
+            "the initial probe requires a missing committed crypto policy"
+        );
+        let error = submit_transaction_at(
+            &state,
+            &queue,
+            &key,
+            InstructionBox::from(empty_advance(SccpNetworkV1::EthereumMainnet)),
+            wall_clock_ms(),
+        )
+        .expect_err("ordinary admission requires a committed crypto policy");
+        assert_eq!(
+            error
+                .downcast_ref::<iroha_core::execution_attempt::ExecutionDeferred>()
+                .expect("missing policy is an unfinished attempt")
+                .reason(),
+            ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable,
+        );
+        for algorithm in [
+            iroha_crypto::Algorithm::Secp256k1,
+            iroha_crypto::Algorithm::Ed25519,
+        ] {
+            let header = BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, 0, 0);
+            let mut block = state.block(header);
+            block
+                .world
+                .set_parameter_for_testing(
+                    iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        algorithm,
+                    ])
+                    .expect("explicit fixture policy")
+                    .into_parameter()
+                    .expect("canonical fixture policy"),
+                )
+                .expect("install the committed policy");
+            block
+                .commit_world_overlay_for_testing()
+                .expect("publish the committed policy");
+            if algorithm == iroha_crypto::Algorithm::Secp256k1 {
+                let error = submit_transaction_at(
+                    &state,
+                    &queue,
+                    &key,
+                    InstructionBox::from(empty_advance(SccpNetworkV1::EthereumMainnet)),
+                    wall_clock_ms(),
+                )
+                .expect_err("the keeper's Ed25519 key is not permitted");
+                assert!(matches!(
+                    error.downcast_ref::<iroha_core::tx::AcceptTransactionFail>(),
+                    Some(iroha_core::tx::AcceptTransactionFail::SignatureVerification(failure))
+                        if failure.code() == iroha_core::tx::SignatureRejectionCode::AlgorithmNotPermitted
+                ));
+            }
+        }
         let advance = empty_advance(SccpNetworkV1::EthereumMainnet);
         let error = submit_transaction(&state, &queue, &key, InstructionBox::from(advance))
             .expect_err("no light client is installed");

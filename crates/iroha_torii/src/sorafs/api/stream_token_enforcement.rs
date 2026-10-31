@@ -1,4 +1,4 @@
-//! Production stream-token admission for SoraFS serving routes.
+//! Production stream-token admission for `SoraFS` serving routes.
 use super::*;
 use crate::sorafs::stream_token_cleanup::ExternalStreamTokenLeaseV1;
 #[cfg(test)]
@@ -15,7 +15,7 @@ use iroha_data_model::sorafs::{
         StreamTokenViolationKindV1,
     },
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use sorafs_manifest::{StreamTokenBodyV1, token::STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1};
 /// An immutable lifetime bound derived from the authenticated accepted record.
 #[derive(Clone, Copy, Debug)]
@@ -157,7 +157,7 @@ fn requested_bytes(route: StreamTokenRequestRouteV1) -> u64 {
     }
 }
 fn new_serving_attempt_id() -> Result<[u8; 32], StreamTokenGatewayAdmissionErrorV1> {
-    serving_attempt_id_with_rng(&mut OsRng)
+    serving_attempt_id_with_rng(&mut SysRng)
 }
 fn serving_attempt_id_with_rng<R: TryCryptoRng>(
     rng: &mut R,
@@ -755,7 +755,7 @@ fn enforce_stream_token_in_worker(
     #[cfg(test)]
     return enforce_test_local_admission(
         state,
-        telemetry,
+        &(telemetry),
         token,
         route,
         validated_at_unix_ms / 1_000,
@@ -768,7 +768,7 @@ fn enforce_stream_token_in_worker(
 #[cfg(test)]
 fn enforce_test_local_admission(
     state: &SharedAppState,
-    telemetry: MaybeTelemetry,
+    telemetry: &MaybeTelemetry,
     token: StreamTokenV1,
     route: StreamTokenRequestRouteV1,
     now: u64,

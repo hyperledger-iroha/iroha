@@ -1,4 +1,4 @@
-//! Tests for SoraCloud signed-mutation request admission.
+//! Tests for `SoraCloud` signed-mutation request admission.
 use super::*;
 use axum::{
     Router,

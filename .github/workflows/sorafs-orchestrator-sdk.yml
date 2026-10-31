@@ -150,11 +150,11 @@ jobs:
       IROHA_JS_NATIVE_BUILD_PROFILE: "release"
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - name: Verify Python ABI-31 evidence retention contract
+      - name: Verify Python ABI-33 evidence retention contract
         run: bash scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh
       - name: Bind the canonical mobile Python
         run: |
@@ -171,11 +171,11 @@ jobs:
           ')"
           [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: sorafs-orchestrator-sdk
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
@@ -217,8 +217,8 @@ jobs:
           cargo_target="$RUNNER_TEMP/iroha-sorafs-apple-cargo"
           mkdir -p "$cargo_target"
           cargo_target="$(cd "$cargo_target" && pwd -P)"
-          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.99.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.99.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -250,28 +250,28 @@ jobs:
           release_lock="$(IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$release_lock" \
             privacy_sdk_resolve_cargo_lockfile "$GITHUB_WORKSPACE" "$MOBILE_SDK_PYTHON_BINARY")"
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-      - name: Build exact ABI-31 NoritoBridge XCFramework
+      - name: Build exact ABI-33 NoritoBridge XCFramework
         run: scripts/build_norito_xcframework.sh --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Authenticate Apple native artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
-      - name: Run exact Python 3.12 ABI-31 native reference parity
+      - name: Run exact Python 3.12 ABI-33 native reference parity
         env:
-          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi31-evidence
+          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi33-evidence
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
         run: bash ci/sdk_sorafs_orchestrator.sh
-      - name: Upload verified Python ABI-31 evidence
+      - name: Upload verified Python ABI-33 evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sorafs-python-native-abi31-${{ github.run_id }}
-          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi31-evidence/python-native-abi31.json
+          name: sorafs-python-native-abi33-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi33-evidence/python-native-abi33.json
           if-no-files-found: error
           retention-days: 30
       - name: Upload parity evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sorafs-orchestrator-sdk-${{ github.run_id }}
           path: |
@@ -288,8 +288,8 @@ jobs:
       ANDROID_BUILD_TOOLS_PACKAGE: build-tools;35.0.0
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Bind the canonical mobile Python
@@ -308,12 +308,12 @@ jobs:
           ')"
           [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: sorafs-orchestrator-mobile-parity
       - name: Install required Android SDK packages
@@ -341,7 +341,7 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
         run: cargo fetch --locked
-      - name: Build and authenticate the exact ABI-31 Kotlin bridge
+      - name: Build and authenticate the exact ABI-33 Kotlin bridge
         shell: bash
         run: |
           target=x86_64-unknown-linux-gnu
@@ -355,7 +355,7 @@ jobs:
             --target "$target" --target-dir "$native_root/cargo-target"
           native_dir="$native_root/cargo-target/$target/release"
           artifact="$native_dir/libconnect_norito_bridge.so"
-          manifest="$native_root/native-sdk-abi31.json"
+          manifest="$native_root/native-sdk-abi33.json"
           python3 -I scripts/check_native_sdk_artifact.py record \
             --artifact "$artifact" --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" --sdk c-jni --target "$target"
@@ -372,7 +372,7 @@ jobs:
           test ! -e "$artifact_dir"
           mkdir -m 0700 "$artifact_dir"
           echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
-      - name: Require fresh ABI-31 JNI bridge in complete Kotlin and Java suites
+      - name: Require fresh ABI-33 JNI bridge in complete Kotlin and Java suites
         working-directory: kotlin
         shell: bash
         run: |
@@ -399,11 +399,11 @@ jobs:
             --source-root "$GITHUB_WORKSPACE"
       - name: Upload Kotlin and Java native parity evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sorafs-orchestrator-mobile-parity-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/sorafs-mobile-native/native-sdk-abi31.json
+            ${{ runner.temp }}/sorafs-mobile-native/native-sdk-abi33.json
             ${{ runner.temp }}/sorafs-mobile-parity/test-execution.json
             ${{ runner.temp }}/sorafs-mobile-parity/gradle-build/iroha_kotlin_sdk/*/test-results/**/TEST-*.xml
           if-no-files-found: error
@@ -415,27 +415,27 @@ jobs:
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+          dotnet-version: 10.0.403
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: sorafs-orchestrator-csharp-parity
-      - name: Build and authenticate the exact ABI-31 C# bridge
+      - name: Build and authenticate the exact ABI-33 C# bridge
         shell: bash
         run: |
           target=x86_64-unknown-linux-gnu
           cargo build --locked --release -p connect_norito_bridge --target "$target"
           native_dir="$RUNNER_TEMP/sorafs-csharp-native"
           artifact="$native_dir/libconnect_norito_bridge.so"
-          manifest="$native_dir/native-sdk-abi31.json"
+          manifest="$native_dir/native-sdk-abi33.json"
           mkdir -p "$native_dir"
           cp "target/$target/release/libconnect_norito_bridge.so" "$artifact"
           python3 -I scripts/check_native_sdk_artifact.py record \
@@ -455,6 +455,6 @@ jobs:
       - name: Build C# SDK with warnings denied
         working-directory: csharp
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
-      - name: Run complete C# ABI-31 parity suite
+      - name: Run complete C# ABI-33 parity suite
         working-directory: csharp
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build

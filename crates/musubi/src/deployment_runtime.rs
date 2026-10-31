@@ -537,10 +537,16 @@ impl DeploymentRuntime {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let slot = deployment_slot(&self.config, &self.journal_root, alias);
         // A read must not create a new alias slot merely because no deployment exists.
-        let session = DeploymentSlot::open_read(&slot)?;
+        let session = DeploymentSlot::open_read(&slot).map_err(|error| {
+            if error_is_not_found(&error) {
+                no_saved_deployment(alias)
+            } else {
+                error
+            }
+        })?;
         let journal = session
             .current_journal()?
-            .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
+            .ok_or_else(|| no_saved_deployment(alias))?;
         let service = DeploymentService::new(self.config.clone())?;
         let preflight = service
             .retained_preflight(&journal)
@@ -561,6 +567,47 @@ impl DeploymentRuntime {
         session.revalidate()?;
         Ok(CurrentDeployment { contract, journal })
     }
+
+    /// List the journal each alias slot under this runtime's root would resume, by alias.
+    ///
+    /// Each retained plan is authenticated with this runtime's original authority. Nothing is
+    /// reconciled, signed, dispatched or read from the network, and [`Self::resume`] still
+    /// admits the chosen journal. An absent root lists nothing.
+    ///
+    /// # Errors
+    /// Rejects unsafe custody, a slot held by running work, or a retained plan this authority
+    /// cannot authenticate.
+    pub fn saved_deployments(&self) -> Result<Vec<SavedDeployment>> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let root = match PrivateDirectory::open(&self.journal_root) {
+            Ok(root) => root,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(eyre::Report::new(error).wrap_err("open deployment journals")),
+        };
+        let service = DeploymentService::new(self.config.clone())?;
+        let mut saved = Vec::new();
+        for name in root.entries(MAX_SAVED_DEPLOYMENT_SLOTS)? {
+            // Alias slots carry their BLAKE3 identity as the name; nothing else is a slot.
+            let Some(name) = name.to_str().filter(|name| is_slot_name(name)) else {
+                continue;
+            };
+            let session = DeploymentSlot::open_read(&root.path().join(name))?;
+            let Some((journal, preflight)) = session.resumable(&service)? else {
+                continue;
+            };
+            // Presentation only: resume authenticates the receipt it finds.
+            let has_receipt =
+                std::fs::symlink_metadata(iroha_contract_deploy::receipt_path(&journal))
+                    .is_ok_and(|metadata| metadata.is_file());
+            saved.push(SavedDeployment {
+                alias: preflight.contract_alias,
+                journal,
+                has_receipt,
+            });
+        }
+        saved.sort_by(|left, right| left.alias.cmp(&right.alias));
+        Ok(saved)
+    }
 }
 
 /// Exact completed deployment selected by the native alias slot.
@@ -569,6 +616,27 @@ pub struct CurrentDeployment {
     pub contract: iroha_contract_deploy::CompletedContract,
     /// Owner-private original deployment recovery path.
     pub journal: PathBuf,
+}
+
+/// Alias slots one listing reads; a managed environment holds one per deployed alias.
+const MAX_SAVED_DEPLOYMENT_SLOTS: usize = 4096;
+
+/// One alias slot's resumable journal, as [`DeploymentRuntime::saved_deployments`] lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedDeployment {
+    /// Alias the authenticated retained plan deploys.
+    pub alias: ContractAlias,
+    /// Exact journal [`DeploymentRuntime::resume`] accepts.
+    pub journal: PathBuf,
+    /// The journal holds a finalized receipt; otherwise its outcome is not yet recorded.
+    pub has_receipt: bool,
+}
+
+fn is_slot_name(name: &str) -> bool {
+    name.len() == 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn journal_failure(error: DeploymentError, journal: &Path) -> eyre::Report {
@@ -644,6 +712,20 @@ fn validate_journal_id(id: &str) -> Result<()> {
     }
     id.parse::<iroha::crypto::Hash>()?;
     Ok(())
+}
+
+fn no_saved_deployment(alias: &ContractAlias) -> eyre::Report {
+    eyre!(
+        "contract alias `{alias}` has no saved deployment in this environment; check the alias, or deploy the contract first"
+    )
+}
+
+fn error_is_not_found(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 #[cfg(test)]
@@ -876,7 +958,15 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let runtime =
             DeploymentRuntime::new(config.clone(), root.clone(), temporary.path().join("cache"));
         let alias: ContractAlias = "Counter::universal".parse()?;
-        assert!(runtime.current_deployment(&alias).is_err());
+        let missing = runtime
+            .current_deployment(&alias)
+            .err()
+            .expect("an absent slot has no deployment")
+            .to_string();
+        assert!(
+            missing.contains("`Counter::universal` has no saved deployment"),
+            "{missing}"
+        );
         assert!(!root.exists());
 
         let slot = deployment_slot(&config, &root, &alias);

@@ -43,9 +43,11 @@ fn with_session(
         dispatches: AtomicUsize::new(0),
         source,
     });
+    let finality = test_finality(&account.source);
     let operation = NativePaymentOperation::create(
         request,
         storage,
+        finality,
         session,
         account.clone(),
         account.clone(),
@@ -127,6 +129,7 @@ fn next_payment(
     let mut proofs = previous.proofs.clone();
     proofs.insert(header.height().get(), proof);
     let source = Arc::new(Source {
+        finality_root: Arc::new(tempfile::tempdir().unwrap()),
         proofs,
         locator: PaymentLocator {
             height: header.height().get(),
@@ -140,6 +143,74 @@ fn next_payment(
         submitted: AtomicBool::new(false),
     });
     (request, transaction, source)
+}
+
+#[tokio::test]
+async fn cold_pending_payment_beyond_one_read_allowance_resumes_without_a_new_carrier() {
+    let (mut native, mut request, mut transaction, mut source) = fixture(false);
+    for _ in 3..=70 {
+        (request, transaction, source) = next_payment(&mut native, &request, &source);
+    }
+    assert_eq!(source.proofs.keys().next_back(), Some(&70));
+    let root = tempfile::tempdir().unwrap();
+    let original_storage = storage(root.path(), "original");
+    let (first, account) = with_session(
+        request.clone(),
+        transaction.clone(),
+        source.clone(),
+        source.clone(),
+        session(&native, 3),
+        original_storage.clone(),
+    );
+    store_carrier_journal(
+        original_storage.as_ref(),
+        &first,
+        &account,
+        &request,
+        norito::encode_canonical(transaction.payload()).unwrap(),
+        Some(&transaction),
+    );
+    let workflow = first.id();
+    // The final payment is discoverable, but its locator is not settlement evidence.
+    // Recovery must authenticate all original certificates under the cold genesis owner.
+    source.visible.store(true, Ordering::Relaxed);
+    let error = first.recover(&allowance(64)).await.unwrap_err();
+    assert!(matches!(
+        error,
+        NativePaymentError::Observation { cause, .. }
+            if matches!(cause.as_ref(), NativePaymentObservationError::ReadBudgetExhausted)
+    ));
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), 64);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+    drop(first);
+    drop(account);
+    drop(original_storage);
+
+    // All SDK session and workflow owners are cold. Only the exact original durable
+    // payment and independently selected genesis may resume; there is no H71 traffic.
+    let reopened_storage = storage(root.path(), "original");
+    let (reopened, account) = with_session(
+        request,
+        transaction.clone(),
+        source.clone(),
+        source.clone(),
+        session(&native, 3),
+        reopened_storage,
+    );
+    assert_eq!(reopened.id(), workflow);
+    let result = reopened.recover(&allowance(64)).await;
+    assert!(
+        result.is_ok(),
+        "cold pending payment must resume its authenticated prefix beyond one read allowance: {result:?}"
+    );
+    assert_eq!(
+        result.unwrap().receipt.unwrap().transaction_hash(),
+        transaction.hash()
+    );
+    assert!(source.proof_reads.load(Ordering::Relaxed) <= 72);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -192,14 +263,15 @@ async fn sequential_payments_share_original_prefix_and_retire_only_local_history
         assert_eq!(account.signs.load(Ordering::Relaxed), 1);
         assert_eq!(account.dispatches.load(Ordering::Relaxed), 1);
         assert_eq!(Arc::as_ptr(&session.owner), owner);
-        let verifier = session.verifier().unwrap();
-        assert_eq!(verifier.instance(), instance);
-        assert_eq!(verifier.authenticated_height(), Some(height));
-        assert_eq!(
-            verifier.oldest_authenticated_height(),
-            Some(height.saturating_sub(2).max(1))
-        );
-        drop(verifier);
+        {
+            let verifier = session.verifier().unwrap();
+            assert_eq!(verifier.instance(), instance);
+            assert_eq!(verifier.authenticated_height(), Some(height));
+            assert_eq!(
+                verifier.oldest_authenticated_height(),
+                Some(height.saturating_sub(2).max(1))
+            );
+        }
         if height == 3 {
             let before = first_source.proof_reads.load(Ordering::Relaxed);
             let retained = first.recover(&allowance(1)).await.unwrap();
@@ -207,7 +279,7 @@ async fn sequential_payments_share_original_prefix_and_retire_only_local_history
                 retained.receipt.unwrap().transaction_hash(),
                 first_tx.hash()
             );
-            assert_eq!(first_source.proof_reads.load(Ordering::Relaxed), before + 1);
+            assert_eq!(first_source.proof_reads.load(Ordering::Relaxed), before);
             assert_eq!(
                 first_storage.load(&first.id()).unwrap().unwrap(),
                 first_journal
@@ -216,19 +288,13 @@ async fn sequential_payments_share_original_prefix_and_retire_only_local_history
         previous = source;
         request = next_request;
     }
-    // The original successful journal is not authority to bypass its retired proof history.
+    // Reimport the original authenticated payment pin even after its shared warm parents retire.
     let before = first_source.proof_reads.load(Ordering::Relaxed);
-    let error = first.recover(&allowance(1)).await.unwrap_err();
-    let NativePaymentError::Observation { cause, .. } = error else {
-        panic!("typed local observation")
-    };
-    assert!(matches!(
-        cause.as_ref(),
-        NativePaymentObservationError::HistoryUnavailable {
-            requested_height: 2,
-            oldest_verifiable_height: 5,
-        }
-    ));
+    let recovered = first.recover(&allowance(1)).await.unwrap();
+    assert_eq!(
+        recovered.receipt.unwrap().transaction_hash(),
+        first_tx.hash()
+    );
     assert_eq!(first_source.proof_reads.load(Ordering::Relaxed), before);
     assert_eq!(
         first_storage.load(&first.id()).unwrap().unwrap(),
@@ -249,7 +315,7 @@ async fn sequential_payments_share_original_prefix_and_retire_only_local_history
     assert_eq!(result.receipt.unwrap().transaction_hash(), first_tx.hash());
     assert_eq!(account.signs.load(Ordering::Relaxed), 0);
     assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
-    assert_eq!(first_source.proof_reads.load(Ordering::Relaxed), before + 2);
+    assert_eq!(first_source.proof_reads.load(Ordering::Relaxed), before);
 }
 
 struct GatedSource {
@@ -292,7 +358,7 @@ impl PaymentSource for GatedSource {
     fn proof(
         &self,
         height: NonZeroU64,
-    ) -> WorkflowFuture<'_, Result<SumeragiFinalityProof, NativePaymentObservationError>> {
+    ) -> WorkflowFuture<'_, Result<PaymentProof, NativePaymentObservationError>> {
         Box::pin(async move {
             self.reads.lock().unwrap().push(height.get());
             if height.get() == self.height && self.blocked.load(Ordering::Relaxed) {
@@ -387,8 +453,7 @@ async fn cancelled_observation_keeps_authenticated_prefix_and_resumes_original_c
         .attempts
         .last()
         .unwrap()
-        .identity
-        .clone();
+        .identity;
     assert_eq!(original_identity, Some(identity(&transaction)));
     drop(pending);
     assert!(session.owner.catch_up.try_lock().is_ok());
@@ -479,6 +544,7 @@ fn session_rejects_invalid_capacity_and_foreign_root_network_chain_or_payer_befo
         let refused = account.native_payment_with_session(
             request.clone(),
             Arc::new(UnusedStorage),
+            test_finality(&fixture(false).3),
             selected.clone(),
         );
         assert!(
@@ -490,7 +556,7 @@ fn session_rejects_invalid_capacity_and_foreign_root_network_chain_or_payer_befo
 }
 
 #[tokio::test]
-async fn retired_unresolved_payment_requires_cold_original_recovery_without_new_carrier() {
+async fn unresolved_payment_keeps_original_durable_progress_after_shared_cache_pruning() {
     let (mut native, request, transaction, source) = fixture(false);
     let session = session(&native, 3);
     let root = tempfile::tempdir().unwrap();
@@ -525,7 +591,6 @@ async fn retired_unresolved_payment_requires_cold_original_recovery_without_new_
     assert_eq!(attempt.identity.as_ref(), Some(&identity(&transaction)));
     assert_eq!(account.signs.load(Ordering::Relaxed), 1);
     assert_eq!(account.dispatches.load(Ordering::Relaxed), 1);
-    let original_record = original_storage.load(&original.id()).unwrap().unwrap();
     let mut previous = source.clone();
     let mut previous_request = request.clone();
     for height in 3..=5 {
@@ -547,22 +612,10 @@ async fn retired_unresolved_payment_requires_cold_original_recovery_without_new_
     }
     source.visible.store(true, Ordering::Relaxed); // Only an unauthenticated original-receipt locator.
     let reads = source.proof_reads.load(Ordering::Relaxed);
-    let error = original.resume(&allowance(1)).await.unwrap_err();
-    let NativePaymentError::Observation { cause, .. } = error else {
-        panic!("typed local history refusal")
-    };
-    assert!(matches!(
-        cause.as_ref(),
-        NativePaymentObservationError::HistoryUnavailable {
-            requested_height: 2,
-            oldest_verifiable_height: 4,
-        }
-    ));
-    assert_eq!(source.proof_reads.load(Ordering::Relaxed), reads);
-    assert_eq!(
-        original_storage.load(&original.id()).unwrap().unwrap(),
-        original_record
-    );
+    let recovered = original.resume(&allowance(1)).await.unwrap();
+    assert_eq!(recovered.receipt.transaction_hash(), transaction.hash());
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), reads + 1);
+    let completed = original_storage.load(&original.id()).unwrap().unwrap();
     assert_eq!(account.signs.load(Ordering::Relaxed), 1);
     assert_eq!(account.dispatches.load(Ordering::Relaxed), 1);
     let (cold_original, cold_account) = with_session(
@@ -571,11 +624,192 @@ async fn retired_unresolved_payment_requires_cold_original_recovery_without_new_
         source.clone(),
         source.clone(),
         self::session(&native, 3),
-        original_storage,
+        original_storage.clone(),
     );
     let recovered = cold_original.resume(&allowance(2)).await.unwrap();
     assert_eq!(recovered.receipt.transaction_hash(), transaction.hash());
-    assert_eq!(source.proof_reads.load(Ordering::Relaxed), reads + 2);
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), reads + 1);
+    assert_eq!(
+        original_storage.load(&cold_original.id()).unwrap().unwrap(),
+        completed
+    );
     assert_eq!(cold_account.signs.load(Ordering::Relaxed), 0);
     assert_eq!(cold_account.dispatches.load(Ordering::Relaxed), 0);
+}
+
+struct ChangedLocatorSource {
+    original: Arc<Source>,
+    locator: Mutex<PaymentLocator>,
+    refuse_publication: AtomicBool,
+}
+impl PaymentSource for ChangedLocatorSource {
+    fn settlement<'a>(
+        &'a self,
+        _: &'a SettlementId,
+    ) -> WorkflowFuture<'a, Result<Option<PaymentLocator>, NativePaymentObservationError>> {
+        Box::pin(async { Ok(Some(*self.locator.lock().unwrap())) })
+    }
+    fn carrier(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> WorkflowFuture<'_, Result<CarrierLocation, NativePaymentObservationError>> {
+        self.original.carrier(hash)
+    }
+    fn proof(
+        &self,
+        height: NonZeroU64,
+    ) -> WorkflowFuture<'_, Result<PaymentProof, NativePaymentObservationError>> {
+        Box::pin(async move {
+            let proof = self.original.proof(height).await?;
+            if self.refuse_publication.swap(false, Ordering::Relaxed) {
+                std::fs::create_dir(
+                    self.original
+                        .finality_root
+                        .path()
+                        .join("pending/native-payment.finality"),
+                )
+                .unwrap();
+            }
+            Ok(proof)
+        })
+    }
+}
+
+#[tokio::test]
+async fn corrected_lower_payment_locator_replays_original_genesis_after_cold_restart() {
+    let (mut native, request, transaction, original) = fixture(false);
+    let original_locator = original.locator;
+    let mut latest_request = request.clone();
+    let mut source = original;
+    for _ in 3..=70 {
+        let (next, _, advanced) = next_payment(&mut native, &latest_request, &source);
+        latest_request = next;
+        source = advanced;
+    }
+    let locator = Arc::new(ChangedLocatorSource {
+        locator: Mutex::new(source.locator),
+        original: source.clone(),
+        refuse_publication: AtomicBool::new(false),
+    });
+    let root = tempfile::tempdir().unwrap();
+    let original_storage = storage(root.path(), "original");
+    let (first, account) = with_session(
+        request.clone(),
+        transaction.clone(),
+        source.clone(),
+        locator.clone(),
+        session(&native, 3),
+        original_storage.clone(),
+    );
+    assert!(
+        matches!(first.recover(&allowance(64)).await, Err(NativePaymentError::Observation { cause, .. }) if matches!(cause.as_ref(), NativePaymentObservationError::ReadBudgetExhausted))
+    );
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), 64);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+    drop(first);
+    drop(account);
+    drop(original_storage);
+    *locator.locator.lock().unwrap() = original_locator;
+    let (reopened, account) = with_session(
+        request,
+        transaction.clone(),
+        source.clone(),
+        locator,
+        session(&native, 3),
+        storage(root.path(), "original"),
+    );
+    let recovered = reopened.recover(&allowance(2)).await.unwrap();
+    assert_eq!(
+        recovered.receipt.unwrap().transaction_hash(),
+        transaction.hash()
+    );
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), 66);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn refused_pending_publication_does_not_advance_shared_cache_and_same_original_retries() {
+    let (native, request, transaction, source) = fixture(false);
+    let selected = session(&native, 3);
+    let refusing = Arc::new(ChangedLocatorSource {
+        locator: Mutex::new(source.locator),
+        original: source.clone(),
+        refuse_publication: AtomicBool::new(true),
+    });
+    let root = tempfile::tempdir().unwrap();
+    let (operation, account) = with_session(
+        request,
+        transaction.clone(),
+        source.clone(),
+        refusing,
+        selected.clone(),
+        storage(root.path(), "original"),
+    );
+    assert!(
+        matches!(operation.recover(&allowance(2)).await, Err(NativePaymentError::Observation { cause, .. }) if matches!(cause.as_ref(), NativePaymentObservationError::FinalityCustody(_)))
+    );
+    assert_eq!(selected.verifier().unwrap().authenticated_height(), None);
+    std::fs::remove_dir(
+        source
+            .finality_root
+            .path()
+            .join("pending/native-payment.finality"),
+    )
+    .unwrap();
+    let recovered = operation.recover(&allowance(2)).await.unwrap();
+    assert_eq!(
+        recovered.receipt.unwrap().transaction_hash(),
+        transaction.hash()
+    );
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), 3);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn unrelated_authenticated_carrier_pin_refuses_even_with_original_success_pin() {
+    use super::super::finality_custody::{
+        PendingBusinessPin, PendingCarrierPin, PendingFinalityRecord,
+    };
+    let (mut native, request, transaction, source) = fixture(false);
+    let original_checkpoint = native.checkpoint();
+    let (_, foreign, _) = next_payment(&mut native, &request, &source);
+    let root = tempfile::tempdir().unwrap();
+    let (operation, account) = with_session(
+        request.clone(),
+        transaction.clone(),
+        source.clone(),
+        source.clone(),
+        session(&native, 3),
+        storage(root.path(), "original"),
+    );
+    let owner = test_finality(&source);
+    let bound = owner
+        .bind(operation.id(), request.digest, &native.verifier())
+        .unwrap();
+    bound
+        .compare_and_publish(
+            None,
+            &PendingFinalityRecord {
+                prefix: None,
+                carrier: Some(PendingCarrierPin {
+                    identity: identity(&foreign),
+                    checkpoint: native.checkpoint(),
+                    replay: None,
+                }),
+                business: Some(PendingBusinessPin {
+                    identity: identity(&transaction),
+                    checkpoint: original_checkpoint,
+                }),
+            },
+        )
+        .unwrap();
+    assert!(
+        matches!(operation.recover(&allowance(2)).await, Err(NativePaymentError::Observation { cause, .. }) if matches!(cause.as_ref(), NativePaymentObservationError::CandidateMismatch))
+    );
+    assert_eq!(source.proof_reads.load(Ordering::Relaxed), 0);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
 }

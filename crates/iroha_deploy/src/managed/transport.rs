@@ -11,6 +11,18 @@ use std::{
 // Ordinary observation gets one total I/O budget, including connection admission.
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
+const MAX_LISTENERS: usize = 8;
+
+fn listener_count(count: usize) -> Result<()> {
+    if (1..=MAX_LISTENERS).contains(&count) {
+        Ok(())
+    } else {
+        Err(Error::Invalid(
+            "managed listener count must be between one and eight".into(),
+        ))
+    }
+}
+
 fn remaining_io(deadline: Instant) -> std::io::Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
@@ -290,7 +302,7 @@ mod native {
                     if admission.is_err() {
                         return Ok(None);
                     }
-                    Ok(Some(Connection(stream)))
+                    Ok(Some(Connection(stream, None)))
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
                 Err(error) => Err(error.into()),
@@ -309,16 +321,60 @@ mod native {
         }
     }
 
-    pub struct Connection(UnixStream);
+    pub struct Connection(UnixStream, Option<Instant>);
 
     impl Connection {
+        fn io_deadline(&self) -> Instant {
+            self.1.unwrap_or_else(|| Instant::now() + IO_TIMEOUT)
+        }
+
         pub(crate) fn receive(&mut self) -> Result<ControlRequest> {
-            decode(&read_frame(&mut self.0)?)
+            self.receive_reply()
         }
 
         pub(crate) fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
-            write_frame(&mut self.0, &encode(status)?)
+            write_frame(
+                &mut DeadlineStream::new(self.0.try_clone()?, self.io_deadline())?,
+                &encode(status)?,
+            )
         }
+
+        pub(crate) fn send_request(&mut self, request: &ControlRequest) -> Result<()> {
+            self.reply(request)
+        }
+
+        pub(crate) fn receive_reply<T: JsonDeserialize>(&mut self) -> Result<T> {
+            decode(&read_frame(&mut DeadlineStream::new(
+                self.0.try_clone()?,
+                self.io_deadline(),
+            )?)?)
+        }
+
+        pub(crate) fn set_deadline(&mut self, deadline: Instant) -> Result<()> {
+            self.1 = Some(self.io_deadline().min(deadline));
+            remaining_io(self.io_deadline())?;
+            Ok(())
+        }
+    }
+
+    pub(crate) fn connect_until(
+        directory: &PrivateDirectory,
+        deadline: Instant,
+    ) -> Result<Connection> {
+        let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
+        remaining_io(deadline)?;
+        let ipc = ipc_directory(directory, false)?;
+        let before = validate_endpoint(&ipc)?;
+        let stream = connect_socket_until(&endpoint(&ipc), deadline)?;
+        authenticate_peer(&stream)?;
+        if validate_endpoint(&ipc)? != before {
+            return Err(Error::Invalid(
+                "managed control endpoint changed during connection".into(),
+            ));
+        }
+        directory.revalidate()?;
+        remaining_io(deadline)?;
+        Ok(Connection(stream, Some(deadline)))
     }
 
     pub fn request_as<T: JsonDeserialize>(
@@ -333,7 +389,7 @@ mod native {
         request: &ControlRequest,
     ) -> std::result::Result<T, RequestFailure> {
         let deadline = Instant::now()
-            + if request.action == "down" {
+            + if request.action == ControlAction::Down {
                 STOP_OBSERVATION_MAXIMUM
             } else {
                 IO_TIMEOUT
@@ -352,7 +408,7 @@ mod native {
         let result = (|| -> std::result::Result<T, RequestFailure> {
             let before = endpoint_observation(&directory)?;
             original = Some(before);
-            let stream = connect_until(&endpoint(&directory), deadline)
+            let stream = connect_socket_until(&endpoint(&directory), deadline)
                 .map_err(|error| RequestFailure::stream(error.into()))?;
             authenticate_peer(&stream)?;
             if endpoint_observation(&directory)? != before {
@@ -389,7 +445,10 @@ mod native {
 
     // A queued local connection can wait when the original owner's accept queue is full.
     // Every observer uses the same nonblocking admission and its original total I/O deadline.
-    fn connect_until(path: &std::path::Path, deadline: Instant) -> std::io::Result<UnixStream> {
+    fn connect_socket_until(
+        path: &std::path::Path,
+        deadline: Instant,
+    ) -> std::io::Result<UnixStream> {
         #[cfg(not(target_vendor = "apple"))]
         use rustix::net::SocketFlags;
         use rustix::{
@@ -552,6 +611,8 @@ mod native {
         }
     }
 
+    include!("transport_handoff_unix.rs");
+
     #[cfg(test)]
     mod down_deadline_tests {
         use super::*;
@@ -608,7 +669,8 @@ mod native {
             let path = temporary.path().join("socket");
             let listener = UnixListener::bind(&path).unwrap();
             // Exercise the same socket creation and SIGPIPE policy as an owned stop request.
-            let stream = connect_until(&path, Instant::now() + Duration::from_secs(1)).unwrap();
+            let stream =
+                connect_socket_until(&path, Instant::now() + Duration::from_secs(1)).unwrap();
             let (peer, _) = listener.accept().unwrap();
             #[cfg(target_vendor = "apple")]
             assert!(rustix::net::sockopt::socket_nosigpipe(&stream).unwrap());
@@ -715,7 +777,8 @@ mod native {
             let temporary = tempfile::tempdir().unwrap();
             let path = temporary.path().join("socket");
             let listener = UnixListener::bind(&path).unwrap();
-            let stream = connect_until(&path, Instant::now() + Duration::from_secs(1)).unwrap();
+            let stream =
+                connect_socket_until(&path, Instant::now() + Duration::from_secs(1)).unwrap();
             #[cfg(target_vendor = "apple")]
             assert!(rustix::net::sockopt::socket_nosigpipe(&stream).unwrap());
             let (mut accepted, _) = listener.accept().unwrap();
@@ -737,7 +800,9 @@ mod native {
                 "returned stream remained nonblocking"
             );
             assert_eq!(
-                connect_until(&path, Instant::now()).unwrap_err().kind(),
+                connect_socket_until(&path, Instant::now())
+                    .unwrap_err()
+                    .kind(),
                 io::ErrorKind::TimedOut
             );
         }
@@ -754,7 +819,7 @@ mod native {
             let mut queued = Vec::new();
             let mut full = None;
             for _ in 0..8 {
-                match connect_until(&path, Instant::now() + Duration::from_millis(50)) {
+                match connect_socket_until(&path, Instant::now() + Duration::from_millis(50)) {
                     Ok(stream) => {
                         authenticate_peer(&stream).unwrap();
                         queued.push(stream);
@@ -805,7 +870,7 @@ mod native {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: "status".into(),
+                    action: ControlAction::Status,
                 },
             );
             let elapsed = started.elapsed();
@@ -849,7 +914,10 @@ mod native {
                     assert!(Instant::now() < accepted_before);
                     thread::sleep(Duration::from_millis(1));
                 };
-                assert_eq!(connection.receive().unwrap().action, "startup_expired");
+                assert_eq!(
+                    connection.receive().unwrap().action,
+                    ControlAction::StartupExpired
+                );
                 connection.0.write_all(&4_u32.to_be_bytes()).unwrap();
                 connection.0.write_all(b"a").unwrap();
                 for byte in b"bcd" {
@@ -865,7 +933,7 @@ mod native {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: "startup_expired".into(),
+                    action: ControlAction::StartupExpired,
                 },
             );
             let elapsed = started.elapsed();
@@ -880,7 +948,11 @@ mod native {
         #[test]
         fn foreground_control_replies_keep_the_callers_absolute_deadline() {
             let _resources = super::super::super::native_test_guard();
-            for action in ["status", "attachment_start", "attachment_status"] {
+            for action in [
+                ControlAction::Status,
+                ControlAction::AttachmentStart,
+                ControlAction::AttachmentStatus,
+            ] {
                 let temporary = tempfile::tempdir().unwrap();
                 let directory =
                     PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
@@ -909,7 +981,7 @@ mod native {
                     &directory,
                     &ControlRequest {
                         token: "c".repeat(64),
-                        action: action.into(),
+                        action,
                     },
                     started + Duration::from_millis(180),
                 );
@@ -957,7 +1029,7 @@ mod native {
                 PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
             let request = ControlRequest {
                 token: "d".repeat(64),
-                action: "down".into(),
+                action: ControlAction::Down,
             };
             let listener = Listener::bind(&directory).unwrap();
             drop(listener);
@@ -1151,7 +1223,7 @@ mod native {
             assert_eq!(connection.0.write_timeout().unwrap(), Some(IO_TIMEOUT));
             let request = ControlRequest {
                 token: "d".repeat(64),
-                action: "status".into(),
+                action: ControlAction::Status,
             };
             write_frame(&mut client, &encode(&request).unwrap()).unwrap();
             let actual = connection.receive().unwrap();
@@ -1181,7 +1253,7 @@ mod native {
             assert!(listener.accept().unwrap().is_none());
             let request = ControlRequest {
                 token: "c".repeat(64),
-                action: "status".into(),
+                action: ControlAction::Status,
             };
             let mut frame = Vec::new();
             write_frame(&mut frame, &encode(&request).unwrap()).unwrap();
@@ -1244,6 +1316,30 @@ mod native {
         pub(crate) fn reply<T: JsonSerialize>(&mut self, _: &T) -> Result<()> {
             supported()
         }
+        pub(crate) fn peer_process_id(&self) -> Result<u32> {
+            Err(Error::Invalid("native IPC unavailable".into()))
+        }
+        pub(crate) fn send_request(&mut self, _: &ControlRequest) -> Result<()> {
+            supported()
+        }
+        pub(crate) fn receive_reply<T: JsonDeserialize>(&mut self) -> Result<T> {
+            Err(Error::Invalid("native IPC unavailable".into()))
+        }
+        pub(crate) fn set_deadline(&mut self, _: Instant) -> Result<()> {
+            supported()
+        }
+        pub(crate) fn send_tcp_listeners(&mut self, _: &[std::net::TcpListener]) -> Result<()> {
+            supported()
+        }
+        pub(crate) fn receive_tcp_listeners(
+            &mut self,
+            _: usize,
+        ) -> Result<Vec<std::net::TcpListener>> {
+            Err(Error::Invalid("native IPC unavailable".into()))
+        }
+    }
+    pub(crate) fn connect_until(_: &PrivateDirectory, _: Instant) -> Result<Connection> {
+        Err(Error::Invalid("native IPC unavailable".into()))
     }
     pub(crate) fn request_as<T: JsonDeserialize>(
         _: &PrivateDirectory,
@@ -1266,7 +1362,7 @@ mod native {
     }
 }
 
-pub(super) use native::{Listener, detach, request_as};
+pub(crate) use native::{Listener, connect_until, detach, request_as};
 
 pub fn supported() -> Result<()> {
     if cfg!(any(unix, windows)) {
@@ -1360,7 +1456,10 @@ mod tests {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
                 if let Some(mut connection) = listener.accept().unwrap() {
-                    assert_eq!(connection.receive().unwrap().action, "attachment_status");
+                    assert_eq!(
+                        connection.receive().unwrap().action,
+                        ControlAction::AttachmentStatus
+                    );
                     connection.reply(&reply).unwrap();
                     return;
                 }
@@ -1372,7 +1471,7 @@ mod tests {
             &directory,
             &ControlRequest {
                 token: "c".repeat(64),
-                action: "attachment_status".into(),
+                action: ControlAction::AttachmentStatus,
             },
         )
         .unwrap();

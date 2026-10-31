@@ -16,7 +16,7 @@ use crate::{
         json_decode_attempt_error, norito_decode_attempt_error,
     },
     smartcontracts::Execute,
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
+    smartcontracts::isi::domain::isi::ensure_controller_policy,
     state::{
         StateTransaction, WorldReadOnly, public_lane_stake_share_matches_key,
         public_lane_validator_record_matches_key, retail_daily_limit_state as retail_state,
@@ -355,6 +355,19 @@ fn multisig_proposal_state_key(
     ))
     .expect("constant string must be a valid state path")
 }
+/// Kernel-owned commitment to the semantics approved for one proposal occurrence.
+fn multisig_proposal_expectation_key(
+    account: &AccountId,
+    proposal_id: &MultisigProposalId,
+) -> StatePath {
+    format!(
+        "multisig/proposal-expectation/{}/{proposal_id}",
+        HashOf::new(account)
+    )
+    .parse()
+    .expect("multisig expectation path must be valid")
+}
+
 fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_STATE}{DELIMITER}{}{DELIMITER}",
@@ -403,10 +416,10 @@ pub fn multisig_approval_outcome_state_key(
 }
 fn account_role_suffix(account: &AccountId) -> String {
     const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
-    if let Ok(canonical_suffix) = account.canonical_i105() {
-        if canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN {
-            return canonical_suffix;
-        }
+    if let Ok(canonical_suffix) = account.canonical_i105()
+        && canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN
+    {
+        return canonical_suffix;
     }
     HashOf::new(account).to_string()
 }
@@ -415,11 +428,10 @@ fn multisig_role_for(
     account: &AccountId,
 ) -> RoleId {
     let suffix = account_role_suffix(account);
-    let literal = if let Some(home_domain) = home_domain {
-        format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",)
-    } else {
-        format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}")
-    };
+    let literal = home_domain.map_or_else(
+        || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}"),
+        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",),
+    );
     literal.parse().expect("multisig role name must be valid")
 }
 fn rekey_multisig_account(
@@ -431,10 +443,15 @@ fn rekey_multisig_account(
     ensure_signatories_are_single(spec).map_err(map_validation_fail)?;
     let policy = multisig_policy_from_spec(spec)?;
     let updated_account = AccountId::new_multisig(policy);
-    ensure_controller_capabilities(
+    ensure_controller_policy(
         updated_account.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
+        state_transaction
+            .crypto_admission_policy()
+            .map_err(|message| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message.into(),
+                )
+            })?,
     )?;
     if &updated_account == account {
         return Ok(account.clone());
@@ -815,7 +832,7 @@ fn rekey_account_id(
     for (label, record) in rekey_record_updates {
         state_transaction
             .world
-            .insert_account_alias_binding(label.clone(), new_account.clone());
+            .insert_account_alias_binding(&(label.clone()), &(new_account.clone()));
         debug_assert_eq!(label, record.label);
         state_transaction.world.replace_account_rekey_record(record);
     }
@@ -852,21 +869,20 @@ fn rekey_account_id(
             .account_permissions
             .insert(new_account.clone(), perms);
     }
-    if old_multisig_role != new_multisig_role {
-        if let Some(mut role) = state_transaction
+    if old_multisig_role != new_multisig_role
+        && let Some(mut role) = state_transaction
             .world
             .roles
             .remove(old_multisig_role.clone())
-        {
-            role.id = new_multisig_role.clone();
-            state_transaction
-                .world
-                .roles
-                .insert(new_multisig_role.clone(), role);
-        }
+    {
+        role.id = new_multisig_role.clone();
+        state_transaction
+            .world
+            .roles
+            .insert(new_multisig_role.clone(), role);
     }
     let mut role_updates = Vec::new();
-    for (role_id, _) in state_transaction.world.account_roles.iter() {
+    for (role_id, ()) in state_transaction.world.account_roles.iter() {
         let mut updated = role_id.clone();
         if updated.account == *old_account {
             updated.account = new_account.clone();
@@ -973,7 +989,7 @@ fn rekey_account_id(
         .provider_owners
         .iter()
         .filter(|(_, owner)| *owner == old_account)
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for provider_id in provider_ids {
         state_transaction
@@ -1037,10 +1053,15 @@ pub(crate) fn replace_account_controller(
             AccountId::new_multisig(policy)
         }
     };
-    ensure_controller_capabilities(
+    ensure_controller_policy(
         new_account.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
+        state_transaction
+            .crypto_admission_policy()
+            .map_err(|message| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message.into(),
+                )
+            })?,
     )?;
     if &new_account == old_account {
         return Err(InstructionExecutionError::InvalidParameter(
@@ -1125,7 +1146,7 @@ fn replace_account_id_in_asset_id(
         asset_id.clone()
     }
 }
-fn replace_account_id_in_vec(accounts: &mut Vec<AccountId>, old: &AccountId, new: &AccountId) {
+fn replace_account_id_in_vec(accounts: &mut [AccountId], old: &AccountId, new: &AccountId) {
     for account in accounts.iter_mut() {
         replace_account_id(account, old, new);
     }
@@ -1562,7 +1583,7 @@ fn replace_account_id_in_oracle(
         .world
         .oracle_changes
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for change_id in change_ids {
         if let Some(change) = state_transaction.world.oracle_changes.get_mut(&change_id) {
@@ -1578,7 +1599,7 @@ fn replace_account_id_in_oracle(
         .world
         .oracle_disputes
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for dispute_id in dispute_ids {
         if let Some(dispute) = state_transaction.world.oracle_disputes.get_mut(&dispute_id) {
@@ -1615,19 +1636,18 @@ fn replace_account_id_in_oracle(
             .world
             .oracle_observations
             .get_mut(&observation_key)
+            && window.observations.contains_key(old)
         {
-            if window.observations.contains_key(old) {
-                let mut updated = BTreeMap::new();
-                for (provider, observation) in std::mem::take(&mut window.observations) {
-                    let provider = if provider == *old {
-                        new.clone()
-                    } else {
-                        provider
-                    };
-                    updated.insert(provider, observation);
-                }
-                window.observations = updated;
+            let mut updated = BTreeMap::new();
+            for (provider, observation) in std::mem::take(&mut window.observations) {
+                let provider = if provider == *old {
+                    new.clone()
+                } else {
+                    provider
+                };
+                updated.insert(provider, observation);
             }
+            window.observations = updated;
         }
     }
 }
@@ -1640,7 +1660,7 @@ fn replace_account_id_in_content_bundles(
         .world
         .content_bundles
         .iter()
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| *id)
         .collect();
     for bundle_id in bundle_ids {
         if let Some(bundle) = state_transaction.world.content_bundles.get_mut(&bundle_id) {
@@ -1857,7 +1877,7 @@ fn execute_approve(
             MultisigProposalTerminalStatus::Expired,
             &instruction.account,
         )?;
-        prune_down(state_transaction, &account, &instruction.proposal_id)?;
+        prune_down(state_transaction, &account, &instruction.proposal_id);
         return store_multisig_approval_outcome(
             state_transaction,
             &instruction.account,
@@ -1867,6 +1887,7 @@ fn execute_approve(
             MultisigApprovalOutcomeStatusV1::NotExecuted,
         );
     }
+    check_proposal_expectation(state_transaction, &proposal)?;
     upsert_subject_approval(&mut proposal.approvals, authority.clone());
     if approved_weight_by_subject(&spec, &proposal.approvals) < u32::from(spec.quorum.get()) {
         store_multisig_proposal_state(state_transaction, &proposal)?;
@@ -1898,7 +1919,7 @@ fn execute_approve(
             MultisigProposalTerminalStatus::Finalized,
             &instruction.account,
         )?;
-        prune_down(state_transaction, &account, &instruction.proposal_id)?;
+        prune_down(state_transaction, &account, &instruction.proposal_id);
         for inner in proposal.instructions {
             executor.execute_instruction(state_transaction, &account, inner)?;
         }
@@ -1972,7 +1993,8 @@ fn execute_cancel(
         MultisigProposalTerminalStatus::Canceled,
         &instruction.account,
     )?;
-    prune_down(state_transaction, &multisig_account, &proposal_id)
+    prune_down(state_transaction, &multisig_account, &proposal_id);
+    Ok(())
 }
 fn execute_invalidate_outstanding(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2072,7 +2094,8 @@ fn prune_expired_with_guard(
             MultisigProposalTerminalStatus::Expired,
             entrypoint_account,
         )?;
-        prune_down(state_transaction, multisig_account, proposal_id)
+        prune_down(state_transaction, multisig_account, proposal_id);
+        Ok(())
     })();
     active_path.remove(&execution_id);
     result
@@ -2081,12 +2104,15 @@ fn prune_down(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: &AccountId,
     proposal_id: &MultisigProposalId,
-) -> Result<(), ValidationFail> {
+) {
     state_transaction
         .world
         .smart_contract_state
         .remove(multisig_proposal_state_key(account, proposal_id));
-    Ok(())
+    state_transaction
+        .world
+        .smart_contract_state
+        .remove(multisig_proposal_expectation_key(account, proposal_id));
 }
 fn validate_registration(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2276,14 +2302,16 @@ fn is_multisig(
 ) -> Result<bool, ValidationFail> {
     match load_multisig_account_state_optional(state_transaction, account) {
         Ok(Some(_)) => Ok(true),
-        Ok(None) => Ok(false),
-        Err(ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-            FindError::Account(_),
-        ))) => Ok(false),
+        Ok(None)
+        | Err(
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Account(
+                _,
+            )))
+            | ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
+        ) => Ok(false),
         Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(_)))) => {
             Ok(false)
         }
-        Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -2455,7 +2483,8 @@ fn persist_multisig_account_state(
         home_domain_key(),
         Json::new(account_state.home_domain.clone()),
     );
-    let bytes = norito::to_bytes(account_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(account_state).map_err(|value| multisig_state_encode_error(&value))?;
     state_transaction
         .world
         .smart_contract_state
@@ -2483,7 +2512,7 @@ fn load_multisig_signatory_memberships(
     let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
         return Ok(BTreeSet::new());
     };
-    norito::decode_from_bytes(bytes).map_err(multisig_state_decode_error)
+    norito::decode_from_bytes(bytes).map_err(|value| multisig_state_decode_error(&value))
 }
 fn store_multisig_signatory_memberships(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2495,7 +2524,8 @@ fn store_multisig_signatory_memberships(
         state_transaction.world.smart_contract_state.remove(key);
         return Ok(());
     }
-    let bytes = norito::to_bytes(memberships).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(memberships).map_err(|value| multisig_state_encode_error(&value))?;
     state_transaction
         .world
         .smart_contract_state
@@ -2559,6 +2589,47 @@ fn store_multisig_proposal_state(
         &proposal_state.multisig_account_id,
         &proposal_state.proposal_id,
     );
+    let expectation_key = multisig_proposal_expectation_key(
+        &proposal_state.multisig_account_id,
+        &proposal_state.proposal_id,
+    );
+    let new_expectation = if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_none()
+    {
+        if state_transaction
+            .world
+            .smart_contract_state
+            .get(&expectation_key)
+            .is_some()
+        {
+            return Err(invalid_proposal_binding());
+        }
+        let expectation = crate::runtime::expectation::capture_instructions(
+            &proposal_state.instructions,
+            &state_transaction.world,
+        )
+        .map_err(ValidationFail::InstructionFailed)?;
+        crate::runtime::expectation::check(
+            &expectation,
+            &state_transaction.world,
+            state_transaction.block_height(),
+        )
+        .map_err(ValidationFail::InstructionFailed)?;
+        let digest =
+            crate::runtime::expectation::digest_owned(&expectation, &state_transaction.world)
+                .map_err(ValidationFail::InstructionFailed)?;
+        Some(norito::to_bytes(&digest).map_err(|error| {
+            retain_multisig_read_attempt(
+                state_transaction,
+                norito_decode_attempt_error(error, |error| multisig_state_encode_error(&error)),
+            )
+        })?)
+    } else {
+        None
+    };
     if let Some(previous) = state_transaction.world.smart_contract_state.get(&key) {
         let previous = decode_proposal_state_at_key(&key, previous)
             .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
@@ -2568,20 +2639,68 @@ fn store_multisig_proposal_state(
             return Err(invalid_proposal_binding());
         }
     }
-    let bytes = norito::to_bytes(proposal_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(proposal_state).map_err(|value| multisig_state_encode_error(&value))?;
+    if let Some(expectation) = new_expectation {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(expectation_key, expectation);
+    }
     state_transaction
         .world
         .smart_contract_state
         .insert(key, bytes);
     Ok(())
 }
+/// Original approvals never authorize the same instruction bytes under changed semantics.
+/// Renewed consent uses a new caller occurrence, leaving this one cancellable or expirable.
+fn check_proposal_expectation(
+    state_transaction: &StateTransaction<'_, '_>,
+    proposal: &MultisigProposalState,
+) -> Result<(), ValidationFail> {
+    use crate::runtime::expectation;
+    use iroha_data_model::runtime::lifecycle::RuntimeRejectionV1;
+    let mismatch = || {
+        ValidationFail::InstructionFailed(
+            RuntimeRejectionV1::ExpectationMismatch { wire_id: None }.into(),
+        )
+    };
+    let key =
+        multisig_proposal_expectation_key(&proposal.multisig_account_id, &proposal.proposal_id);
+    let bytes = state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .ok_or_else(mismatch)?;
+    let expected: Hash = norito::core::classify_decode_attempt(|| norito::decode_from_bytes(bytes))
+        .map_err(multisig_decode_attempt)
+        .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
+    let current =
+        expectation::capture_instructions(&proposal.instructions, &state_transaction.world)
+            .map_err(ValidationFail::InstructionFailed)?;
+    if expectation::digest_owned(&current, &state_transaction.world)
+        .map_err(ValidationFail::InstructionFailed)?
+        != expected
+    {
+        return Err(mismatch());
+    }
+    expectation::check(
+        &current,
+        &state_transaction.world,
+        state_transaction.block_height(),
+    )
+    .map_err(ValidationFail::InstructionFailed)
+}
+
 fn store_multisig_proposal_terminal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     terminal_state: &MultisigProposalTerminalState,
 ) -> Result<(), ValidationFail> {
     validate_terminal_occurrence(terminal_state)
         .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
-    let bytes = norito::to_bytes(terminal_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(terminal_state).map_err(|value| multisig_state_encode_error(&value))?;
     let key = multisig_proposal_terminal_state_key(
         &terminal_state.multisig_account_id,
         &terminal_state.proposal_id,
@@ -2620,7 +2739,8 @@ fn store_multisig_proposal_terminal_execution_state(
         state_transaction.block_height(),
         terminal_entrypoint_hash,
     );
-    let bytes = norito::to_bytes(&execution_state).map_err(multisig_state_encode_error)?;
+    let bytes =
+        norito::to_bytes(&execution_state).map_err(|value| multisig_state_encode_error(&value))?;
     let execution_key = multisig_proposal_terminal_execution_state_key(
         terminal_entrypoint_hash,
         entrypoint_account,
@@ -2669,7 +2789,7 @@ fn store_multisig_approval_outcome(
         state_transaction.block_height(),
         entrypoint_hash,
     );
-    let bytes = norito::to_bytes(&outcome).map_err(multisig_state_encode_error)?;
+    let bytes = norito::to_bytes(&outcome).map_err(|value| multisig_state_encode_error(&value))?;
     let outcome_key =
         multisig_approval_outcome_state_key(entrypoint_hash, entrypoint_account, proposal_id);
     if let Some(existing) = state_transaction
@@ -2711,10 +2831,10 @@ fn retain_multisig_read_attempt(
 
 fn multisig_decode_attempt(error: norito::core::DecodeAttemptError) -> Attempt<ValidationFail> {
     if cfg!(all(test, sumeragi_core_mutation = "HC67")) {
-        return Attempt::Rejected(multisig_state_decode_error(error.into_error()));
+        return Attempt::Rejected(multisig_state_decode_error(&(error.into_error())));
     }
     canonical_decode_attempt_error(error, |error| {
-        multisig_state_decode_error(error.into_error())
+        multisig_state_decode_error(&(error.into_error()))
     })
 }
 
@@ -2778,7 +2898,7 @@ fn decode_proposal_state_at_key(
     })
     .map_err(|error| {
         canonical_decode_attempt_error(error, |error| {
-            multisig_state_encode_error(error.into_error())
+            multisig_state_encode_error(&(error.into_error()))
         })
     })?;
     if !cfg!(all(test, sumeragi_core_mutation = "HC68"))
@@ -2808,8 +2928,9 @@ fn validate_terminal_occurrence(
     terminal: &MultisigProposalTerminalState,
 ) -> Result<(), Attempt<ValidationFail>> {
     let value = &terminal.proposal;
-    let hash = HashOf::try_new(&value.instructions)
-        .map_err(|error| multisig_instruction_decode_attempt(error, multisig_state_encode_error))?;
+    let hash = HashOf::try_new(&value.instructions).map_err(|error| {
+        multisig_instruction_decode_attempt(error, |value| multisig_state_encode_error(&value))
+    })?;
     if terminal.proposal_id != value.proposal_id
         || terminal.proposal_id
             != MultisigProposalId::derive(
@@ -2842,6 +2963,14 @@ pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
         if expected_network.is_some_and(|network| *network != proposal.network_id) {
             return Err(invalid_proposal_binding().into());
         }
+        let expectation_key =
+            multisig_proposal_expectation_key(&proposal.multisig_account_id, &proposal.proposal_id);
+        let expectation = world
+            .smart_contract_state()
+            .get(&expectation_key)
+            .ok_or_else(|| Attempt::Rejected(invalid_proposal_binding()))?;
+        norito::core::classify_decode_attempt(|| norito::decode_from_bytes::<Hash>(expectation))
+            .map_err(multisig_decode_attempt)?;
     }
     let prefix: StatePath = "multisig/proposal-terminal/"
         .parse()
@@ -2873,8 +3002,9 @@ fn proposal_instruction_attempt(
 ) -> Result<Option<MultisigInstructionBox>, Attempt<ValidationFail>> {
     match MultisigInstructionBox::try_from(instruction) {
         Ok(instruction) => Ok(Some(instruction)),
-        Err(error) => match multisig_instruction_decode_attempt(error, multisig_state_decode_error)
-        {
+        Err(error) => match multisig_instruction_decode_attempt(error, |value| {
+            multisig_state_decode_error(&value)
+        }) {
             Attempt::Deferred(reason) if !cfg!(all(test, sumeragi_core_mutation = "HC69")) => {
                 Err(Attempt::Deferred(reason))
             }
@@ -2991,7 +3121,7 @@ pub(crate) fn invalidate_outstanding_proposals(
             state_transaction,
             &proposal.multisig_account_id,
             &proposal.proposal_id,
-        )?;
+        );
     }
     Ok(invalidated)
 }
@@ -3021,10 +3151,10 @@ fn now_ms(state_transaction: &StateTransaction<'_, '_>) -> u64 {
         .try_into()
         .expect("block creation time must fit into u64")
 }
-fn multisig_state_encode_error(err: norito::Error) -> ValidationFail {
+fn multisig_state_encode_error(err: &norito::Error) -> ValidationFail {
     ValidationFail::InternalError(format!("failed to encode multisig state:\n{err}"))
 }
-fn multisig_state_decode_error(err: norito::Error) -> ValidationFail {
+fn multisig_state_decode_error(err: &norito::Error) -> ValidationFail {
     ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
         "multisig state malformed:\n{err}"
     )))
@@ -3052,6 +3182,7 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 mod tests {
     mod cancellation;
     mod proposal_attempt;
+    mod runtime_expectation;
     mod sccp_record;
     use super::*;
     use crate::{
@@ -3197,13 +3328,36 @@ mod tests {
         assert_eq!(header.prev_block_hash(), Some(original));
         assert_eq!(header.creation_time_ms, 1_000);
     }
+    #[test]
+    fn multisig_component_fixture_owns_policy_without_genesis_authority() {
+        let raw = World::new();
+        assert!(raw.parameters.view().crypto_policy().is_none());
+        let state = State::new_with_chain(
+            component_world_for_multisig(raw),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-component-policy"),
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            state
+                .world
+                .parameters
+                .view()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy(),
+        );
+    }
+
     macro_rules! tx {
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr) => {
             tx!($state, $block, $transaction, $world, $chain_id, 1_u64, 0);
         };
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr, $height:expr, $creation_time_ms:expr) => {
             let $state = State::new_with_chain(
-                $world,
+                component_world_for_multisig($world),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 ChainId::from($chain_id),
@@ -3569,11 +3723,10 @@ mod tests {
                 b"retail_registration|alias=clear-orbit-3941@hbl.sbp",
             ))
         });
-        let registration_account = if let Some(uaid) = registration_uaid {
-            Account::new(retail_account.clone()).with_uaid(Some(uaid))
-        } else {
-            Account::new(retail_account.clone())
-        };
+        let registration_account = registration_uaid.map_or_else(
+            || Account::new(retail_account.clone()),
+            |uaid| Account::new(retail_account.clone()).with_uaid(Some(uaid)),
+        );
         let resolved_alias = ResolvedAccountAliasV1::new(
             "clear-orbit-3941@hbl.sbp"
                 .parse()
@@ -3586,7 +3739,7 @@ mod tests {
         .expect("FI account alias selector");
         let quote = quote_resolved_name_registration(
             tx.world(),
-            selector,
+            &(selector),
             &retail_account,
             1,
             None,
@@ -4606,7 +4759,7 @@ mod tests {
     #[test]
     fn rekey_account_id_migrates_acquired_unbound_and_binding_cleared_leases() {
         let state = State::new_with_chain(
-            World::new(),
+            component_world_for_multisig(World::new()),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("multisig-rekey-unbound-alias-leases"),
@@ -4956,7 +5109,7 @@ mod tests {
             for old_account in accounts {
                 let new_account = new_account_id(&checked_keypair());
                 let state = State::new_with_chain(
-                    World::new(),
+                    component_world_for_multisig(World::new()),
                     Kura::blank_kura_for_testing(),
                     LiveQueryStore::start_test(),
                     ChainId::from("immutable-settlement-rekey"),
@@ -5301,7 +5454,7 @@ mod tests {
                 total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
-                status: active.clone(),
+                status: active,
                 activation_height: 1,
                 election_exit_height: None,
                 deactivation_height: None,
@@ -5484,9 +5637,7 @@ mod tests {
                 &tx.world.asset_definition_nonzero_holders,
                 &asset_def_id
             )
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .contains(&old_account)
+            .any(|x| x == &old_account)
         );
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
@@ -5604,9 +5755,7 @@ mod tests {
                         &tx.world.asset_definition_assets,
                         &definition
                     )
-                    .cloned()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .contains(&moved)
+                    .any(|x| x == &moved)
                 );
             }
             assert!(
@@ -6179,7 +6328,7 @@ mod tests {
             norito::codec::Encode::encode(&lease),
         );
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("multisig-repair-from-controller"),
@@ -6358,10 +6507,7 @@ mod tests {
             "multisig-trigger-contract-entrypoint"
         );
         let network_id = tx.network_id;
-        tx.tx_call_hash = Some(
-            tx.direct_execution_identity()
-                .expect("component approval root"),
-        );
+        tx.tx_call_hash = Some(tx.direct_execution_identity());
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -6926,10 +7072,7 @@ seiyaku TriggerDispatch { permission Admin;
             "multisig-staged-mint-json-args"
         );
         let network_id = tx.network_id;
-        tx.tx_call_hash = Some(
-            tx.direct_execution_identity()
-                .expect("component approval root"),
-        );
+        tx.tx_call_hash = Some(tx.direct_execution_identity());
         let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -7540,6 +7683,10 @@ seiyaku TriggerDispatch { permission Admin;
             "deferred instruction must reach the active executor".to_owned(),
         ))];
         let denied_hash = HashOf::new(&denied_instructions);
+        // Capture consent with the same installed executor that must later
+        // reject the deferred instruction, so this exercises executor reentry.
+        *tx.world.executor.get_mut() =
+            crate::executor::denying_executor_for_testing("deferred instruction denied");
         Executor::Initial
             .execute_instruction(
                 &mut tx,
@@ -7552,9 +7699,7 @@ seiyaku TriggerDispatch { permission Admin;
                 )
                 .into(),
             )
-            .expect("propose instruction before executor replacement");
-        *tx.world.executor.get_mut() =
-            crate::executor::denying_executor_for_testing("deferred instruction denied");
+            .expect("propose instruction with the denying executor captured");
         let denied_error = execute_approve(
             &mut tx,
             &signer_id,
@@ -7858,7 +8003,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &owner_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-single-to-multisig"),
@@ -7924,7 +8069,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-single"),
@@ -7989,7 +8134,7 @@ seiyaku TriggerDispatch { permission Admin;
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &signer1_id, &domain_id);
         let state = State::new_with_chain(
-            world,
+            component_world_for_multisig(world),
             kura,
             query_handle,
             ChainId::from("replace-multisig-to-multisig"),

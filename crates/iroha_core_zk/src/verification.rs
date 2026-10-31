@@ -236,7 +236,7 @@ mod tests;
 
 /// Assert a completed rejection in deterministic unit controls; local errors must fail the control.
 #[cfg(test)]
-pub(crate) fn expect_rejected<E>(error: VerificationAttemptError<E>) -> E {
+pub fn expect_rejected<E>(error: VerificationAttemptError<E>) -> E {
     match error {
         VerificationAttemptError::Rejected(rejected) => rejected,
         VerificationAttemptError::Deferred(original) => {

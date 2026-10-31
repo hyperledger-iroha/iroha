@@ -383,6 +383,10 @@ impl PreparedStreamTokenCheckV1 {
     /// Rejects signature, authority, instruction, network, size or deadline substitution.
     /// Every failure retains the exact signed graph and original preparation. Local refusals may
     /// retry only that same attempt; terminal rejection never reopens signing or renews its deadline.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn bind_signed_transaction(
         self,
         signed: SignedTransaction,
@@ -392,6 +396,10 @@ impl PreparedStreamTokenCheckV1 {
             .map_err(StreamTokenCheckBindingFailureV1)
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "This callback implements the fallible signer-check binding interface shared with scopes requiring validation"
+    )]
     fn binding_scope(&mut self) -> Result<BindingScope<'_>, NativeCheckErrorV1> {
         Ok(BindingScope {
             state: &self.state,
@@ -520,6 +528,10 @@ impl StreamTokenCheckBindingFailureV1 {
     ///
     /// # Errors
     /// Returns the unchanged signed custody and original rejection or latest local refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn retry(self) -> Result<PendingStreamTokenCheckV1, Self> {
         if !self.0.error.is_retryable() {
             return Err(self);
@@ -566,6 +578,10 @@ impl PendingStreamTokenCheckV1 {
     /// # Errors
     /// Consumes the pending attempt on any unavailable application/finality/history, current
     /// authority change, malformed time interval or expiration.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failure returns the original prepared check and signed attempt without allocating during refusal"
+    )]
     pub fn verify_finalized(
         self,
         sample_time: impl FnOnce() -> Result<StreamTokenEligibilityTimeIntervalV1, Error>,

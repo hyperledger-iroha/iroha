@@ -19,7 +19,7 @@ use std::{
 
 pub(super) mod cold_start_smoke;
 mod context_smoke;
-mod publication_smoke;
+pub(super) mod publication_smoke;
 mod reset_smoke;
 
 const LOCAL_CLEANUP: [&str; 3] = ["localnet", "down", "local"];
@@ -354,7 +354,6 @@ impl Harness {
         ] {
             self.execute_on_every_peer(deployment, expected)?;
         }
-        publication_smoke::run(self)?;
         context_smoke::run(self, &initial, &first)?;
         reset_smoke::run(self)
     }

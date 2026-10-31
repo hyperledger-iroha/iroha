@@ -28,7 +28,7 @@ pub(super) use mask_boundary::ImportedRows;
 mod reuse;
 #[path = "full_catalog/transport.rs"]
 mod transport;
-pub(crate) use acceptance::{
+pub use acceptance::{
     open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
     reopen_pinned_engineering_wallet_sources,
 };
@@ -112,7 +112,7 @@ fn fixture_scope() -> SourceScopeV1 {
     // Public engineering root only; the same scalar and compiled provider are
     // used by the test authority owner. No production signing material is read.
     let root = SigningKey::from_bytes((&[0x11; 32]).into()).unwrap();
-    let point = root.verifying_key().to_encoded_point(false);
+    let point = root.verifying_key().to_sec1_point(false);
     let sec1 = point.as_bytes();
     let provider = kagemusha_wallet_provider_contract_v1();
     SourceScopeV1::new(
@@ -298,7 +298,7 @@ fn complete_wallet_catalog_from_pinned_genesis() {
     publish(&output.join("producer-inventory.norito"), bytes).unwrap();
     publish(
         &output.join("producer-inventory.sha256"),
-        &BlobV1::of(&bytes).sha256,
+        &BlobV1::of(bytes).sha256,
     )
     .unwrap();
     // wallet_pack strictly imports both new and reused originals. Inspect the

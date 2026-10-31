@@ -44,11 +44,12 @@ pub struct TonMinterStateV1 {
     pub committee: CommitteeStateV1,
     /// At most three retained certified checkpoint commitments, in height order.
     pub checkpoints: Vec<(u64, H256)>,
-    /// Completed circulating supply.
+    /// Circulating supply, including mints dispatched to wallets; never above `max_supply`.
     pub total_supply: u128,
-    /// Reserved supply awaiting asynchronous completion.
+    /// Mint amounts admitted and awaiting their bucket's verdict, duplicates included. The
+    /// cap binds only when a consume is applied, so this is not part of it.
     pub pending_supply: u128,
-    /// Immutable maximum combined supply.
+    /// Immutable cap on `total_supply`, below `2^96`.
     pub max_supply: u128,
     /// Next outbound burn nonce.
     pub outbound_nonce: u64,
@@ -222,14 +223,13 @@ fn recovery_row(
 }
 
 fn label(bits: &mut TonBitReader<'_>, maximum: usize) -> Option<(u64, usize)> {
-    let length;
     let long_or_same = bits.read_bit()?;
     let same = if long_or_same {
         bits.read_bit()?
     } else {
         false
     };
-    if !long_or_same {
+    let length = if !long_or_same {
         let mut unary = 0;
         while bits.read_bit()? {
             unary += 1;
@@ -237,12 +237,12 @@ fn label(bits: &mut TonBitReader<'_>, maximum: usize) -> Option<(u64, usize)> {
                 return None;
             }
         }
-        length = unary;
+        unary
     } else if !same {
-        length = bits.read_usize(ton_hashmap_uint_len_bits(maximum))?;
+        bits.read_usize(ton_hashmap_uint_len_bits(maximum))?
     } else {
         let value = bits.read_bit()?;
-        length = bits.read_usize(ton_hashmap_uint_len_bits(maximum))?;
+        let length = bits.read_usize(ton_hashmap_uint_len_bits(maximum))?;
         if length > maximum {
             return None;
         }
@@ -258,7 +258,7 @@ fn label(bits: &mut TonBitReader<'_>, maximum: usize) -> Option<(u64, usize)> {
             },
             length,
         ));
-    }
+    };
     if length > maximum {
         return None;
     }
@@ -346,7 +346,8 @@ fn parse(cells: &TonAccountCells) -> Option<TonMinterStateV1> {
         || revision == 0
         || max_supply == 0
         || max_supply >= (1_u128 << 96)
-        || total_supply.checked_add(pending_supply)? > max_supply
+        // In-flight duplicates may push `total + pending` past the cap; the supply cannot.
+        || total_supply > max_supply
     {
         return None;
     }

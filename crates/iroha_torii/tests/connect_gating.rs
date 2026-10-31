@@ -392,7 +392,7 @@ fn connect_config_fixture_uses_checked_key_generation() {
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::defaults;
     use iroha_crypto::streaming::StreamingKeyMaterial;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
 
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
 
@@ -509,9 +509,12 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            telemetry,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                telemetry,
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid Torii Connect fixture")

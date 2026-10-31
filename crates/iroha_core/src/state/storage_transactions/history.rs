@@ -156,7 +156,7 @@ pub(super) fn new_identity(
 
 /// One original preparation. A capacity retry resumes this same cursor/batch;
 /// it cannot rebuild already completed work against a newly sampled cut.
-pub(crate) struct Pending {
+pub struct Pending {
     pub(super) predecessor: Identity,
     pub(super) latest: Option<Tip>,
     pub(super) replacement: bool,
@@ -307,7 +307,7 @@ impl Pending {
                 writer
                     .try_release_into_observed(
                         releases,
-                        |writer| writer.detach(),
+                        concread::bptree::BptreeMapWriteTxn::detach,
                         || storage.blocks.is_poisoned(),
                     )
                     .unwrap_or_else(|_| unreachable!("original physical history release family")),
@@ -429,7 +429,7 @@ impl TransactionsStorage {
 
     /// Construct the sole historical representation from an explicit original pool.
     pub fn try_new(budget: AllocationBudget) -> Result<Self, MembershipAdmissionError> {
-        budget.with_deferred_refund_notifications(|_| {
+        budget.clone().with_deferred_refund_notifications(|_| {
             let mut identity_charge = None;
             let mut history_released = None;
             let mut released = None;
@@ -482,7 +482,7 @@ impl TransactionsStorage {
                 released: released.expect("logical notification admitted with original root"),
                 history_released: history_released
                     .expect("physical notification admitted with original root"),
-                budget: budget.clone(),
+                budget,
                 pending: Mutex::new(None),
                 publication_sequence: AtomicU64::new(0),
             })

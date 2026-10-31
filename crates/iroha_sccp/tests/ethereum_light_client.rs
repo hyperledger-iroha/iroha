@@ -950,7 +950,7 @@ fn reinitializing_a_frozen_light_client_discards_forged_sets_and_checkpoints() {
     )
     .expect("a frozen light client is re-initialized");
     assert_eq!(initial.purge, SccpLcPurgeV1::DiscardUnvetted);
-    assert!(initial.superseded_sets.is_empty());
+    assert_eq!(initial.superseded_sets, []);
     memory.install(ETH, &initial);
     // Neither the forged checkpoint nor the forged committee survives.
     assert_eq!(

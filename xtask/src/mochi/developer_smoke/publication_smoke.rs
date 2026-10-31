@@ -37,7 +37,32 @@ const LIBRARY_SOURCE: &str = "module InstalledLibrary { export fn value() -> int
 const CONSUMER_SOURCE: &str = "seiyaku InstalledConsumer { view fn quote(int cups) authorize(anyone) -> int { return published::value(); } }";
 const PROGRESS_MESSAGE: &str = "publication did not reach exact finalized release verification";
 
-pub(super) fn run(harness: &mut Harness) -> Result<(), Box<dyn Error>> {
+const PUBLICATION_START: [&str; 4] = ["localnet", "up", "local", "--with-storage"];
+
+pub(in crate::mochi) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
+    // The config-free deployment fixture intentionally uses Standard. A fresh store is
+    // required to select storage services without replacing any retained generation.
+    let mut harness = Harness::new(kagami)?;
+    let result = (|| {
+        let started = harness.command(&PUBLICATION_START)?;
+        super::require_phase(&started, "ready", 4)?;
+        exercise(&mut harness)
+    })();
+    // Even failed startup may have created a worker. Require authenticated cleanup before
+    // dropping the fixture, independently of whether any publication command was reached.
+    let stopped = harness
+        .command(&super::LOCAL_CLEANUP)
+        .and_then(|value| super::require_zero_owned_resources(&value));
+    match (result, stopped) {
+        (Ok(()), Ok(())) => Ok(()),
+        (result, stopped) => {
+            let root = harness.root.keep();
+            Err(format!("installed publication smoke failed; retained diagnostics at {}: flow={result:?}; cleanup={stopped:?}", root.display()).into())
+        }
+    }
+}
+
+fn exercise(harness: &mut Harness) -> Result<(), Box<dyn Error>> {
     let initial = harness.command(&["localnet", "status"])?;
     super::require_phase(&initial, "ready", 4)?;
     let store = ManagedStore::open(&harness.state)?;

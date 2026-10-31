@@ -2,7 +2,7 @@
 # SCCP v1 EVM contract smoke (`specs/sccp.md` §5.2, §5.4, §5.5, §11).
 #
 # Builds `contracts/evm/sccp/SccpTairaXor.sol` and its one library,
-# `contracts/evm/sccp/lib/BLS12_381.sol`, with the pinned native solc 0.8.31
+# `contracts/evm/sccp/lib/BLS12_381.sol`, with the pinned native solc 0.8.38
 # through `scripts/contract_artifact_corridor.py`, and proves that a mutated
 # manifest, a stale contract or library source and a mutated compiler are
 # refused. It then installs and audits the locked EDR runtime in a private
@@ -12,7 +12,7 @@
 # under chain ids 1 and 56. The gas suite compares every §5.4 row with
 # `contracts/evm/sccp/test/gas_baseline_v1.json`.
 #
-# Prerequisites: Python 3.9+, Node.js >= 22 with npm, and HTTPS for the first
+# Prerequisites: Python 3.9+, Node.js >= 22.23.4 with npm, and HTTPS for the first
 # compiler download (cached by SHA-256 under target/sccp-contract-tooling) and
 # for `npm ci` and `npm audit`. Runs natively on macOS arm64/x86-64 and Linux
 # x86-64/arm64; no Rosetta or Docker. Developer overrides:
@@ -152,7 +152,7 @@ cp scripts/contract_tooling/evm-runtime/package.json \
 )
 
 echo "Running the EDR provider test (EIP-2537 precompiles under Prague and Osaka)."
-NODE_PATH="$RUNTIME_DIR/node_modules" "$NODE_BIN" --test scripts/tests/contract_edr_provider_test.cjs
+SCCP_EVM_RUNTIME_DIR="$RUNTIME_DIR" "$NODE_BIN" --test scripts/tests/contract_edr_provider_test.cjs
 
 # These adapter checks use committed structural fixtures, not a live export or
 # an EDR fork run, so keep them outside the fork-suite and gas-report guards.

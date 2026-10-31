@@ -367,7 +367,7 @@ fn policy_revision_cannot_be_used_to_reset_the_same_identity_day_usage() {
     )
     .expect("initial debit preflight")
     .expect("installed policy");
-    retail_state::put_usage(&mut stx.world, first.key.clone(), first.after)
+    retail_state::put_usage(&mut stx.world, &first.key, &first.after)
         .expect("test-only canonical usage write");
 
     // A forged revision, even with a matching rewritten marker and bindings,

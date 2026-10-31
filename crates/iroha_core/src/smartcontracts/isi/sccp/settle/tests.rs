@@ -194,7 +194,7 @@ fn escrow_of(stx: &StateTransaction<'_, '_>, network: SccpNetworkV1) -> AccountI
 }
 
 fn set_enabled(stx: &mut StateTransaction<'_, '_>, enabled: bool) {
-    let mut params = store::parameters::get(&*stx.world).clone().expect("SCCP");
+    let mut params = (*store::parameters::get(&*stx.world)).expect("SCCP");
     params.enabled = enabled;
     store::parameters::set(stx, Some(params));
 }
@@ -251,9 +251,37 @@ fn retired_account(stx: &mut StateTransaction<'_, '_>, seed: u8) -> AccountId {
     account
 }
 
-/// Select a real sink identity; `None` selects a permanently unregistered fixture account.
+/// Author the original sink before this component opens its block.
+fn set_original_fee_sink(state: &State, sink: &AccountId) {
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("original funded fee fixture block");
+    let mut fees = parameters
+        .root_fees()
+        .expect("explicit fixture fees")
+        .clone();
+    fees.fee_sink_account_id = sink.clone();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(fees.into_custom_parameter().unwrap()),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("author original settlement fee policy");
+    parameters.commit();
+}
+
+/// Mutate only the pending policy: settlement must still use the original sink.
+/// `None` selects a permanently unregistered pending fixture account.
 fn set_fee_sink(stx: &mut StateTransaction<'_, '_>, sink: Option<&AccountId>) {
-    stx.nexus.fees.fee_sink_account_id = sink.cloned().unwrap_or_else(|| authority(253));
+    let mut fees = stx
+        .root_fee_policy()
+        .expect("original settlement fees")
+        .clone();
+    fees.fee_sink_account_id = sink.cloned().unwrap_or_else(|| authority(253));
+    stx.world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter().unwrap(),
+        ))
+        .expect("author pending settlement fee policy");
 }
 
 /// Record an outbound message of `amount_xor` XOR from `sender` through `RecordSccpMessage`.
@@ -452,8 +480,331 @@ fn a_release_without_a_fee_registers_and_credits_the_recipient() {
 }
 
 #[test]
+fn inbound_local_capacity_refusal_never_records_a_pending_credit_reason() {
+    let _fixture_retirement_pin = crossbeam_epoch::pin();
+    for fail_during_guards in [false, true] {
+        let state = state();
+        let mut block = state.block(header(5));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"sccp-inbound-capacity"));
+        install(&mut tx);
+        fund(&mut tx, ETH, 1, 10 * ONE_XOR);
+        let recipient = authority(21);
+        if fail_during_guards {
+            recipients::ensure_registered(&mut tx, &recipient).unwrap();
+        }
+        set_enabled(&mut tx, false);
+        let id = prove(&mut tx, 0, ONE_XOR, address_bytes(&recipient), 0);
+        set_enabled(&mut tx, true);
+        let record = store::inbound_messages::get(&*tx.world, &id)
+            .unwrap()
+            .clone();
+        let status = record.status;
+        let events = sccp_events(&tx);
+        let budget = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let baseline = budget.reserved_bytes();
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None]).unwrap();
+        let input_bytes = budget.reserved_bytes() - baseline;
+        drop(prepared);
+        let spare = if fail_during_guards { input_bytes } else { 0 };
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes() - baseline - spare)
+            .unwrap();
+        let result = release_inbound(
+            &mut tx,
+            id,
+            record,
+            ONE_XOR,
+            (recipient.clone(), fail_during_guards),
+        );
+        assert!(tx.is_execution_deferred());
+        assert_eq!(
+            inbound_status(&tx, &id),
+            status,
+            "HC972 local inbound refusal must not write a pending-credit reason"
+        );
+        result.expect_err("local resource exhaustion must abort the attempt");
+        assert_eq!(sccp_events(&tx), events);
+        assert_eq!(tx.world.account(&recipient).is_ok(), fail_during_guards);
+        assert_eq!(xor_balance(&*tx.world, &recipient), 0);
+        assert_eq!(liability(&tx, ETH, 1), 10 * ONE_XOR);
+        assert_eq!(store::pending_count(&*tx.world, &(ETH, 1)), (1, 0));
+        drop(held);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_escrow_invariant(&*tx.world, "local inbound refusal");
+    }
+}
+
+#[test]
+fn refund_local_capacity_refusal_preserves_pending_reason_and_registration() {
+    let _fixture_retirement_pin = crossbeam_epoch::pin();
+    for fail_during_guards in [false, true] {
+        let state = state();
+        let mut block = state.block(header(5));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"sccp-refund-capacity"));
+        install(&mut tx);
+        let recipient = authority(22);
+        if fail_during_guards {
+            recipients::ensure_registered(&mut tx, &recipient).unwrap();
+        }
+        let id = seed_outbound(&mut tx, ETH, 0, &recipient, ONE_XOR);
+        set_enabled(&mut tx, false);
+        void_expired(&mut tx, ETH, 0).unwrap();
+        set_enabled(&mut tx, true);
+        let status = outbound_status(&tx, &id);
+        let budget = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let baseline = budget.reserved_bytes();
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None]).unwrap();
+        let input_bytes = budget.reserved_bytes() - baseline;
+        drop(prepared);
+        let spare = if fail_during_guards { input_bytes } else { 0 };
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes() - baseline - spare)
+            .unwrap();
+        let mut events = Vec::new();
+        let result = refund(&mut tx, id, &mut events, true);
+        assert!(tx.is_execution_deferred());
+        assert_eq!(
+            outbound_status(&tx, &id),
+            status,
+            "HC972 local refund refusal must not write a pending-credit reason"
+        );
+        result.expect_err("local resource refusal must abort refund");
+        assert!(events.is_empty());
+        assert_eq!(tx.world.account(&recipient).is_ok(), fail_during_guards);
+        assert_eq!(xor_balance(&*tx.world, &recipient), 0);
+        assert_eq!(liability(&tx, ETH, 1), ONE_XOR);
+        assert_eq!(store::pending_count(&*tx.world, &(ETH, 1)), (0, 1));
+        drop(held);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_escrow_invariant(&*tx.world, "local refund refusal");
+    }
+}
+
+#[test]
+fn late_sccp_preflight_refusal_cannot_publish_tentative_recipient_registration() {
+    use iroha_allocation::AllocationCharge;
+    let state = state();
+    let before_state = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let recipient = authority(23);
+    {
+        let mut block = state.block(header(5));
+        let id = {
+            let mut setup = block.transaction_for_fastpq_testing(Hash::new(b"late-refusal-setup"));
+            install(&mut setup);
+            fund(&mut setup, ETH, 1, 10 * ONE_XOR);
+            set_enabled(&mut setup, false);
+            let id = prove(&mut setup, 0, ONE_XOR, address_bytes(&recipient), 0);
+            set_enabled(&mut setup, true);
+            setup.apply();
+            id
+        };
+        let events_before = block.world.pending_external_events().len();
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"late-refusal-attempt"));
+        let original_status = inbound_status(&tx, &id);
+        let prepared =
+            escrow::PreparedReleases::new(&tx, ETH, &[Some((&recipient, ONE_XOR)), None])
+                .unwrap()
+                .unwrap();
+        recipients::register_recipient(&mut tx, &recipient, ETH, Some(id)).unwrap();
+        let mut account_backings = 0;
+        recipient
+            .for_each_admission_clone_layout(|_| account_backings += 1)
+            .unwrap();
+        let layout = std::alloc::Layout::array::<AllocationCharge>(account_backings).unwrap();
+        // Exercise only the preflight's fallible allocation boundary. Registration
+        // has completed; the separate capacity controls above cover both actual
+        // settlement callers' propagation of a refusal returned by this check.
+        let (result, refused) =
+            crate::test_allocations::refuse_one_layout_during(layout, || prepared.check(&tx));
+        assert!(refused);
+        assert!(result.is_err());
+        assert!(
+            tx.world.account(&recipient).is_ok(),
+            "exercise a genuinely tentative registration"
+        );
+        assert_eq!(inbound_status(&tx, &id), original_status);
+        assert!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .allocator_refusal()
+                .is_some()
+        );
+        tx.apply();
+        assert!(
+            block.world.account(&recipient).is_err(),
+            "deferred overlay must not publish registration"
+        );
+        assert_eq!(
+            store::inbound_messages::get(&block.world, &id)
+                .unwrap()
+                .status,
+            original_status
+        );
+        assert_eq!(block.world.pending_external_events().len(), events_before);
+        assert_eq!(xor_balance(&block.world, &recipient), 0);
+        assert_escrow_invariant(&block.world, "late refusal dropped at transaction apply");
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(&state),
+        before_state
+    );
+}
+
+#[test]
+fn maximal_codec3_multisig_recipient_releases_without_decoder_deferral() {
+    use iroha_data_model::{
+        account::controller::{MultisigMember, MultisigPolicy},
+        sccp::events::SccpInboundProvenV1,
+    };
+    use iroha_sccp::v1::constants::MAX_TAIRA_ACCOUNT_BYTES;
+
+    let members = (1_u8..=27)
+        .map(|seed| {
+            let algorithm = if seed <= 9 {
+                Algorithm::Ed25519
+            } else {
+                Algorithm::Secp256k1
+            };
+            let key = KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("valid member key");
+            MultisigMember::new(key.public_key().clone(), 1).expect("positive member weight")
+        })
+        .collect();
+    // The constructor checks unique keys and orders the weighted members canonically.
+    let multisig = MultisigPolicy::new(1, members).expect("canonical multisig policy");
+    assert_eq!(multisig.version(), 1);
+    assert_eq!(multisig.threshold(), 1);
+    assert_eq!(multisig.members().len(), 27);
+    assert!(multisig.members().iter().all(|member| member.weight() == 1));
+    for (algorithm, expected) in [(Algorithm::Ed25519, 9), (Algorithm::Secp256k1, 18)] {
+        assert_eq!(
+            multisig
+                .members()
+                .iter()
+                .filter(|member| member.public_key().algorithm() == algorithm)
+                .count(),
+            expected
+        );
+    }
+    let recipient = AccountId::new_multisig(multisig);
+    let recipient_bytes = address_bytes(&recipient);
+    // Seven fixed bytes plus five framing bytes and the key bytes per member.
+    assert_eq!(recipient_bytes.len(), 7 + 9 * (5 + 32) + 18 * (5 + 33));
+    assert_eq!(recipient_bytes.len(), MAX_TAIRA_ACCOUNT_BYTES);
+
+    let state = state();
+    let mut block = state.block(header(5));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"maximal-codec3-recipient"));
+    let original_policy = stx
+        .crypto_admission_policy()
+        .expect("fixture policy retained from the block preimage")
+        .clone();
+    assert!(original_policy.allows(Algorithm::Ed25519));
+    assert!(original_policy.allows(Algorithm::Secp256k1));
+    install(&mut stx);
+    fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+    let escrow = escrow_of(&stx, ETH);
+    let holder_after_lock = xor_balance(&*stx.world, &holder());
+    assert_eq!(xor_balance(&*stx.world, &escrow), 10 * ONE_XOR);
+    assert!(stx.world.account(&recipient).is_err());
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    let events_before = sccp_events(&stx).len();
+
+    // Pass only canonical bytes to record_proven -> settle_inbound -> classify_recipient.
+    let id = prove(&mut stx, 0, 3 * ONE_XOR, recipient_bytes.clone(), 0);
+    assert_eq!(
+        inbound_status(&stx, &id),
+        SccpInboundStatusV1::Released(SccpInboundSettledV1 {
+            height: 5,
+            payout: 3 * ONE_XOR,
+        })
+    );
+    assert!(
+        stx.world.account(&recipient).is_ok(),
+        "registered exact identity"
+    );
+    assert_eq!(xor_balance(&*stx.world, &recipient), 3 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &escrow), 7 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &holder()), holder_after_lock);
+    assert_eq!(liability(&stx, ETH, 1), 7 * ONE_XOR);
+    assert_eq!(stranded(&stx, ETH), 0);
+    assert_eq!(store::pending_count(&*stx.world, &(ETH, 1)), (0, 0));
+    assert_eq!(store::outbound_messages::iter(&*stx.world).count(), 0);
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    assert_eq!(stx.crypto_admission_policy().unwrap(), &original_policy);
+    let record = store::inbound_messages::get(&*stx.world, &id).expect("proven record");
+    assert_eq!(
+        SccpTransferPayloadV1::decode(&record.payload)
+            .expect("stored canonical payload")
+            .recipient
+            .bytes,
+        recipient_bytes
+    );
+    let events = sccp_events(&stx);
+    assert_eq!(
+        &events[events_before..],
+        &[
+            SccpEvent::InboundProven(SccpInboundProvenV1 {
+                message_id: id,
+                network: ETH,
+                revision: 1,
+                amount: 3 * ONE_XOR,
+                source_locator: SccpSourceLocatorV1 {
+                    source_height: 100,
+                    block_hash: [7; 32],
+                    index_in_block: 0,
+                },
+                fee_due: 0,
+            }),
+            SccpEvent::RecipientRegistered(SccpRecipientRegisteredV1 {
+                account: recipient.clone(),
+                network: ETH,
+                message_id: Some(id),
+            }),
+            SccpEvent::InboundReleased(SccpInboundReleasedV1 {
+                message_id: id,
+                network: ETH,
+                revision: 1,
+                recipient: recipient.clone(),
+                amount: 3 * ONE_XOR,
+                fee: 0,
+            }),
+        ]
+    );
+    assert_escrow_invariant(&*stx.world, "maximal recipient release");
+    assert_pending_counts(&stx, "maximal recipient release");
+
+    execute_settle(SettleSccpV1::inbound(id), &holder(), &mut stx).expect_err("not pending");
+    assert_eq!(xor_balance(&*stx.world, &recipient), 3 * ONE_XOR);
+    assert_eq!(xor_balance(&*stx.world, &escrow), 7 * ONE_XOR);
+    assert_eq!(liability(&stx, ETH, 1), 7 * ONE_XOR);
+    assert_eq!(
+        sccp_events(&stx),
+        events,
+        "retry cannot publish another release"
+    );
+    assert!(!stx.is_execution_deferred());
+    assert!(stx.borrow_execution_deferral().is_none());
+    assert_eq!(stx.crypto_admission_policy().unwrap(), &original_policy);
+    assert_escrow_invariant(&*stx.world, "maximal recipient retry");
+    assert_pending_counts(&stx, "maximal recipient retry");
+}
+
+#[test]
 fn a_release_with_a_self_claim_fee_pays_the_fee_sink() {
     let state = state();
+    set_original_fee_sink(&state, &authority(30));
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"release-with-fee"));
     install(&mut stx);
@@ -498,8 +849,127 @@ fn a_release_with_a_self_claim_fee_pays_the_fee_sink() {
 }
 
 #[test]
+fn pending_and_applied_fee_policy_cannot_redirect_original_settlement_sink() {
+    let state = state();
+    let original = authority(30);
+    let pending_sink = authority(31);
+    set_original_fee_sink(&state, &original);
+    let mut block = state.block(header(5));
+    {
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"original-sink-setup"));
+        install(&mut stx);
+        fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+        recipients::ensure_registered(&mut stx, &original).unwrap();
+        recipients::ensure_registered(&mut stx, &pending_sink).unwrap();
+        stx.apply();
+    }
+    {
+        let mut dropped = block.transaction();
+        set_fee_sink(&mut dropped, Some(&pending_sink));
+        assert_eq!(
+            dropped.root_fee_policy().unwrap().fee_sink_account_id,
+            original
+        );
+    }
+    {
+        let mut applied = block.transaction();
+        assert_eq!(
+            applied
+                .world
+                .parameters
+                .root_fees()
+                .unwrap()
+                .fee_sink_account_id,
+            original
+        );
+        set_fee_sink(&mut applied, Some(&pending_sink));
+        applied.apply();
+    }
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"original-sink-release"));
+    assert_eq!(
+        stx.world
+            .parameters
+            .root_fees()
+            .unwrap()
+            .fee_sink_account_id,
+        pending_sink
+    );
+    assert_eq!(stx.root_fee_policy().unwrap().fee_sink_account_id, original);
+    let recipient = authority(32);
+    let id = prove(&mut stx, 0, ONE_XOR, address_bytes(&recipient), FEE);
+    assert!(matches!(
+        inbound_status(&stx, &id),
+        SccpInboundStatusV1::Released(_)
+    ));
+    assert_eq!(xor_balance(&*stx.world, &original), FEE);
+    assert_eq!(xor_balance(&*stx.world, &pending_sink), 0);
+    assert_eq!(xor_balance(&*stx.world, &recipient), ONE_XOR - FEE);
+    assert_escrow_invariant(
+        &*stx.world,
+        "original sink after pending and applied policies",
+    );
+    assert_pending_counts(&stx, "original sink after pending and applied policies");
+}
+
+#[test]
+fn missing_original_fee_policy_refuses_before_release_effects() {
+    let state = state();
+    {
+        let mut cell = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        let mut authored = cell.get().get().clone();
+        assert!(
+            authored
+                .remove_custom_parameter(
+                    &iroha_data_model::block::consensus::RootFeePolicy::parameter_id(),
+                )
+                .unwrap()
+                .is_some()
+        );
+        let retained = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded absent original fee fixture");
+        *cell.get_mut() = retained;
+        cell.commit();
+    }
+    let mut block = state.block(header(5));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"missing-original-sink"));
+    install(&mut stx);
+    fund(&mut stx, ETH, 1, 10 * ONE_XOR);
+    set_enabled(&mut stx, false);
+    let recipient = authority(32);
+    let id = prove(&mut stx, 0, ONE_XOR, address_bytes(&recipient), FEE);
+    set_enabled(&mut stx, true);
+    let before_record = store::inbound_messages::get(&*stx.world, &id)
+        .unwrap()
+        .clone();
+    let before_liability = liability(&stx, ETH, 1);
+    let before_pending = store::pending_count(&*stx.world, &(ETH, 1));
+    let before_events = sccp_events(&stx);
+    let escrow = escrow_of(&stx, ETH);
+    let before_escrow = xor_balance(&*stx.world, &escrow);
+    let error = execute_settle(SettleSccpV1::inbound(id), &holder(), &mut stx).unwrap_err();
+    assert!(matches!(error, Error::InvariantViolation(ref message)
+        if message.as_ref() == "SCCP settlement: original committed root fee policy is absent"));
+    assert_eq!(
+        store::inbound_messages::get(&*stx.world, &id).unwrap(),
+        &before_record
+    );
+    assert_eq!(liability(&stx, ETH, 1), before_liability);
+    assert_eq!(store::pending_count(&*stx.world, &(ETH, 1)), before_pending);
+    assert_eq!(sccp_events(&stx), before_events);
+    assert_eq!(xor_balance(&*stx.world, &escrow), before_escrow);
+    assert!(stx.world.account(&recipient).is_err());
+    assert_eq!(xor_balance(&*stx.world, &recipient), 0);
+    assert_escrow_invariant(&*stx.world, "missing original fee policy");
+    assert_pending_counts(&stx, "missing original fee policy");
+}
+
+#[test]
 fn every_hold_reason_keeps_the_proof_and_is_retried_by_settle() {
     let state = state();
+    set_original_fee_sink(&state, &authority(26));
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"hold-reasons"));
     install(&mut stx);
@@ -578,6 +1048,18 @@ fn every_hold_reason_keeps_the_proof_and_is_retried_by_settle() {
         "an unregistered sink"
     );
     set_fee_sink(&mut stx, None);
+    assert_eq!(
+        stx.root_fee_policy().unwrap().fee_sink_account_id,
+        unknown_sink
+    );
+    assert_eq!(
+        stx.world
+            .parameters
+            .root_fees()
+            .unwrap()
+            .fee_sink_account_id,
+        authority(253)
+    );
     settle(&mut stx, id).expect_err("another absent sink is the same hold");
     let sink = refusing_account(&mut stx, 26);
     set_fee_sink(&mut stx, Some(&sink));
@@ -619,9 +1101,19 @@ fn every_hold_reason_keeps_the_proof_and_is_retried_by_settle() {
 #[test]
 fn recipients_that_can_never_be_credited_bounce() {
     let state = state();
-    let mut crypto = (*state.crypto()).clone();
-    crypto.allowed_signing = vec![Algorithm::Ed25519];
-    state.install_crypto_snapshot_for_isolated_replay(crypto);
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Ed25519,
+    ])
+    .unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded parameter fixture block");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy.into_parameter().unwrap(),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .unwrap();
+    parameters.commit();
     let mut block = state.block(header(5));
     let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"bounces"));
     install(&mut stx);
@@ -1118,7 +1610,7 @@ fn a_void_never_releases_a_multisig_sender_inline() {
     assert_pending_counts(&stx, "after the multisig void");
 }
 
-/// Deterministic 64-bit generator (SplitMix64), so every seed replays exactly.
+/// Deterministic 64-bit generator (`SplitMix64`), so every seed replays exactly.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -1335,9 +1827,11 @@ impl Outcomes {
 
 /// Run `steps` pseudo-random value operations from `seed`, each in its own transaction that
 /// applies only when it succeeds, checking the escrow invariant and the pending counts after
-/// every step, and return the final outcomes.
+/// every step, and return the final outcomes. Pending fee-sink policy toggles
+/// are adversarial writes only: the original block custody remains fixed.
 fn run_operation_sequence(seed: u64, steps: u64) -> Outcomes {
     let state = state();
+    set_original_fee_sink(&state, &authority(60));
     let mut block = state.block(header(5));
     let accounts = {
         let mut stx = block.transaction_for_fastpq_testing(Hash::new(format!("seq/{seed}")));
@@ -1358,7 +1852,13 @@ fn run_operation_sequence(seed: u64, steps: u64) -> Outcomes {
     let (mut inbound_nonce, mut sink_resolves) = (0_u64, true);
     for step in 0..steps {
         let mut stx = block.transaction_for_fastpq_testing(Hash::new(format!("seq/{seed}/{step}")));
+        // Governance attempts in this block never redirect its original fees.
+        // The standalone hold test covers an actually unavailable original sink.
         set_fee_sink(&mut stx, sink_resolves.then_some(&accounts.sink));
+        assert_eq!(
+            stx.root_fee_policy().unwrap().fee_sink_account_id,
+            accounts.sink
+        );
         let (operation, result) = random_operation(
             &mut stx,
             &mut rng,
@@ -1404,24 +1904,42 @@ fn release_credits_skip_zero_legs_and_merge_a_self_sink() {
     let unavailable = SccpPendingReasonV1::FeeSinkUnavailable;
     assert_eq!(
         release_credits(&recipient, 5, None, 0),
-        vec![(recipient.clone(), 5, refused)]
+        [Some((&recipient, 5, refused)), None]
     );
+    let both = release_credits(&recipient, 5, Some(&sink), 2);
     assert_eq!(
-        release_credits(&recipient, 5, Some(&sink), 2),
-        vec![
-            (recipient.clone(), 5, refused),
-            (sink.clone(), 2, unavailable)
+        both,
+        [
+            Some((&recipient, 5, refused)),
+            Some((&sink, 2, unavailable))
         ]
     );
+    assert!(std::ptr::eq(
+        both[0].expect("recipient credit").0,
+        &raw const recipient
+    ));
+    assert!(std::ptr::eq(
+        both[1].expect("fee credit").0,
+        &raw const sink
+    ));
     assert_eq!(
         release_credits(&recipient, 0, Some(&sink), 2),
-        vec![(sink.clone(), 2, unavailable)]
+        [Some((&sink, 2, unavailable)), None]
     );
     assert_eq!(
         release_credits(&recipient, 5, Some(&recipient), 2),
-        vec![(recipient.clone(), 7, refused)]
+        [Some((&recipient, 7, refused)), None]
     );
-    assert!(release_credits(&recipient, 0, None, 0).is_empty());
+    assert_eq!(release_credits(&recipient, 0, None, 0), [None, None]);
+    // Preserve the existing self-sink branch even for a zero or saturated sum.
+    assert_eq!(
+        release_credits(&recipient, 0, Some(&recipient), 0),
+        [Some((&recipient, 0, refused)), None]
+    );
+    assert_eq!(
+        release_credits(&recipient, u128::MAX, Some(&recipient), 1),
+        [Some((&recipient, u128::MAX, refused)), None]
+    );
 }
 
 #[test]
@@ -1765,3 +2283,7 @@ fn late_void_keeps_full_refund_pending_when_reconciled_claims_spent_liability() 
     assert!(attempt_refund(&mut stx, outbound).unwrap().is_held());
     assert_escrow_invariant(&*stx.world, "late void after reconciliation");
 }
+
+mod sorafs;
+mod source_controls;
+mod uid;

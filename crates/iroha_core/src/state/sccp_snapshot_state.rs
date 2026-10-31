@@ -188,6 +188,10 @@ fn admit_anchor_chunks(
 }
 
 /// Admit the original scalar current/undo Cell owners before publishing any field.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Restoration consumes and releases the decoded source cell after installing the original admitted owner"
+)]
 fn admit_scalar<T: mv::Value>(
     decoded: Cell<T>,
     budget: &AllocationBudget,
@@ -371,13 +375,17 @@ fn snapshot_graph_demand(
 }
 
 /// Name of the State snapshot member that carries this envelope.
-pub(crate) const SCCP_SNAPSHOT_MEMBER: &str = "sccp";
+pub const SCCP_SNAPSHOT_MEMBER: &str = "sccp";
 
 /// Required SCCP wire fields; every store includes both current and exact undo maps.
 /// Unknown fields are rejected, including fields of the retired attestation transport.
 #[derive(JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct SnapshotSccpState {
+#[expect(
+    clippy::struct_field_names,
+    reason = "Snapshot field names preserve the canonical SCCP storage identities"
+)]
+pub struct SnapshotSccpState {
     pub(super) sccp_parameters: Cell<Option<SccpParametersV1>>,
     pub(super) sccp_reset_nonce: Cell<Option<[u8; 32]>>,
     pub(super) sccp_committee_generations: snapshot_storage::SnapshotStorage,
@@ -486,7 +494,7 @@ macro_rules! serialize_sccp_fields {
 }
 
 /// Append `,"sccp":{..}` for the committed World under the outer State capture fence.
-pub(crate) fn serialize(world: &World, out: &mut String) {
+pub fn serialize(world: &World, out: &mut String) {
     out.push(',');
     json::write_json_string(SCCP_SNAPSHOT_MEMBER, out);
     out.push(':');
@@ -496,7 +504,7 @@ pub(crate) fn serialize(world: &World, out: &mut String) {
 /// Append `,"sccp":{..}` for the exact maps and cells that consuming this World overlay would
 /// publish.
 #[cfg(test)]
-pub(crate) fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
+pub fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string(SCCP_SNAPSHOT_MEMBER, out);
     out.push(':');
@@ -504,13 +512,13 @@ pub(crate) fn serialize_block(world: &WorldBlock<'_>, out: &mut String) {
 }
 
 /// Write the bare envelope object of the committed World.
-pub(crate) fn serialize_envelope(world: &World, out: &mut String) {
+pub fn serialize_envelope(world: &World, out: &mut String) {
     serialize_sccp_fields!(world, out, serialize);
 }
 
 /// Write the bare envelope object of a World overlay.
 #[cfg(test)]
-pub(crate) fn serialize_block_envelope(world: &WorldBlock<'_>, out: &mut String) {
+pub fn serialize_block_envelope(world: &WorldBlock<'_>, out: &mut String) {
     serialize_sccp_fields!(world, out, serialize_block);
 }
 
@@ -607,37 +615,33 @@ impl SnapshotSccpState {
         let evidence = world.consensus_evidence.snapshot();
         // SCCP bodies are permanent; only the independent penalty metadata may change.
         for (id, old) in evidence.revert_map().iter() {
-            if let Some(old) = old {
-                if matches!(
+            if let Some(old) = old
+                && matches!(
                     old.evidence,
                     iroha_data_model::block::consensus::RecordedEvidenceV1::SccpForgery(_)
-                ) && evidence
+                )
+                && evidence
                     .current()
                     .get(id)
                     .is_none_or(|current| **current != **old)
-                {
-                    return Err(invalid(
-                        "consensus_evidence",
-                        "permanent SCCP evidence body was removed or rebound",
-                    )
-                    .into());
-                }
+            {
+                return Err(invalid(
+                    "consensus_evidence",
+                    "permanent SCCP evidence body was removed or rebound",
+                )
+                .into());
             }
         }
         // Reconstruct both exact cuts without a copied graph or an intermediate map.
         let offence_at = |key: &sccp_forgery_custody::OffenceKey, previous: bool| {
-            if previous {
-                if let Some(old) = snapshot.revert_map().get(key) {
-                    return old.as_ref();
-                }
+            if previous && let Some(old) = snapshot.revert_map().get(key) {
+                return old.as_ref();
             }
             snapshot.current().get(key)
         };
         let evidence_at = |id: &Hash, previous: bool| {
-            if previous {
-                if let Some(old) = evidence.revert_map().get(id) {
-                    return old.as_ref();
-                }
+            if previous && let Some(old) = evidence.revert_map().get(id) {
+                return old.as_ref();
             }
             evidence.current().get(id)
         };
@@ -718,38 +722,39 @@ impl SnapshotSccpState {
                 }
             }
         }
+        // Every permanent SCCP record names its generation, including a record without
+        // offenders whose signers G6 left unresolved (§4.9 step 7); each offence's record
+        // shares its generation, as checked above.
+        let recorded_max = |previous: bool| {
+            evidence
+                .current()
+                .iter()
+                .map(|(id, _)| id)
+                .chain(evidence.revert_map().iter().map(|(id, _)| id))
+                .filter_map(|id| match &evidence_at(id, previous)?.evidence {
+                    iroha_data_model::block::consensus::RecordedEvidenceV1::SccpForgery(
+                        material,
+                    ) => Some(material.generation),
+                    iroha_data_model::block::consensus::RecordedEvidenceV1::Native(_) => None,
+                })
+                .max()
+        };
+        let (current_max, previous_max) = (recorded_max(false), recorded_max(true));
         drop(evidence);
-        let current_max = snapshot
-            .current()
-            .iter()
-            .map(|(key, _)| key.generation())
-            .max();
-        let previous_max = snapshot
-            .current()
-            .iter()
-            .filter(|(key, _)| snapshot.revert_map().get(key).is_none())
-            .map(|(key, _)| key.generation())
-            .chain(
-                snapshot
-                    .revert_map()
-                    .iter()
-                    .filter_map(|(key, value)| value.as_ref().map(|_| key.generation())),
-            )
-            .max();
         if max_current != current_max || max_previous.unwrap_or(max_current) != previous_max {
             return Err(invalid(
                 "sccp_forgery_max_generation",
-                "maximum does not match permanent current/undo offences",
+                "maximum does not match permanent current/undo SCCP evidence",
             )
             .into());
         }
         // Fund replacement scalar controls under the same original offence pool before publication.
         let forgery_max_generation = sccp_forgery_custody::initialize_max(
             max_current,
-            match max_previous {
-                Some(value) => sccp_forgery_custody::MaxGenerationPredecessor::Value(value),
-                None => sccp_forgery_custody::MaxGenerationPredecessor::Unchanged,
-            },
+            max_previous.map_or(
+                sccp_forgery_custody::MaxGenerationPredecessor::Unchanged,
+                sccp_forgery_custody::MaxGenerationPredecessor::Value,
+            ),
             budget,
         )?;
         drop(snapshot);
@@ -943,4 +948,4 @@ impl SnapshotSccpState {
 
 #[cfg(test)]
 #[path = "sccp_snapshot_state_tests.rs"]
-pub(crate) mod tests;
+pub mod tests;

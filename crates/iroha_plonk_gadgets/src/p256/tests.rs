@@ -20,7 +20,7 @@ use iroha_plonk::{
 use p256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier as _};
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 
 use super::{
@@ -175,7 +175,7 @@ fn native_constants_and_field_arithmetic() {
 fn native_group_law_matches_the_p256_crate() {
     use p256::{
         ProjectivePoint, Scalar,
-        elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
+        elliptic_curve::{ff::PrimeField as _, sec1::ToSec1Point as _},
     };
     let mut rng = ChaCha20Rng::seed_from_u64(2);
     for _ in 0..8 {
@@ -184,7 +184,7 @@ fn native_group_law_matches_the_p256_crate() {
         let scalar =
             Option::<Scalar>::from(Scalar::from_repr(words_to_be(&k).into())).expect("canonical");
         let theirs = (ProjectivePoint::GENERATOR * scalar).to_affine();
-        let encoded = theirs.to_encoded_point(false);
+        let encoded = theirs.to_sec1_point(false);
         assert_eq!(
             encoded.x().map(|x| x.as_slice().to_vec()),
             Some(words_to_be(&mine.x).to_vec())
@@ -271,7 +271,10 @@ fn native_helpers_match_their_definitions() {
     assert_eq!(joint, separate);
     // Fixed-base tags are distinct and below the dynamic tags (2^32).
     let mut tags: Vec<u64> = (0..8)
-        .flat_map(|base| (0..33).map(move |window| window::fixed_tag(base, window)))
+        .flat_map(|base| {
+            (0..33)
+                .map(move |window| window::checked_fixed_tag(base, window).expect("fixed window"))
+        })
         .collect();
     let count = tags.len();
     tags.sort_unstable();
@@ -2551,17 +2554,20 @@ fn p256_window_tags_are_unique_by_construction() {
     assert_eq!(window::dynamic_tag(0), Ok(1 << 32));
     assert_eq!(window::dynamic_tag(7_940), Ok((1 << 32) + 7_940));
     assert_eq!(window::checked_fixed_tag(0, 0), Ok(1));
-    assert_eq!(
-        window::checked_fixed_tag(2, 32),
-        Ok(window::fixed_tag(2, 32))
-    );
-    // Window 64 of base 0 would be window 0 of base 1.
-    assert_eq!(window::fixed_tag(0, 64), window::fixed_tag(1, 0));
+    assert_eq!(window::checked_fixed_tag(2, 32), Ok(161));
+    // Window 64 of base 0 would alias the valid tag of window 0 of base 1.
+    assert_eq!(window::checked_fixed_tag(1, 0), Ok(65));
     assert_eq!(window::checked_fixed_tag(0, 64), Err(Error::Synthesis));
     // The last fixed tag below 2^32, and the first one that would reach it.
     let base = (1_usize << 26) - 1;
     assert_eq!(window::checked_fixed_tag(base, 62), Ok((1 << 32) - 1));
     assert_eq!(window::checked_fixed_tag(base, 63), Err(Error::Synthesis));
+    for (base, window) in [(0, usize::MAX), (usize::MAX, 0), (usize::MAX, usize::MAX)] {
+        assert_eq!(
+            window::checked_fixed_tag(base, window),
+            Err(Error::Synthesis)
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2582,9 +2588,10 @@ struct ProtocolSignature {
 
 fn protocol_signatures() -> Vec<ProtocolSignature> {
     use norito::json::Value as Json;
-    let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT").map_or_else(
+        || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        std::path::PathBuf::from,
+    );
     let path = root.join("fixtures/kagemusha/wallet_v1_vectors.json");
     let text = std::fs::read_to_string(&path).expect("read the wallet vectors");
     let json = norito::json::parse_value(&text).expect("parse the wallet vectors");

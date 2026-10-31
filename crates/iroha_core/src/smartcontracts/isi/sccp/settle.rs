@@ -16,8 +16,15 @@
 //! (`FeeSinkUnavailable`) and a bounce without a free commitment leaf (`BlockLeavesFull`) keep
 //! the record `Pending`, and a refund the movement refuses keeps the record voided with its
 //! refund pending. So the proof or void that triggered settlement is still recorded, and one
-//! refusal never aborts a void range. Only an execution invariant violation fails, besides a
-//! local fee-sink read that did not complete, which defers the transaction.
+//! deterministic refusal never aborts a void range. Typed local refusals from the admitted
+//! preflight owners and transaction-aware metadata decoders defer the whole execution attempt;
+//! they never become a pending-credit reason. Input admission precedes registration. A later
+//! typed local refusal may follow tentative registration, but the sticky deferral forbids
+//! publishing the transaction and rolls back its registration, proof/void and monetary effects
+//! together. Invariant violations and unavailable original fee-policy reads also fail the call.
+//!
+//! TODO: shared UID and retail policy scratch still needs original-pool ownership and typed
+//! local refusal propagation through its remaining decoder/error-conversion paths.
 
 use super::{
     Error, escrow, leaves,
@@ -248,7 +255,7 @@ pub fn settle_inbound(
             false,
         );
     }
-    let changed = match recipients::classify_recipient(state_transaction, &payload.recipient.bytes)
+    let changed = match recipients::classify_recipient(state_transaction, &payload.recipient.bytes)?
     {
         SccpRecipientClassV1::Creditable {
             account,
@@ -309,7 +316,12 @@ fn release_inbound(
     let sink = if fee == 0 {
         None
     } else {
-        let sink = state_transaction.nexus.fees.fee_sink_account_id.clone();
+        // An applied sibling or pending policy cannot redirect this block's fee.
+        let sink = state_transaction
+            .root_fee_policy()
+            .map_err(refuse)?
+            .fee_sink_account_id
+            .clone();
         match state_transaction.world.account(&sink) {
             Ok(_) => Some(sink),
             Err(_) => {
@@ -323,6 +335,12 @@ fn release_inbound(
             }
         }
     };
+    let credits = release_credits(&account, net, sink.as_ref(), fee);
+    let ordered_credits = credits.map(|credit| credit.map(|(to, value, _)| (to, value)));
+    // Own every bounded input before registration can mutate the transaction.
+    // A local refusal aborts the attempt and can never become a pending reason.
+    let prepared = escrow::PreparedReleases::new(state_transaction, network, &ordered_credits)
+        .map_err(|(_, error)| error)?;
     // The classification ran the identity precheck of `Register<Account>`, so this is an
     // ordinary registration that cannot be refused; the movement is prechecked against the
     // registered account below.
@@ -331,20 +349,28 @@ fn release_inbound(
     } else {
         false
     };
-    let credits = release_credits(&account, net, sink.as_ref(), fee);
-    for (to, value, reason) in &credits {
-        if escrow::precheck_release(state_transaction, network, to, *value).is_err() {
-            return hold_inbound(
-                state_transaction,
-                message_id,
-                record,
-                *reason,
-                registered_now,
-            );
+    if let Err((index, error)) = prepared
+        .as_ref()
+        .map_or(Ok(()), |prepared| prepared.check(state_transaction))
+    {
+        // SPEC: §13.4 HC972 turns a local refusal into a pending-credit write.
+        if state_transaction.is_execution_deferred()
+            && !cfg!(all(test, sumeragi_core_mutation = "HC972"))
+        {
+            return Err(error);
         }
+        return hold_inbound(
+            state_transaction,
+            message_id,
+            record,
+            credits[index]
+                .expect("a refused credit occupies its ordered slot")
+                .2,
+            registered_now,
+        );
     }
-    for (to, value, _) in credits {
-        escrow::release(state_transaction, network, &to, value, message_id)?;
+    for (to, value, _) in credits.into_iter().flatten() {
+        escrow::release(state_transaction, network, to, value, message_id)?;
     }
     debit_liability(state_transaction, network, revision, amount)?;
     adjust_pending(state_transaction, (network, revision), -1, 0)?;
@@ -373,29 +399,31 @@ fn release_inbound(
 
 /// The escrow credits of a release of `net` to `account` and `fee` to the fee `sink`, each
 /// with the hold reason its refusal maps to. Zero credits are skipped, and a sink that is the
-/// recipient itself receives one combined credit.
-fn release_credits(
-    account: &AccountId,
+/// recipient itself receives one combined credit. The two compact slots borrow the original
+/// accounts; an empty slot never precedes an occupied one.
+fn release_credits<'a>(
+    account: &'a AccountId,
     net: u128,
-    sink: Option<&AccountId>,
+    sink: Option<&'a AccountId>,
     fee: u128,
-) -> Vec<(AccountId, u128, SccpPendingReasonV1)> {
-    let mut credits = Vec::with_capacity(2);
+) -> [Option<(&'a AccountId, u128, SccpPendingReasonV1)>; 2] {
     if sink == Some(account) {
-        credits.push((
-            account.clone(),
-            net.saturating_add(fee),
-            SccpPendingReasonV1::CreditRefused,
-        ));
-        return credits;
+        return [
+            Some((
+                account,
+                net.saturating_add(fee),
+                SccpPendingReasonV1::CreditRefused,
+            )),
+            None,
+        ];
     }
-    if net > 0 {
-        credits.push((account.clone(), net, SccpPendingReasonV1::CreditRefused));
-    }
-    if let Some(sink) = sink.filter(|_| fee > 0) {
-        credits.push((sink.clone(), fee, SccpPendingReasonV1::FeeSinkUnavailable));
-    }
-    credits
+    let recipient = (net > 0).then_some((account, net, SccpPendingReasonV1::CreditRefused));
+    let fee_credit = sink
+        .filter(|_| fee > 0)
+        .map(|sink| (sink, fee, SccpPendingReasonV1::FeeSinkUnavailable));
+    recipient.map_or([fee_credit, None], |recipient| {
+        [Some(recipient), fee_credit]
+    })
 }
 
 /// Bounce the inbound message `message_id` back to its source-chain sender (§4.12.5), or hold
@@ -695,7 +723,7 @@ pub(super) fn refund(
     let target = if escrow::is_escrow(world, &record.sender) {
         None
     } else {
-        match recipients::classify_account(state_transaction, record.sender.clone()) {
+        match recipients::classify_account(state_transaction, record.sender.clone())? {
             SccpRecipientClassV1::Creditable {
                 account,
                 registered,
@@ -714,6 +742,12 @@ pub(super) fn refund(
                 false,
             );
         }
+        let prepared = escrow::PreparedReleases::new(
+            state_transaction,
+            network,
+            &[Some((&account, amount)), None],
+        )
+        .map_err(|(_, error)| error)?;
         let registered_now =
             !registered && recipients::ensure_registered(state_transaction, &account)?;
         if registered_now {
@@ -723,7 +757,16 @@ pub(super) fn refund(
                 message_id: Some(message_id),
             }));
         }
-        if escrow::precheck_release(state_transaction, network, &account, amount).is_err() {
+        if let Err((_, error)) = prepared
+            .as_ref()
+            .map_or(Ok(()), |prepared| prepared.check(state_transaction))
+        {
+            // SPEC: §13.4 HC972 also covers the refund caller's refusal boundary.
+            if state_transaction.is_execution_deferred()
+                && !cfg!(all(test, sumeragi_core_mutation = "HC972"))
+            {
+                return Err(error);
+            }
             return hold_refund(
                 state_transaction,
                 message_id,

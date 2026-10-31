@@ -38,7 +38,7 @@ enum PolicyProjection {
 /// A source-bound capability. Only the pristine owner (or explicit component test scope)
 /// constructs it; an arbitrary native route cannot grant physical policy authority.
 #[derive(Clone, Copy)]
-pub(crate) struct CapturedNetworkPolicyRoute {
+pub struct CapturedNetworkPolicyRoute {
     native: RoutingDecision,
     signed_hash: Option<HashOf<SignedTransaction>>,
     projection: PolicyProjection,
@@ -47,7 +47,7 @@ pub(crate) struct CapturedNetworkPolicyRoute {
 
 /// Opaque instruction bootstrap authority for one original authenticated Network input.
 /// Its scope cannot be constructed from a height-one header or mutable local configuration.
-pub(crate) struct GenesisExecutionScope {
+pub struct GenesisExecutionScope {
     scope: SumeragiRootScope,
     header: BlockHeader,
     entrypoint: HashOf<TransactionEntrypoint>,

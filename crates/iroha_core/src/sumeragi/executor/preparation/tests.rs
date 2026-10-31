@@ -21,6 +21,9 @@ use std::{
 
 #[test]
 fn certificate_capacity_refusal_reaches_scheduler_with_original_release_and_execution() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     for occupy_after in 1..=3 {
         publication_tests::with_worker(move |chain, worker, blocks, events| {
             let mut registration = crate::unit_test_support::release_registration(
@@ -51,7 +54,7 @@ fn certificate_capacity_refusal_reaches_scheduler_with_original_release_and_exec
                 _ => panic!("retain original executed phase"),
             };
             let mut scheduler = ExecSched::new(1, Backoff::default(), scheduler_registration);
-            scheduler.bind_release_thread(original_thread);
+            scheduler.bind_release_thread(&original_thread);
             scheduler.commit(body.clone(), qc.clone());
             let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
                 panic!("prepare same original commit");
@@ -429,6 +432,9 @@ fn immutable_preparation_short_prepaid_parent_requires_recovery_without_losing_c
 
 #[test]
 fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use super::super::{
         FinishingPhase, NativeContextArchiveError, NativeLaneStateProofError, PublicationDeferral,
     };
@@ -485,7 +491,7 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
             }));
             let retained = budget.reserved_bytes();
             let mut scheduler = ExecSched::new(1, Backoff::default(), scheduler_registration);
-            scheduler.bind_release_thread(original_thread);
+            scheduler.bind_release_thread(&original_thread);
             scheduler.commit(body.clone(), qc.clone());
             let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
                 panic!("cold prepare retains the original queued decision");

@@ -380,7 +380,7 @@ pub struct PushBridge {
 impl PushBridge {
     #[cfg(test)]
     pub fn new(config: actual::Push) -> Self {
-        Self::new_in(config, crate::data_dir::base_dir())
+        Self::new_in(config, &(crate::data_dir::base_dir()))
             .expect("test push persistence must be valid")
     }
     /// Construct a push bridge rooted at the explicitly configured Torii data directory.
@@ -389,7 +389,7 @@ impl PushBridge {
     ///
     /// Returns an error when any existing device or delivery record is unsafe,
     /// malformed, conflicting, or exceeds the bounded storage geometry.
-    pub fn new_in(config: actual::Push, data_dir: PathBuf) -> Result<Self, PushError> {
+    pub fn new_in(config: actual::Push, data_dir: &std::path::Path) -> Result<Self, PushError> {
         Self::with_dispatcher_and_limits_in(
             config,
             Arc::new(RealPushDispatcher),
@@ -403,7 +403,7 @@ impl PushBridge {
             config,
             dispatcher,
             PUSH_STORAGE_LIMITS,
-            crate::data_dir::base_dir(),
+            &(crate::data_dir::base_dir()),
         )
         .expect("test push persistence must be valid")
     }
@@ -417,7 +417,7 @@ impl PushBridge {
             config,
             dispatcher,
             storage_limits,
-            crate::data_dir::base_dir(),
+            &(crate::data_dir::base_dir()),
         )
         .expect("test push persistence must be valid")
     }
@@ -425,15 +425,15 @@ impl PushBridge {
         config: actual::Push,
         dispatcher: Arc<dyn PushDispatcher>,
         storage_limits: PushStorageLimits,
-        data_dir: PathBuf,
+        data_dir: &std::path::Path,
     ) -> Result<Self, PushError> {
         let settings = DispatchSettings {
             connect_timeout: config.connect_timeout,
             request_timeout: config.request_timeout,
         };
         let data_dir = Arc::new(data_dir.join(PUSH_DIR));
-        let applied_block_cursor =
-            load_or_initialize_applied_block_cursor(&data_dir).map_err(storage_error)?;
+        let applied_block_cursor = load_or_initialize_applied_block_cursor(&data_dir)
+            .map_err(|value| storage_error(&value))?;
         let bridge = Self {
             config,
             settings,
@@ -445,7 +445,9 @@ impl PushBridge {
             mutation_guard: Arc::new(StorageMutex::new(())),
             applied_block_cursor: Arc::new(StorageMutex::new(applied_block_cursor)),
         };
-        bridge.load_from_disk().map_err(storage_error)?;
+        bridge
+            .load_from_disk()
+            .map_err(|value| storage_error(&value))?;
         Ok(bridge)
     }
     pub fn register_device(&self, request: RegisterDeviceRequest) -> Result<(), PushError> {
@@ -496,12 +498,12 @@ impl PushBridge {
                 // uncertain.
                 self.devices.insert(token_fingerprint, record);
             }
-            return Err(storage_error(error.source));
+            return Err(storage_error(&(error.source)));
         }
         self.devices.insert(token_fingerprint, record);
         Ok(())
     }
-    pub fn unregister_device(&self, request: RegisterDeviceRequest) -> Result<(), PushError> {
+    pub fn unregister_device(&self, request: &RegisterDeviceRequest) -> Result<(), PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
         }
@@ -643,7 +645,7 @@ impl PushBridge {
     pub(crate) fn start_event_worker(
         &self,
         state: Arc<State>,
-        events: EventsSender,
+        events: &EventsSender,
         shutdown_signal: ShutdownSignal,
     ) -> Result<Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>, PushWorkerStartError>
     {
@@ -844,7 +846,7 @@ impl PushBridge {
         read: &mut PushReplayRead<'_>,
     ) -> Result<(), ExecutionAttemptError<PushError>> {
         let cursor = self.applied_block_cursor.lock().clone();
-        cursor.validate().map_err(storage_error)?;
+        cursor.validate().map_err(|value| storage_error(&value))?;
         if cursor.height > authoritative_height {
             return Err(PushError::Storage(format!(
                 "push applied-block cursor height {} exceeds State's applied height {authoritative_height}",
@@ -1173,7 +1175,7 @@ impl PushBridge {
                     // dispatching through a token whose sole durable record is already gone.
                     self.devices.remove(token_fingerprint);
                 }
-                Err(storage_error(error.source))
+                Err(storage_error(&(error.source)))
             }
         }
     }
@@ -1198,7 +1200,7 @@ impl PushBridge {
     }
     fn persist_job(&self, job: &DeliveryJob) -> Result<(), PushError> {
         self.persist_job_with_state(job)
-            .map_err(|error| storage_error(error.source))
+            .map_err(|error| storage_error(&(error.source)))
     }
     fn persist_job_with_state(&self, job: &DeliveryJob) -> Result<(), AtomicWriteError> {
         validate_delivery_job(job).map_err(AtomicWriteError::before_publish)?;
@@ -1209,13 +1211,13 @@ impl PushBridge {
         )
     }
     fn persist_applied_block_cursor(&self, cursor: &AppliedBlockCursor) -> Result<(), PushError> {
-        cursor.validate().map_err(storage_error)?;
+        cursor.validate().map_err(|value| storage_error(&value))?;
         write_json_atomic(
             &self.applied_block_cursor_path(),
             cursor,
             MAX_PUSH_APPLIED_BLOCK_CURSOR_BYTES,
         )
-        .map_err(storage_error)
+        .map_err(|value| storage_error(&value))
     }
     fn load_from_disk(&self) -> io::Result<()> {
         self.load_devices()?;
@@ -1848,7 +1850,7 @@ fn fingerprint(bytes: &[u8]) -> String {
     }
     out
 }
-fn storage_error(error: io::Error) -> PushError {
+fn storage_error(error: &io::Error) -> PushError {
     PushError::Storage(error.to_string())
 }
 fn storage_limit_error(label: &str, actual: usize, maximum: usize) -> PushError {
@@ -2237,12 +2239,13 @@ fn set_no_follow_open_options(options: &mut fs::OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(
+        options.custom_flags(i32::from_ne_bytes(
             (rustix::fs::OFlags::NOFOLLOW
                 | rustix::fs::OFlags::NONBLOCK
                 | rustix::fs::OFlags::NOCTTY)
-                .bits() as i32,
-        );
+                .bits()
+                .to_ne_bytes(),
+        ));
     }
     #[cfg(windows)]
     {
@@ -2323,10 +2326,7 @@ async fn send_fcm_http_v1(
         Ok(token) => token,
         Err(error) => return DispatchOutcome::Retry(error),
     };
-    let url = format!(
-        "https://fcm.googleapis.com/v1/projects/{}/messages:send",
-        project_id
-    );
+    let url = format!("https://fcm.googleapis.com/v1/projects/{project_id}/messages:send");
     let body = fcm_body(&delivery.token, &delivery.payload);
     let body = match norito::json::to_vec(&body) {
         Ok(body) => body,
@@ -2400,8 +2400,8 @@ fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|error| error.to_string())
 }
-fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
-    match algorithm {
+fn jwt_algorithm_name(algorithm: Algorithm) -> Result<&'static str, &'static str> {
+    Ok(match algorithm {
         Algorithm::HS256 => "HS256",
         Algorithm::HS384 => "HS384",
         Algorithm::HS512 => "HS512",
@@ -2414,19 +2414,21 @@ fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
         Algorithm::PS384 => "PS384",
         Algorithm::PS512 => "PS512",
         Algorithm::EdDSA => "EdDSA",
-    }
+        // A new upstream algorithm needs an explicit protocol name and review.
+        _ => return Err("unsupported push JWT signing algorithm"),
+    })
 }
 fn encode_jwt_claims(
     algorithm: Algorithm,
     key_id: Option<&str>,
-    claims: norito::json::Value,
+    claims: &norito::json::Value,
     key: &EncodingKey,
 ) -> Result<String, String> {
     let mut header = norito::json::Map::new();
     header.insert("typ".to_string(), norito::json::Value::from("JWT"));
     header.insert(
         "alg".to_string(),
-        norito::json::Value::from(jwt_algorithm_name(algorithm)),
+        norito::json::Value::from(jwt_algorithm_name(algorithm)?),
     );
     if let Some(key_id) = key_id {
         header.insert("kid".to_string(), norito::json::Value::from(key_id));
@@ -2436,7 +2438,7 @@ fn encode_jwt_claims(
             .map_err(|error| error.to_string())?,
     );
     let encoded_claims = BASE64_URL_SAFE_NO_PAD
-        .encode(norito::json::to_vec(&claims).map_err(|error| error.to_string())?);
+        .encode(norito::json::to_vec(claims).map_err(|error| error.to_string())?);
     let message = format!("{encoded_header}.{encoded_claims}");
     let signature = jsonwebtoken::crypto::sign(message.as_bytes(), key, algorithm)
         .map_err(|error| error.to_string())?;
@@ -2513,7 +2515,7 @@ async fn mint_fcm_access_token(
     let jwt = encode_jwt_claims(
         Algorithm::RS256,
         None,
-        norito::json::Value::Object(claims),
+        &(norito::json::Value::Object(claims)),
         &EncodingKey::from_rsa_pem(private_key.as_bytes()).map_err(|error| error.to_string())?,
     )?;
     let response = client
@@ -2551,7 +2553,7 @@ fn mint_apns_provider_token(
     encode_jwt_claims(
         Algorithm::ES256,
         Some(key_id),
-        norito::json::Value::Object(claims),
+        &(norito::json::Value::Object(claims)),
         &EncodingKey::from_ec_pem(&private_key).map_err(|error| error.to_string())?,
     )
 }
@@ -2610,8 +2612,10 @@ async fn classify_fcm_response(response: reqwest::Response) -> DispatchOutcome {
     }
     let body = read_push_provider_response_bounded(response, "FCM send endpoint")
         .await
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_else(|error| format!("response body unavailable: {error}"));
+        .map_or_else(
+            |error| format!("response body unavailable: {error}"),
+            |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+        );
     classify_fcm_status_body(status, &body)
 }
 async fn classify_apns_response(response: reqwest::Response) -> DispatchOutcome {
@@ -2621,8 +2625,10 @@ async fn classify_apns_response(response: reqwest::Response) -> DispatchOutcome 
     }
     let body = read_push_provider_response_bounded(response, "APNs send endpoint")
         .await
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_else(|error| format!("response body unavailable: {error}"));
+        .map_or_else(
+            |error| format!("response body unavailable: {error}"),
+            |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+        );
     classify_apns_status_body(status, &body)
 }
 fn classify_fcm_status_body(status: HttpStatusCode, body: &str) -> DispatchOutcome {
@@ -3002,6 +3008,9 @@ mod tests {
 
     #[tokio::test]
     async fn push_worker_genesis_bootstrap_waits_for_authenticated_successor_and_shutdown() {
+        // Retain unrelated constructor EBR generations while measuring only the
+        // original reader/capture owners and their exact synchronous refunds.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use iroha_core::sumeragi::test_chain::CertifiedTestChain;
         for restarted in [false, true] {
             for publish_successor in [false, true] {
@@ -3020,7 +3029,7 @@ mod tests {
                     test_bridge_config(),
                     dispatcher.clone(),
                     test_storage_limits(1, 1),
-                    temp.path().to_path_buf(),
+                    temp.path(),
                 )
                 .unwrap();
                 bridge
@@ -3033,7 +3042,7 @@ mod tests {
                 let (events, _) = tokio::sync::broadcast::channel(4);
                 let shutdown = ShutdownSignal::new();
                 let mut worker = bridge
-                    .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+                    .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
                     .unwrap()
                     .unwrap();
                 let parked = tokio::time::timeout(Duration::from_millis(20), &mut worker).await;
@@ -3127,7 +3136,7 @@ mod tests {
                 test_bridge_config(),
                 dispatcher.clone(),
                 test_storage_limits(1, 1),
-                temp.path().to_path_buf(),
+                temp.path(),
             )
             .unwrap();
             bridge
@@ -3137,7 +3146,7 @@ mod tests {
             let (events, _) = tokio::sync::broadcast::channel(4);
             let shutdown = ShutdownSignal::new();
             let mut worker = bridge
-                .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+                .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
                 .unwrap()
                 .unwrap();
             let parked = tokio::time::timeout(Duration::from_millis(20), &mut worker).await;
@@ -3210,13 +3219,12 @@ mod tests {
             },
         ] {
             let temp = tempfile::tempdir().unwrap();
-            let bridge =
-                PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+            let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
             *bridge.applied_block_cursor.lock() = cursor.clone();
             let (events, _) = tokio::sync::broadcast::channel(4);
             let shutdown = ShutdownSignal::new();
             let mut worker = bridge
-                .start_event_worker(Arc::clone(chain.state()), events.clone(), shutdown.clone())
+                .start_event_worker(Arc::clone(chain.state()), &(events), shutdown.clone())
                 .unwrap()
                 .unwrap();
             let terminal = tokio::time::timeout(Duration::from_secs(10), &mut worker).await;
@@ -3303,14 +3311,14 @@ mod tests {
     #[tokio::test]
     async fn event_worker_reconciles_broadcast_lag_and_stays_supervised() {
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
-            .expect("valid empty push store");
+        let bridge =
+            PushBridge::new_in(test_bridge_config(), temp.path()).expect("valid empty push store");
         let (events, _) = tokio::sync::broadcast::channel(1);
         let shutdown = ShutdownSignal::new();
         let worker = bridge
             .start_event_worker(
                 pristine_push_state(Kura::blank_kura_for_testing()),
-                events.clone(),
+                &(events),
                 shutdown.clone(),
             )
             .expect("original State pool admits push retry control")
@@ -3339,7 +3347,7 @@ mod tests {
         fs::create_dir(temp.path().join(PUSH_INITIALIZATION_DIR))
             .expect("create interrupted push initialization fixture");
 
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path())
             .expect("prepared first-run initialization must be recoverable");
 
         assert_eq!(
@@ -3354,7 +3362,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("push tempdir");
         fs::create_dir(temp.path().join(PUSH_DIR)).expect("create legacy push root");
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("legacy push root without cursor must fail closed");
 
@@ -3373,7 +3381,7 @@ mod tests {
         write_direct_regular_file(&path, b"{\"partial\":")
             .expect("write interrupted queue publication");
 
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path())
             .expect("exact queue writer temp must be recoverable");
 
         assert_eq!(bridge.queued_count(), 0);
@@ -3393,7 +3401,7 @@ mod tests {
         write_direct_regular_file(&path, b"{\"partial\":")
             .expect("write interrupted device publication");
 
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path())
             .expect("exact device writer temp must be recoverable");
 
         assert_eq!(bridge.device_count(), 0);
@@ -3407,7 +3415,7 @@ mod tests {
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
             limits,
-            temp.path().to_path_buf(),
+            temp.path(),
         )
         .expect("initialize bounded push store");
         bridge
@@ -3427,7 +3435,7 @@ mod tests {
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
             limits,
-            temp.path().to_path_buf(),
+            temp.path(),
         )
         .expect("recover temp outside the persisted device limit");
 
@@ -3445,7 +3453,7 @@ mod tests {
         write_direct_regular_file(&first, b"{\"partial\":").expect("write first queue temp");
         write_direct_regular_file(&second, b"{\"partial\":").expect("write second queue temp");
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("multiple queue temps must fail closed");
 
@@ -3474,7 +3482,7 @@ mod tests {
             .join(format!("{token_fingerprint}.json"));
         write_raw_push_fixture(&path, &json_with_top_level_unknown(&record));
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("unknown device record fields must fail startup");
 
@@ -3492,7 +3500,7 @@ mod tests {
             .join(format!("{}.json", job.dedupe_key));
         write_raw_push_fixture(&path, &json_with_top_level_unknown(&job));
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("unknown delivery job fields must fail startup");
 
@@ -3510,7 +3518,7 @@ mod tests {
             .join(format!("{}.json", job.dedupe_key));
         write_raw_push_fixture(&path, &job_json_with_nested_payload_unknown(&job));
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("unknown nested push payload fields must fail startup");
 
@@ -3526,7 +3534,7 @@ mod tests {
         kura.store_block(block)
             .expect("deliberately store an unapplied body");
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         bridge
             .register_device(register_request("unfinalized-activity-token"))
             .unwrap();
@@ -3552,13 +3560,13 @@ mod tests {
         let state = Arc::clone(chain.state());
         let second = chain.committed(2);
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
-            .expect("valid empty push store");
+        let bridge =
+            PushBridge::new_in(test_bridge_config(), temp.path()).expect("valid empty push store");
         let (events, _) = tokio::sync::broadcast::channel(4);
         let shutdown = ShutdownSignal::new();
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
             .expect("original State pool admits push retry control")
             .expect("enabled push worker");
 
@@ -3583,12 +3591,12 @@ mod tests {
         let mut chain = native_push_chain(false);
         let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
-            .expect("valid empty push store");
+        let bridge =
+            PushBridge::new_in(test_bridge_config(), temp.path()).expect("valid empty push store");
         let (events, _) = tokio::sync::broadcast::channel(4);
         let shutdown = ShutdownSignal::new();
         let worker = bridge
-            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
             .expect("original State pool admits push retry control")
             .expect("enabled push worker");
         wait_for_cursor(&bridge, 2).await;
@@ -3613,6 +3621,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_push_history_capacity_preserves_cursor_queue_and_pool_release() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
@@ -3627,7 +3638,7 @@ mod tests {
             panic!("temporarily occupied original pool");
         };
         let temp = tempfile::tempdir().unwrap();
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         let cursor = bridge.applied_block_cursor.lock().clone();
         let Err(PushReplayError::Deferred(reason)) =
             bridge.reconcile_to_authoritative_height(state)
@@ -3657,6 +3668,9 @@ mod tests {
             future::Future,
             task::{Context, Poll},
         };
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
@@ -3675,7 +3689,7 @@ mod tests {
             .try_reserve_bytes(pool.limit_bytes() - controls - frame_bytes)
             .unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         let cursor = bridge.applied_block_cursor.lock().clone();
         let shutdown = ShutdownSignal::new();
         let observed = Arc::new(Mutex::new(None::<iroha_allocation::AllocationRefusal>));
@@ -3789,8 +3803,7 @@ mod tests {
         // Cancellation is a real operation retirement: it releases the retained
         // original bytes and leaves this separate durable cursor unchanged.
         let cancelled_temp = tempfile::tempdir().unwrap();
-        let cancelled =
-            PushBridge::new_in(test_bridge_config(), cancelled_temp.path().to_path_buf()).unwrap();
+        let cancelled = PushBridge::new_in(test_bridge_config(), cancelled_temp.path()).unwrap();
         let occupied = pool
             .try_reserve_bytes(pool.limit_bytes() - controls - frame_bytes)
             .unwrap();
@@ -3842,7 +3855,7 @@ mod tests {
             source.append(&wire).unwrap();
             let mut decoder =
                 iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(&census).unwrap();
-            let decoded = decoder
+            let block = decoder
                 .decode(
                     &source,
                     norito::core::SequenceSpan {
@@ -3852,7 +3865,7 @@ mod tests {
                     norito::canonical_decode_limits(frame_bytes),
                 )
                 .unwrap();
-            assert_eq!(decoded.encode_wire().unwrap(), wire);
+            assert_eq!(block.encode_wire().unwrap(), wire);
             census.reserved_bytes() - frame_bytes
         };
         let shell_bytes = SharedSignedBlock::allocation_layout().size();
@@ -3889,8 +3902,7 @@ mod tests {
                 .try_reserve_bytes(pool.limit_bytes() - controls - retained_bytes)
                 .unwrap();
             let temp = tempfile::tempdir().unwrap();
-            let bridge =
-                PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+            let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
             let cursor = bridge.applied_block_cursor.lock().clone();
             let shutdown = ShutdownSignal::new();
             let observed = Arc::new(Mutex::new(None::<iroha_allocation::AllocationRefusal>));
@@ -4000,8 +4012,7 @@ mod tests {
 
             let cancelled_temp = tempfile::tempdir().unwrap();
             let cancelled =
-                PushBridge::new_in(test_bridge_config(), cancelled_temp.path().to_path_buf())
-                    .unwrap();
+                PushBridge::new_in(test_bridge_config(), cancelled_temp.path()).unwrap();
             let occupied = pool
                 .try_reserve_bytes(pool.limit_bytes() - controls - retained_bytes)
                 .unwrap();
@@ -4032,12 +4043,15 @@ mod tests {
             future::Future,
             task::{Context, Poll},
         };
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
         let baseline = pool.reserved_bytes();
         let temp = tempfile::tempdir().unwrap();
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         let mut read = PushReplayRead::new(state);
         read.reconcile(&bridge, PushReplayTarget::Height(1))
             .unwrap();
@@ -4119,6 +4133,9 @@ mod tests {
 
     #[test]
     fn push_replay_cursor_receipt_is_operation_local_and_rejects_rebound_state() {
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         // Authenticate the replacement before exhausting the original pool: reading
         // certified history itself requires that pool's allocation authority.
@@ -4127,7 +4144,7 @@ mod tests {
         let pool = state.ivm_execution_budget();
         let baseline = pool.reserved_bytes();
         let temp = tempfile::tempdir().unwrap();
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         let mut initial = PushReplayRead::new(state);
         initial
             .reconcile(&bridge, PushReplayTarget::Height(1))
@@ -4217,6 +4234,9 @@ mod tests {
 
     #[tokio::test]
     async fn push_worker_admits_original_retry_control_before_startup_and_refunds_after_shutdown() {
+        // Retain unrelated constructor EBR generations while measuring only the
+        // original reader/capture owners and their exact synchronous refunds.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let state = pristine_push_state(Kura::blank_kura_for_testing());
         let pool = state.ivm_execution_budget();
         let baseline = pool.reserved_bytes();
@@ -4227,13 +4247,13 @@ mod tests {
             .try_reserve(ReleaseRegistration::allocation_layout())
             .unwrap_err();
         let temp = tempfile::tempdir().unwrap();
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf()).unwrap();
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path()).unwrap();
         let cursor = bridge.applied_block_cursor.lock().clone();
         let (events, receiver) = tokio::sync::broadcast::channel(1);
         let receiver_count = events.receiver_count();
         let shutdown = ShutdownSignal::new();
         let error = bridge
-            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
             .expect_err("occupied original pool refuses before subscription or spawn");
         let PushWorkerStartError::Admission(actual) = error else {
             panic!("exact original capacity refusal");
@@ -4245,7 +4265,7 @@ mod tests {
         assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
         drop(occupied);
         let worker = bridge
-            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
             .expect("same original pool retries after its refund")
             .expect("enabled worker");
         assert_eq!(
@@ -4337,7 +4357,7 @@ mod tests {
             test_bridge_config(),
             dispatcher,
             test_storage_limits(1, 1),
-            temp.path().to_path_buf(),
+            temp.path(),
         )
         .expect("valid bounded push store");
         bridge
@@ -4368,7 +4388,7 @@ mod tests {
         let shutdown = ShutdownSignal::new();
         // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&state), events.clone(), shutdown.clone())
+            .start_event_worker(Arc::clone(&state), &(events), shutdown.clone())
             .expect("original State pool admits push retry control")
             .expect("enabled push worker");
         wait_for_cursor(&bridge, chain.height()).await;
@@ -4395,7 +4415,7 @@ mod tests {
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
             test_storage_limits(2, 1),
-            temp.path().to_path_buf(),
+            temp.path(),
         )
         .expect("valid bounded push store");
         bridge
@@ -4424,8 +4444,8 @@ mod tests {
         let chain = native_push_chain(true);
         let state = Arc::clone(chain.state());
         let temp = tempfile::tempdir().expect("push tempdir");
-        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
-            .expect("valid empty push store");
+        let bridge =
+            PushBridge::new_in(test_bridge_config(), temp.path()).expect("valid empty push store");
         bridge
             .register_device(register_request("blocked-queue-token"))
             .expect("register push activity target");
@@ -4499,6 +4519,26 @@ mod tests {
         );
     }
     #[test]
+    fn jwt_algorithm_names_preserve_explicit_protocol_labels() {
+        for (algorithm, expected) in [
+            (Algorithm::HS256, "HS256"),
+            (Algorithm::HS384, "HS384"),
+            (Algorithm::HS512, "HS512"),
+            (Algorithm::ES256, "ES256"),
+            (Algorithm::ES384, "ES384"),
+            (Algorithm::RS256, "RS256"),
+            (Algorithm::RS384, "RS384"),
+            (Algorithm::RS512, "RS512"),
+            (Algorithm::PS256, "PS256"),
+            (Algorithm::PS384, "PS384"),
+            (Algorithm::PS512, "PS512"),
+            (Algorithm::EdDSA, "EdDSA"),
+        ] {
+            assert_eq!(jwt_algorithm_name(algorithm), Ok(expected));
+        }
+    }
+
+    #[test]
     fn encode_jwt_claims_builds_verifiable_compact_token() {
         let mut claims = norito::json::Map::new();
         claims.insert("iss".to_string(), norito::json::Value::from("issuer"));
@@ -4510,7 +4550,7 @@ mod tests {
         let token = encode_jwt_claims(
             Algorithm::HS256,
             Some("test-key"),
-            norito::json::Value::Object(claims),
+            &(norito::json::Value::Object(claims)),
             &key,
         )
         .expect("JWT should encode");
@@ -4690,7 +4730,7 @@ mod tests {
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
             test_storage_limits(1, 2),
-            temp.path().to_path_buf(),
+            temp.path(),
         )
         .err()
         .expect("oversized durable queue must fail startup");
@@ -5175,7 +5215,7 @@ mod tests {
         )
         .expect("write nested legacy device fixture");
 
-        let error = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+        let error = PushBridge::new_in(test_bridge_config(), temp.path())
             .err()
             .expect("nested legacy layout must fail startup");
         assert!(matches!(error, PushError::Storage(_)));
@@ -5216,7 +5256,7 @@ mod tests {
             .register_device(request.clone())
             .expect("register device");
         bridge
-            .unregister_device(request)
+            .unregister_device(&(request))
             .expect("unregister device");
         assert_eq!(bridge.device_count(), 0);
         assert!(bridge.registered_device("token-123").is_none());

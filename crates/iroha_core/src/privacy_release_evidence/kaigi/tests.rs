@@ -38,8 +38,8 @@ fn real_kaigi_release_builders_preserve_governed_keys_and_final_carriers() {
     );
     let create = created.create(call.clone());
     assert_eq!(create.call.id(), call.id());
-    assert_eq!(create.commitment, Some(created.commitment.clone()));
-    record.host_commitment = Some(created.commitment.clone());
+    assert_eq!(create.commitment, Some(created.commitment));
+    record.host_commitment = Some(created.commitment);
     for action in [
         KaigiAuthorizationActionV1::Join,
         KaigiAuthorizationActionV1::Leave,

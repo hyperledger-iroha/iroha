@@ -115,7 +115,7 @@ fn offenders(parser: &mut Parser<'_>, budget: &AllocationBudget) -> Result<Funde
 
 /// Restore canonical fields from the original borrowed JSON stream. Pool funding
 /// never establishes historical attribution; the existing verifier reauthenticates it.
-pub(crate) fn restore_attribution(
+pub fn restore_attribution(
     parser: &mut Parser<'_>,
     budget: &AllocationBudget,
 ) -> Result<FundedEvidenceAttribution, Error> {
@@ -207,5 +207,5 @@ pub(crate) fn restore_attribution(
         authority_generation: generation,
         safety_violation: required(safety, "safety_violation")?,
     };
-    Ok(graph.into_attribution(fields))
+    Ok(graph.into_attribution(&fields))
 }

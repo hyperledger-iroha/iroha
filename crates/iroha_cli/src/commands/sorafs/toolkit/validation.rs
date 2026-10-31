@@ -1,4 +1,4 @@
-//! Local SoraFS artifact validation, signing and release evidence.
+//! Local `SoraFS` artifact validation, signing and release evidence.
 //!
 //! Command arguments belong to the canonical CLI; artifact validators, wire types and
 //! cryptographic verification remain in their reusable library owners.
@@ -43,9 +43,9 @@ use std::{
 };
 
 fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.ok_or(CliError::Config(
-        "advert requires --input <path>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .ok_or_else(|| CliError::Config("advert requires --input <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let now = match args.now {
         Some(now) => now,
@@ -71,9 +71,9 @@ fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_admission(args: AdmissionArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.ok_or(CliError::Config(
-        "admission requires --input <path>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .ok_or_else(|| CliError::Config("admission requires --input <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -121,9 +121,9 @@ fn run_admission(args: AdmissionArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_order(args: OrderArgs) -> Result<ExitCode, CliError> {
-    let input = args.order.ok_or(CliError::Config(
-        "order requires --order <path> or --signed-order <path>".to_owned(),
-    ))?;
+    let input = args.order.ok_or_else(|| {
+        CliError::Config("order requires --order <path> or --signed-order <path>".to_owned())
+    })?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -148,12 +148,12 @@ fn run_order(args: OrderArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.ok_or(CliError::Config(
-        "orderbook requires --input <path>".to_owned(),
-    ))?;
-    let kind = args.kind.ok_or(CliError::Config(
-        "orderbook requires --kind <payload-kind>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .ok_or_else(|| CliError::Config("orderbook requires --input <path>".to_owned()))?;
+    let kind = args
+        .kind
+        .ok_or_else(|| CliError::Config("orderbook requires --kind <payload-kind>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -176,10 +176,10 @@ fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
 fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
     let input = args
         .input
-        .ok_or(CliError::Config("pop requires --input <path>".to_owned()))?;
-    let kind = args.kind.ok_or(CliError::Config(
-        "pop requires --kind <payload-kind>".to_owned(),
-    ))?;
+        .ok_or_else(|| CliError::Config("pop requires --input <path>".to_owned()))?;
+    let kind = args
+        .kind
+        .ok_or_else(|| CliError::Config("pop requires --kind <payload-kind>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -200,12 +200,12 @@ fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_hedging(args: HedgingArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.ok_or(CliError::Config(
-        "hedging requires --input <path>".to_owned(),
-    ))?;
-    let kind = args.kind.ok_or(CliError::Config(
-        "hedging requires --kind <payload-kind>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .ok_or_else(|| CliError::Config("hedging requires --input <path>".to_owned()))?;
+    let kind = args
+        .kind
+        .ok_or_else(|| CliError::Config("hedging requires --kind <payload-kind>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -354,12 +354,12 @@ fn read_cli_bytes_bounded(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
-    let challenge = args.challenge.ok_or(CliError::Config(
-        "por requires --challenge <path>".to_owned(),
-    ))?;
+    let challenge = args
+        .challenge
+        .ok_or_else(|| CliError::Config("por requires --challenge <path>".to_owned()))?;
     let proof = args
         .proof
-        .ok_or(CliError::Config("por requires --proof <path>".to_owned()))?;
+        .ok_or_else(|| CliError::Config("por requires --proof <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -388,9 +388,9 @@ fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_potr(args: PotrArgs) -> Result<ExitCode, CliError> {
-    let receipt = args.receipt.ok_or(CliError::Config(
-        "potr requires --receipt <path>".to_owned(),
-    ))?;
+    let receipt = args
+        .receipt
+        .ok_or_else(|| CliError::Config("potr requires --receipt <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -416,12 +416,12 @@ fn run_potr(args: PotrArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_repair(args: RepairArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.ok_or(CliError::Config(
-        "repair requires --input <path>".to_owned(),
-    ))?;
-    let kind = args.kind.ok_or(CliError::Config(
-        "repair requires --kind <payload-kind>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .ok_or_else(|| CliError::Config("repair requires --input <path>".to_owned()))?;
+    let kind = args
+        .kind
+        .ok_or_else(|| CliError::Config("repair requires --kind <payload-kind>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -443,9 +443,9 @@ fn run_repair(args: RepairArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_bundle(args: BundleArgs) -> Result<ExitCode, CliError> {
-    let bundle = args.bundle.ok_or(CliError::Config(
-        "bundle requires --bundle <directory>".to_owned(),
-    ))?;
+    let bundle = args
+        .bundle
+        .ok_or_else(|| CliError::Config("bundle requires --bundle <directory>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let now = match args.now {
         Some(now) => now,
@@ -503,9 +503,9 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
         }
         let bytes = fs::read(&node)
             .map_err(|err| CliError::Io(format!("failed to read {}: {err}", node.display())))?;
-        let cid = args.cid.as_deref().ok_or(CliError::Config(
-            "governance --node requires --cid <node-cid>".to_owned(),
-        ))?;
+        let cid = args.cid.as_deref().ok_or_else(|| {
+            CliError::Config("governance --node requires --cid <node-cid>".to_owned())
+        })?;
         let expected_cid = parse_cid_arg_bytes(cid)?;
         validate_governance_log_node_bytes(
             &bytes,
@@ -576,15 +576,15 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
 const RELEASE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 pub(super) fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError> {
-    let manifest_path = args.manifest.ok_or(CliError::Config(
-        "release-manifest requires --manifest <path>".to_owned(),
-    ))?;
-    let public_key_path = args.public_key.ok_or(CliError::Config(
-        "release-manifest requires --public-key <path>".to_owned(),
-    ))?;
-    let fingerprint_text = args.public_key_fingerprint.ok_or(CliError::Config(
-        "release-manifest requires --public-key-fingerprint <hex>".to_owned(),
-    ))?;
+    let manifest_path = args.manifest.ok_or_else(|| {
+        CliError::Config("release-manifest requires --manifest <path>".to_owned())
+    })?;
+    let public_key_path = args.public_key.ok_or_else(|| {
+        CliError::Config("release-manifest requires --public-key <path>".to_owned())
+    })?;
+    let fingerprint_text = args.public_key_fingerprint.ok_or_else(|| {
+        CliError::Config("release-manifest requires --public-key-fingerprint <hex>".to_owned())
+    })?;
     let reviewed_fingerprint = parse_release_fingerprint(&fingerprint_text)?;
     let manifest = read_release_input(
         &manifest_path,
@@ -714,12 +714,14 @@ pub(super) fn run_sign(args: SignArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.clone().ok_or(CliError::Config(
-        "sign --kind advert requires --input <path>".to_owned(),
-    ))?;
-    let output = args.out.clone().ok_or(CliError::Config(
-        "sign --kind advert requires --out <path>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .clone()
+        .ok_or_else(|| CliError::Config("sign --kind advert requires --input <path>".to_owned()))?;
+    let output = args
+        .out
+        .clone()
+        .ok_or_else(|| CliError::Config("sign --kind advert requires --out <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let now = match args.now {
         Some(now) => now,
@@ -733,21 +735,20 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
     };
     let seed = read_signing_seed(&args)?;
     let input_bytes = read_cli_bytes_bounded(&input, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
-    let mut advert = match decode_provider_advert_v1(&input_bytes) {
-        Ok(advert) => advert,
-        Err(_) => {
-            let outcome = validate_provider_advert_bytes(
-                &input_bytes,
-                input.display().to_string(),
-                now,
-                generated_at,
-            );
-            if let Some(path) = args.telemetry_out {
-                write_json_outcome(&path, &outcome)?;
-            }
-            print_outcome(&outcome, format)?;
-            return Ok(ExitCode::from(2));
+    let mut advert = if let Ok(advert) = decode_provider_advert_v1(&input_bytes) {
+        advert
+    } else {
+        let outcome = validate_provider_advert_bytes(
+            &input_bytes,
+            input.display().to_string(),
+            now,
+            generated_at,
+        );
+        if let Some(path) = args.telemetry_out {
+            write_json_outcome(&path, &outcome)?;
         }
+        print_outcome(&outcome, format)?;
+        return Ok(ExitCode::from(2));
     };
     sign_provider_advert(&mut advert, &seed)?;
     let signed_bytes = norito::to_bytes(&advert).map_err(|err| {
@@ -788,12 +789,14 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.clone().ok_or(CliError::Config(
-        "sign --kind order requires --input <path>".to_owned(),
-    ))?;
-    let output = args.out.clone().ok_or(CliError::Config(
-        "sign --kind order requires --out <path>".to_owned(),
-    ))?;
+    let input = args
+        .input
+        .clone()
+        .ok_or_else(|| CliError::Config("sign --kind order requires --input <path>".to_owned()))?;
+    let output = args
+        .out
+        .clone()
+        .ok_or_else(|| CliError::Config("sign --kind order requires --out <path>".to_owned()))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -803,20 +806,19 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
     let seed = read_signing_seed(&args)?;
     let input_bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
-    let order = match norito::decode_from_bytes::<ReplicationOrderV1>(&input_bytes) {
-        Ok(order) => order,
-        Err(_) => {
-            let outcome = validate_replication_order_bytes(
-                &input_bytes,
-                input.display().to_string(),
-                generated_at,
-            );
-            if let Some(path) = args.telemetry_out {
-                write_json_outcome(&path, &outcome)?;
-            }
-            print_outcome(&outcome, format)?;
-            return Ok(ExitCode::from(2));
+    let order = if let Ok(order) = norito::decode_from_bytes::<ReplicationOrderV1>(&input_bytes) {
+        order
+    } else {
+        let outcome = validate_replication_order_bytes(
+            &input_bytes,
+            input.display().to_string(),
+            generated_at,
+        );
+        if let Some(path) = args.telemetry_out {
+            write_json_outcome(&path, &outcome)?;
         }
+        print_outcome(&outcome, format)?;
+        return Ok(ExitCode::from(2));
     };
     let signed_order = sign_replication_order(order, &seed)?;
     let signed_bytes = norito::to_bytes(&signed_order).map_err(|err| {
@@ -856,13 +858,13 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.clone().ok_or(CliError::Config(
-        "sign --kind orderbook requires --input <path>".to_owned(),
-    ))?;
-    let output = args.out.clone().ok_or(CliError::Config(
-        "sign --kind orderbook requires --out <path>".to_owned(),
-    ))?;
-    let payload_kind = args.payload_kind.ok_or(CliError::Config(
+    let input = args.input.clone().ok_or_else(|| {
+        CliError::Config("sign --kind orderbook requires --input <path>".to_owned())
+    })?;
+    let output = args.out.clone().ok_or_else(|| {
+        CliError::Config("sign --kind orderbook requires --out <path>".to_owned())
+    })?;
+    let payload_kind = args.payload_kind.ok_or_else(|| CliError::Config(
         "sign --kind orderbook requires --payload-kind order-request, order-cancel, or settlement-receipt".to_owned(),
     ))?;
     let format = args.format.unwrap_or(OutputFormat::Table);
@@ -944,12 +946,12 @@ fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
     }
 }
 fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
-    let input = args.input.clone().ok_or(CliError::Config(
-        "sign --kind governance requires --input <path>".to_owned(),
-    ))?;
-    let output = args.out.clone().ok_or(CliError::Config(
-        "sign --kind governance requires --out <path>".to_owned(),
-    ))?;
+    let input = args.input.clone().ok_or_else(|| {
+        CliError::Config("sign --kind governance requires --input <path>".to_owned())
+    })?;
+    let output = args.out.clone().ok_or_else(|| {
+        CliError::Config("sign --kind governance requires --out <path>".to_owned())
+    })?;
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
         Some(generated_at) => generated_at,
@@ -959,21 +961,21 @@ fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
     let seed = read_signing_seed(&args)?;
     let input_bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
-    let mut node = match norito::decode_from_bytes::<GovernanceLogNodeV1>(&input_bytes) {
-        Ok(node) => node,
-        Err(_) => {
-            let outcome = validate_governance_log_node_bytes(
-                &input_bytes,
-                input.display().to_string(),
-                None,
-                generated_at,
-            );
-            if let Some(path) = args.telemetry_out {
-                write_json_outcome(&path, &outcome)?;
-            }
-            print_outcome(&outcome, format)?;
-            return Ok(ExitCode::from(2));
+    let mut node = if let Ok(node) = norito::decode_from_bytes::<GovernanceLogNodeV1>(&input_bytes)
+    {
+        node
+    } else {
+        let outcome = validate_governance_log_node_bytes(
+            &input_bytes,
+            input.display().to_string(),
+            None,
+            generated_at,
+        );
+        if let Some(path) = args.telemetry_out {
+            write_json_outcome(&path, &outcome)?;
         }
+        print_outcome(&outcome, format)?;
+        return Ok(ExitCode::from(2));
     };
     sign_governance_log_node(&mut node, &seed)?;
     let signed_bytes = norito::to_bytes(&node).map_err(|err| {
@@ -1044,7 +1046,7 @@ impl OutputFormat {
 }
 /// Stable artifact validation error and exit-status classification.
 #[derive(Debug)]
-pub(crate) enum CliError {
+pub enum CliError {
     Validation(String),
     Config(String),
     Io(String),
@@ -1102,12 +1104,7 @@ fn parse_cid_arg_bytes(value: &str) -> Result<Vec<u8>, CliError> {
             CliError::Config(format!("invalid governance --cid hex `{trimmed}`: {err}"))
         });
     }
-    if trimmed.len().is_multiple_of(2)
-        && trimmed
-            .as_bytes()
-            .iter()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
+    if trimmed.len().is_multiple_of(2) && trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return hex::decode(trimmed).map_err(|err| {
             CliError::Config(format!("invalid governance --cid hex `{trimmed}`: {err}"))
         });
@@ -1817,35 +1814,47 @@ fn print_outcome(outcome: &ValidationOutcomeV1, format: OutputFormat) -> Result<
         .map_err(|err| CliError::Io(format!("failed to flush stdout: {err}")))
 }
 fn render_yaml(outcome: &ValidationOutcomeV1) -> String {
+    use std::fmt::Write as _;
     let mut rendered = String::new();
-    rendered.push_str(&format!("status: {}\n", yaml_string(&outcome.status)));
-    rendered.push_str(&format!("code: {}\n", yaml_string(&outcome.code)));
-    rendered.push_str(&format!("category: {}\n", yaml_string(&outcome.category)));
-    rendered.push_str(&format!("message: {}\n", yaml_string(&outcome.message)));
+    writeln!(rendered, "status: {}", yaml_string(&outcome.status))
+        .expect("writing to a String cannot fail");
+    writeln!(rendered, "code: {}", yaml_string(&outcome.code))
+        .expect("writing to a String cannot fail");
+    writeln!(rendered, "category: {}", yaml_string(&outcome.category))
+        .expect("writing to a String cannot fail");
+    writeln!(rendered, "message: {}", yaml_string(&outcome.message))
+        .expect("writing to a String cannot fail");
     match &outcome.action {
-        Some(action) => rendered.push_str(&format!("action: {}\n", yaml_string(action))),
+        Some(action) => writeln!(rendered, "action: {}", yaml_string(action))
+            .expect("writing to a String cannot fail"),
         None => rendered.push_str("action: null\n"),
     }
     match &outcome.docs_url {
-        Some(docs_url) => rendered.push_str(&format!("docs_url: {}\n", yaml_string(docs_url))),
+        Some(docs_url) => writeln!(rendered, "docs_url: {}", yaml_string(docs_url))
+            .expect("writing to a String cannot fail"),
         None => rendered.push_str("docs_url: null\n"),
     }
     rendered.push_str("telemetry_tags:\n");
     for tag in &outcome.telemetry_tags {
-        rendered.push_str(&format!("  - {}\n", yaml_string(tag)));
+        writeln!(rendered, "  - {}", yaml_string(tag)).expect("writing to a String cannot fail");
     }
     rendered.push_str("context:\n");
     for field in &outcome.context {
-        rendered.push_str(&format!("  - key: {}\n", yaml_string(&field.key)));
-        rendered.push_str(&format!("    value: {}\n", yaml_string(&field.value)));
+        writeln!(rendered, "  - key: {}", yaml_string(&field.key))
+            .expect("writing to a String cannot fail");
+        writeln!(rendered, "    value: {}", yaml_string(&field.value))
+            .expect("writing to a String cannot fail");
     }
     rendered.push_str("inputs:\n");
     for input in &outcome.inputs {
-        rendered.push_str(&format!("  - kind: {}\n", yaml_string(&input.kind)));
-        rendered.push_str(&format!("    path: {}\n", yaml_string(&input.path)));
+        writeln!(rendered, "  - kind: {}", yaml_string(&input.kind))
+            .expect("writing to a String cannot fail");
+        writeln!(rendered, "    path: {}", yaml_string(&input.path))
+            .expect("writing to a String cannot fail");
     }
-    rendered.push_str(&format!("version: {}\n", outcome.version));
-    rendered.push_str(&format!("generated_at: {}\n", outcome.generated_at));
+    writeln!(rendered, "version: {}", outcome.version).expect("writing to a String cannot fail");
+    writeln!(rendered, "generated_at: {}", outcome.generated_at)
+        .expect("writing to a String cannot fail");
     rendered
 }
 fn yaml_string(value: &str) -> String {
@@ -1871,7 +1880,7 @@ fn unix_time_now() -> Option<u64> {
         .map(|duration| duration.as_secs())
 }
 
-/// Validate a local SoraFS artifact.
+/// Validate a local `SoraFS` artifact.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Validate advert artifacts.

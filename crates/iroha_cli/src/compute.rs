@@ -661,7 +661,8 @@ mod tests {
         let payload = load_payload(
             &args.payload,
             None,
-            compute_defaults::MAX_REQUEST_BYTES.0 as usize,
+            usize::try_from(compute_defaults::MAX_REQUEST_BYTES.0)
+                .expect("request test bound fits usize"),
         )
         .expect("payload");
         let stub = simulate_with_call(&manifest, call.clone(), &payload).expect("simulate");
@@ -727,7 +728,8 @@ mod tests {
         let payload = load_payload(
             &workspace_fixture(DEFAULT_PAYLOAD),
             None,
-            compute_defaults::MAX_REQUEST_BYTES.0 as usize,
+            usize::try_from(compute_defaults::MAX_REQUEST_BYTES.0)
+                .expect("request test bound fits usize"),
         )
         .expect("payload");
         let receipt = simulate_with_call(&manifest, call, &payload)

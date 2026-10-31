@@ -1,4 +1,4 @@
-//! Production adapter boundaries for the finalized-chain SoraFS moderation orchestrator.
+//! Production adapter boundaries for the finalized-chain `SoraFS` moderation orchestrator.
 //!
 //! These adapters intentionally own no moderation consensus state. Transaction idempotency and
 //! terminal handoff deduplication are delegated to injected durable boundaries, while finalized
@@ -777,7 +777,7 @@ impl ToriiModerationStrictTransactionIngressV1 {
     }
     fn has_positive_pending_hint(&self, transaction_hash: &HashOf<SignedTransaction>) -> bool {
         self.queue.contains_pending_hash(
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone()),
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(*transaction_hash),
             self.state.as_ref(),
         ) || self
             .pipeline_status_cache
@@ -820,7 +820,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         let observed_finalized_height = self.validate_retained_baseline(request)?;
         let transaction_id = *transaction.hash().as_ref();
         let accepted = crate::routing::accept_transaction_for_ingress(
-            Arc::clone(&self.state),
+            &(Arc::clone(&self.state)),
             transaction,
             &self.telemetry,
         )
@@ -839,8 +839,8 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
             .route_plan_with_state(&accepted, self.state.as_ref())
             .map_err(|_| ModerationStrictIngressFailureV1::Unavailable)?;
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
-            Arc::clone(&self.queue),
-            Arc::clone(&self.state),
+            &(Arc::clone(&self.queue)),
+            &(Arc::clone(&self.state)),
             accepted,
             Some(routing_plan),
         ) {
@@ -873,7 +873,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         }
         let transaction_hash = HashOf::from_untyped_unchecked(Hash::prehashed(transaction_id));
         let entrypoint_hash =
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash);
         let view = self.state.view();
         let Some(observed_finalized_height) = u64::try_from(view.block_hashes().len())
             .ok()
@@ -983,7 +983,8 @@ fn classify_local_moderation_queue_rejection(
         | iroha_core::queue::Error::LaneComplianceDenied { .. }
         | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
         | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
-        | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
+        | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. }
+        | iroha_core::queue::Error::RuntimeRejected(_) => {
             Err(ModerationStrictIngressFailureV1::PermanentRejection)
         }
     }

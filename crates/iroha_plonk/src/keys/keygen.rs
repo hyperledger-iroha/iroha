@@ -53,11 +53,11 @@ use crate::{
 mod builtin;
 mod rebuild;
 pub use builtin::{
-    BuiltinSourceErrorV1, BuiltinSourceMemberV1, BuiltinSourceProfileV1, builtin_source_identity_v1,
+    BuiltinSourceErrorV1, BuiltinSourceMemberV1, BuiltinSourceProfileV1, builtin_contract_v1,
 };
 pub use rebuild::{
     RebuildError, SourceAdmissionSealV2, SourceBoundVerifyingKeyV2, SourceBoundViewV2,
-    keygen_pk_from_vk_v2, keygen_pk_from_vk_v2_cancellable,
+    check_source_v2_cancellable, keygen_pk_from_vk_v2, keygen_pk_from_vk_v2_cancellable,
 };
 pub(crate) use rebuild::{
     keygen_pk_from_synthesized_v2_cancellable, validate_rebuild_profile_v2_cancellable,

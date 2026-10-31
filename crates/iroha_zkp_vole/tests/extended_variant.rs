@@ -29,10 +29,8 @@ use iroha_zkp_vole::{
     variant::{Binding, Construction, EXTENDED_LAST_COUNTER, SALT_BYTES, Variant},
     vole,
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use zeroize::Zeroizing;
 
 const EXTENDED: Construction = Construction::Extended;

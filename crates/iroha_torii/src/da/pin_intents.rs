@@ -381,8 +381,12 @@ mod tests {
         let authorization = sample_authorization(LaneId::new(lane), epoch, sequence);
         let scope = DaPinScopeV1::new(
             &authorization,
-            StorageTicketId::new([lane as u8; 32]),
-            ManifestDigest::new([sequence as u8; 32]),
+            StorageTicketId::new(
+                [u8::try_from(lane).expect("fixture lane fits in a digest byte"); 32],
+            ),
+            ManifestDigest::new(
+                [u8::try_from(sequence).expect("fixture sequence fits in a digest byte"); 32],
+            ),
             None,
         );
         let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
@@ -979,6 +983,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_pin_history_capacity_is_retryable_for_prove_and_verify() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use axum::response::IntoResponse as _;
         let app = app_with_pin_intent_bundle(vec![sample_intent(1, 1, 1)]);
         let request = DaPinIntentQueryRequest {
@@ -1156,6 +1163,15 @@ mod tests {
     }
     #[tokio::test]
     async fn pin_intent_post_routes_reject_oversized_bodies() {
+        use axum::{
+            Router,
+            body::Body,
+            extract::DefaultBodyLimit,
+            http::{Method, Request, StatusCode, header},
+            routing::post,
+        };
+        use tower::ServiceExt as _;
+
         crate::frame_test_support::assert_current_frame(
             &DaPinIntentListRequest {
                 limit: std::num::NonZeroU64::new(7),
@@ -1172,14 +1188,6 @@ mod tests {
             },
             "iroha_torii::da::pin_intents::DaPinIntentQueryRequest",
         );
-        use axum::{
-            Router,
-            body::Body,
-            extract::DefaultBodyLimit,
-            http::{Method, Request, StatusCode, header},
-            routing::post,
-        };
-        use tower::ServiceExt as _;
         let app = crate::mk_app_state_for_tests();
         let router = Router::new()
             .route(

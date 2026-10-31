@@ -4,8 +4,8 @@
 use super::preparation_custody::SOURCE_CUSTODY_MAX_BYTES;
 use super::*;
 use crate::kagemusha_wallet_advance_v1::{
-    KAGEMUSHA_WALLET_BALLAST_BYTES_V1, KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1,
-    KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1,
+    KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KAGEMUSHA_WALLET_BALLAST_BYTES_V1,
+    KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1, KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1,
 };
 use crate::kagemusha_wallet_capacity_v1::{
     KAGEMUSHA_WALLET_CORE_BASELINE_BYTES_V1, KagemushaWalletCapacityShortfallV1,
@@ -71,6 +71,46 @@ pub(super) const INTAKE_MEMORY_RESERVATION_BYTES: u64 = 6
     + 2 * (REQUEST_MAX_BYTES as u64 + PLAN_BOUND as u64)
     + 64 * 1024;
 
+// A deferred receipt transition updates at most six bounded index paths: permanent
+// receipt, unverified FIFO, actual Send, ready FIFO, retained request-only intent, and
+// the reserved sessions leaf selecting the complete bounded deferred metadata frame.
+// Each path writes at most 258 nodes. Two metadata publications cover intent retention
+// followed by verified queue membership. Eight provider pages per publication cover
+// redundant checkpoints, markers and anchor updates, including publication overlap.
+const DEFERRED_INDEX_BYTES: u64 =
+    6 * 258 * (index::INDEX_VALUE_LIMIT as u64 + archive::METADATA_BOUND as u64);
+const DEFERRED_INDEX_ENVELOPES: u64 = 6 * 258 * archive::METADATA_BOUND as u64;
+const DEFERRED_PUBLICATION_BYTES: u64 =
+    2 * 8 * KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1 as u64;
+
+/// Bound the queue's own publication workspace independently of any proving relations.
+/// These are conservative serialized/staged-byte allowances, not an RSS measurement or
+/// an exclusive filesystem reservation. Existing provider errors still govern actual I/O.
+pub(super) fn deferred_archive_capacity(
+    original_bytes: usize,
+    retain_intent: bool,
+) -> Result<KagemushaWalletRuntimeCapacityV1, Error> {
+    if original_bytes > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+        return Err(Error::Invalid("deferred receipt size"));
+    }
+    let envelope = archive::METADATA_BOUND as u64;
+    let receipt = original_bytes as u64 + envelope;
+    let intent = if retain_intent {
+        REQUEST_MAX_BYTES as u64 + envelope
+    } else {
+        0
+    };
+    let staged = receipt + intent + DEFERRED_INDEX_BYTES + DEFERRED_INDEX_ENVELOPES;
+    Ok(KagemushaWalletRuntimeCapacityV1 {
+        storage_bytes: 2 * staged
+            + DEFERRED_PUBLICATION_BYTES
+            + KAGEMUSHA_WALLET_CAPACITY_HEADROOM_BYTES_V1,
+        // Cover grouped staging, redundant envelope decode, content copies and
+        // serialization overlap; add fixed codec/path scratch. No prover is started.
+        memory_bytes: 6 * staged + 64 * 1024,
+    })
+}
+
 /// Memory intake itself holds: its allowance plus the wallet-core baseline, which the
 /// relation bound already carries.
 pub(super) const INTAKE_PEAK_MEMORY_BYTES: u64 =
@@ -84,6 +124,17 @@ fn intake_memory_bytes(relations: KagemushaWalletRuntimeCapacityV1) -> u64 {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    /// Admit only a fresh deferred-receipt metadata publication. Exact retained reads,
+    /// duplicate intake and already-completed reconciliation must not depend on this check.
+    pub(super) fn require_deferred_archive_capacity(
+        &mut self,
+        original_bytes: usize,
+        retain_intent: bool,
+    ) -> Result<(), Error> {
+        let required = deferred_archive_capacity(original_bytes, retain_intent)?;
+        self.check_capacity_observed(NativeAdmissionPhaseV1::DeferredArchive, required)
+    }
+
     /// Admit the bounded intake workspace and its redundant recovery batch before allocating
     /// variable draft data, and refuse a phone that could not prove the step afterwards.
     pub(super) fn require_intake_capacity(&mut self) -> Result<(), Error> {

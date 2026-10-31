@@ -19,7 +19,8 @@ test("Nexus App transfer recipe executes the canonical native codec end to end",
     {
       cwd: PACKAGE_ROOT,
       encoding: "utf8",
-      timeout: 15_000,
+      // Native custody verification may take up to 180 seconds before the recipe runs.
+      timeout: 240_000,
       env: { ...process.env, NO_COLOR: "1" },
     },
   );

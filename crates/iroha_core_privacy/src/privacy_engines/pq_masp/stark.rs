@@ -43,7 +43,7 @@ use iroha_data_model::privacy::{
     PqMaspStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
     PrivacyProtocolIdV1,
 };
-use rand::TryRngCore;
+use rand::TryRng;
 const TYPE_SHA_ROUND: usize = 0;
 const TYPE_SHA_END: usize = 1;
 const TYPE_NODE_SELECT: usize = 2;
@@ -566,14 +566,14 @@ impl ProofManagedNoteStarkAdapterV1 for PqMaspStarkAdapterV1<'_> {
     }
     fn profile_constraint_residues_v1(
         &self,
-        current_base: &[F],
-        next_base: &[F],
+        base_rows: (&[F], &[F]),
         current_aux: &[F],
         next_aux: &[F],
         fixed: &[F],
         _copy_challenges: NoteCopyChallengesV1,
         _profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
+        let (current_base, next_base) = base_rows;
         pq_masp_profile_constraint_residues_inner_v1(
             current_base,
             next_base,
@@ -597,7 +597,7 @@ pub(super) fn compile_pq_masp_prover_columns_v1(
 /// The witness is compiled and checked by the native interpreter before the shared proof driver
 /// sees any columns. The proof driver then checks the same relation algebraically on the native and
 /// extension domains. This relation adapter independently verifies its opaque candidate before returning bytes.
-pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
+pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRng>(
     statement: &PqMaspStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
@@ -648,7 +648,8 @@ mod tests {
             note_copy_constraint_residues_v1,
         },
     };
-    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     fn row(columns: &[Vec<F>], index: usize) -> Vec<F> {
         columns.iter().map(|column| column[index]).collect()
@@ -757,17 +758,18 @@ mod tests {
             "valid statement, binding and outer authorization must reach the inner verifier"
         );
     }
-    fn prepared_columns(
-        statement: &PqMaspStarkStatementV1,
-        witness: &PqMaspWitnessV1,
-        transcript_domain: &'static [u8],
-    ) -> (
+    type PreparedColumnsV1 = (
         super::super::air::PqMaspBaseTraceV1,
         Vec<Vec<F>>,
         Vec<Vec<F>>,
         Vec<Vec<F>>,
         NoteCopyChallengesV1,
-    ) {
+    );
+    fn prepared_columns(
+        statement: &PqMaspStarkStatementV1,
+        witness: &PqMaspWitnessV1,
+        transcript_domain: &'static [u8],
+    ) -> PreparedColumnsV1 {
         let trace = super::super::air::build_pq_masp_base_trace_v1(statement, witness)
             .expect("canonical PQ-MASP trace");
         let base = pq_masp_base_columns_v1(&trace).expect("base columns");
@@ -892,8 +894,8 @@ mod tests {
             b"pq-masp-wrong-facade-key-v1",
         )
         .expect("wrong ML-DSA authorization key");
-        let mut untouched_rng = StdRng::from_seed([0xB9; 32]);
-        let mut expected_rng = StdRng::from_seed([0xB9; 32]);
+        let mut untouched_rng = ChaCha12Rng::from_seed([0xB9; 32]);
+        let mut expected_rng = ChaCha12Rng::from_seed([0xB9; 32]);
         assert_eq!(
             super::super::prove_pq_masp_v1_with_rng(
                 &statement,
@@ -908,8 +910,10 @@ mod tests {
             ))
         );
         assert_eq!(
-            untouched_rng.next_u64(),
-            expected_rng.next_u64(),
+            untouched_rng
+                .try_next_u64()
+                .expect("test RNG draw succeeds"),
+            expected_rng.try_next_u64().expect("test RNG draw succeeds"),
             "invalid authorization keys must fail before entropy is consumed"
         );
     }
@@ -929,7 +933,7 @@ mod tests {
         let (binding, limits) = consensus_material(&statement);
         let (other_genesis_statement, matched_other_genesis) =
             other_genesis_consensus_material(&statement, &limits);
-        let mut rng = StdRng::from_seed([0xB7; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xB7; 32]);
         let authorized_proof = super::super::prove_pq_masp_v1_with_rng(
             &statement,
             &binding,

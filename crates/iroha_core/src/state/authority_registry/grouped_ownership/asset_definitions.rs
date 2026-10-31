@@ -2,7 +2,7 @@
 //!
 //! Both committed and frozen consumers share these sealed native-image checks.
 //! Work is prepaid source inspection, not allocation or finalized authority.
-//! TODO: join every original relation/cell/history to StatePublication and Kura.
+//! TODO: join every original relation/cell/history to `StatePublication` and Kura.
 
 use super::confidential_policies::{self, RetainedConfidentialPolicies};
 use super::*;
@@ -59,11 +59,8 @@ impl<'world> CheckedAssetDefinitions<'world> {
         let result = validate_original_asset_definitions(
             &checked.rows,
             &checked.domains,
-            &checked.contexts,
-            &checked.by_domain,
-            &checked.by_owner,
-            transitions,
-            counts,
+            (&checked.contexts, &checked.by_domain, &checked.by_owner),
+            (transitions, counts),
             &checked.homes,
             &checked.incarnations,
             max_work,
@@ -349,15 +346,19 @@ pub(super) fn validate_original_direct_home_rows(
 
 /// The sole complete definition/reference/group/policy relation over original images.
 /// Phased Current/Predecessor order and all source/index predicates stay unchanged.
-/// No accounts, embedded-id, alias, balance quantity or zk_assets rule is added.
+/// No accounts, embedded-id, alias, balance quantity or `zk_assets` rule is added.
 pub(in crate::state) fn validate_original_asset_definitions(
     rows: &impl RawStorageImages<AssetDefinitionId, AssetDefinition>,
     domains: &impl RawStorageImages<DomainId, Domain>,
-    contexts: &impl RawStorageImages<AssetDefinitionId, DomainId>,
-    by_domain: &impl RawStorageImages<(DomainId, AssetDefinitionId), ()>,
-    by_owner: &impl RawStorageImages<(AccountId, AssetDefinitionId), ()>,
-    transitions: &impl RawStorageImages<(u64, AssetDefinitionId), ()>,
-    counts: &impl RawStorageImages<u64, u32>,
+    (contexts, by_domain, by_owner): (
+        &impl RawStorageImages<AssetDefinitionId, DomainId>,
+        &impl RawStorageImages<(DomainId, AssetDefinitionId), ()>,
+        &impl RawStorageImages<(AccountId, AssetDefinitionId), ()>,
+    ),
+    (transitions, counts): (
+        &impl RawStorageImages<(u64, AssetDefinitionId), ()>,
+        &impl RawStorageImages<u64, u32>,
+    ),
     homes: &impl RawStorageImages<AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     incarnations: &impl RawStorageImages<AssetDefinitionId, AxtAssetIncarnationV1>,
     max_work: u64,
@@ -391,14 +392,14 @@ pub(in crate::state) fn validate_original_asset_definitions(
                 image,
                 reason: "definition has no coherent authoritative home",
             })?;
-            if let Some(domain) = domain {
-                if lookup(domains, image, domain, work)?.is_none() {
-                    return Err(GroupedOwnershipError::Source {
-                        table: "world.asset_definitions",
-                        image,
-                        reason: "owning domain is absent",
-                    });
-                }
+            if let Some(domain) = domain
+                && lookup(domains, image, domain, work)?.is_none()
+            {
+                return Err(GroupedOwnershipError::Source {
+                    table: "world.asset_definitions",
+                    image,
+                    reason: "owning domain is absent",
+                });
             }
             if !optional_domain_equal(
                 definition.owning_domain().as_ref(),

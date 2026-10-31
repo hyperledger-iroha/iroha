@@ -142,7 +142,7 @@ impl ImportedRows {
         // second commitment import. The owned PK retires at this call's end.
         let key = ProvingKey::from_masked_artifact_v2(bytes, binding, params, circuit, config)
             .map_err(|error| error.to_string())?;
-        if original.verifying_key != BlobV1::of(&key.vk().to_bytes()) {
+        if original.verifying_key != BlobV1::of(key.vk().to_bytes()) {
             return Err("compact source capture exact VK".into());
         }
         let rows = selected

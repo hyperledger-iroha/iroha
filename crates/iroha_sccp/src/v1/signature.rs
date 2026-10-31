@@ -319,21 +319,24 @@ fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// RFC 6979 HMAC-DRBG over SHA-256, seeded like the `rfc6979` crate that k256 uses:
-/// entropy input `x` (the secret), nonce `h` (the unreduced 32-byte prehash) and additional
-/// data `k'`.
+/// entropy input `x` (the secret), nonce `bits2octets(h)` (the 32-byte prehash reduced mod N,
+/// §3.2 step d) and additional data `k'`.
 struct HmacDrbg {
     k: [u8; 32],
     v: [u8; 32],
 }
 
 impl HmacDrbg {
-    fn new(secret: &[u8; 32], digest: &[u8; 32], additional: &[u8]) -> Self {
+    fn new(secret: &[u8; 32], reduced_digest: &[u8; 32], additional: &[u8]) -> Self {
         let mut drbg = Self {
             k: [0; 32],
             v: [1; 32],
         };
         for round in 0_u8..=1 {
-            drbg.k = hmac_sha256(&drbg.k, &[&drbg.v, &[round], secret, digest, additional]);
+            drbg.k = hmac_sha256(
+                &drbg.k,
+                &[&drbg.v, &[round], secret, reduced_digest, additional],
+            );
             drbg.v = hmac_sha256(&drbg.k, &[&drbg.v]);
         }
         drbg
@@ -358,6 +361,8 @@ impl Drop for HmacDrbg {
 /// ECDSA over secp256k1 with an RFC 6979 nonce that includes `additional` data (§3.6 of the
 /// RFC), producing the same `r ‖ s ‖ 27 + recovery_id` form (low-S) as
 /// `EcdsaSecp256k1Sha256::sign_prehash_recoverable`, which it equals for empty additional data.
+/// A digest at or above N is reduced mod N for both `s` and the nonce input, so it signs
+/// exactly like its reduction.
 fn sign_with_additional_data(
     secret: &[u8; 32],
     digest: &[u8; 32],
@@ -366,13 +371,14 @@ fn sign_with_additional_data(
     let signing_key = EcdsaSecp256k1Sha256::parse_private_key(secret)
         .map_err(|_| SignatureError::InvalidSecret)?;
     let secret_scalar = *signing_key.to_nonzero_scalar();
-    // digest mod N (at most one subtraction since digest < 2^256 < 2N).
+    // digest mod N (at most one subtraction since digest < 2^256 < 2N): the `z` of `s` and the
+    // RFC 6979 `bits2octets(h)` nonce input.
     let reduced_digest = if *digest >= SECP256K1_N {
         be_sub(digest, &SECP256K1_N)
     } else {
         *digest
     };
-    let mut drbg = HmacDrbg::new(secret, digest, additional);
+    let mut drbg = HmacDrbg::new(secret, &reduced_digest, additional);
     for _ in 0..64 {
         let mut k_bytes = drbg.generate();
         if is_zero(&k_bytes) || k_bytes >= SECP256K1_N {
@@ -472,13 +478,29 @@ mod tests {
             let own = sign_with_additional_data(&key, &message, &[]).unwrap();
             assert_eq!(own, backend, "seed {seed}");
         }
-        // A digest above N is reduced for s but used unreduced as the RFC 6979 nonce input.
+        // A digest at or above N is reduced mod N for `s` and, as RFC 6979 `bits2octets(h)`, for
+        // the nonce input (the backend since ecdsa 0.17; ecdsa 0.16 seeded it unreduced).
         let key = secret(99);
-        let high = [0xff; 32];
-        assert_eq!(
-            sign_with_additional_data(&key, &high, &[]).unwrap(),
-            rfc6979_sign(&key, &high, None).unwrap()
-        );
+        for high in [SECP256K1_N, [0xff; 32]] {
+            assert_eq!(
+                sign_with_additional_data(&key, &high, &[]).unwrap(),
+                rfc6979_sign(&key, &high, None).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn a_digest_at_or_above_n_signs_like_its_reduction() {
+        let key = secret(98);
+        for high in [SECP256K1_N, [0xff; 32]] {
+            let reduced = be_sub(&high, &SECP256K1_N);
+            for extra in [None, Some(&[0x5a; 32])] {
+                assert_eq!(
+                    rfc6979_sign(&key, &high, extra).unwrap(),
+                    rfc6979_sign(&key, &reduced, extra).unwrap()
+                );
+            }
+        }
     }
 
     #[test]

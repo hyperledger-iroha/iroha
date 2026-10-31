@@ -365,7 +365,7 @@ impl QueryIndexJournal {
     /// Return the current in-memory snapshot.
     #[must_use]
     pub fn snapshot(&self) -> QueryIndexStatus {
-        self.status.clone()
+        self.status
     }
     /// Update the latest indexed height/hash tracked by this journal.
     pub fn set_latest(
@@ -387,7 +387,7 @@ impl QueryIndexJournal {
         }
         let payload = PersistedQueryIndexStatus {
             version: Self::JOURNAL_VERSION,
-            status: self.status.clone(),
+            status: self.status,
         };
         let bytes = to_bytes(&payload).map_err(QueryIndexJournalError::Encode)?;
         let tmp_path = Self::temp_path(&self.path);

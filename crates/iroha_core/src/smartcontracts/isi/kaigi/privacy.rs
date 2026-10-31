@@ -11,6 +11,7 @@ use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     kaigi::{
+        KAIGI_STALE_ROSTER_ROOT_ERROR_V1, KAIGI_STALE_USAGE_CONTEXT_ERROR_V1,
         KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRecord,
         scalar::KaigiAuthorizationScalarV1,
     },
@@ -71,9 +72,7 @@ pub fn verify_authorization(
         .roster_root
         .ok_or_else(|| privacy_error("privacy mode requires roster root"))?;
     if root.as_ref() != &context.pre_roster_root {
-        return Err(privacy_error(
-            "roster root differs from authenticated call state",
-        ));
+        return Err(privacy_error(KAIGI_STALE_ROSTER_ROOT_ERROR_V1));
     }
     let proof = artifacts
         .proof
@@ -196,7 +195,7 @@ pub fn verify_usage_commitment(
     };
     if column.len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
         return Err(privacy_error(
-            "Kaigi usage requires exactly 25 instance rows",
+            "Kaigi usage requires exactly 21 instance rows",
         ));
     }
     let host_commitment = Option::<Fp>::from(Fp::from_repr(host.commitment.to_le_bytes()))
@@ -212,9 +211,7 @@ pub fn verify_usage_commitment(
     }
     .instance();
     if column.as_slice() != expected {
-        return Err(privacy_error(
-            "Kaigi usage differs from authenticated call, host, root, segment or billed tuple",
-        ));
+        return Err(privacy_error(KAIGI_STALE_USAGE_CONTEXT_ERROR_V1));
     }
     verify_with_config(
         state,

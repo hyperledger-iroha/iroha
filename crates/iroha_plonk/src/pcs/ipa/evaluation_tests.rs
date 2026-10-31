@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Instant};
 use ff::Field;
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::{evaluate_horner_interleaved, evaluate_polynomial};
 
@@ -88,8 +88,9 @@ fn measure<F: Field>(field: &str) {
 #[test]
 #[ignore = "release-only paired arithmetic diagnostic; not a phone latency measurement"]
 fn measure_interleaved_horner_leaves() {
+    // Refuse invocation in debug builds while keeping the ignored test compilable.
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run this diagnostic with --release"
     );
     measure::<Fp>("Fp");

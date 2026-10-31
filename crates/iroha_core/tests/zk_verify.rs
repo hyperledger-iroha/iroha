@@ -2,8 +2,7 @@
 #![cfg(feature = "zk-tests")]
 //! ZK attachment pre-verify wiring tests (dedup and basic sanity).
 #![cfg(feature = "zk-preverify")]
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::zk_components;
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -17,6 +16,7 @@ use iroha_data_model::{
     confidential::ConfidentialStatus,
     isi::error::{InstructionExecutionError, InvalidParameterError},
     prelude::*,
+    transaction::signed_attachments::SignedAttachmentErrorV1,
     zk::BackendTag,
 };
 use iroha_test_samples::ALICE_ID;
@@ -77,10 +77,8 @@ fn production_circuit_proof(
         norito::encode_canonical(&envelope).expect("encode native envelope"),
     )
 }
-#[path = "common/native_genesis.rs"]
-mod native_genesis;
-#[path = "common/world_fixture.rs"]
-mod test_world;
+use crate::native_genesis;
+use crate::test_world;
 use native_genesis::certified_state;
 const NATIVE_CIRCUIT_ID: &str = iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
 fn bound_native_fixture() -> FixtureEnvelope {
@@ -130,16 +128,16 @@ fn build_vk_record(
         schema_hash,
         commitment,
     );
-    record.vk_len = vk_box.bytes.len() as u32;
+    record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture length fits u32");
     record.status = ConfidentialStatus::Active;
     record.key = Some(vk_box);
     record.gas_schedule_id = Some("native_pipa_r_default".into());
     record
 }
-fn signed_empty_tx_with_attachments(
+fn try_signed_empty_tx_with_attachments(
     network_id: NetworkId,
     attachments: Vec<iroha_data_model::proof::ProofAttachment>,
-) -> SignedTransaction {
+) -> Result<SignedTransaction, SignedAttachmentErrorV1> {
     TransactionBuilder::new(
         network_id,
         ALICE_ID.clone(),
@@ -149,8 +147,13 @@ fn signed_empty_tx_with_attachments(
         Vec::<InstructionBox>::new().into(),
     ))
     .with_proof_attachments(attachments)
-    .expect("valid proof carriers")
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+    .map(|builder| builder.sign(iroha_test_samples::ALICE_KEYPAIR.private_key()))
+}
+fn signed_empty_tx_with_attachments(
+    network_id: NetworkId,
+    attachments: Vec<iroha_data_model::proof::ProofAttachment>,
+) -> SignedTransaction {
+    try_signed_empty_tx_with_attachments(network_id, attachments).expect("valid proof carriers")
 }
 fn bounded_proof_attachments(
     attachments: Vec<iroha_data_model::proof::ProofAttachment>,
@@ -167,7 +170,7 @@ fn grant_vk_management(
         iroha_primitives::json::Json::new(()),
     );
     let grant: InstructionBox = Grant::account_permission(permission, authority.clone()).into();
-    execute_isi_component(stx, authority, grant).expect("grant vk management");
+    execute_isi_component(stx, authority, &(grant)).expect("grant vk management");
 }
 #[test]
 fn duplicate_proof_in_same_block_is_rejected() {
@@ -200,7 +203,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, &(reg_vk)).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -268,7 +271,7 @@ fn verifyproof_isi_records_proof() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register vk");
     // Verify a proof using VK reference
     let proof_box = fixture.proof_box("pipa-r/pasta");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -277,7 +280,7 @@ fn verifyproof_isi_records_proof() {
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify).expect("verify proof");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify)).expect("verify proof");
     // Apply transaction and ensure a proof record exists
     let pid = iroha_data_model::proof::ProofId {
         backend: "pipa-r/pasta".into(),
@@ -314,7 +317,7 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof, vk_id);
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("proof should exceed size cap");
     assert!(
         matches!(
@@ -367,7 +370,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
         vk_id.clone(),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect("first verify should succeed");
     assert_eq!(
         stx.world
@@ -386,7 +389,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
     let attachment2 =
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), second, vk_id);
     let verify2: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment2).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify2)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify2))
         .expect_err("second verify should hit block cap");
     assert!(
         matches!(
@@ -443,46 +446,31 @@ fn preverify_rejects_missing_vk_reference() {
     assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("verifying key")));
 }
 #[test]
-fn preverify_rejects_proof_backend_mismatch_before_lookup() {
+fn signed_carrier_rejects_proof_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let state = certified_state(world);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        state.view().latest_block_hash(),
-        None,
-        1,
-        0,
-    );
-    let mut block = state.block(header);
 
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         iroha_data_model::proof::ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
         iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_mismatch"),
     );
-    let tx = signed_empty_tx_with_attachments(
+    let error = try_signed_empty_tx_with_attachments(
         *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
-    );
-    let mut stx = block.transaction();
-    let err = Executor::preverify_attachments(&mut stx, &tx)
-        .expect_err("proof backend mismatch should be rejected before registry lookup");
-    assert!(
-        matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: proof.backend must match attachment backend")
-    );
+    )
+    .expect_err("malformed carrier must fail before signing and registry lookup");
+    assert!(matches!(
+        error,
+        SignedAttachmentErrorV1::MalformedProofCarrier { index: 0, reason }
+            if reason == "proof.backend must match attachment backend"
+    ));
 }
+
 #[test]
-fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
+fn signed_carrier_rejects_vk_ref_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let state = certified_state(world);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        state.view().latest_block_hash(),
-        None,
-        1,
-        0,
-    );
-    let mut block = state.block(header);
 
     let fixture = bound_native_fixture();
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -490,17 +478,18 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
         fixture.proof_box("pipa-r/pasta"),
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_mismatch"),
     );
-    let tx = signed_empty_tx_with_attachments(
+    let error = try_signed_empty_tx_with_attachments(
         *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
-    );
-    let mut stx = block.transaction();
-    let err = Executor::preverify_attachments(&mut stx, &tx)
-        .expect_err("vk_ref backend mismatch should be rejected before registry lookup");
-    assert!(
-        matches!(err, ValidationFail::NotPermitted(msg) if msg == "malformed proof attachment: vk_ref.backend must match attachment backend")
-    );
+    )
+    .expect_err("malformed carrier must fail before signing and registry lookup");
+    assert!(matches!(
+        error,
+        SignedAttachmentErrorV1::MalformedProofCarrier { index: 0, reason }
+            if reason == "vk_ref.backend must match attachment backend"
+    ));
 }
+
 #[test]
 fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
     for (idx, backend) in UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS
@@ -521,7 +510,10 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
 
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
             backend.into(),
-            iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
+            iroha_data_model::proof::ProofBox::new(
+                backend.into(),
+                vec![u8::try_from(idx).expect("fixture index fits u8"), 2, 3],
+            ),
             iroha_data_model::proof::VerifyingKeyId::new(
                 backend,
                 format!("vk_unsupported_protocol_attachment_{idx}"),
@@ -560,30 +552,43 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
 
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
             backend.into(),
-            iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
+            iroha_data_model::proof::ProofBox::new(
+                backend.into(),
+                vec![u8::try_from(idx).expect("fixture index fits u8"), 2, 3],
+            ),
             iroha_data_model::proof::VerifyingKeyId::new(
                 backend,
                 format!("vk_production_claim_attachment_{idx}"),
             ),
         );
-        let tx = signed_empty_tx_with_attachments(
+        let carrier = try_signed_empty_tx_with_attachments(
             *state.network_id_ref(),
             bounded_proof_attachments(vec![attachment]),
         );
+        if !iroha_data_model::proof::verifying_key_id_field_is_portable(backend) {
+            // Nonportable labels never acquire a signed carrier. The typed
+            // construction refusal is earlier than any registry/preverify read.
+            assert!(
+                matches!(
+                    &carrier,
+                    Err(SignedAttachmentErrorV1::MalformedProofCarrier { index: 0, reason })
+                        if reason == "vk_ref must use portable registry syntax"
+                ),
+                "unexpected carrier result for {backend}: {carrier:?}"
+            );
+            continue;
+        }
+        let tx = carrier.expect("portable production-claim label is a structural carrier");
         let mut stx = block.transaction();
         let err = Executor::preverify_attachments(&mut stx, &tx)
             .expect_err("production-claim attachment backend must fail before registry lookup");
-        let expected = if iroha_data_model::proof::verifying_key_id_field_is_portable(backend) {
-            "readiness-claim proof backends"
-        } else {
-            "malformed proof attachment: vk_ref must use portable registry syntax"
-        };
         assert!(
-            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains(expected)),
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("readiness-claim proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
         );
     }
 }
+
 #[test]
 fn preverify_rejects_commitment_only_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
@@ -645,7 +650,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register proposed vk");
+        execute_isi_component(&mut reg_stx, &authority, &(reg_vk)).expect("register proposed vk");
         reg_stx.apply();
     }
     let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -682,7 +687,7 @@ fn verifyproof_requires_registered_verifying_key() {
         iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "missing_vk"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("verifyproof should require a registered verifying key");
     assert!(
         format!("{err:?}").contains(
@@ -706,7 +711,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("proof backend mismatch must fail before registry lookup");
     assert!(format!("{err:?}").contains("proof backend mismatch"));
 }
@@ -727,7 +732,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_not_consulted"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("vk_ref backend mismatch must fail before registry lookup");
     assert!(format!("{err:?}").contains("verifying key backend mismatch"));
 }
@@ -747,7 +752,7 @@ fn verifyproof_rejects_unsupported_backend_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("halo2/unknown-native-v1", "vk_missing"),
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("unsupported proof backend must fail before registry lookup");
     assert!(format!("{err:?}").contains("unsupported proof backends"));
 }
@@ -774,14 +779,14 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register inactive vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register inactive vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture.proof_box("pipa-r/pasta"),
         vk_id,
     );
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("verifyproof must reject inactive verifying keys");
     assert!(format!("{err:?}").contains("verifying key is not active"));
 }
@@ -814,7 +819,7 @@ fn verifyproof_enforces_verifying_key_activation_window() {
         }
         .into();
         grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-        execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk)
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk))
             .expect("register height-bounded vk");
 
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -823,7 +828,7 @@ fn verifyproof_enforces_verifying_key_activation_window() {
             vk_id,
         );
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-        let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+        let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
             .expect_err("proof verification must honor the key activation window");
         assert!(
             format!("{err:?}").contains("verifying key is not active"),
@@ -854,7 +859,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register vk");
     let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
@@ -863,7 +868,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect_err("tampered envelope vk_hash must not verify");
     assert!(format!("{err:?}").contains("verifying key commitment mismatch"));
 }
@@ -889,7 +894,7 @@ fn verifyproof_rejects_duplicate_proof_record() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register vk");
     let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
         "pipa-r/pasta".into(),
         fixture.proof_box("pipa-r/pasta"),
@@ -897,15 +902,15 @@ fn verifyproof_rejects_duplicate_proof_record() {
     );
     let first: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), first)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(first))
         .expect("first proof verify records proof");
     let duplicate: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), duplicate)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(duplicate))
         .expect_err("duplicate proof record must be rejected");
     assert!(format!("{err:?}").contains("Repetition"));
 }
 #[test]
-fn preverify_rejects_empty_proof_as_malformed() {
+fn signed_carrier_rejects_empty_proof_before_preverify() {
     let world = test_world::world_with_test_accounts();
     let state = certified_state(world);
     let header = iroha_data_model::block::BlockHeader::new(
@@ -918,7 +923,6 @@ fn preverify_rejects_empty_proof_as_malformed() {
     let mut block = state.block(header);
     let exec = Executor::default();
     let authority = ALICE_ID.clone();
-    let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", "vk_empty_proof");
     let fixture = bound_native_fixture();
     let vk_box = fixture
@@ -933,7 +937,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, &(reg_vk)).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -942,22 +946,15 @@ fn preverify_rejects_empty_proof_as_malformed() {
             iroha_data_model::proof::ProofBox::new("pipa-r/pasta".into(), vec![]),
             vk_id,
         )]);
-    let tx: SignedTransaction = TransactionBuilder::new(
-        *state.network_id_ref(),
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::Instructions(
-        Vec::<InstructionBox>::new().into(),
-    ))
-    .with_proof_attachments(attachments)
-    .expect("valid proof carriers")
-    .sign(&private_key);
-    let mut stx = block.transaction();
-    let err = Executor::preverify_attachments(&mut stx, &tx)
-        .expect_err("empty proof should be rejected as malformed");
-    assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("malformed proof")));
+    let error = try_signed_empty_tx_with_attachments(*state.network_id_ref(), attachments)
+        .expect_err("empty proof must be refused before signing and preverification");
+    assert!(matches!(
+        error,
+        SignedAttachmentErrorV1::MalformedProofCarrier { index: 0, reason }
+            if reason == "proof.bytes must be non-empty"
+    ));
 }
+
 #[test]
 fn preverify_rejects_proof_too_big() {
     let world = test_world::world_with_test_accounts();
@@ -989,7 +986,7 @@ fn preverify_rejects_proof_too_big() {
         }
         .into();
         grant_vk_management(&exec, &mut reg_stx, &authority);
-        execute_isi_component(&mut reg_stx, &authority, reg_vk).expect("register vk");
+        execute_isi_component(&mut reg_stx, &authority, &(reg_vk)).expect("register vk");
         reg_stx.apply();
     }
     let attachments =
@@ -1036,7 +1033,7 @@ fn verifyproof_records_rejected_malformed_native_envelope() {
     }
     .into();
     grant_vk_management(&exec, &mut stx, &ALICE_ID.clone());
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(reg_vk)).expect("register vk");
     let mut proof_box = fixture.proof_box("pipa-r/pasta");
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
@@ -1047,7 +1044,7 @@ fn verifyproof_records_rejected_malformed_native_envelope() {
         iroha_data_model::proof::ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
     let verify: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), verify)
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(verify))
         .expect("verify should record even if rejected");
     let pid = iroha_data_model::proof::ProofId {
         backend: attachment.backend,

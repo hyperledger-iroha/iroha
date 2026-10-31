@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
 
 /// Build a deterministic exact network identity for protocol fixtures.
-pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
+pub fn synthetic_network_id(seed: &str) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         seed.as_bytes(),
     )))
@@ -14,7 +14,7 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
 ///
 /// Call before saturating that pool or acquiring the physical guard whose release
 /// is observed. This helper allocates no fallback pool and preserves pool identity.
-pub(crate) fn release_registration(
+pub fn release_registration(
     budget: &iroha_allocation::AllocationBudget,
 ) -> iroha_allocation::release::ReleaseRegistration {
     use iroha_allocation::release::ReleaseRegistration;
@@ -31,16 +31,20 @@ pub(crate) fn release_registration(
 ///
 /// Returns `true` in the parent after the child completes exactly once, and
 /// `false` in the child so the caller executes its original assertions.
-pub(crate) fn run_in_isolated_harness(exact: &str) -> bool {
+pub fn run_in_isolated_harness(exact: &str) -> bool {
     const CHILD: &str = "IROHA_CORE_ISOLATED_UNIT_TEST_CHILD";
     if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new(exact)) {
         return false;
     }
+    let status_dir = tempfile::tempdir().expect("create isolated test status directory");
+    let status_path = status_dir.path().join("libtest.log");
     let output = std::process::Command::new(
         std::env::current_exe().expect("resolve Core unit-test executable"),
     )
     .arg(exact)
     .args(["--exact", "--nocapture", "--test-threads=1"])
+    .arg("--logfile")
+    .arg(&status_path)
     .env(CHILD, exact)
     .output()
     .expect("execute exact isolated test");
@@ -52,10 +56,22 @@ pub(crate) fn run_in_isolated_harness(exact: &str) -> bool {
         isolated_harness_diagnostic(&stdout),
         isolated_harness_diagnostic(&stderr),
     );
+    // --nocapture permits ordinary child output between libtest's name and result.
+    // The separate status stream retains the exact terminal identity without interleaving.
+    let status = std::fs::read_to_string(&status_path).expect("read isolated test terminal status");
+    let mut summaries = stdout
+        .lines()
+        .filter(|line| line.starts_with("test result:"));
+    let summary = summaries.next();
     assert!(
-        stdout.contains(&format!("test {exact} ... ok"))
-            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
-        "{exact} did not complete exactly once\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        status == format!("ok {exact}\n")
+            && summary.is_some_and(|line| line
+                .starts_with("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "))
+            && summaries.next().is_none(),
+        "{exact} did not complete exactly once\nstatus:\n{}\nstdout:\n{}\nstderr:\n{}",
+        isolated_harness_diagnostic(&status),
+        isolated_harness_diagnostic(&stdout),
+        isolated_harness_diagnostic(&stderr),
     );
     true
 }
@@ -75,7 +91,7 @@ fn isolated_harness_diagnostic(output: &str) -> String {
 ///
 /// Only the typed busy result is retried. Semantic, resource and verification
 /// failures remain immediate test failures, and the request never changes.
-pub(crate) fn prove_axt_bound_batch_when_available(
+pub fn prove_axt_bound_batch_when_available(
     batch: &fastpq_prover::TransitionBatch,
     binding: &iroha_data_model::nexus::AxtFastpqBinding,
 ) -> Vec<u8> {
@@ -129,6 +145,40 @@ mod tests {
         assert!(message.contains(&format!("  | test {EXACT} ...")));
         assert!(message.contains("  | test result: FAILED. 0 passed; 1 failed;"));
         assert!(message.contains("  | running 1 test"));
+        assert!(message.lines().all(|line| {
+            !line.starts_with("running ")
+                && !line.starts_with("test ")
+                && !line.starts_with("test result:")
+        }));
+    }
+
+    #[test]
+    fn isolated_child_stdout_preserves_exact_terminal_result() {
+        const EXACT: &str =
+            "unit_test_support::tests::isolated_child_stdout_preserves_exact_terminal_result";
+        if super::run_in_isolated_harness(EXACT) {
+            return;
+        }
+        std::io::Write::write_all(
+            &mut std::io::stdout(),
+            b"ordinary child stdout interleaves with the libtest name and result\n",
+        )
+        .expect("write actual isolated child stdout");
+    }
+
+    #[test]
+    fn isolated_child_empty_selection_is_refused() {
+        const MISSING: &str =
+            "unit_test_support::tests::missing_isolated_child_for_completion_check";
+        let failure = std::panic::catch_unwind(|| super::run_in_isolated_harness(MISSING))
+            .expect_err("a successful zero-test child must not qualify the requested test");
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.downcast_ref::<&str>().copied())
+            .expect("the original harness failure has a textual diagnostic");
+        assert!(message.contains("did not complete exactly once"));
+        assert!(message.contains("  | test result: ok. 0 passed; 0 failed;"));
         assert!(message.lines().all(|line| {
             !line.starts_with("running ")
                 && !line.starts_with("test ")

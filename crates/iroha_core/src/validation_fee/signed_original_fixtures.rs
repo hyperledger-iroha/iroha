@@ -3,7 +3,7 @@
 use super::*;
 
 /// Sign fixture work with the exact fee intent derived from its original policy.
-pub(crate) fn sign_payout_fixture_work(
+pub fn sign_payout_fixture_work(
     chain: &crate::sumeragi::test_chain::CertifiedTestChain,
     signer: &KeyPair,
     instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
@@ -38,7 +38,7 @@ pub(crate) fn sign_payout_fixture_work(
             &fees.per_gas_unit_fee,
         ]
         .into_iter()
-        .all(|amount| amount.is_zero())
+        .all(iroha_primitives::Quantity::is_zero)
         && view.pipeline().gas.accepted_assets.is_empty()
     {
         // Ordinary component fixtures have no configured fee component. They do
@@ -71,10 +71,7 @@ pub(super) fn signed_fee_registry_root_fixture() -> (
     Hash,
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     signed_fee_registry_root_fixture_with_config(config)
 }
 
@@ -184,20 +181,17 @@ fn signed_fee_registry_fixture(
 }
 
 /// Two genuinely signed deployments used by the Parliament reader regression.
-pub(crate) fn signed_payout_lifecycle_registry_fixture() -> (
+pub fn signed_payout_lifecycle_registry_fixture() -> (
     crate::sumeragi::test_chain::CertifiedTestChain,
     ValidationFeeTreasuryPayoutBindingV1,
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     signed_payout_lifecycle_registry_fixture_with_config(config)
 }
 
 /// Execute the same two signed deployments with the caller's original genesis policy.
-pub(crate) fn signed_payout_lifecycle_registry_fixture_with_config(
+pub fn signed_payout_lifecycle_registry_fixture_with_config(
     config: crate::sumeragi::test_chain::TestChainConfig,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,
@@ -245,7 +239,7 @@ pub(crate) fn signed_payout_lifecycle_registry_fixture_with_config(
 }
 
 /// Own a signed root and a bounded, genuinely certified prefix before exact-due dispatch.
-pub(crate) fn with_original_validation_fee_payout_state_at_height(
+pub fn with_original_validation_fee_payout_state_at_height(
     height: u64,
     configure: impl FnOnce(crate::state::State) -> crate::sumeragi::test_chain::TestChainConfig,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -266,7 +260,12 @@ pub(crate) fn with_original_validation_fee_payout_state_at_height(
         "generic-testnet".parse().expect("chain id"),
         validation_fee_test_network_id(),
     );
-    let config = configure(component);
+    let mut config = configure(component);
+    // This exact-due caller supplies component settings, not pre-genesis monetary authority.
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .extend(validation_fee_payout_genesis_parameters());
     let (mut chain, deployer, code, code_hash) =
         signed_fee_registry_root_fixture_with_config(config);
     while chain.height() < height - 1 {

@@ -983,9 +983,14 @@ async fn sse_handler(
 fn load_tls_configs(config: &DotTlsConfig) -> Result<ResolverTls> {
     let certs = load_certs(&config.cert_path)?;
     let key = load_key(&config.key_path)?;
-    let mut dot_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs.clone(), key.clone_key())?;
+    // The resolver's Reqwest TLS dependency selects AWS-LC. Keep that choice
+    // explicit when a workspace consumer also enables Ring.
+    let mut dot_config = ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(certs.clone(), key.clone_key())?;
     dot_config.alpn_protocols = vec![b"dot".to_vec()];
     let rustls = Arc::new(dot_config);
     Ok(ResolverTls { rustls })
@@ -1131,6 +1136,33 @@ mod tests {
             u16::MAX.to_be_bytes()
         );
         assert!(dot_response_length_prefix(u16::MAX as usize + 1).is_err());
+    }
+    #[test]
+    fn dot_tls_rejects_invalid_key_without_implicit_provider_selection() {
+        let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("TLS fixture directory");
+        let cert_path = directory.path().join("dot.der");
+        let key_path = directory.path().join("dot.key");
+        std::fs::write(
+            &cert_path,
+            include_bytes!("../../../certs/google_attestation_root_ecdsa.der"),
+        )
+        .expect("write certificate fixture");
+        std::fs::write(&key_path, b"invalid PKCS8 key").expect("write invalid private key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect private key");
+        }
+        let error = match load_tls_configs(&DotTlsConfig {
+            cert_path,
+            key_path,
+        }) {
+            Ok(_) => panic!("invalid private key must not create a DoT listener"),
+            Err(error) => error,
+        };
+        assert!(error.downcast_ref::<rustls::Error>().is_some(), "{error}");
     }
     #[cfg(unix)]
     #[test]

@@ -4,11 +4,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   buildCanonicalJsonRequest,
   NetworkId,
   withCanonicalReadRetry,
+  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,
+  CANONICAL_READ_TOTAL_TIMEOUT_MS,
 } from "../src/canonicalRequest.js";
 
 const READ = { method: "POST", path: "/v1/multisig/proposals/query" };
@@ -173,7 +175,7 @@ test("Retry-After seconds, date and typed details delay the next fresh attempt",
   }
 });
 
-test("Retry-After cannot exceed the remaining ten-second window or be shortened", async (t) => {
+test("Retry-After must leave the complete next attempt within the total deadline", async (t) => {
   mockClock(t);
   const tooLong = refusal({ retryAfter: "120" });
   let calls = 0;
@@ -185,13 +187,13 @@ test("Retry-After cannot exceed the remaining ten-second window or be shortened"
 
   const failures = [];
   const result = withCanonicalReadRetry({ ...READ, operation: () => {
-    const error = refusal({ retryAfterSeconds: 4 });
+    const error = refusal({ retryAfterSeconds: 20 });
     failures.push(error);
     throw error;
   } });
   const rejected = assert.rejects(result, (error) => error === failures[2]);
-  await advance(t, 4_000);
-  await advance(t, 4_000);
+  await advance(t, 20_000);
+  await advance(t, 20_000);
   await rejected;
   assert.equal(failures.length, 3);
 });
@@ -238,4 +240,61 @@ test("abort during operation prevents accepting its late success", async () => {
   controller.abort(reason);
   finish("stale result");
   await assert.rejects(result, (error) => error === reason);
+});
+
+
+test("a queued refusal after thirty seconds can retry with a fresh full transport allowance", async (t) => {
+  mockClock(t);
+  const contexts = [];
+  const result = withCanonicalReadRetry({
+    method: "GET", path: "/v1/accounts?limit=500",
+    operation: async (attempt, context) => {
+      contexts.push(context);
+      await new Promise(resolve => setTimeout(resolve, 30_000));
+      if (attempt === 0) throw refusal();
+      return { items: [{ id: "account" }] };
+    },
+  });
+  await advance(t, 30_000);
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].timeoutMs, CANONICAL_READ_ATTEMPT_TIMEOUT_MS);
+  assert.equal(contexts[0].signal.aborted, false);
+  await advance(t, 250);
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[1].timeoutMs, CANONICAL_READ_ATTEMPT_TIMEOUT_MS);
+  await advance(t, 30_000);
+  assert.deepEqual(await result, { items: [{ id: "account" }] });
+});
+
+test("an expired total deadline aborts the in-flight operation and accepts no late success", async (t) => {
+  mockClock(t);
+  const caller = new AbortController();
+  let context;
+  const result = withCanonicalReadRetry({ ...READ, signal: caller.signal, operation: async (_attempt, received) => {
+    context = received;
+    await new Promise(resolve => received.signal.addEventListener("abort", resolve, { once: true }));
+    return "late response";
+  } });
+  const rejected = assert.rejects(result, error => error.name === "AbortError");
+  await advance(t, CANONICAL_READ_TOTAL_TIMEOUT_MS - 1);
+  assert.equal(context.signal.aborted, false);
+  await advance(t, 1);
+  await rejected;
+  assert.equal(context.signal.aborted, true);
+  assert.equal(caller.signal.aborted, false);
+});
+
+test("a write receives no read timeout and retains exactly the caller signal", async () => {
+  const caller = new AbortController();
+  let calls = 0;
+  const result = await withCanonicalReadRetry({ method: "POST", path: "/v1/transactions", signal: caller.signal,
+    operation: (attempt, context) => {
+      calls++;
+      assert.equal(attempt, 0);
+      assert.equal(context.signal, caller.signal);
+      assert.equal(context.timeoutMs, undefined);
+      return "submitted";
+    } });
+  assert.equal(calls, 1);
+  assert.equal(result, "submitted");
 });

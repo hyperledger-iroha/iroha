@@ -213,6 +213,10 @@ impl PreparedGlobalBeaconAggregateRestoreV1 {
     ///
     /// # Errors
     /// Returns this original owner with exact native-context, AEAD, canonical or scalar causes.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub fn restore(
         mut self,
         context: &VerifiedGlobalBeaconDkgAggregateContextV1,

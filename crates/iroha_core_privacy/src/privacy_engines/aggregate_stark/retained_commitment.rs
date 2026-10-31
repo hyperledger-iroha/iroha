@@ -5,10 +5,12 @@
 
 use super::*;
 
-pub const CUT_LEVEL_V1: usize = 4;
+/// Retain sibling-pair roots so opening one row replays at most two leaves.
+/// The larger private cut is charged across every MAIN/CA lifetime.
+pub const CUT_LEVEL_V1: usize = 1;
 const CUT_ROWS_V1: usize = 1 << CUT_LEVEL_V1;
 
-/// Original level-four roots, without copying or debug-printing private custody.
+/// Original sibling-pair roots, without debug-printing private custody.
 pub struct RetainedMerkleCutV1 {
     rows: usize,
     roots: Vec<PrivacyOuterDigestV1>,
@@ -223,7 +225,9 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         if digest_streams.capacity() != selected_count {
             return Err(AggregateStarkErrorV1::AllocationFailure);
         }
-        let catalog = context.catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain = context
             .domain_v1(&catalog, leaf_role, b"vector-row-leaf", 0, 0, 0)
             .map_err(map_transparent_error_v1)?;
@@ -443,31 +447,31 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         )?;
         let mut offset = 0usize;
         let mut tile = DigestCutTileV1([PrivacyOuterDigestV1::default(); CUT_ROWS_V1]);
-        for (block, &original) in self.cut.roots.iter().enumerate() {
-            if self.selected_rows.get(offset).copied() == Some(block * CUT_ROWS_V1) {
-                for (slot, stream) in tile
-                    .0
-                    .iter_mut()
-                    .zip(&mut inner.digest_streams[offset..offset + CUT_ROWS_V1])
-                {
-                    *slot = stream
-                        .finalize_in_place_v1()
-                        .map_err(map_digest_stream_error_v1)
-                        .map_err(map_transparent_error_v1)?;
-                }
-                // Reduction uses the accumulator's original leaf offset and levels.
-                streaming_commitment::append_tile_v1(&mut acc, &mut tile.0)?;
-                if tile.0[0] != original {
-                    return Err(AggregateStarkErrorV1::InvalidProofShape);
-                }
-                for node in &mut tile.0 {
-                    node.zeroize_v1();
-                }
-                offset += CUT_ROWS_V1;
-            } else {
-                acc.append_subtree_v1(CUT_LEVEL_V1, original)?;
+        for rows in self.selected_rows.chunks_exact(CUT_ROWS_V1) {
+            let first = rows[0];
+            let original = self.cut.roots[first / CUT_ROWS_V1];
+            for (slot, stream) in tile
+                .0
+                .iter_mut()
+                .zip(&mut inner.digest_streams[offset..offset + CUT_ROWS_V1])
+            {
+                *slot = stream
+                    .finalize_in_place_v1()
+                    .map_err(map_digest_stream_error_v1)
+                    .map_err(map_transparent_error_v1)?;
             }
+            // Capture the lower frontier before reducing this selected pair.
+            // Upper levels are verified together in bounded parallel tiles.
+            streaming_commitment::reduce_tile_at_level_v1(&mut acc, &mut tile.0, first, 0, None)?;
+            if tile.0[0] != original {
+                return Err(AggregateStarkErrorV1::InvalidProofShape);
+            }
+            for node in &mut tile.0 {
+                node.zeroize_v1();
+            }
+            offset += CUT_ROWS_V1;
         }
+        streaming_commitment::append_retained_subtrees_v1(&mut acc, &self.cut.roots, CUT_LEVEL_V1)?;
         if offset != self.selected_rows.len()
             || acc.pending.last().copied().flatten() != Some(self.cut.root)
         {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed verifier for the ABI-31 bridge embedded in an APK or AAB."""
+"""Fail-closed verifier for the ABI-33 bridge embedded in an APK or AAB."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ MAX_PROVENANCE_BYTES = 64 * 1024
 MAX_SOURCE_SEAL_BYTES = 64 * 1024
 BUILD_ENVIRONMENT_SCHEMA = "iroha.mobile-native-build-environment.v1"
 SOURCE_SEAL_SCHEMA = "iroha.norito-bridge-source-seal.v1"
-ANDROID_NDK_BASE_REVISION = "28.0.12674087"
+ANDROID_NDK_BASE_REVISION = "30.0.16248370"
 ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
-    "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+    "e73b7dc557cea2da9212c09ee1795434957d62e63b7550eef69fd1887a355d94"
 )
 
 
@@ -248,13 +248,13 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
     if (
         decoded["schema"] != "iroha.android-native-build-provenance.v1"
         or type(decoded["native_bridge_abi_version"]) is not int
-        or decoded["native_bridge_abi_version"] != 31
+        or decoded["native_bridge_abi_version"] != 33
         or decoded["build_profile"] != "release"
         or decoded["cargo_locked"] is not True
         or decoded["privacy_production_enabled"] is not True
         or decoded["cargo_features"] != ["privacy-production-enabled"]
     ):
-        fail("native provenance does not bind the production ABI-31 release")
+        fail("native provenance does not bind the production ABI-33 release")
     if decoded["android_ndk_revision"] != ANDROID_NDK_BASE_REVISION:
         fail("native provenance Android NDK base revision is not exact")
     if decoded["source_tree_dirty"] is not False:
@@ -601,7 +601,7 @@ def main(argv: list[str]) -> int:
     except VerificationError as error:
         print(f"[android-native-archive] ERROR: {error}", file=sys.stderr)
         return 1
-    print("[android-native-archive] authenticated ABI-31 bridge bytes match SDK AAR and app archive")
+    print("[android-native-archive] authenticated ABI-33 bridge bytes match SDK AAR and app archive")
     return 0
 
 

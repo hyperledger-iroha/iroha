@@ -12,6 +12,14 @@ for setup, configuration, and client examples.
 
 ## Features
 
+HTTP uses reqwest 0.13 with the operating system certificate verifier by default.
+The `tls-rustls-webpki-roots` feature keeps Mozilla roots explicit; disable default
+features to select only that store. Enabling both rustls root profiles merges
+Mozilla roots with platform trust. The `tls-native` profiles select native TLS.
+WebSocket transports retain the corresponding native or Mozilla root feature.
+Custom trust stores use `tls_certs_only`; certificate and hostname checks remain
+mandatory. Cleartext loopback pools do not load trust roots or follow redirects.
+
 * Submit one or several Iroha Special Instructions (ISI) as a Transaction to Iroha Peer
 * Read Torii collections with one filter, sort and cursor language
 * Request data based on Iroha Queries from a Peer
@@ -46,8 +54,10 @@ only selects evidence; it never grants receipt authority.
 
 `AccountClient::native_payment` composes that verification with submission and
 durable recovery. Supply a `NativePaymentRequest` with the complete intent and
-fee authorization, durable `WorkflowStorage`, and an independently rooted
-`SumeragiFinalityVerifier`. Recreate the operation with the same inputs after
+fee authorization, durable `WorkflowStorage`, an `Arc<FileNativePaymentFinality>`,
+and an independently rooted `SumeragiFinalityVerifier`. Open finality custody in
+its own directory with a caller-retained encryption key and explicit byte allowance.
+Recreate the operation with the same inputs and custody after
 restart: `resume` uses only the original retained signed carrier, while `recover`
 only reads and verifies evidence. Explicit `submit` authorizes a new paid attempt
 with the reviewed fee intent. A second gateway can `resume` the original successful
@@ -93,7 +103,7 @@ certificates; genuine prover and validator-network qualification remains open.
 ## Setup
 
 **Requirements:** install
-[Rust 1.93.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
+[Rust 1.99.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
 for this workspace in the repository-root `rust-toolchain.toml`.
 
 Add the following to the manifest file of your Rust project:
@@ -182,6 +192,14 @@ continuation ends that stream and cannot replay the signed request. When the
 node reports more rows but returns no continuation cursor, the stream ends with
 `QueryError::Truncated` instead of stopping silently. List collections with the
 collection queries below.
+
+The native `iroha::query::transaction_details_candidate_response_v1` helper converts
+one canonical `PipelineTransactionDetailsResponse` into a single-row canonical
+`QueryResponse` for selective finality verification. It bounds both frames and
+checks local source/output bindings while preserving the exact committed row,
+including rejection results. The caller retains the original details bytes. This
+is only an untrusted candidate conversion: it does not authenticate execution,
+choose a checkpoint, or replace the required consecutive native finality proofs.
 
 ## Collection queries
 
@@ -459,15 +477,20 @@ until the cursor ends, including after empty pages. Account movements use
 `Collection::AccountHistory(account_id)` with the same history controls.
 
 `AccountClient::native_payment` binds a `NativePaymentRequest`, durable
-`WorkflowStorage` and independently selected `SumeragiFinalityVerifier` into a
+`WorkflowStorage`, caller-key `FileNativePaymentFinality` custody and an
+independently selected `SumeragiFinalityVerifier` into a
 resumable direct Global payment. `submit` explicitly authorizes a paid attempt;
 `resume` cannot build or sign another carrier, even when rejected-retry options
 are set. Both return only an opaque verified original receipt. A fresh gateway
 without verified success or a retained carrier receives
 `NewAttemptAuthorizationRequired` from `resume`; `recover` performs no signing or
 dispatch. The existing workflow journal
-retains exact carrier identities and a bounded completion locator, which is
-re-fetched and reverified after restart. A rejected duplicate carrier remains
+retains exact carrier identities and a bounded completion locator, whose evidence
+is reverified from authenticated custody or the network after restart. Separate bounded finality custody retains
+the original payment's authenticated prefix and pinned outcome evidence, so a
+cold restart can continue beyond one proof-read allowance. It remains bound to
+the original genesis, payment and exact carrier; its encrypted bytes alone grant
+no outcome authority. A rejected duplicate carrier remains
 rejected even when original business success is recovered. Status-only expiry,
 local read limits and failed reads never authorize a new payment identity.
 Before signing or dispatching restored bytes, the operation checks their exact
@@ -478,13 +501,16 @@ first-release layout, scope and online recovery contract.
 
 `NativePaymentFullReturnRequest` derives one receiver-owned ID from an opaque
 verified original and prepares its exact full reverse payment.
-`AccountClient::native_payment_return` reuses the same durable operation and
+`AccountClient::native_payment_return` uses separate finality custody for the
+reverse payment, reuses the same durable operation and
 exposes the same `submit`, `resume` and read-only `recover` boundary. It returns
 `VerifiedPaymentReturn`, retaining both successful receipts. Partial
 returns require a future consensus-owned cumulative allowance.
 
 `AccountClient::private_settlement` accepts already prepared confidential
-settlement materials and owns their durable submission/recovery workflow.
+settlement materials, durable workflow storage, caller-key
+`FilePrivateSettlementFinality` custody and an independently rooted verifier.
+It owns their durable submission/recovery workflow.
 Genuine native wallet/prover/sealer orchestration belongs to the separate internal
 [`iroha_private_settlement`](../iroha_private_settlement) crate. Construct its
 `OneCallPrivateSettlementOperation::new(account, request, storage, artifacts,
@@ -493,10 +519,24 @@ the base SDK dependency boundary. That operation acquires authenticated context,
 checks caller-held restricted openings and prepares materials for the SDK
 workflow. Callers retain genesis/schema pins, exact private business terms,
 original wallet reservations and the encrypted artifact key. Recovery reopens
-and independently verifies the original context/proofs without invoking the
-wallet or sending transactions; `run` explicitly continues preparation.
+and independently verifies the original context/proofs without reserving inputs,
+proving, signing or sending transactions; `run` explicitly continues preparation.
+`FilePrivateSettlementWallet` provides bounded encrypted custody for explicitly
+staged native input authorizations and openings. `VerifiedPrivateSettlementOutcome`
+distinguishes successful settlement from successful Abort execution. Native
+verification binds either result to the complete original request before one
+atomic wallet update consumes or releases all pending legs. An Abort at the
+final tip can be recovered even before Prepare completes. If local cleanup
+fails, the typed reconciliation result preserves the verified outcome and
+original failure for safe retry.
 Whole-network one-call qualification remains open.
 The current context transport requires `CanReadAllLedgerData` because its complete
 World hashes disclose unrelated row identities and low-entropy values. A bank's
 selected-dataspace grants do not authorize that response; scoped authenticated
 context proofs remain unfinished.
+
+`Client::get_asset_fi_context_snapshot` requests one owner-authorized FI context
+using explicit ephemeral/bounded query execution. It bounds the encoded response
+and rejects incomplete, cursor-bearing or changed-selector results. The returned
+snapshot is an untrusted observation; only exact native assertion execution and
+independent finality verification can authenticate its use in a wallet review.

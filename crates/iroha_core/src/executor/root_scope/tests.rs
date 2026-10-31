@@ -2,6 +2,8 @@
 
 mod amx_approvals;
 mod amx_roles;
+mod contract_permissions;
+mod decode_refusal;
 mod role_removal;
 
 use super::*;
@@ -34,10 +36,13 @@ fn private_state() -> (State, DataSpaceId) {
         dataspace_id: ds,
     };
     let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-    let mut parameters = world.parameters.block();
-    parameters
-        .set_parameter(test_support::metadata(scope))
-        .expect("valid fixture parameters");
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        test_support::metadata(scope),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let nexus = iroha_config::parameters::actual::Nexus {
         dataspace_catalog: DataSpaceCatalog::new(vec![
@@ -304,8 +309,7 @@ fn malformed_root_metadata_is_terminal_and_cannot_acquire_retry_authority() {
         let mut tx = block.transaction();
         bind_scope(&mut tx, ds);
         tx.world
-            .parameters
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 handshake_meta_id(),
                 payload.parse::<iroha_primitives::json::Json>().unwrap(),
             )))
@@ -348,8 +352,7 @@ fn readonly_manifest_query_preserves_malformed_and_foreign_rejections() {
     ));
     for payload in ["null", "{}", "false", "\"global\""] {
         tx.world
-            .parameters
-            .set_parameter(Parameter::Custom(CustomParameter::new(
+            .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                 handshake_meta_id(),
                 payload.parse::<iroha_primitives::json::Json>().unwrap(),
             )))

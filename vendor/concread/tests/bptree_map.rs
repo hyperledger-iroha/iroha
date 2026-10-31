@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use concread::bptree::BptreeMap;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 
 // Iroha patch: the upstream proptest properties run as fixed-seed randomized
 // cases so the vendored workspace member does not pull `proptest` into the

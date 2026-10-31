@@ -31,7 +31,6 @@ use iroha_data_model::{
         LaneConfig as LaneConfigMetadata, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     soracloud::SoraPublishedInrouGuestImageArtifactV1,
     sorafs::{
@@ -44,10 +43,12 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
     transaction::FeePaymentIntent,
 };
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{
+    chain::ChainId,
+    domain::DomainId,
+    name::Name,
+    peer::{Peer, PeerId},
+};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     addr::SocketAddr,
@@ -1580,42 +1581,21 @@ pub struct Crypto {
     pub enable_sm_openssl_preview: bool,
     /// Intrinsic dispatch policy applied to SM acceleration.
     pub sm_intrinsics: SmIntrinsicsPolicy,
-    /// Default hash algorithm identifier (e.g., `blake2b-256`, `sm3-256`).
+    /// Local generation hash preference (e.g., `blake2b-256`, `sm3-256`);
+    /// this does not select transaction hashing or committed admission semantics.
     pub default_hash: String,
-    /// Signing algorithms allowed for transaction admission.
-    pub allowed_signing: Vec<Algorithm>,
-    /// Default distinguishing identifier applied when SM2 signatures omit it.
+    /// Local SM2 generation default; mandatory IVM verification uses the fixed
+    /// protocol distinguishing identifier when the syscall operand is omitted.
     pub sm2_distid_default: String,
-    /// Curve identifiers (per the account curve registry) allowed for controllers.
-    pub allowed_curve_ids: Vec<u8>,
 }
 impl_default!(Crypto => {
         Self {
             enable_sm_openssl_preview: defaults::crypto::enable_sm_openssl_preview(),
             sm_intrinsics: SmIntrinsicsPolicy::Auto,
             default_hash: defaults::crypto::default_hash(),
-            allowed_signing: defaults::crypto::allowed_signing(),
             sm2_distid_default: defaults::crypto::sm2_distid_default(),
-            allowed_curve_ids: defaults::crypto::allowed_curve_ids(),
         }
 });
-impl Crypto {
-    /// Determine whether SM helper syscalls should be enabled for this configuration.
-    #[must_use]
-    pub fn sm_helpers_enabled(&self) -> bool {
-        #[cfg(feature = "sm")]
-        {
-            self.allowed_signing
-                .iter()
-                .any(|algo| matches!(algo, Algorithm::Sm2))
-        }
-        #[cfg(not(feature = "sm"))]
-        {
-            let _ = self;
-            false
-        }
-    }
-}
 /// Parsed `SoraNet` handshake configuration.
 #[derive(Clone)]
 pub struct SoranetHandshake {
@@ -2487,54 +2467,6 @@ impl_default!(ViralIncentives => {
             campaign_cap: defaults::governance::viral_campaign_cap(),
         }
 });
-/// Runtime-upgrade provenance enforcement modes (actual layer).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl RuntimeUpgradeProvenanceMode {
-    /// Return whether provenance is required.
-    #[inline]
-    #[must_use]
-    pub const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
-    }
-}
-impl From<user::RuntimeUpgradeProvenanceMode> for RuntimeUpgradeProvenanceMode {
-    fn from(mode: user::RuntimeUpgradeProvenanceMode) -> Self {
-        match mode {
-            user::RuntimeUpgradeProvenanceMode::Optional => Self::Optional,
-            user::RuntimeUpgradeProvenanceMode::Required => Self::Required,
-        }
-    }
-}
-/// Runtime-upgrade provenance policy (actual layer).
-#[derive(Debug, Clone)]
-pub struct RuntimeUpgradeProvenancePolicy {
-    /// Enforcement mode for provenance.
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    pub require_slsa: bool,
-    /// Trusted signer public keys.
-    pub trusted_signers: BTreeSet<PublicKey>,
-    /// Minimum number of trusted signatures required.
-    pub signature_threshold: usize,
-}
-impl_default!(RuntimeUpgradeProvenancePolicy => {
-        Self {
-            mode: RuntimeUpgradeProvenanceMode::Optional,
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            trusted_signers: BTreeSet::new(),
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-        }
-});
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParliamentTimedOvn {
@@ -2735,8 +2667,6 @@ pub struct Governance {
     pub debug_trace_pipeline: bool,
     /// Allowed JDG signature schemes for attestation validation.
     pub jdg_signature_schemes: BTreeSet<JdgSignatureScheme>,
-    /// Runtime upgrade provenance enforcement policy.
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy,
     /// Viral incentive policy for social rewards.
     pub viral_incentives: ViralIncentives,
     /// `SoraFS` pin policy constraints enforced during manifest admission.
@@ -2843,7 +2773,6 @@ impl_default!(Governance => {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy::default(),
             viral_incentives: ViralIncentives::default(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
@@ -3073,47 +3002,22 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
 }
-/// Nexus staking configuration (public lanes).
-#[derive(Debug, Clone)]
+/// Validator activation and capacity configuration for public lanes.
+/// Monetary staking terms belong exclusively to the original committed policy.
+#[derive(Debug, Clone, Copy)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
     pub public_validator_mode: LaneValidatorMode,
     /// Validator activation policy for restricted/permissioned lanes.
     pub restricted_validator_mode: LaneValidatorMode,
-    /// Minimum bonded stake required to register or bond as a validator.
-    pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     pub max_validators: NonZeroU32,
-    /// Maximum number of stake-share rows retained for one validator.
-    pub max_stake_shares_per_validator: NonZeroU32,
-    /// Maximum number of pending unbond requests retained in one stake share.
-    pub max_pending_unbonds_per_share: NonZeroU32,
-    /// Minimum delay between scheduling and finalising an unbond (milliseconds).
-    pub unbonding_delay: Duration,
-    /// Maximum slash ratio allowed (basis points, `10_000` = 100%).
-    pub max_slash_bps: u16,
-    /// Asset definition used for staking bonds (string form).
-    pub stake_asset_id: String,
-    /// Escrow account that holds bonded stake (string form).
-    pub stake_escrow_account_id: String,
-    /// Account that receives slashed stake (string form).
-    pub slash_sink_account_id: String,
 }
 impl_default!(NexusStaking => {
         Self {
             public_validator_mode: LaneValidatorMode::StakeElected,
             restricted_validator_mode: LaneValidatorMode::AdminManaged,
-            min_validator_stake: defaults::nexus::staking::min_validator_stake(),
             max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-            max_stake_shares_per_validator:
-                defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
-            max_pending_unbonds_per_share:
-                defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
-            unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
-            max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            stake_asset_id: defaults::nexus::staking::stake_asset_id(),
-            stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
-            slash_sink_account_id: defaults::nexus::staking::slash_sink_account_id(),
         }
 });
 impl NexusStaking {
@@ -3208,102 +3112,17 @@ impl_default!(NexusAxt => {
                 .expect("replay retention window must be non-zero"),
         }
 });
-/// Governed atomic private cross-dataspace settlement configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Node-local custody limits for encrypted atomic private settlement sidecars.
+/// Payment validity comes from the committed privacy consensus policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Whether admission is enabled, subject to the governed activation height.
-    pub enabled: bool,
-    /// First block height at which the path may be admitted.
-    pub activation_height: Option<u64>,
-    /// Minimum notice required between governance approval and activation.
-    pub minimum_activation_notice_blocks: NonZeroU64,
-    /// Audited fixed-shape private-note proof profile version.
-    pub proof_profile_version: NonZeroU16,
-    /// Maximum number of ordered dataspace legs in one bundle.
-    pub max_participants: NonZeroU16,
-    /// Maximum admission-to-expiry distance, in blocks.
-    pub max_expiry_blocks: NonZeroU64,
-    /// Maximum auditor-approval phase duration, in blocks.
-    pub audit_timeout_blocks: NonZeroU64,
-    /// Maximum Prepare-QC phase duration, in blocks.
-    pub prepare_timeout_blocks: NonZeroU64,
-    /// Maximum Commit-QC phase duration, in blocks.
-    pub commit_timeout_blocks: NonZeroU64,
-    /// Strictly increasing canonical padded-plaintext classes, in bytes.
-    ///
-    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
-    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
-    pub capsule_padding_classes_bytes: Vec<NonZeroU32>,
-    /// Maximum proof sidecar size per leg.
-    pub max_proof_bytes: NonZeroU64,
-    /// Maximum encrypted audit capsule size per leg.
-    pub max_capsule_bytes: NonZeroU64,
-    /// Maximum canonical sponsor-signed direct carrier transaction size.
-    pub max_carrier_bytes: NonZeroU64,
-    /// Minimum durable sidecar retention after admission, in blocks.
-    pub sidecar_retention_blocks: NonZeroU64,
     /// Maximum encrypted settlement records retained by one local sidecar store.
     pub sidecar_max_records: NonZeroU32,
     /// Maximum canonical bytes retained by one local sidecar store.
     pub sidecar_max_total_bytes: NonZeroU64,
-    /// Governed minimum online auditor threshold accepted for new policies.
-    pub default_min_auditor_approvals: NonZeroU16,
-    /// Audit-policy schema versions accepted by this deployment.
-    pub permitted_policy_versions: BTreeSet<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement => {
         Self {
-            enabled: defaults::nexus::atomic_private_settlement::ENABLED,
-            activation_height: None,
-            minimum_activation_notice_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
-            )
-            .expect("private-settlement activation notice must be non-zero"),
-            proof_profile_version: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
-            )
-            .expect("private-settlement proof profile must be non-zero"),
-            max_participants: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
-            )
-            .expect("private-settlement participant bound must be non-zero"),
-            max_expiry_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
-            )
-            .expect("private-settlement expiry bound must be non-zero"),
-            audit_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement audit timeout must be non-zero"),
-            prepare_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement prepare timeout must be non-zero"),
-            commit_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement commit timeout must be non-zero"),
-            capsule_padding_classes_bytes:
-                defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
-                    .into_iter()
-                    .map(|bytes| NonZeroU32::new(bytes).expect("padding class must be non-zero"))
-                    .collect(),
-            max_proof_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
-            )
-            .expect("private-settlement proof bound must be non-zero"),
-            max_capsule_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
-            )
-            .expect("private-settlement capsule bound must be non-zero"),
-            max_carrier_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
-            )
-            .expect("private-settlement carrier bound must be non-zero"),
-            sidecar_retention_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
-            )
-            .expect("private-settlement sidecar retention must be non-zero"),
             sidecar_max_records: NonZeroU32::new(
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
             )
@@ -3312,12 +3131,6 @@ impl_default!(NexusAtomicPrivateSettlement => {
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
             )
             .expect("private-settlement sidecar byte bound must be non-zero"),
-            default_min_auditor_approvals: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
-            )
-            .expect("private-settlement auditor threshold must be non-zero"),
-            permitted_policy_versions:
-                defaults::nexus::atomic_private_settlement::PERMITTED_POLICY_VERSIONS.into(),
         }
 });
 /// Storage component participating in Nexus disk budgeting.
@@ -3527,7 +3340,8 @@ pub struct Nexus {
     pub storage: NexusStorage,
     /// Staking guardrails for public lanes.
     pub staking: NexusStaking,
-    /// Universal fee schedule for Nexus transactions.
+    /// Explicit fee recipe for genesis authors. Runtime authority comes from the
+    /// original committed root fee parameter passed to the consensus projections.
     pub fees: iroha_data_model::block::consensus::RootFeePolicy,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
@@ -3726,14 +3540,14 @@ pub enum NexusConsensusPolicyDigestError {
     MissingCompliancePolicyDigest,
 }
 #[derive(Encode)]
-struct NexusConsensusPolicyPreimageV1 {
+struct NexusConsensusPolicyPreimageV1<'a> {
     version: u8,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
     dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
     routing: NexusConsensusRoutingV1,
     staking: NexusConsensusStakingV1,
-    fees: iroha_data_model::block::consensus::RootFeePolicy,
+    fees: Option<norito::core::PayloadRef<'a, iroha_data_model::block::consensus::RootFeePolicy>>,
     hf_shared_leases: NexusConsensusHfSharedLeasesV1,
     uploaded_models: NexusConsensusUploadedModelsV1,
     endorsement: NexusConsensusEndorsementV1,
@@ -3777,15 +3591,7 @@ struct NexusConsensusDurationV1 {
 struct NexusConsensusStakingV1 {
     public_validator_mode: u8,
     restricted_validator_mode: u8,
-    min_validator_stake: Quantity,
     max_validators: u32,
-    max_stake_shares_per_validator: u32,
-    max_pending_unbonds_per_share: u32,
-    unbonding_delay: NexusConsensusDurationV1,
-    max_slash_bps: u16,
-    stake_asset_id: String,
-    stake_escrow_account_id: String,
-    slash_sink_account_id: String,
 }
 #[derive(Encode)]
 struct NexusConsensusHfSharedLeasesV1 {
@@ -3808,11 +3614,14 @@ struct NexusConsensusAxtV1 {
     proof_cache_ttl_slots: u64,
     replay_retention_slots: u64,
 }
+/// Immutable slots in the original V1 signed commitment, in their original wire order.
+///
+/// These values identify the canonical first-release baseline; they are not local admission
+/// settings. Current private-payment validity comes from committed policy, and local sidecar
+/// capacity cannot change this signed contract. Other historical configurations cannot be
+/// reconstructed by substituting today's defaults for their authenticated original values.
 #[derive(Encode)]
 struct NexusConsensusAtomicPrivateSettlementV1 {
-    enabled: bool,
-    activation_height: Option<u64>,
-    minimum_activation_notice_blocks: u64,
     proof_profile_version: u16,
     max_participants: u16,
     max_expiry_blocks: u64,
@@ -3828,6 +3637,28 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
     sidecar_max_total_bytes: u64,
     default_min_auditor_approvals: u16,
     permitted_policy_versions: Vec<u16>,
+}
+impl NexusConsensusAtomicPrivateSettlementV1 {
+    /// Exact signed V1 baseline, independent of mutable defaults and operational configuration.
+    fn frozen_v1() -> Self {
+        Self {
+            proof_profile_version: 1,
+            max_participants: 255,
+            max_expiry_blocks: 7_200,
+            audit_timeout_blocks: 1_200,
+            prepare_timeout_blocks: 1_200,
+            commit_timeout_blocks: 1_200,
+            capsule_padding_classes_bytes: vec![4_096, 16_384, 65_536, 262_144],
+            max_proof_bytes: 8_388_608,
+            max_capsule_bytes: 1_048_576,
+            max_carrier_bytes: 4_194_304,
+            sidecar_retention_blocks: 1_000_000,
+            sidecar_max_records: 256,
+            sidecar_max_total_bytes: 3_221_225_472,
+            default_min_auditor_approvals: 1,
+            permitted_policy_versions: vec![1],
+        }
+    }
 }
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
@@ -3945,8 +3776,9 @@ fn nexus_consensus_unit_ratio_bits(
 #[cfg(test)]
 pub fn nexus_consensus_policy_digest(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_compliance(nexus, None)
+    nexus_consensus_policy_digest_with_compliance(nexus, original_fees, None)
 }
 /// Compute the canonical Nexus policy digest while binding the loaded compliance policy set.
 ///
@@ -3959,11 +3791,21 @@ pub fn nexus_consensus_policy_digest(
 #[cfg(test)]
 pub fn nexus_consensus_policy_digest_with_compliance(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
-    nexus_consensus_policy_digest_with_runtime_policies(nexus, compliance_policy_digest, None)
+    nexus_consensus_policy_digest_with_runtime_policies(
+        nexus,
+        original_fees,
+        compliance_policy_digest,
+        None,
+    )
 }
-/// Compute the canonical Nexus digest with loaded compliance and lane-manifest policy sets.
+/// Compute the canonical Nexus digest with the original root fee policy and loaded policy sets.
+///
+/// `original_fees` borrows the caller's exact authored or retained parameter policy.
+/// `None` commits actual pre-genesis absence; runtime owners must require the mandatory
+/// original policy before exposing a current consensus view. No node-local fee value is read.
 ///
 /// Passing `None` for a policy set commits that absence, so it cannot match a validator that loaded
 /// a concrete registry digest. Runtime callers should always pass the installed lane-manifest
@@ -3974,12 +3816,14 @@ pub fn nexus_consensus_policy_digest_with_compliance(
 /// policy-set digest, as required by [`nexus_consensus_policy_preimage_with_runtime_policies`].
 pub fn nexus_consensus_policy_digest_with_runtime_policies(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
     const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
     let encoded = nexus_consensus_policy_preimage_with_runtime_policies(
         nexus,
+        original_fees,
         compliance_policy_digest,
         lane_manifest_policy_digest,
     )?;
@@ -3987,6 +3831,8 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
 }
 /// Return the exact bare Norito V1 preimage used by the Nexus consensus-policy digest.
 ///
+/// The monetary field encodes `original_fees` directly, preserving the distinction
+/// between pre-genesis absence and a present zero-fee policy without cloning its backing.
 /// This makes the complete static policy value available to the State authority
 /// owner without duplicating the digest's field selection. Encoding fixes the
 /// V1 flags, so ambient codec settings cannot alter peer policy identity.
@@ -3998,6 +3844,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
 /// no authenticated policy-set digest.
 pub fn nexus_consensus_policy_preimage_with_runtime_policies(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     compliance_policy_digest: Option<[u8; 32]>,
     lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> core::result::Result<Vec<u8>, NexusConsensusPolicyDigestError> {
@@ -4079,17 +3926,9 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             restricted_validator_mode: lane_validator_mode_tag(
                 nexus.staking.restricted_validator_mode,
             ),
-            min_validator_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
-            max_stake_shares_per_validator: nexus.staking.max_stake_shares_per_validator.get(),
-            max_pending_unbonds_per_share: nexus.staking.max_pending_unbonds_per_share.get(),
-            unbonding_delay: nexus.staking.unbonding_delay.into(),
-            max_slash_bps: nexus.staking.max_slash_bps,
-            stake_asset_id: nexus.staking.stake_asset_id.clone(),
-            stake_escrow_account_id: nexus.staking.stake_escrow_account_id.clone(),
-            slash_sink_account_id: nexus.staking.slash_sink_account_id.clone(),
         },
-        fees: nexus.fees.clone(),
+        fees: original_fees.map(norito::core::PayloadRef),
         hf_shared_leases: NexusConsensusHfSharedLeasesV1 {
             drain_grace: nexus.hf_shared_leases.drain_grace.into(),
         },
@@ -4107,48 +3946,7 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             proof_cache_ttl_slots: nexus.axt.proof_cache_ttl_slots.get(),
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
         },
-        atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
-            enabled: nexus.atomic_private_settlement.enabled,
-            activation_height: nexus.atomic_private_settlement.activation_height,
-            minimum_activation_notice_blocks: nexus
-                .atomic_private_settlement
-                .minimum_activation_notice_blocks
-                .get(),
-            proof_profile_version: nexus.atomic_private_settlement.proof_profile_version.get(),
-            max_participants: nexus.atomic_private_settlement.max_participants.get(),
-            max_expiry_blocks: nexus.atomic_private_settlement.max_expiry_blocks.get(),
-            audit_timeout_blocks: nexus.atomic_private_settlement.audit_timeout_blocks.get(),
-            prepare_timeout_blocks: nexus.atomic_private_settlement.prepare_timeout_blocks.get(),
-            commit_timeout_blocks: nexus.atomic_private_settlement.commit_timeout_blocks.get(),
-            capsule_padding_classes_bytes: nexus
-                .atomic_private_settlement
-                .capsule_padding_classes_bytes
-                .iter()
-                .map(|bytes| bytes.get())
-                .collect(),
-            max_proof_bytes: nexus.atomic_private_settlement.max_proof_bytes.get(),
-            max_capsule_bytes: nexus.atomic_private_settlement.max_capsule_bytes.get(),
-            max_carrier_bytes: nexus.atomic_private_settlement.max_carrier_bytes.get(),
-            sidecar_retention_blocks: nexus
-                .atomic_private_settlement
-                .sidecar_retention_blocks
-                .get(),
-            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
-            sidecar_max_total_bytes: nexus
-                .atomic_private_settlement
-                .sidecar_max_total_bytes
-                .get(),
-            default_min_auditor_approvals: nexus
-                .atomic_private_settlement
-                .default_min_auditor_approvals
-                .get(),
-            permitted_policy_versions: nexus
-                .atomic_private_settlement
-                .permitted_policy_versions
-                .iter()
-                .copied()
-                .collect(),
-        },
+        atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),
         governance: NexusConsensusGovernanceV1 {
             default_module: nexus.governance.default_module.clone(),
             modules: governance_modules,
@@ -4236,6 +4034,22 @@ impl ExecutionPolicyFieldsV1 {
             value: value.encode(),
         });
     }
+
+    /// Retain the signed V1 baseline slots after deleting their former node-local authority.
+    /// Current release provenance is governed by the committed runtime provenance policy.
+    fn push_frozen_runtime_provenance_v1(&mut self) {
+        self.push("governance.runtime_upgrade_provenance.mode", &1_u8);
+        self.push("governance.runtime_upgrade_provenance.require_sbom", &false);
+        self.push("governance.runtime_upgrade_provenance.require_slsa", &false);
+        self.push(
+            "governance.runtime_upgrade_provenance.trusted_signers",
+            &Vec::<Vec<u8>>::new(),
+        );
+        self.push(
+            "governance.runtime_upgrade_provenance.signature_threshold",
+            &0_u64,
+        );
+    }
 }
 fn execution_policy_usize(value: usize) -> u64 {
     u64::try_from(value)
@@ -4269,14 +4083,13 @@ fn execution_policy_canonical_set<'a, T: Encode + 'a>(
 // The pipeline execution limits hashed here are the committed `pipeline_validity_policy_v1`
 // parameter or its protocol default; pipeline fee fields are also a validated
 // committed projection (State passes its effective settings).
-// TODO(F.4): the other fields are still read from node configuration ([crypto], [gov], oracle, content, settlement router and the Nexus policy digest).
+// TODO(F.4): the other fields are still read from node configuration ([gov], oracle, content, settlement router and the Nexus policy digest).
 // Move each family into a typed committed parameter, as `zk_validity_policy_v1` and
 // `pipeline_validity_policy_v1` did (census entries `cfg.*` of
 // specs/zk_runtime_validity_census.json), then remove this digest from genesis metadata.
 pub fn execution_policy_digest_v1(
     pipeline: &Pipeline,
     oracle: &Oracle,
-    crypto: &Crypto,
     fraud_monitoring: &FraudMonitoring,
     governance: &Governance,
     content: &Content,
@@ -4375,17 +4188,8 @@ pub fn execution_policy_digest_v1(
         &pipeline.amx_per_memory_access_ns,
     );
     policy.push("pipeline.amx_per_syscall_ns", &pipeline.amx_per_syscall_ns);
-    // Cryptographic admission and host-surface policy. Backend selection is operational.
-    policy.push("crypto.default_hash", &crypto.default_hash);
-    policy.push(
-        "crypto.allowed_signing",
-        &execution_policy_canonical_set(crypto.allowed_signing.iter()),
-    );
-    policy.push("crypto.sm2_distid_default", &crypto.sm2_distid_default);
-    let mut allowed_curve_ids = crypto.allowed_curve_ids.clone();
-    allowed_curve_ids.sort_unstable();
-    allowed_curve_ids.dedup();
-    policy.push("crypto.allowed_curve_ids", &allowed_curve_ids);
+    // Ordinary crypto admission belongs exclusively to committed Parameters.
+    // Local generation defaults and implementation selection carry no execution authority.
     // Oracle state transitions, economics, governance, and binding admission.
     policy.push(
         "oracle.history_depth",
@@ -4551,30 +4355,9 @@ pub fn execution_policy_digest_v1(
             .map(|scheme| scheme.scheme_id())
             .collect::<Vec<_>>(),
     );
-    let provenance = &governance.runtime_upgrade_provenance;
-    policy.push(
-        "governance.runtime_upgrade_provenance.mode",
-        &match provenance.mode {
-            RuntimeUpgradeProvenanceMode::Optional => 1_u8,
-            RuntimeUpgradeProvenanceMode::Required => 2,
-        },
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_sbom",
-        &provenance.require_sbom,
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_slsa",
-        &provenance.require_slsa,
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.trusted_signers",
-        &execution_policy_canonical_set(provenance.trusted_signers.iter()),
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.signature_threshold",
-        &execution_policy_usize(provenance.signature_threshold),
-    );
+    // These original V1 fields remain in their signed position; deleting configuration does
+    // not delete slots from a genesis commitment (specs/live_runtime_upgrades.md §6).
+    policy.push_frozen_runtime_provenance_v1();
     let viral = &governance.viral_incentives;
     policy.push(
         "governance.viral.incentive_pool_account",
@@ -5733,7 +5516,10 @@ pub struct SumeragiLaneLifecycleEntry {
 /// change proposal assembly or deterministic validation.
 ///
 /// The projection deliberately excludes local storage paths, worker pool
-/// sizing, caches, and telemetry. It includes the validated lane geometry,
+/// sizing, caches, and telemetry. Monetary terms come only from `original_fees`:
+/// a present policy is the exact authored or retained root parameter, while `None`
+/// records actual pre-genesis absence. Current runtime owners enforce presence.
+/// It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
 /// It also commits the complete retained lane-incarnation lineage, including
@@ -5748,11 +5534,14 @@ pub struct SumeragiLaneLifecycleEntry {
 #[must_use]
 pub fn sumeragi_nexus_amx_context_preimage(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Vec<u8> {
     use iroha_data_model::nexus::{NexusAmxContextWriterV1, tag};
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let mut preimage = NexusAmxContextWriterV1::new();
     preimage.field(tag::LANE_COUNT, &nexus.lane_catalog.lane_count().get());
     let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
@@ -5820,59 +5609,14 @@ pub fn sumeragi_nexus_amx_context_preimage(
         &restricted_validator_mode,
     );
     preimage.field(
-        tag::STAKING_MIN_VALIDATOR_STAKE,
-        &nexus.staking.min_validator_stake,
-    );
-    preimage.field(
         tag::STAKING_MAX_VALIDATORS,
         &nexus.staking.max_validators.get(),
     );
+    // The exact caller-owned original policy is encoded once as a typed option.
+    // No node-local fee defaults, account rendering or monetary mirror is consulted.
     preimage.field(
-        tag::STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-        &nexus.staking.max_stake_shares_per_validator.get(),
-    );
-    preimage.field(
-        tag::STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
-        &nexus.staking.max_pending_unbonds_per_share.get(),
-    );
-    preimage.field(
-        tag::STAKING_UNBONDING_DELAY_NS,
-        &nexus.staking.unbonding_delay.as_nanos(),
-    );
-    preimage.field(tag::STAKING_MAX_SLASH_BPS, &nexus.staking.max_slash_bps);
-    preimage.field(tag::STAKING_STAKE_ASSET_ID, &nexus.staking.stake_asset_id);
-    preimage.field(
-        tag::STAKING_STAKE_ESCROW_ACCOUNT_ID,
-        &nexus.staking.stake_escrow_account_id,
-    );
-    preimage.field(
-        tag::STAKING_SLASH_SINK_ACCOUNT_ID,
-        &nexus.staking.slash_sink_account_id,
-    );
-    preimage.field(tag::FEES_ASSET, &nexus.fees.fee_asset_id);
-    preimage.field(tag::FEES_SINK, &nexus.fees.fee_sink_account_id);
-    preimage.field(tag::FEES_BASE, &nexus.fees.base_fee);
-    preimage.field(tag::FEES_PER_BYTE, &nexus.fees.per_byte_fee);
-    preimage.field(tag::FEES_PER_INSTRUCTION, &nexus.fees.per_instruction_fee);
-    preimage.field(tag::FEES_PER_GAS_UNIT, &nexus.fees.per_gas_unit_fee);
-    preimage.field(
-        tag::FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
-        &nexus.fees.sponsor_vault_custody_account_id,
-    );
-
-    let successful_claim_fee_exempt_authorities = nexus
-        .fees
-        .successful_claim_fee_exempt_authorities
-        .iter()
-        .map(|authority| {
-            authority
-                .canonical_i105()
-                .expect("validated Nexus fee-exempt authority must encode as canonical I105")
-        })
-        .collect::<Vec<_>>();
-    preimage.field(
-        tag::FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
-        &successful_claim_fee_exempt_authorities,
+        tag::ROOT_FEE_POLICY,
+        &original_fees.map(norito::core::PayloadRef),
     );
     preimage.field(
         tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
@@ -6023,12 +5767,14 @@ pub fn sumeragi_nexus_amx_context_preimage(
 #[must_use]
 pub fn sumeragi_nexus_amx_context_hash(
     nexus: &Nexus,
+    original_fees: Option<&iroha_data_model::block::consensus::RootFeePolicy>,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Hash {
     Hash::new(sumeragi_nexus_amx_context_preimage(
         nexus,
+        original_fees,
         pipeline,
         active_validators,
         retained_lane_lineage,
@@ -7169,6 +6915,8 @@ pub struct Torii {
     pub query_fanout_max_retained_bytes: Bytes,
     /// Maximum complete working set for one query, independent of aggregate capacity.
     pub query_fanout_max_working_set_bytes: Bytes,
+    /// Maximum initial full-native-finality working set within the same shared fanout pool.
+    pub finality_max_working_set_bytes: Bytes,
     /// Bytes retained by this node's authenticated SCCP history-node cache.
     pub sccp_history_cache_max_bytes: Bytes,
     /// Absolute deadline for one admitted App routed-read body.
@@ -7385,6 +7133,10 @@ impl fmt::Debug for Torii {
             .field(
                 "query_fanout_max_working_set_bytes",
                 &self.query_fanout_max_working_set_bytes,
+            )
+            .field(
+                "finality_max_working_set_bytes",
+                &self.finality_max_working_set_bytes,
             )
             .field(
                 "sccp_history_cache_max_bytes",
@@ -10700,8 +10452,9 @@ pub struct StreamingCodec {
     pub cabac_mode: CabacMode,
     /// Trellis-enabled block sizes (empty until claim-avoidance ships).
     pub trellis_block_sizes: Vec<u16>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact.
-    pub rans_tables_path: PathBuf,
+    /// Operator-selected `SignedRansTablesV1` artefact. `None` uses the canonical tables compiled
+    /// into the binary ([`defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML`]).
+    pub rans_tables_path: Option<PathBuf>,
     /// Entropy mode advertised by manifests/headers.
     pub entropy_mode: EntropyMode,
     /// Bundle width used when `entropy_mode` enables bundled rANS.
@@ -10722,7 +10475,7 @@ impl StreamingCodec {
         Self {
             cabac_mode: CabacMode::Disabled,
             trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-            rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+            rans_tables_path: None,
             entropy_mode: EntropyMode::RansBundled,
             bundle_width: defaults::streaming::codec::bundle_width(),
             bundle_accel: BundleAcceleration::None,

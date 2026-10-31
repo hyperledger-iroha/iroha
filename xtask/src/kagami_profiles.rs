@@ -6,7 +6,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus::is_valid_committee_size,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -16,6 +15,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_genesis};
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::is_valid_committee_size;
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;
@@ -541,10 +541,10 @@ impl Drop for PrivateProfileStaging {
 }
 fn create_profile_staging(output_root: &Path, slug: &str) -> AnyResult<PrivateProfileStaging> {
     let parent = iroha_fs::OwnerDirectory::open_or_create(output_root)?;
-    let mut rng = rand_core_06::OsRng;
+    let mut rng = rand::rngs::SysRng;
     for _ in 0..32 {
         let mut entropy = [0_u8; 16];
-        rand_core_06::RngCore::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
+        rand::TryRng::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
             std::io::Error::other(format!("profile staging entropy unavailable: {error}"))
         })?;
         let name = format!(".{slug}-staging-{}", hex::encode(entropy));
@@ -715,6 +715,12 @@ fn generate_genesis(
     command.args([
         "genesis",
         "generate",
+        "--allowed-signing",
+        "ed25519",
+        "--allowed-signing",
+        "secp256k1",
+        "--allowed-signing",
+        "bls_normal",
         "--profile",
         spec.profile_flag,
         "--ivm-dir",
@@ -757,6 +763,8 @@ fn inject_topology(
 ) -> AnyResult<RawGenesisTransaction> {
     let consensus_mode = manifest.consensus_mode();
     let chain_discriminant = manifest.chain_discriminant();
+    let _author =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     let topology: Vec<GenesisTopologyEntry> = peers
         .iter()
         .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
@@ -1772,11 +1780,27 @@ mod tests {
             )
         }
     }
+    fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        iroha_genesis::default_staking_policy(
+            fees.fee_asset_id,
+            fees.fee_sink_account_id.clone(),
+            fees.fee_sink_account_id,
+        )
+    }
     fn stub_genesis() -> RawGenesisTransaction {
         iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_model_base::chain::ChainId::from("stub"),
             ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(fixture_staking_policy())
+        .expect("explicit profile fixture staking policy")
         .complete_for_test()
         .build_raw()
         .expect("complete stub genesis")
@@ -1787,7 +1811,15 @@ mod tests {
         let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_model_base::chain::ChainId::from("stub"),
             staging.path(),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(fixture_staking_policy())
+        .expect("explicit profile fixture staking policy")
         .complete_for_test()
         .build_raw()
         .expect("complete portable bound-manifest fixture")
@@ -1817,7 +1849,15 @@ mod tests {
             iroha_model_base::chain::ChainId::from("stub"),
             staging.path().join("executor.to"),
             staging.path(),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(fixture_staking_policy())
+        .expect("explicit profile fixture staking policy")
         .complete_for_test()
         .build_raw()
         .expect("complete leaking bound-manifest fixture")
@@ -1836,11 +1876,20 @@ mod tests {
         );
 
         let non_default_discriminant = 369;
+        let _author = ChainDiscriminantGuard::enter(non_default_discriminant);
         let generated_manifest = stub_genesis().with_chain_discriminant(non_default_discriminant);
         let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_model_base::chain::ChainId::from("stub"),
             staging.path(),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(fixture_staking_policy())
+        .expect("explicit profile fixture staking policy")
         .complete_for_test()
         .build_raw()
         .expect("complete non-default-discriminant fixture")
@@ -2052,11 +2101,35 @@ mod tests {
     }
     #[test]
     fn topology_is_injected_into_genesis() {
+        let _author = ChainDiscriminantGuard::enter(369);
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let source = stub_genesis().with_chain_discriminant(369);
+        let original_policy =
+            iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+                &source.effective_parameters().unwrap(),
+            )
+            .unwrap();
         let _wrong_discriminant = ChainDiscriminantGuard::enter(753);
         let patched = inject_topology(source, &peers).expect("inject topology");
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
         assert_eq!(patched.chain_discriminant(), 369);
+        {
+            let _author = ChainDiscriminantGuard::enter(patched.chain_discriminant());
+            assert_eq!(
+                iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(
+                    &patched.effective_parameters().unwrap()
+                )
+                .unwrap(),
+                original_policy
+            );
+        }
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
         let txs = patched.transactions();
         assert_eq!(txs.len(), 1, "stub genesis should carry one transaction");
         let tx0 = &txs[0];
@@ -2089,13 +2162,22 @@ mod tests {
     }
     #[test]
     fn write_json_uses_manifest_chain_discriminant_for_account_literals() {
+        let _author = ChainDiscriminantGuard::enter(369);
         let account_key =
             deterministic_keypair("manifest-chain-discriminant-account", Algorithm::Ed25519)
                 .expect("derive deterministic account key");
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_model_base::chain::ChainId::from("manifest-chain-discriminant"),
             ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(fixture_staking_policy())
+        .expect("explicit profile fixture staking policy")
         .domain(
             iroha_model_base::domain::DomainId::try_new("accounts", "universal")
                 .expect("valid fixture domain"),
@@ -3313,6 +3395,12 @@ mod tests {
         let builder = iroha_genesis::GenesisBuilder::new_without_executor(
             defaults.chain_id.clone(),
             ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
         .set_topology(topology)
         .with_sumeragi_context_parameters(
@@ -3325,6 +3413,7 @@ mod tests {
             SumeragiConsensusMode::Permissioned,
             Some(&defaults),
             None,
+            fixture_staking_policy(),
         )
         .expect("generate complete development-profile genesis");
         let mut rendered = json::to_json_pretty(&genesis).expect("render development genesis");

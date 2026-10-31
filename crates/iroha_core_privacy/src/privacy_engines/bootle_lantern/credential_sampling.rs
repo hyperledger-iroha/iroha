@@ -7,7 +7,7 @@
 //! fixed-control-flow algebraic S-box; neither secret-indexed tables nor
 //! accelerator/device dispatch are used.
 use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 pub const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
@@ -80,7 +80,7 @@ impl Drop for CredentialRandomnessV1 {
         self.zeroize();
     }
 }
-pub fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
+pub fn sample_credential_randomness_v1<R: TryCryptoRng + TryRng>(
     rng: &mut R,
 ) -> Result<CredentialRandomnessV1, CredentialRandomnessErrorV1> {
     let mut seed = Zeroizing::new([0_u8; 32]);
@@ -188,7 +188,7 @@ fn sample_credential_randomness_from_seed_bounded_v1(
         }
         if norm_squared <= norm_squared_bound {
             let polynomials = core::array::from_fn(|index| {
-                ApplicationPolynomialV1::from_centered_coefficients(centered[index])
+                ApplicationPolynomialV1::from_centered_coefficients(&centered[index])
             });
             return Ok((
                 CredentialRandomnessV1 {
@@ -272,6 +272,12 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     }
     index
 }
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and rounding steps."
+)]
 fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     const LN_2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);
     let mut bytes = Zeroizing::new([0_u8; 16]);
@@ -287,6 +293,10 @@ fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     let threshold = (exp_small_v1(-exponent) * (1_u64 << 53) as f64) as u64;
     first_accepts && second < threshold
 }
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "Separate multiply/add rounding preserves the pinned fdlibm sampler and its byte-exact known answers."
+)]
 fn exp_small_v1(value: f64) -> f64 {
     const C1: f64 = 1.666_666_666_666_660_2e-1;
     const C2: f64 = -2.777_777_777_701_559_3e-3;
@@ -357,24 +367,23 @@ pub enum CredentialRandomnessErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::Error as RngError;
     use sha2::{Digest as _, Sha256};
+    use std::io::Error as RngError;
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("credential sampling must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("credential sampling must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("credential sampling must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
-            Err(RngError::new("injected credential-sampling RNG failure"))
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(RngError::other("injected credential-sampling RNG failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     #[test]
     fn gaussian_rejection_exponent_matches_exact_branch_and_center_numerators() {
         // The CDF terminator bounds magnitudes by 20; rounding supplies only 0 or 1/2.

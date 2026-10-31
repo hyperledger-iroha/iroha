@@ -1,0 +1,147 @@
+// Copyright 2023 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nearby.internal;
+
+import "internal/proto/credential.proto";
+
+// option java_api_version = 2;
+option java_multiple_files = true;
+option java_package = "com.google.nearby.presence";
+option java_outer_classname = "MetadataProto";
+option optimize_for = LITE_RUNTIME;
+
+// The metadata of a device. Contains confidential data not to be broadcasted
+// directly in OTA.
+// NEXT_ID=8
+message DeviceIdentityMetaData {
+  // The type of the device.
+  DeviceType device_type = 1;
+
+  // The name of the local device to be returned through credentials.
+  string device_name = 2;
+
+  // The ChromeOS team requires the BT mac address for debugging purposes
+  // temporarily. This should be removed by the end of this year.
+  bytes bluetooth_mac_address = 3;
+
+  // The instance type (user profile) related to the metadata.
+  InstanceType instance_type = 4;
+
+  // The device_id from the MultideviceParameters file of the broadcasting
+  // device
+  bytes device_id = 5;
+
+  // The device's model name
+  string device_model_name = 6;
+
+  // The device's manufacturer name
+  string device_manufacturer = 7;
+
+  // identity of the user profile
+  PresenceIdentity identity = 8;
+}
+
+message PresenceIdentity {
+  // The type of the identity.
+  IdentityType identity_type = 1;
+
+  // The name of the identity provider.
+  string identity_provider_name = 2;
+}
+
+// The metadata of a device.
+// Contains confidential data not to be broadcasted directly in OTA.
+// Metadata is deprecated, use DeviceIdentityMetadata instead.
+message Metadata {
+  option deprecated = true;
+
+  // The type of the device.
+  DeviceType device_type = 1;
+
+  // The account name of the account who owns the device.
+  string account_name = 2;
+
+  // The name of the local device to be returned through credentials.
+  string device_name = 3;
+
+  // The name of the user who owns the device.
+  string user_name = 4;
+
+  // The profile url of the device.
+  string device_profile_url = 5;
+
+  // The Bluetooth MAC address of the device.
+  bytes bluetooth_mac_address = 6;
+
+  // The instance type (user profile) related to the metadata.
+  InstanceType instance_type = 7;
+}
+
+// The type of the device.
+// LINT.IfChange
+enum DeviceType {
+  // The type of the device is unknown.
+  DEVICE_TYPE_UNKNOWN = 0;
+
+  // The device is a phone.
+  DEVICE_TYPE_PHONE = 1;
+
+  // The device is a tablet.
+  DEVICE_TYPE_TABLET = 2;
+
+  // The device is a display.
+  DEVICE_TYPE_DISPLAY = 3;
+
+  // The device is a laptop.
+  DEVICE_TYPE_LAPTOP = 4;
+
+  // The device is a TV.
+  DEVICE_TYPE_TV = 5;
+
+  // The device is a watch.
+  DEVICE_TYPE_WATCH = 6;
+
+  // The device is a ChromeOS device. ChromeOS can be a laptop, desktop, or
+  // convertible (tablet + clamshell).
+  DEVICE_TYPE_CHROMEOS = 7;
+
+  // The device is a foldable.
+  DEVICE_TYPE_FOLDABLE = 8;
+
+  // The device is an automotive.
+  DEVICE_TYPE_AUTOMOTIVE = 9;
+
+  // The device is a speaker.
+  DEVICE_TYPE_SPEAKER = 10;
+}
+// LINT.ThenChange(//depot/google3/java/com/google/android/gmscore/integ/client/nearby/src/com/google/android/gms/nearby/presence/PresenceDevice.java)
+
+// The instance type of the metadata.
+// LINT.IfChange
+enum InstanceType {
+  // Unknown instance type.
+  INSTANCE_TYPE_UNKNOWN = 0;
+
+  // The metadata is associated with the main instance. (Usually
+  // first-registered personal profile.)
+  INSTANCE_TYPE_MAIN = 1;
+
+  // The metadata is associated with a secondary instance, such as a working
+  // profile.
+  INSTANCE_TYPE_SECONDARY = 2;
+}
+// LINT.ThenChange(//depot/google3/java/com/google/android/gmscore/integ/client/nearby/src/com/google/android/gms/nearby/connection/Device.java)

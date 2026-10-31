@@ -147,6 +147,7 @@ def test_site_inventory_matches_the_source_tree() -> None:
     for path in (
         "crates/iroha_data_model/src/privacy/statements.rs",
         "crates/iroha_core_privacy/src/privacy_state.rs",
+        "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
         "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs",
     ):
         assert roles[path] == ["canonical"]
@@ -154,10 +155,8 @@ def test_site_inventory_matches_the_source_tree() -> None:
     assert roles[
         "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs"
     ] == ["canonical", "in-relation"]
-    # The hand-written CRL registration predicate and both hand-written
-    # deadlines are found by the scan and pinned, not classified canonical.
+    # The two remaining hand-written deadlines stay scanned and pinned.
     for path in (
-        "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
         "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
         "integration_tests/tests/privacy_exact12_zk_x509_network.rs",
     ):
@@ -169,12 +168,49 @@ def test_site_inventory_matches_the_source_tree() -> None:
         path for path, chosen in roles.items() if "deferred" in chosen
     }
     assert set(inventory["roles"]) == set(ORACLE["SITE_ROLES"])
-    # The DER-to-bounds helper and prover preflight are recorded as gated.
+    # Production reference/prover code is ordinary; only release fixtures are gated.
     relation = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs"
-    assert 'feature = "privacy-release-evidence"' in inventory["build_gates"][relation][
-        "declaration"
-    ][0]
-    assert inventory["build_gates"][relation]["declaration"][-1] == "pub mod relation;"
+    engine = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs"
+    assert relation not in inventory["build_gates"]
+    assert engine not in inventory["build_gates"]
+
+
+
+def test_holder_bounds_reference_and_complete_prover_are_ordinary() -> None:
+    inventory = _inventory()
+    prefix = "crates/iroha_core_privacy/src/privacy_engines/"
+    helper = prefix + "zk_x509/presentation.rs"
+    assert inventory["sites"][helper] == ["canonical"]
+    assert helper not in inventory["build_gates"]
+    assert inventory["sites"][
+        "crates/iroha_core_privacy/tests/zk_x509_presentation_bounds.rs"
+    ] == ["test"]
+    # Inspect the actual declarations, including the shared parser and errors.
+    # A preceding item's attributes end at its semicolon, not at a blank line.
+    for path, declarations in (
+        (prefix + "mod.rs", ("pub mod zk_x509;",)),
+        (prefix + "zk_x509/mod.rs", (
+            "mod certificate;", "pub(crate) mod der;",
+            "pub mod errors;", "pub mod presentation;", "pub mod holder;",
+            "pub mod relation;", "pub(crate) mod codec;", "pub(crate) mod main_assembly;",
+        )),
+    ):
+        source = ORACLE["read_site"](path)
+        for declaration in declarations:
+            assert source.count(declaration) == 1
+            attributes = source.split(declaration)[0].rsplit(";", 1)[-1]
+            assert "#[cfg" not in attributes, (path, declaration)
+    assert set(inventory["build_gates"]) == {
+        prefix + "zk_x509/relation/release_fixture.rs",
+    }
+    engine = ORACLE["read_site"](prefix + "zk_x509/engine.rs")
+    for declaration in (
+        "pub(crate) fn prepare_zk_x509_prover_input_v1(",
+        "pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(",
+    ):
+        assert engine.count(declaration) == 1
+        attributes = engine.split(declaration)[0].rsplit("}", 1)[-1]
+        assert "#[cfg(" not in attributes, declaration
 
 
 def test_site_scan_keeps_paths_with_whitespace_whole(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,12 +369,31 @@ def test_roles_are_checked_against_the_source() -> None:
     assert not ORACLE["is_test_path"]("crates/a/src/attestation.rs")
 
 
+def test_core_crl_publication_is_canonical_not_deferred() -> None:
+    inventory = _inventory()
+    isi = "crates/iroha_core/src/smartcontracts/isi/privacy.rs"
+    assert inventory["sites"][isi] == ["canonical"]
+    assert isi not in inventory["deferred"]
+    source = ORACLE["read_site"](isi)
+    assert "PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())" in source
+    assert ".is_ok_and(|bounds| bounds.contains_unix_seconds(block_unix_seconds))" in source
+    changed = copy.deepcopy(inventory)
+    changed["sites"][isi] = ["transport"]
+    assert (
+        f"{isi}: calls the canonical definition but is not `canonical`"
+        in ORACLE["site_problems"](sorted(inventory["sites"]), changed)
+    )
+
+
 def test_deferred_sites_are_pinned_to_their_reviewed_source() -> None:
     inventory = _inventory()
     found = sorted(inventory["sites"])
     problems = ORACLE["site_problems"]
     read = ORACLE["read_site"]
-    isi = "crates/iroha_core/src/smartcontracts/isi/privacy.rs"
+    deferred_sites = (
+        "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
+        "integration_tests/tests/privacy_exact12_zk_x509_network.rs",
+    )
     test_path = inventory["deferred_test"]["path"]
 
     def reading(path_to_edit: str, old: str, new: str):
@@ -351,68 +406,44 @@ def test_deferred_sites_are_pinned_to_their_reviewed_source() -> None:
 
         return read_edited
 
-    # Loosening the hand-written predicate (nextUpdate inclusive) is reported.
-    reported = problems(
-        found,
-        inventory,
-        read=reading(
-            isi,
-            "|| block_unix_seconds >= record.next_update_unix_seconds",
-            "|| block_unix_seconds > record.next_update_unix_seconds",
-        ),
-    )
-    assert any(
-        "`validate_zk_x509_crl_freshness_v1` no longer matches its pinned source" in problem
-        for problem in reported
-    )
-    assert any("fragment is not in the site" in problem for problem in reported)
-    # So is a boundary-grid test that stops transcribing the same predicate.
-    reported = problems(
-        found,
-        inventory,
-        read=reading(
-            test_path,
-            "|| block_unix_seconds >= record.next_update_unix_seconds",
-            "|| block_unix_seconds > record.next_update_unix_seconds",
-        ),
-    )
-    assert any("fragment is not in the boundary-grid test" in problem for problem in reported)
-    reported = problems(
-        found,
-        inventory,
-        read=reading(
-            test_path,
-            f"fn {inventory['deferred_test']['name']}()",
-            "fn renamed()",
-        ),
-    )
-    assert any("boundary-grid test" in problem and "is missing" in problem for problem in reported)
-    # Reformatting the pinned lines is not drift.
-    assert (
-        problems(
-            found,
-            inventory,
-            read=reading(
-                isi,
-                "    let block_unix_seconds = block_timestamp_ms / 1_000;\n",
-                "    let block_unix_seconds =\n        block_timestamp_ms / 1_000;\n",
-            ),
+    for site in deferred_sites:
+        # Extending either pinned deadline by one second is reported.
+        reported = problems(
+            found, inventory,
+            read=reading(site, ".checked_add(1)", ".checked_add(2)"),
         )
-        == []
+        name = inventory["deferred"][site][0]["name"]
+        assert any(f"`{name}` no longer matches its pinned source" in p for p in reported)
+        assert any("fragment is not in the site" in p for p in reported)
+        # Reformatting its pinned lines is not drift.
+        assert problems(
+            found, inventory,
+            read=reading(site, ".checked_add(1)", ".checked_add(\n    1\n)"),
+        ) == []
+        # A deferred role and its pins must agree in both directions.
+        changed = copy.deepcopy(inventory)
+        del changed["deferred"][site]
+        assert f"{site}: `deferred` role and pinned entries must agree" in problems(found, changed)
+        changed = copy.deepcopy(inventory)
+        changed["sites"][site] = ["transport"]
+        assert f"{site}: `deferred` role and pinned entries must agree" in problems(found, changed)
+        changed = copy.deepcopy(inventory)
+        changed["deferred"][site][0]["todo"] = "later"
+        assert any("carries no TODO" in p for p in problems(found, changed))
+        changed = copy.deepcopy(inventory)
+        del changed["deferred"][site][0]["owner"]
+        assert any("must have exactly the keys" in p for p in problems(found, changed))
+    # A boundary-grid reference that changes the deadline is also reported.
+    reported = problems(
+        found, inventory,
+        read=reading(test_path, ".checked_add(1)", ".checked_add(2)"),
     )
-    # A deferred role and its pinned entries must agree, in both directions.
-    changed = copy.deepcopy(inventory)
-    del changed["deferred"][isi]
-    assert f"{isi}: `deferred` role and pinned entries must agree" in problems(found, changed)
-    changed = copy.deepcopy(inventory)
-    changed["sites"][isi] = ["transport"]
-    assert f"{isi}: `deferred` role and pinned entries must agree" in problems(found, changed)
-    changed = copy.deepcopy(inventory)
-    changed["deferred"][isi][0]["todo"] = "later"
-    assert any("carries no TODO" in problem for problem in problems(found, changed))
-    changed = copy.deepcopy(inventory)
-    del changed["deferred"][isi][0]["owner"]
-    assert any("must have exactly the keys" in problem for problem in problems(found, changed))
+    assert any("fragment is not in the boundary-grid test" in p for p in reported)
+    reported = problems(
+        found, inventory,
+        read=reading(test_path, f"fn {inventory['deferred_test']['name']}()", "fn renamed()"),
+    )
+    assert any("boundary-grid test" in p and "is missing" in p for p in reported)
 
 
 def test_build_gates_are_checked_against_the_declaring_source() -> None:
@@ -420,21 +451,21 @@ def test_build_gates_are_checked_against_the_declaring_source() -> None:
     found = sorted(inventory["sites"])
     problems = ORACLE["site_problems"]
     read = ORACLE["read_site"]
-    module = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/mod.rs"
-    relation = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs"
+    module = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs"
+    relation = "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation/release_fixture.rs"
 
     def ungated(path: str) -> str:
         text = read(path)
         if path == module:
             gated = (
                 '#[cfg(any(test, feature = "privacy-release-evidence"))]\n'
-                "#[doc(hidden)]\npub mod relation;"
+                "#[doc(hidden)]\npub mod release_fixture;"
             )
             assert gated in text
-            return text.replace(gated, "#[doc(hidden)]\npub mod relation;")
+            return text.replace(gated, "#[doc(hidden)]\npub mod release_fixture;")
         return text
 
-    # Shipping the relation module (X.5) must update the inventory and the spec.
+    # Removing the release-fixture gate must still update inventory and spec.
     assert problems(found, inventory, read=ungated) == [
         f"{relation}: build gate changed in {module}; update the inventory "
         "and specs/zk_x509_presentation_interval.md"

@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 31
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 33
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -28,6 +28,9 @@ extern "C" {
 #define CONNECT_NORITO_ERR_PRIVATE_SETTLEMENT_RESPONSE -507
 #define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_INCLUSION -508
 #define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_QUERY -509
+#define CONNECT_NORITO_ERR_FI_CHECKPOINT -510
+#define CONNECT_NORITO_ERR_FI_CONTEXT -511
+#define CONNECT_NORITO_ERR_FI_CHECKPOINT_ADVANCE -512
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
 
@@ -100,6 +103,80 @@ typedef struct ConnectNoritoSorafsReferenceBundlePayload {
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
 
+// Independently signed runtime selects all six inputs. Authenticates historical Global tip only.
+// Output is bounded JSON {height:decimal-string,context_id:hex,block_hash:hex}; free with connect_norito_free.
+int32_t connect_norito_verify_fi_checkpoint_selection_v1(
+    const uint8_t* checkpoint, unsigned long checkpoint_len,
+    const uint8_t* network_utf8, unsigned long network_len,
+    const uint8_t* chain_utf8, unsigned long chain_len,
+    const uint8_t* sha256_32, unsigned long sha256_len,
+    const uint8_t* height_decimal_utf8, unsigned long height_len,
+    const uint8_t* context_32, unsigned long context_len,
+    uint8_t** out_json, unsigned long* out_json_len);
+
+// Exact retained request and independently admitted local checkpoint/trust inputs.
+// Capsule is untrusted. Success returns native-authenticated FI snapshot JSON;
+// it grants no signing authority, freshness decision or physical execution route.
+// All inputs are bounded before reads; outputs are zeroed on failure (-511).
+// Free the bridge-owned output using connect_norito_free.
+int32_t connect_norito_verify_fi_context_assertion_v1(
+    const uint8_t* capsule, unsigned long capsule_len,
+    const uint8_t* original_request, unsigned long original_request_len,
+    const uint8_t* checkpoint, unsigned long checkpoint_len,
+    const uint8_t* local_trust_json, unsigned long local_trust_json_len,
+    uint8_t** out_json, unsigned long* out_json_len);
+
+// Advance an independently selected checkpoint through exact original proof frames.
+// Requires 2..4096 frames, at most 16 MiB total, exact initial decision and
+// consecutive Global successors under the independently admitted network/chain.
+// Checkpoint input/output is at most 68 MiB; metadata output is at most 4096 bytes.
+// All input/output storage must remain live and disjoint for the call. On failure
+// (-512), both output pointers and lengths are cleared. Free both owned outputs
+// independently with connect_norito_free. This call performs no persistence.
+int32_t connect_norito_advance_fi_checkpoint_v1(
+    const uint8_t* checkpoint, unsigned long checkpoint_len,
+    const uint8_t* const* proof_frames,
+    const unsigned long* proof_lengths, unsigned long proof_count,
+    const uint8_t* network, unsigned long network_len,
+    const uint8_t* chain, unsigned long chain_len,
+    const uint8_t* sha256, unsigned long sha256_len,
+    const uint8_t* decimal_height, unsigned long decimal_height_len,
+    const uint8_t* context_id, unsigned long context_id_len,
+    uint8_t** out_checkpoint, unsigned long* out_checkpoint_len,
+    uint8_t** out_metadata, unsigned long* out_metadata_len);
+
+// Admit the exact signed singleton assertion against its retained raw request and
+// independently selected original checkpoint/trust. This checks signed shape and
+// original selection only; it proves no execution, snapshot or freshness.
+// Wire and request are each <=64 KiB, checkpoint <=68 MiB, trust <=32 KiB;
+// their aggregate is <=71467008 bytes. Output is closed JSON <=2048 bytes.
+// Input/output storage must be live and disjoint. Failure (-513) clears both
+// output slots. Free successful output with connect_norito_free.
+int32_t connect_norito_admit_fi_assertion_original_v1(
+    const uint8_t* wire, unsigned long wire_len,
+    const uint8_t* original_request, unsigned long original_request_len,
+    const uint8_t* original_checkpoint, unsigned long original_checkpoint_len,
+    const uint8_t* original_trust_json, unsigned long original_trust_json_len,
+    uint8_t** out_json, unsigned long* out_json_len);
+
+// Authenticate the exact retained signed assertion from a separately admitted
+// Global proof cursor. Execution must be after the unchanged original floor;
+// cursor may equal the carrier. The protected caller owns verified lineage,
+// original runtime/root and current owner/PSP/branch-generation checks.
+// Capsule <=512 KiB, request and retained wire each <=64 KiB, each checkpoint
+// <=68 MiB, closed continuation trust <=36 KiB; aggregate <=143298560 bytes.
+// Output uses the existing closed FI observation JSON schema, <=512 KiB.
+// Input/output storage must be live and disjoint. Failure (-514) clears both
+// output slots. Free successful output with connect_norito_free.
+int32_t connect_norito_verify_fi_context_continuation_v1(
+    const uint8_t* capsule, unsigned long capsule_len,
+    const uint8_t* original_request, unsigned long original_request_len,
+    const uint8_t* retained_wire, unsigned long retained_wire_len,
+    const uint8_t* original_checkpoint, unsigned long original_checkpoint_len,
+    const uint8_t* cursor_checkpoint, unsigned long cursor_checkpoint_len,
+    const uint8_t* continuation_trust_json, unsigned long continuation_trust_json_len,
+    uint8_t** out_json, unsigned long* out_json_len);
+
 // Releases any bridge-owned byte buffer returned through an out pointer.
 void connect_norito_free(uint8_t *ptr);
 
@@ -126,6 +203,31 @@ int32_t connect_norito_verify_committed_transaction_inclusion_v1(
     unsigned long trusted_checkpoint_len,
     const uint8_t* expected_transaction_hash,
     unsigned long expected_transaction_hash_len,
+    uint8_t** out_row,
+    unsigned long* out_row_len,
+    uint8_t* out_output_hash_32,
+    uint8_t* out_block_hash_32,
+    uint64_t* out_block_height,
+    uint8_t* out_result_ok,
+    uint8_t** out_checkpoint,
+    unsigned long* out_checkpoint_len);
+
+// Same independent trust and output ownership contract as the general verifier.
+// Requires canonical versioned original SignedTransaction (1..4 MiB), including
+// its exact signature; returns success only for certified successful execution.
+int32_t connect_norito_verify_exact_successful_committed_transaction_v1(
+    const uint8_t* response,
+    unsigned long response_len,
+    const uint8_t* native_finality_proof_chain_json,
+    unsigned long native_finality_proof_chain_json_len,
+    const uint8_t* expected_network_id,
+    unsigned long expected_network_id_len,
+    const uint8_t* expected_chain_utf8,
+    unsigned long expected_chain_utf8_len,
+    const uint8_t* trusted_checkpoint,
+    unsigned long trusted_checkpoint_len,
+    const uint8_t* original_signed_transaction,
+    unsigned long original_signed_transaction_len,
     uint8_t** out_row,
     unsigned long* out_row_len,
     uint8_t* out_output_hash_32,
@@ -393,9 +495,9 @@ int32_t connect_norito_decode_ciphertext_frame(
 // released with `iroha_privacy_free_buffer`, which zeroizes privacy output
 // memory before release.
 // The catalog describes only profiles compiled into this binary. It contains
-// no committed height, consensus policy, activation, lifecycle, or readiness
-// state. Fetch a fresh PrivacyCapabilitySnapshotV1 from live Torii before
-// treating a protocol as ready for proof submission.
+// no committed height, consensus policy, or protocol policy. Fetch a fresh
+// PrivacyExact12CapabilityManifestV1 from live Torii before checking whether
+// the selected protocol/profile and effective limits permit proof submission.
 typedef enum iroha_privacy_compiled_profile_catalog_validation_status_v1 {
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_VALID_V1 = 0,
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_NULL_POINTER_V1 = 1,
@@ -416,9 +518,9 @@ int32_t iroha_privacy_validate_compiled_profile_catalog_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
 
-// Authoritative canonical/semantic evidence validation, including all release,
-// audit and deployment signatures. Only zero accepts. The caller separately
-// authenticates Torii and matches all committed tuples to its local catalog.
+// Authoritative canonical profile/policy validation. Only zero accepts.
+// The caller separately authenticates Torii and the exact selected network/profile.
+// Release, audit, registration and activation records do not enable an implementation.
 typedef enum iroha_privacy_exact12_capability_validation_status_v1 {
     IROHA_PRIVACY_EXACT12_CAPABILITY_VALID_V1 = 0,
     IROHA_PRIVACY_EXACT12_CAPABILITY_NULL_POINTER_V1 = 1,
@@ -434,6 +536,18 @@ typedef enum iroha_privacy_exact12_capability_validation_status_v1 {
 int32_t iroha_privacy_validate_exact12_capability_manifest_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
+
+// Canonical construction-time profile, expected-network and effective resource-limit
+// validation shared with JNI. Zero accepts construction; proof cryptography and execution
+// authorization remain separate obligations. Pointers are borrowed only for this call.
+int32_t iroha_privacy_validate_exact12_submit_proof_construction_v1(
+    const uint8_t* manifest_ptr,
+    unsigned long manifest_len,
+    uint32_t protocol_index,
+    const uint8_t* instruction_ptr,
+    unsigned long instruction_len,
+    const uint8_t* expected_network_ptr,
+    unsigned long expected_network_len);
 
 // Complete Rust-derived canonical bytes through signed-transaction and hash
 // layers for all twelve first-release rows. The archive is accepted only when
@@ -459,6 +573,58 @@ int32_t iroha_privacy_validate_exact12_fixture_bundle_v1(
     unsigned long archive_len);
 
 void iroha_privacy_free_buffer(uint8_t* ptr);
+
+// ---------------- X.509 public ownership-signing preparation ----------------
+// Input is canonical Norito PrivacyStatementV1 with the X.509 variant, <=262144 bytes.
+// Success returns the exact public message and its 32-byte SHA-256 digest. Message
+// signers hash the message once; prehash signers use the digest. Normalize the
+// resulting P-256 signature to low-s fixed 64-byte r || s for witness construction.
+// No subject key enters this API. This does not authenticate State, prove, pair
+// a host, submit a transaction, or establish network readiness.
+// Free BOTH output buffers with iroha_privacy_free_buffer. Every failure sets
+// both outputs to null/zero. Output destinations must be writable and disjoint.
+// Status: 0 success; -1 null pointer; -2 empty; -3 oversized; -4 noncanonical,
+// malformed or wrong-schema frame; -5 wrong protocol; -6 preparation failure;
+// -10 allocation failure; -100 internal failure.
+#define IROHA_ZK_X509_SIGNING_STATEMENT_MAX_BYTES_V1 262144UL
+int32_t connect_norito_zk_x509_prepare_ownership_signing_v1(
+    const uint8_t* statement_ptr,
+    unsigned long statement_len,
+    uint8_t** out_message,
+    unsigned long* out_message_len,
+    uint8_t** out_digest,
+    unsigned long* out_digest_len);
+
+
+// ---------------- Opaque direct X509 transaction owner ----------------
+// Revision 1 in ABI 31. Manifest, empty ordinary TransactionPayload and dedicated
+// SubmitPrivacyZkX509CertificateV1 are canonical Norito frames; network is 32 bytes.
+// Caller must authenticate manifest origin separately (for example sealed HTTPS
+// admission). Native code enforces current selected local profile, exact network,
+// governed context, original authority and one Proof/ActionProof occurrence.
+// The handle never repeats. Close prevents new calls; accepted calls retain ownership.
+// Projections: 0 ordered-intent digest, 1 action digest, 2 canonical ActionStatementV1,
+// 3 canonical tagged PrivacyStatementV1. They cannot replace retained source.
+// Sign takes only handle, 32-byte Ed25519 seed and raw credential-proof container.
+// Output is canonical versioned SignedTransaction. Free every output with
+// iroha_privacy_free_buffer. Errors clear writable outputs; pointers must be valid
+// for their lengths and output destinations must be writable and disjoint.
+// Status: 0 success; -1 invalid input; -2 invalid/stale handle; -3 resource;
+// -4 canonical archive; -5 network; -6 authority; -7 original source; -8 policy;
+// -9 proof container; -11 local tuple; -20 engine unavailable; -21 initialization;
+// -22 conflicting schema id; -23 missing schema reference;
+// -24 JointSecurityReductionIncomplete; -100 internal error.
+int32_t connect_norito_zk_x509_transaction_prepare_v1(
+    const uint8_t* network, unsigned long network_len,
+    const uint8_t* manifest, unsigned long manifest_len,
+    const uint8_t* payload, unsigned long payload_len,
+    const uint8_t* request, unsigned long request_len, uint64_t* out_handle);
+int32_t connect_norito_zk_x509_transaction_projection_v1(uint64_t handle, uint32_t kind,
+    uint8_t** out, unsigned long* out_len);
+int32_t connect_norito_zk_x509_transaction_sign_v1(uint64_t handle,
+    const uint8_t* seed, unsigned long seed_len, const uint8_t* proof, unsigned long proof_len,
+    uint8_t** out, unsigned long* out_len);
+int32_t connect_norito_zk_x509_transaction_close_v1(uint64_t handle);
 
 // ---------------- Envelope helpers ----------------
 int32_t connect_norito_encode_envelope_sign_request_tx(
@@ -1775,9 +1941,41 @@ typedef struct {
        103 rollback, 104 anchor mismatch, 105 completion lost;
        110 unavailable custody data (unspecified kind), 111 enrollment intent,
        112 enrollment phase, 113 committed enrollment marker,
-       114 abandoned-slot custody conflict, 120 unexpected custody entry.
+       114 abandoned-slot custody conflict, 120 unexpected custody entry;
+       130 state witness refusal (unspecified predicate),
+       131 canonical archive record, 132 provider archive authentication,
+       133 archive manifest digest, 134 archive manifest binding,
+       135 archive manifest publication, 136 manifest before Bootstrap,
+       137 manifest ahead of custody, 138 manifest head conflict,
+       139 indexed boundary, 140 indexed boundary head, 141 capsule chain,
+       142 duplicate committed operation, 143 duplicate committed Send,
+       144 duplicate committed Receive, 145 Bootstrap boundary,
+       146 selected capsule missing, 147 capsule binding,
+       148 released completion missing, 149 completion binding,
+       150 step metadata, 151 indexed sequence, 152 step index missing,
+       153 selected preparation source snapshot missing, 154 changed source custody,
+       155 index object missing, 156 index object digest, 157 index node hash,
+       158 index leaf size, 159 index branch, 160 index publication digest,
+       161 duplicate committed fee claim, 162 fee Request original missing,
+       163 earned fee originals size, 164 earned fee originals binding,
+       165 fold head binding, 166 fold index gap, 167 recorded Omega missing,
+       168 source-bound Omega identity.
+       For -1: 200 ledger activation unconfirmed, 201 invalid Load request,
+       202 changed Load amount, 203 inactive Load lifecycle, 204 G1 validation,
+       205 archive encoding, 206 index object/value size, 207 poisoned provider handle,
+       208 no monetary head, 209 collected witness;
+       220 archive manifest size, 221 archive head not released,
+       222 stale archive checkpoint, 223 immutable archive record conflict,
+       224 failed archive call, 225 marker archive checkpoint,
+       226 marker generation, 227 marker state, 228 marker phase,
+       229 marker frame, 230 marker selected generation, 231 marker completion digest,
+       232 marker slot, 233 marker anchor kind, 234 marker superseded,
+       235 marker retired generation, 236 atomic no-replace publication unsupported,
+       237 archive slot, 238 missing archive call, 239 pending archive records,
+       240 archive record/envelope size, 241 current source,
+       242 incoming lineage verdict (Receive admission: the fold would burn this Payment).
        -1 means no more specific cause. Diagnostic only: no recovery permission,
-       actor/key data, or change to the refusal. platform_code stays zero for -7. */
+       actor/key data, or change to the refusal. platform_code stays zero for -1/-7. */
     int32_t reason;
     int32_t platform_code;
     uint64_t sequence_low;
@@ -1845,6 +2043,11 @@ int32_t connect_norito_kagemusha_wallet_open_finish_v1(uint64_t runtime, const u
 int32_t connect_norito_kagemusha_wallet_open_cancel_v1(uint64_t runtime);
 int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);
 int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t foreground, uint8_t charging);
+/* Synchronous controls: begin before worker/UI queueing. Kind60: sequence_low=exchange ID,
+ * high/detail/bytes empty. End kind61: detail0 Ended,1 Ending,2 AlreadyEnded; other fields empty.
+ * Ending fences new children while already accepted calls retain their exact owner. */
+int32_t connect_norito_kagemusha_wallet_begin_exchange_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_end_exchange_v1(uint64_t handle, uint64_t exchange_id, connect_norito_kagemusha_wallet_result_v1* out);
 // Native lifecycle intent; no caller state, roots, proof, time or nonce. Selector meanings:
 // Load0(receipt,finality), Send1(open Request; Native completes it for this payer),
 // Receive2(Payment,credential,certificates),
@@ -1870,16 +2073,16 @@ typedef struct {
 // Setup through the same exclusive Native owner. Selectors:
 // Bootstrap0(no originals), Request2(positive amount, no first original, optional second fee
 // schedule+third signer certificate) returns kind12 open Request (payer fields zero),
-// Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
+// BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
 // CancelTime6(owned token); envelope wrap8..10 / unwrap12..14 in Request,Payment,Credited order.
-// Offer selectors 1, 7 and 11 are retired and rejected.
+// Offer selectors1/7/11 and direct Archive selectors3/41 and nonretaining delivery54 are retired and rejected.
 // PaymentCompanion55(first this wallet's own Payment <=10034, zero setup_id/amount/token) returns
 // kind12 canonical payer companion <=2048: the current credential, which must be the Payment's
 // Omega(pred) credential, and exactly its issuer certificate. DATA only; nothing is signed or written.
 // BackgroundStatus18(no inputs) returns kind29: detail bits0..1 phase (0 not started,
 // 1 parked,2 running), bit2 eligible,bit3 backlog known; sequence is last observed durable
 // backlog. No bytes or proof readiness. Terminal worker errors are returned unchanged and
-// remain parked until observed, followed by a later activity/payment wake. Activity starts
+// remain parked until observed, followed by a later activity/payment/maintenance wake. Activity starts
 // at most one native worker; close cancels and joins it before releasing custody.
 // FeeClaim20(nonzero credit id in setup_id, no originals): kind31 canonical retained pair <=21,092, or kind32 no pending claim.
 // ClaimPayment21/ClaimRequest22(first canonical pair <=21,092) return kind12 exact original DATA, not an admission verdict.
@@ -1911,11 +2114,11 @@ typedef struct {
 // <=65536) reads, and UnloadFinality34(third ledger finality original <=1,327,104) ingests, one
 // envelope's outcome. Any account may relay the exact claim; the claim itself binds the paid account.
 // Results: kind46 Awaiting (zero sequence/detail; bytes32 = the entrypoint hash Native derived from the
-// retained wire, which only selects the attempt's finality route), kind62 Confirmed and kind61 Rejected
+// retained wire, which only selects the attempt's finality route), kind70 Confirmed and kind69 Rejected
 // (sequence_low = height >=2, sequence_high/detail=0, bytes32 = certified native commit hash, not the Iroha
-// header hash), and from 36/34 only kind60 EpochRequired (sequence_low = untrusted target height, no bytes):
+// header hash), and from 36/34 only kind68 EpochRequired (sequence_low = untrusted target height, no bytes):
 // synchronize epochs (Setup52/53) through the attempt's ledger epoch route, then offer the same original.
-// Kind62 for Activate is the wallet's activation, not success of every attempt. Kind61 closes only that
+// Kind70 for Activate is the wallet's activation, not success of every attempt. Kind69 closes only that
 // attempt: it never unlocks first Load, restores offline value or releases, replaces or retargets a claim.
 // Absence, HTTP status and expiry are never verdicts. A different original that verifies to the same
 // entrypoint, height, commit hash and result is idempotent; a differing verified outcome is an error.
@@ -1932,9 +2135,8 @@ typedef struct {
 // ValidateRequestFeePolicy40(first FeeSchedule envelope, second Certificates envelope, each <=10034)
 // verifies signatures, scheme, asset, signer role and selected fee digest; returns the same bytes64.
 // Intake/cache validation does not refresh policy. Exact Request retries retain the original pair.
-// AcceptCreditedForSend41 and CreditedForSendStatus42 use nonzero selected Send request identity
-// and first exact Credited original <=10034; other inputs are zero. Both return ordinary Archive
-// outcomes. Native binds delivery evidence to that Send before issuing or recovering its intent.
+// CreditedForSendStatus42 takes nonzero selected Send identity and first exact Credited <=10034;
+// other inputs are zero. It only queries the exact bound Archive outcome, never dispatches it.
 // UnloadClaim45(nonzero completed Unload request id in setup_id; optional first canonical charge beneficiary <=16,384;
 // no other inputs) returns kind48 canonical UnloadClaim <=16,384 from exact selected originals and native-admitted account.
 // Pending remains an error requiring the existing retry flow; this projection never signs, debits or acknowledges settlement.
@@ -1945,11 +2147,12 @@ typedef struct {
 // CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
 // kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
 // CreditProjection43 takes only the nonzero Receive request id; DeliveryProjection44 takes
-// nonzero Send request id, first exact completed-Archive Credited anchor <=10034 and optional
-// second newer Credited <=10034. VerifiedDelivery54 takes nonzero Send request id and first exact
-// Credited <=10034 before any Archive: the same Send binding and verifier; it selects, proves and
-// signs nothing and prepares no Archive; a completed Archive of that original returns its projection44.
-// Unused originals/amount/token are zero. All return kind47, <=10126:
+// nonzero Send request id and first exact completed-Archive Credited anchor <=10034, no second original.
+// ObserveCredited56 takes nonzero Send request id and first exact Credited <=10034. Native durably
+// selects these exact bytes before verification; interrupted verification is discoverable on reopen.
+// The typed payer evidence is independent of Archive completion and may report authenticated burned.
+// ResumeDeferredReceipt57(no inputs) verifies at most one selected intake; kind47 or empty kind62.
+// Unused originals/amount/token are zero. Projections use kind47, <=10126:
 // LE16 version1; evidence byte1=unfolded/2=credited/3=burned; archive byte0=receiver,
 // 1=awaiting fold/2=removed/3=retained/4=verified, not archived; core-pending byte; three zeros; credit32;
 // Payment digest32; LE128amount; LE32original length; exact receiver Credited <=10034.
@@ -1983,7 +2186,16 @@ typedef struct {
 // its incumbent from protected custody, verifies the exact boundary and atomically retains
 // the successor. Exact retries reconcile publication uncertainty and never regress progress.
 // Older epoch checkpoints remain available for delayed Load receipts. Both return kind57.
-// setup_id is exactly32 bytes: nonzero only for selectors2/19/20/25/27/30/33/34/39/41/42/43/44/45; all zero otherwise.
+// DrainDeferredArchive58(no inputs) recovers/reconciles before idle gates and attempts at most one
+// source-selected Archive. Kind62 no work: empty/all scalars0. Kind63 blocked: detail1 SelectedPending,
+// 2 ArchiveFold,3 FoldBacklog,4 ExchangeOpen,5 NotDue,6 Busy; sequence0/empty bytes.
+// Kind64 outcome: sequence0,detail1 Reconciled/2 Executed; bytes <=10062 contain LEu32 inner completion
+// kind, LEu32 inner detail, LEu128 inner sequence, LEu32 inner length, then <=10034 exact inner bytes.
+// Inner kinds are1 Complete/2 Pending/3 NotPerformed/4 Archived/5 DeliveryDataLoss/10 CreditStatus;
+// each keeps its existing closed geometry. Only exact Complete acknowledges Archive and dequeues.
+// Kind65 reviewed execution retained: the SAME positive original token in sequence_low, high0,
+// detail1 SelectedPending/2 ArchiveFold/6 Busy, empty bytes. No generic failure means review retained.
+// setup_id is exactly32 bytes: nonzero only for selectors2/19/20/25/27/39/42/43/44/45/56; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof verdict or arbitrary signing body.
 // Transport uses first only and returns canonical bytes; it grants no monetary verdict.
@@ -1999,11 +2211,15 @@ typedef struct {
     const uint8_t* third;
     size_t third_length;
 } connect_norito_kagemusha_wallet_setup_request_v1;
-// Setup results: Bootstrap/Credited preserve completion statuses; CancelTime returns idle6.
+// exchange_id is mandatory and separate from setup_id/time/review tokens. It must be zero only for
+// selectors8..10/12..14/16..18/20..22/24/26/29/33/37/38/40/42..45/47/50/52/55/57/58.
+// All other live setup routes require an actual exchange. Cleanup6/51 checks the issuing exchange
+// of its genuine capability and remains callable after end; it cannot execute fresh work.
+// Setup results: Bootstrap preserves completion statuses; CancelTime returns idle6.
 // 12=exact original bytes;13=Native-owned one-use time challenge (token in sequence_low);
-// 14=direct time exchange retained. Token is valid only for the same open Native owner.
+// 14=direct time exchange retained. Token is valid only for the same exact Native owner and exchange.
 // Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
-int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, uint64_t exchange_id, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 
 // Read-only same-owner DATA, always generic original kind12 with zero sequence/detail.
 // Selector0 metadata (empty identity): exact KWMDV1\0\0 frame <=5268 bytes.
@@ -2011,7 +2227,7 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_
 // Selector3 exact prepared Load request: KWLPV1\0\0 frame <=65756 bytes, or exactly
 // KWLNV1\0\0 (8 bytes) for absent selected plan only. Selectors1..3 use nonzero32.
 // Selector4 fold metrics (empty identity): UTF-8 JSON <=131072 bytes with schema
-// iroha.kagemusha.fold-metrics.v2. In-memory public counts/timings only, no custody
+// iroha.kagemusha.fold-metrics.v3. In-memory public counts/timings only, no custody
 // acquisition, fold cancellation or authority; unknown/closing handles fail closed.
 // startedNativeMicros/endedNativeMicros and sampledNativeMicros share a process-local
 // monotonic origin. They are observation-only, not wall time or completion authority.
@@ -2064,7 +2280,7 @@ int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime, const co
  * platform-inapplicable codes, and any other android value, return -1. Pure: no handle or state. */
 int32_t connect_norito_kagemusha_wallet_enrollment_refusal_v1(uint16_t code, uint8_t android);
 
-int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, uint64_t exchange_id, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).
 int32_t connect_norito_kagemusha_wallet_request_status_v1(uint64_t handle, const uint8_t* request_id32, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_retry_v1(uint64_t handle, const uint8_t* operation32, connect_norito_kagemusha_wallet_result_v1* out);
@@ -2072,7 +2288,11 @@ int32_t connect_norito_kagemusha_wallet_resume_v1(uint64_t handle, connect_norit
 int32_t connect_norito_kagemusha_wallet_fold_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const uint8_t* credit32, const uint8_t* payment32, connect_norito_kagemusha_wallet_result_v1* out);
 
-/** Fixed Send/Unload Native intake: selector1/8; no foreign source identifiers.
+/** Request-bound Send/Unload Native intake: selector1/8; no foreign source authority.
+ * request_id32 is required/nonzero and becomes private capability state at issuance.
+ * expectation0 Fresh requires empty expected_projection; expectation1 OriginalUnstarted
+ * requires the exact prior KWORV1 projection495..4591, plus unchanged original action inputs.
+ * Native authenticates request absence/current source; projection DATA grants no authority.
  * Send: amount0, first signed Request1..10034, second canonical AccountId1..4096.
  * Native authenticates the complete Request, then canonical-decodes the singleEd25519
  * account original and binds its Role::Account digest to that signed destination.
@@ -2084,7 +2304,11 @@ int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const 
  * Raw certificate-only charged review is rejected; monetary intent/wire is unchanged. */
 typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
   uint32_t selector;
+  uint32_t expectation;
   connect_norito_kagemusha_wallet_u128_v1 amount;
+  const uint8_t *request_id32;
+  const uint8_t *expected_projection;
+  size_t expected_projection_length;
   const uint8_t *first;
   size_t first_length;
   const uint8_t *second;
@@ -2098,16 +2322,25 @@ typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
  * mandatory LE UInt32 destinationAccountOriginalLength, then those exact AccountId bytes.
  * Send length1..4096, Unload length0; exact total495+length. No491-byte fallback.
  * The original is authenticated display DATA, not an I105 literal or chain discriminator.
- * Copyable DATA cannot reconstruct the actual retained Native review. Free with connect_norito_free. */
-int32_t connect_norito_kagemusha_wallet_review_v1(uint64_t handle,
+ * Copyable DATA cannot reconstruct the actual retained Native review. Free with connect_norito_free.
+ * Review may instead return66 existing request: outer sequence/detail0, exact LE header
+ * {u32 innerKind,u32 innerDetail,u128 innerSequence,u32 innerLength} and <=10034 inner bytes.
+ * Inner kinds1/2/3/4/5/10 retain Completion geometry;11 Preparing has all scalars0/empty bytes.
+ * Unknown0, nested/control/capability kinds refuse. Total28..10062;66 carries no review token.
+ * Review67 is tokenless maintenance: sequence0, detail1 SelectedPending/2 ArchiveFold/6 Busy,
+ * empty bytes. Review never returns65 or an unwrapped monetary Completion. */
+int32_t connect_norito_kagemusha_wallet_review_v1(uint64_t handle, uint64_t exchange_id,
     const connect_norito_kagemusha_wallet_review_request_v1 *request,
     connect_norito_kagemusha_wallet_result_v1 *out);
 /** Consume actual review after fresh hardware approval; current source and ordinary proofs
- * remain mandatory before Advance. No financial input is reconstructed from projection DATA. */
-int32_t connect_norito_kagemusha_wallet_execute_reviewed_v1(uint64_t handle,
-    uint64_t token, const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);
-/** Cancel an in-memory review only; no durable custody mutation. */
-int32_t connect_norito_kagemusha_wallet_discard_review_v1(uint64_t handle, uint64_t token);
+ * remain mandatory before Advance. The privately bound request ID cannot be replaced.
+ * Exact existing binding returns66, never new planning. Only authenticated absence can
+ * return65 with the same live token for typed maintenance. Ordinary execution returns
+ * Completion1/2/3/4/5/10; execution never returns18/67. No projection reconstructs authority. */
+int32_t connect_norito_kagemusha_wallet_execute_reviewed_v1(uint64_t handle, uint64_t exchange_id,
+    uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);
+/** Cancel an in-memory review only; same issuing exchange even after end, no durable custody mutation. */
+int32_t connect_norito_kagemusha_wallet_discard_review_v1(uint64_t handle, uint64_t exchange_id, uint64_t token);
 
 // Mandatory original base authenticated under public build-selected Ed25519 trust.
 // Whole app manifest <=8MiB; envelope <=2048; wallet runtime <=128KiB;

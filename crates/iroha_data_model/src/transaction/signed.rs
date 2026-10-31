@@ -727,9 +727,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         // The attachment decoder has checked everything that is independent of
         // the rest of the payload. The descriptor is bound to this payload here,
         // so a stale, foreign or mis-targeted declaration never decodes.
-        payload
-            .validate_signed_attachments_v1()
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        payload.validate_signed_attachments_v1().map_err(
+            crate::transaction::signed_attachments::SignedAttachmentErrorV1::into_norito_error,
+        )?;
         Ok((payload, offset))
     }
 }
@@ -809,6 +809,9 @@ pub enum TransactionSignatureError {
     /// The supplied private key does not control the exact payload authority.
     #[error("transaction authority does not match the supplied signing key")]
     AuthorityKeyMismatch,
+    /// The canonical algorithm is known but the requested local operation is absent.
+    #[error("{0}")]
+    UnsupportedImplementation(iroha_crypto::UnsupportedImplementation),
     /// Signature verification failed for the provided payload and signatory.
     #[error("{0}")]
     CryptoError(String),
@@ -847,6 +850,16 @@ pub enum TransactionSignatureError {
         #[doc = "Threshold required by the multisig policy."]
         required: u16,
     },
+}
+impl From<iroha_crypto::Error> for TransactionSignatureError {
+    fn from(error: iroha_crypto::Error) -> Self {
+        match error {
+            iroha_crypto::Error::UnsupportedImplementation(original) => {
+                Self::UnsupportedImplementation(original)
+            }
+            completed => Self::CryptoError(completed.to_string()),
+        }
+    }
 }
 static EXPIRES_AT_HEIGHT_NAME: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("expires_at_height").expect("expires_at_height is a valid metadata key")
@@ -1049,6 +1062,11 @@ pub enum PrivacyTransactionIntentErrorV1 {
     /// The payload has no direct typed privacy proof submission.
     #[error("privacy transaction intent requires exactly one direct SubmitPrivacyProofV1")]
     MissingSubmission,
+    /// X.509 execution uses the proof-free request and original signed action attachment.
+    #[error(
+        "X509 execution requires SubmitPrivacyZkX509CertificateV1 with a signed proof attachment"
+    )]
+    X509RequiresSignedAttachment,
     /// More than one direct typed privacy proof submission is present.
     #[error("privacy transaction intent contains {count} direct privacy submissions")]
     MultipleSubmissions {
@@ -1192,9 +1210,21 @@ fn validate_exact_direct_privacy_submission_v1<'a>(
     if let Some(path) = scan.unsupported_path {
         return Err(PrivacyTransactionIntentErrorV1::UnsupportedPath { path });
     }
-    Ok(scan
+    let submission = scan
         .first_submission
-        .expect("a non-zero direct submission count stores its first submission"))
+        .expect("a non-zero direct submission count stores its first submission");
+    if submission.envelope.protocol_id
+        == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || submission.envelope.proof.protocol_id()
+            == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || matches!(
+            &submission.envelope.statement,
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
+        )
+    {
+        return Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment);
+    }
+    Ok(submission)
 }
 impl SubmitPrivacyProofV1 {
     /// Canonical normalized instruction bytes used only inside an ordered-intent preimage.
@@ -1827,7 +1857,7 @@ impl SignedTransaction {
                     return Err(TransactionSignatureError::UnexpectedMultisigSignatures);
                 }
                 verify_typed_signature_for_signer(signature, signatory, &self.payload)
-                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
+                    .map_err(TransactionSignatureError::from)
             }
             AccountController::Multisig(policy) => self.verify_multisig_signatures(policy),
         }
@@ -1913,7 +1943,7 @@ impl SignedSealedTransactionCommitment {
         match self.payload.authority.controller() {
             AccountController::Single(signatory) => {
                 verify_typed_signature_for_signer(&self.signature, signatory, &self.payload)
-                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
+                    .map_err(TransactionSignatureError::from)
             }
             AccountController::Multisig(_) => {
                 Err(TransactionSignatureError::UnsupportedMultisigAuthority)
@@ -2018,7 +2048,7 @@ impl SignedTransaction {
                 return Err(TransactionSignatureError::UnknownMultisigSigner);
             };
             verify_typed_signature_for_signer(&entry.signature, &entry.signer, &self.payload)
-                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
+                .map_err(TransactionSignatureError::from)?;
             collected = collected.saturating_add(u32::from(*weight));
         }
         if collected < u32::from(policy.threshold()) {
@@ -2148,10 +2178,10 @@ impl MultisigSignatures {
             .map(|private_key| {
                 let signer = PublicKey::from(private_key.clone());
                 let signature = SignatureOf::try_new(private_key, payload)
-                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
+                    .map_err(TransactionSignatureError::from)?;
                 Ok(MultisigSignature::new(signer, signature))
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_, TransactionSignatureError>>()?;
         if signatures.is_empty() {
             return Err(TransactionSignatureError::NoSignatures);
         }
@@ -2683,8 +2713,7 @@ impl TransactionBuilder {
             return Err(TransactionSignatureError::AuthorityKeyMismatch);
         }
         let signature = TransactionSignature(
-            SignatureOf::try_new(private_key, &payload)
-                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?,
+            SignatureOf::try_new(private_key, &payload).map_err(TransactionSignatureError::from)?,
         );
         Ok(SignedTransaction {
             signature,
@@ -2990,5 +3019,109 @@ mod checked_container_cleanup_tests {
             },
         );
         audit(&TransactionResult::new(Err(rejection)));
+    }
+}
+
+#[cfg(test)]
+mod implementation_cause_tests {
+    use super::*;
+    use iroha_crypto::{CryptoOperation, UnsupportedImplementation};
+
+    #[test]
+    fn transaction_signature_conversion_preserves_original_capability_and_invalid_diagnostic() {
+        let original = UnsupportedImplementation {
+            algorithm: Algorithm::MlDsa,
+            operation: CryptoOperation::VerifySignature,
+        };
+        assert_eq!(
+            TransactionSignatureError::from(iroha_crypto::Error::UnsupportedImplementation(
+                original
+            )),
+            TransactionSignatureError::UnsupportedImplementation(original)
+        );
+        let completed = iroha_crypto::Error::BadSignature;
+        let diagnostic = completed.to_string();
+        assert_eq!(
+            TransactionSignatureError::from(completed),
+            TransactionSignatureError::CryptoError(diagnostic)
+        );
+    }
+
+    #[test]
+    fn real_single_sealed_and_multisig_verification_preserve_missing_mldsa_backend() {
+        use crate::account::{MultisigMember, MultisigPolicy};
+        let availability =
+            Algorithm::MlDsa.require_implementation(CryptoOperation::VerifySignature);
+        let key = availability.is_ok().then(|| {
+            iroha_crypto::KeyPair::try_from_seed(vec![0x5D; 32], Algorithm::MlDsa).unwrap()
+        });
+        let public = key.as_ref().map_or_else(
+            || PublicKey::from_bytes(Algorithm::MlDsa, &[0x51; 1952]).unwrap(),
+            |key| key.public_key().clone(),
+        );
+        fn signature<T: Encode>(
+            key: Option<&iroha_crypto::KeyPair>,
+            payload: &T,
+        ) -> SignatureOf<T> {
+            key.map_or_else(
+                || SignatureOf::from_signature(Signature::try_from_bytes(&[0x51; 3309]).unwrap()),
+                |key| SignatureOf::try_new(key.private_key(), payload).unwrap(),
+            )
+        }
+        let expected = availability.map_err(TransactionSignatureError::UnsupportedImplementation);
+        let payload = TransactionBuilder::new(
+            test_network_id(0xB4),
+            AccountId::new(public.clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([crate::isi::Log::new(
+            crate::Level::INFO,
+            "typed capability".into(),
+        )])
+        .payload()
+        .clone();
+        let single = SignedTransaction {
+            entrypoint_hash: EntrypointHashMemo::default(),
+            signature: TransactionSignature(signature(key.as_ref(), &payload)),
+            payload,
+            multisig_signatures: None,
+        };
+        assert_eq!(single.verify_signature(), expected);
+        let payload = SealedTransactionCommitmentPayload::new(
+            test_network_id(0xB4),
+            AccountId::new(public.clone()),
+            Hash::new(b"typed capability commitment"),
+            3,
+            7,
+            None,
+        );
+        let sealed = SignedSealedTransactionCommitment {
+            signature: signature(key.as_ref(), &payload),
+            payload,
+        };
+        assert_eq!(sealed.verify_signature(), expected);
+        let policy =
+            MultisigPolicy::new(1, vec![MultisigMember::new(public.clone(), 1).unwrap()]).unwrap();
+        let payload = TransactionBuilder::new(
+            test_network_id(0xB4),
+            AccountId::new_multisig(policy),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([crate::isi::Log::new(
+            crate::Level::INFO,
+            "typed multisig capability".into(),
+        )])
+        .payload()
+        .clone();
+        let signature = signature(key.as_ref(), &payload);
+        let multisig = SignedTransaction {
+            entrypoint_hash: EntrypointHashMemo::default(),
+            signature: TransactionSignature(signature.clone()),
+            payload,
+            multisig_signatures: Some(MultisigSignatures::new(vec![MultisigSignature::new(
+                public, signature,
+            )])),
+        };
+        assert_eq!(multisig.verify_signature(), expected);
     }
 }

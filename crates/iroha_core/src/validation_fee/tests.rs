@@ -1,4 +1,6 @@
 //! Conversion provenance and protected runtime fixture tests.
+#[path = "genesis_policy_tests.rs"]
+mod genesis_policy_tests;
 #[path = "permission_guard_tests.rs"]
 mod permission_guard_tests;
 #[path = "registry_refusal_tests.rs"]
@@ -6,7 +8,7 @@ mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
 mod runtime_dlmm_tests;
 #[path = "runtime_wrapper_tests.rs"]
-pub(crate) mod runtime_wrapper_tests;
+pub mod runtime_wrapper_tests;
 #[path = "signed_original_fixtures.rs"]
 mod signed_original_fixtures;
 use super::*;
@@ -23,7 +25,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::{domain::DomainId, name::Name, topology::DataSpaceId};
 use iroha_primitives::numeric::NumericSpec;
-pub(crate) use signed_original_fixtures::{
+pub use signed_original_fixtures::{
     sign_payout_fixture_work, signed_payout_lifecycle_registry_fixture,
     signed_payout_lifecycle_registry_fixture_with_config,
     with_original_validation_fee_payout_state_at_height,
@@ -92,7 +94,7 @@ fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress 
     .expect("test contract address")
 }
 
-pub(crate) fn treasury_payout_binding(
+pub fn treasury_payout_binding(
     contract_address: iroha_data_model::smart_contract::ContractAddress,
     code: &[u8],
 ) -> ValidationFeeTreasuryPayoutBindingV1 {
@@ -264,6 +266,7 @@ fn payout_permissions_require_dedicated_instance_roles() {
     assert_eq!(dedicated_payout_permission(&duplicate, selector), None);
 }
 
+/// Ledger identities and definitions before any original signed monetary policy exists.
 pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
@@ -297,25 +300,45 @@ pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state:
         None,
     )
     .build(deployer);
-    let world = crate::state::World::with(
+    crate::state::World::with(
         [contract_domain, fee_domain],
         accounts,
         [fee_definition, successor_fee_definition, xor_definition],
-    );
-    {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                    .into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
-        parameters.commit();
-    }
-    world
+    )
 }
 
-pub(crate) fn register_bound_payout_time_trigger(
+/// Explicit authoring inputs for the payout fixture's signed epoch and network XOR policy.
+fn validation_fee_payout_genesis_parameters() -> [iroha_data_model::parameter::Parameter; 2] {
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiNposParameters, SumeragiParameter},
+    };
+    let policy = SumeragiNposParameters::default();
+    [
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            policy.epoch_length_blocks,
+        )),
+        Parameter::Custom(policy.into_custom_parameter()),
+    ]
+}
+
+/// Author explicit NPoS payout genesis; the supplied World retains no pre-genesis policy.
+pub(crate) fn validation_fee_payout_config(
+    deployer: &AccountId,
+    genesis_time_ms: u64,
+) -> crate::sumeragi::test_chain::TestChainConfig {
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
+        validation_fee_payout_world(deployer),
+        genesis_time_ms,
+    );
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .extend(validation_fee_payout_genesis_parameters());
+    config
+}
+
+pub fn register_bound_payout_time_trigger(
     state_tx: &mut StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     expected_code_hash: Hash,
@@ -356,13 +379,13 @@ pub(crate) fn register_bound_payout_time_trigger(
     trigger_id
 }
 
-pub(crate) fn with_validation_fee_payout_state_at_height(
+pub fn with_validation_fee_payout_state_at_height(
     height: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
 ) {
     with_validation_fee_payout_state_at_time(height, 0, test)
 }
-pub(crate) fn with_validation_fee_payout_state_at_time(
+pub fn with_validation_fee_payout_state_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -377,7 +400,7 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
 
 /// Retain a finite invocation owner before opening a direct component fixture.
 /// This does not authenticate a Network input or authorize publication.
-pub(crate) fn with_validation_fee_payout_invocation_at_time(
+pub fn with_validation_fee_payout_invocation_at_time(
     height: u64,
     timestamp_ms: u64,
     invocation: Hash,
@@ -393,7 +416,7 @@ pub(crate) fn with_validation_fee_payout_invocation_at_time(
 
 /// Own only the finite mandatory-purpose component scope for an idle maintenance test.
 /// This grants neither complete carrier inventory nor publication authority.
-pub(crate) fn with_validation_fee_payout_protocol_at_time(
+pub fn with_validation_fee_payout_protocol_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -406,7 +429,7 @@ pub(crate) fn with_validation_fee_payout_protocol_at_time(
     );
 }
 
-pub(crate) fn with_validation_fee_payout_block_at_time(
+pub fn with_validation_fee_payout_block_at_time(
     height: u64,
     timestamp_ms: u64,
     test: impl FnOnce(&mut crate::state::StateBlock<'_>, &AccountId, &[u8], Hash),
@@ -427,6 +450,7 @@ pub(crate) fn with_validation_fee_payout_block_at_time(
     test(&mut block, &deployer, &code, code_hash);
 }
 
+#[derive(Clone, Copy)]
 enum PayoutComponentSource {
     Unowned,
     Invocation(Hash),
@@ -533,7 +557,7 @@ fn payout_component_quantity_requires_exact_retained_invocation() {
     });
 }
 
-pub(crate) fn activate_bound_payout_runtime(
+pub fn activate_bound_payout_runtime(
     state_tx: &mut StateTransaction<'_, '_>,
     deployer: &AccountId,
     code: &[u8],
@@ -687,7 +711,7 @@ fn assert_treasury_payout_plan_mismatch(
     ));
 }
 
-pub(crate) struct BoundPayoutRuntimeFixture {
+pub struct BoundPayoutRuntimeFixture {
     pub(crate) binding: ValidationFeeTreasuryPayoutBindingV1,
 }
 
@@ -912,7 +936,7 @@ fn test_parliament_candidates() -> Vec<AccountId> {
     (220_u8..=243).map(account).collect()
 }
 
-pub(crate) fn test_authorization(
+pub fn test_authorization(
     proposal: &iroha_data_model::governance::types::ProposalKind,
     enacted_at_height: u64,
 ) -> ValidationFeeParliamentAuthorizationV1 {
@@ -945,7 +969,7 @@ pub(crate) fn test_authorization(
     }
 }
 
-pub(crate) fn payout_registry_entry(
+pub fn payout_registry_entry(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     revision: u64,
     enacted_at_height: u64,
@@ -967,7 +991,7 @@ pub(crate) fn payout_registry_entry(
     }
 }
 
-pub(crate) fn policy_registry(
+pub fn policy_registry(
     policies: &[ValidationFeePolicyV1],
     bindings: &[ValidationFeeTreasuryPayoutBindingV1],
 ) -> ValidationFeePolicyRegistryV1 {
@@ -1004,7 +1028,7 @@ pub(crate) fn policy_registry(
 
 fn seed_authorized_proposal(
     kind: iroha_data_model::governance::types::ProposalKind,
-    authorization: ValidationFeeParliamentAuthorizationV1,
+    authorization: &ValidationFeeParliamentAuthorizationV1,
     state_tx: &mut StateTransaction<'_, '_>,
 ) {
     let proposal_id = authorization.proposal_fingerprint;
@@ -1041,7 +1065,7 @@ fn seed_authorized_proposal(
         .expect("persist exact enacted validation-fee Parliament attempt");
 }
 
-pub(crate) fn install_policy_registry_fixture(
+pub fn install_policy_registry_fixture(
     registry: &ValidationFeePolicyRegistryV1,
     state_tx: &mut StateTransaction<'_, '_>,
 ) {
@@ -1054,7 +1078,7 @@ pub(crate) fn install_policy_registry_fixture(
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
                 payout_binding: entry.payout_binding.clone(),
             }),
-            entry.parliament_authorization.clone(),
+            &entry.parliament_authorization,
             state_tx,
         );
     }
@@ -1064,15 +1088,13 @@ pub(crate) fn install_policy_registry_fixture(
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
                 policy: entry.policy.clone(),
             }),
-            entry.parliament_authorization.clone(),
+            &entry.parliament_authorization,
             state_tx,
         );
     }
     state_tx
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             registry
                 .clone()
                 .into_custom_parameter()
@@ -1083,7 +1105,7 @@ pub(crate) fn install_policy_registry_fixture(
 
 /// Original signed root with an explicitly smaller native pool for retail admission controls.
 /// The later block remains a component projection; no limit or publication grant is enlarged.
-pub(crate) fn with_retail_native_capacity_block(
+pub fn with_retail_native_capacity_block(
     height: u64,
     timestamp_ms: u64,
     native_entries: u32,
@@ -1102,15 +1124,12 @@ pub(crate) fn with_retail_native_capacity_block(
 }
 
 /// Reuse the actual signed root for original Time-owner integration controls.
-pub(crate) fn with_retail_native_capacity_state(
+pub fn with_retail_native_capacity_state(
     native_entries: u32,
     test: impl FnOnce(&crate::state::State, &AccountId, &[u8], Hash),
 ) {
     let deployer = AccountId::new(key_pair(55).public_key().clone());
-    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let mut config = validation_fee_payout_config(&deployer, 1_000);
     let mut source = iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap();
     assert!(native_entries <= source.max_native_maintenance_invocations);
     source.max_native_maintenance_invocations = native_entries;

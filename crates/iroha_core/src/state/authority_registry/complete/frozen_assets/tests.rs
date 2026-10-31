@@ -242,10 +242,12 @@ fn exact(original: &Original<'_>) -> u64 {
         &original.rows,
         &original.definitions,
         &original.domains,
-        &original.by_definition,
-        &original.by_domain,
-        &original.holders,
-        &original.nonzero,
+        (
+            &original.by_definition,
+            &original.by_domain,
+            &original.holders,
+            &original.nonzero,
+        ),
         &original.asset_counts,
     )
 }

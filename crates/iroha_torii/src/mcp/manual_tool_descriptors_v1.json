@@ -252,54 +252,10 @@
    }
   },
   {
-   "function": "iroha_runtime_upgrades_activate_tool",
-   "name": "iroha.runtime.upgrades.activate",
-   "effect": "write",
-   "description": "Activate a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/activate/{id}`).",
-   "method": "POST",
-   "path_template": "/v1/runtime/upgrades/activate/{id}",
-   "input_schema": {
-    "type": "object",
-    "additionalProperties": true,
-    "required": [
-     "path",
-     "body"
-    ],
-    "properties": {
-     "path": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-       "id"
-      ],
-      "properties": {
-       "id": {
-        "type": "string"
-       }
-      }
-     },
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Activation request payload."
-     },
-     "headers": {
-      "type": "object",
-      "additionalProperties": {
-       "type": "string"
-      }
-     },
-     "accept": {
-      "type": "string"
-     }
-    }
-   }
-  },
-  {
    "function": "iroha_runtime_upgrades_cancel_tool",
    "name": "iroha.runtime.upgrades.cancel",
    "effect": "write",
-   "description": "Cancel a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/cancel/{id}`).",
+   "description": "Draft the Parliament proposal that withdraws a scheduled runtime change set by canonical `path.id` (`/v1/runtime/upgrades/cancel/{id}`).",
    "method": "POST",
    "path_template": "/v1/runtime/upgrades/cancel/{id}",
    "input_schema": {
@@ -550,7 +506,7 @@
    "function": "iroha_contracts_code_get_tool",
    "name": "iroha.contracts.code.get",
    "effect": "read",
-   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
+   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is a canonical Iroha hash: 64 lowercase hexadecimal characters ending in an odd digit.",
    "method": "GET",
    "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}",
    "input_schema": {
@@ -574,7 +530,7 @@
        },
        "code_hash": {
         "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
+        "pattern": "^[0-9a-f]{63}[13579bdf]$"
        }
       }
      },
@@ -594,7 +550,7 @@
    "function": "iroha_contracts_code_bytes_get_tool",
    "name": "iroha.contracts.code.bytes.get",
    "effect": "read",
-   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
+   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is a canonical Iroha hash: 64 lowercase hexadecimal characters ending in an odd digit.",
    "method": "GET",
    "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes",
    "input_schema": {
@@ -618,7 +574,7 @@
        },
        "code_hash": {
         "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
+        "pattern": "^[0-9a-f]{63}[13579bdf]$"
        }
       }
      },
@@ -3788,37 +3744,14 @@
    "function": "iroha_assets_list_tool",
    "name": "iroha.assets.list",
    "effect": "read",
-   "description": "List a bounded seek page of explorer assets with optional flat filters. Reuse next_cursor only with the exact same filters.",
+   "description": "List visible Explorer assets (`GET /v1/explorer/assets`). Fields: id, definition_id, account_id, value. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"account_id = \\\"sorau…\\\" and value > 0\",\"select\":[\"id\",\"value\"]}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/assets",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "cursor": {
-      "type": "string",
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
-     "owned_by": {
-      "type": "string"
-     },
-     "definition": {
-      "type": "string"
-     },
-     "asset_id": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3873,34 +3806,14 @@
    "function": "iroha_nfts_list_tool",
    "name": "iroha.nfts.list",
    "effect": "read",
-   "description": "List a bounded seek page of explorer NFTs with optional flat filters. Reuse next_cursor only with the exact same filters.",
+   "description": "List visible Explorer NFTs (`GET /v1/explorer/nfts`). Fields: id, owned_by, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors domain require one string equality in the outer conjunction. Example: {\"filter\":\"domain = \\\"wonderland.universal\\\"\",\"select\":[\"id\",\"owned_by\"]}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/nfts",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "cursor": {
-      "type": "string",
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
-     "owned_by": {
-      "type": "string"
-     },
-     "domain": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3979,34 +3892,14 @@
    "function": "iroha_rwas_list_tool",
    "name": "iroha.rwas.list",
    "effect": "read",
-   "description": "List a bounded seek page of explorer RWA lots with optional flat filters. Reuse next_cursor only with the exact same filters.",
+   "description": "List visible Explorer RWA lots (`GET /v1/explorer/rwas`). Fields: id, owned_by, quantity, held_quantity, primary_reference, status, is_frozen, parents, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors domain require one string equality in the outer conjunction. Example: {\"filter\":\"is_frozen = false\",\"select\":[\"id\",\"quantity\"]}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/rwas",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "cursor": {
-      "type": "string",
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
-     "owned_by": {
-      "type": "string"
-     },
-     "domain": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -4085,69 +3978,14 @@
    "function": "iroha_transactions_list_tool",
    "name": "iroha.transactions.list",
    "effect": "read",
-   "description": "List visible explorer transactions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
+   "description": "List visible Explorer transactions (`GET /v1/explorer/transactions`). Fields: authority, hash, block, created_at, executable, status (`Committed` or `Rejected`). Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"status = \\\"Rejected\\\" and block >= 1200\",\"select\":[\"hash\",\"block\"],\"limit\":10}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/transactions",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-       "cursor": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 1424,
-        "pattern": "^[A-Za-z0-9_-]+$"
-       },
-       "limit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 100,
-        "default": 25
-       },
-       "authority": {
-        "type": "string"
-       },
-       "block": {
-        "type": "integer",
-        "minimum": 1
-       },
-       "status": {
-        "type": "string"
-       },
-       "asset_id": {
-        "type": "string"
-       }
-      }
-     },
-     "cursor": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
-     "authority": {
-      "type": "string"
-     },
-     "block": {
-      "type": "integer",
-      "minimum": 1
-     },
-     "status": {
-      "type": "string"
-     },
-     "asset_id": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -4202,87 +4040,14 @@
    "function": "iroha_instructions_list_tool",
    "name": "iroha.instructions.list",
    "effect": "read",
-   "description": "List visible explorer instructions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
+   "description": "List visible Explorer instructions (`GET /v1/explorer/instructions`). Fields: authority, created_at, kind, box, box.wire_id, box.framed_sha256, box.instruction, transaction_hash, transaction_status, block, index; `kind` is the instruction name such as `Transfer`, `Mint` or `Log`, and `transaction_status` is `Committed` or `Rejected`. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"kind = \\\"Transfer\\\" and block >= 1200\",\"select\":[\"transaction_hash\",\"index\",\"kind\"]}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/instructions",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-       "cursor": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 1424,
-        "pattern": "^[A-Za-z0-9_-]+$"
-       },
-       "limit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 100,
-        "default": 25
-       },
-       "authority": {
-        "type": "string"
-       },
-       "account": {
-        "type": "string"
-       },
-       "transaction_hash": {
-        "type": "string"
-       },
-       "transaction_status": {
-        "type": "string"
-       },
-       "block": {
-        "type": "integer",
-        "minimum": 1
-       },
-       "kind": {
-        "type": "string"
-       },
-       "asset_id": {
-        "type": "string"
-       }
-      }
-     },
-     "cursor": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
-     "authority": {
-      "type": "string"
-     },
-     "account": {
-      "type": "string"
-     },
-     "transaction_hash": {
-      "type": "string"
-     },
-     "transaction_status": {
-      "type": "string"
-     },
-     "block": {
-      "type": "integer",
-      "minimum": 1
-     },
-     "kind": {
-      "type": "string"
-     },
-     "asset_id": {
-      "type": "string"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -4341,43 +4106,14 @@
    "function": "iroha_blocks_list_tool",
    "name": "iroha.blocks.list",
    "effect": "read",
-   "description": "List visible explorer block summaries through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
+   "description": "List visible Explorer block summaries (`GET /v1/explorer/blocks`). Fields: hash, height, created_at, prev_block_hash, transactions_hash, transactions_rejected, transactions_total. Fixed bounded order: newest first; default limit 25, maximum 100; `height` bounds in the filter's top-level `and` also bound the walk. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"height >= 901 and height <= 1000\",\"select\":[\"height\",\"hash\"],\"limit\":100}. Optional canonical target authentication expands the anonymous public-dataspace view. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/explorer/blocks",
    "input_schema": {
     "type": "object",
     "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-       "cursor": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 1424,
-        "pattern": "^[A-Za-z0-9_-]+$"
-       },
-       "limit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 100,
-        "default": 25
-       }
-      }
-     },
-     "cursor": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1424,
-      "pattern": "^[A-Za-z0-9_-]+$"
-     },
-     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
-      "default": 25
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {

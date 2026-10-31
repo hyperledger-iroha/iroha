@@ -1,10 +1,8 @@
 #![doc = "Verifying-key registry indexing by `(circuit_id, version)`."]
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
-#[path = "common/native_genesis.rs"]
-mod native_genesis;
-#[path = "common/zk_components.rs"]
-mod zk_components;
+use crate::native_genesis;
+use crate::zk_components;
 use iroha_core::{smartcontracts::Execute, state::WorldReadOnly};
 use iroha_core_zk::hash_vk;
 use iroha_core_zk::{
@@ -14,6 +12,7 @@ use iroha_core_zk::{
 };
 use zk_components::execute_isi_component;
 const FULL: &str = "pipa-r/pasta/confidential-unshield-full-v1";
+use crate::test_world;
 use iroha_data_model::{
     ValidationFail,
     confidential::ConfidentialStatus,
@@ -31,8 +30,6 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-#[path = "common/world_fixture.rs"]
-mod test_world;
 fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     let mut stx = block.transaction();
     let perm = Permission::new(
@@ -55,7 +52,7 @@ fn register_vk(
         record: record.clone(),
     }
     .into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), instr).expect("register vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(instr)).expect("register vk");
     stx.apply();
 }
 fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
@@ -99,7 +96,7 @@ fn duplicate_circuit_version_registration_rejected() {
         record: rec_secondary,
     }
     .into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), instr)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(instr))
         .expect_err("duplicate circuit/version must be rejected");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
@@ -132,7 +129,7 @@ fn update_rotates_circuit_version_index() {
         record: rec_v2,
     }
     .into();
-    execute_isi_component(&mut stx, &ALICE_ID.clone(), update).expect("update vk");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), &(update)).expect("update vk");
     stx.apply();
     let map = block.world.verifying_keys_by_circuit();
     let key_old = (String::from(FULL), 1);
@@ -314,7 +311,7 @@ fn register_requires_circuit_and_schema_hash() {
         record: rec.clone(),
     }
     .into();
-    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), instr)
+    let err = execute_isi_component(&mut stx, &ALICE_ID.clone(), &(instr))
         .expect_err("empty circuit_id must be rejected");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -332,7 +329,7 @@ fn register_requires_circuit_and_schema_hash() {
     rec.public_inputs_schema_hash = [0u8; 32];
     let mut stx2 = block.transaction();
     let instr2: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-    let err2 = execute_isi_component(&mut stx2, &ALICE_ID.clone(), instr2)
+    let err2 = execute_isi_component(&mut stx2, &ALICE_ID.clone(), &(instr2))
         .expect_err("zero schema hash must be rejected");
     match err2 {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(

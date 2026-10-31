@@ -39,7 +39,6 @@ use iroha_data_model::{
     level::Level,
     nexus::{AxtRejectReason, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
-    peer::Peer,
     permission::Permission,
     soranet::privacy_metrics::{
         SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
@@ -62,6 +61,7 @@ use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
@@ -293,12 +293,12 @@ impl ReadinessNode {
                 records_dir: directory.path().join("records"),
                 installation_log: directory.path().join("keys/installation.log"),
                 bodies_dir: directory.path().join("bodies"),
-                local: Default::default(),
+                local: iroha_config::parameters::actual::SumeragiLocalOverrides::default(),
                 assert_fresh_key: true,
                 retired_keys: Vec::new(),
             },
             observer: Arc::new(NoObserver),
-            driver: Default::default(),
+            driver: iroha_core::sumeragi::driver::DriverConfig::default(),
         })
         .expect("production driver startup");
         let app_mut = Arc::get_mut(&mut app).expect("exclusive app fixture");
@@ -319,23 +319,26 @@ impl ReadinessNode {
         }
     }
 
-    async fn response(&self) -> AxResponse {
-        axum::Router::new()
-            .route("/readyz", axum::routing::get(handler_readyz))
-            .layer(axum::middleware::from_fn(capture_response_format))
-            .layer(axum::middleware::from_fn(coalesce_accept_headers))
-            .layer(axum::middleware::from_fn(enforce_typed_error_contract))
-            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
-            .with_state(Arc::clone(&self.app))
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/readyz")
-                    .header(axum::http::header::ACCEPT, "text/plain, application/json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("HTTP readiness response")
+    fn response(&self) -> impl std::future::Future<Output = AxResponse> + Send + use<> {
+        let app = Arc::clone(&self.app);
+        async move {
+            axum::Router::new()
+                .route("/readyz", axum::routing::get(handler_readyz))
+                .layer(axum::middleware::from_fn(capture_response_format))
+                .layer(axum::middleware::from_fn(coalesce_accept_headers))
+                .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+                .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+                .with_state(app)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/readyz")
+                        .header(axum::http::header::ACCEPT, "text/plain, application/json")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .expect("HTTP readiness response")
+        }
     }
 }
 
@@ -438,12 +441,12 @@ async fn readyz_tracks_live_consensus_without_gating_beacon_setup() {
 }
 
 pub fn mk_app_state_for_tests_with_iso_bridge(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), iso, None, None, None)
 }
 pub fn mk_app_state_for_tests_with_options(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -459,12 +462,36 @@ pub fn mk_app_state_for_tests_with_options(
 pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
 }
+/// Construct an app whose World will be authenticated by its original signed genesis.
+///
+/// Unlike ready admission fixtures, this entrypoint leaves ordinary crypto policy
+/// for genesis to author and rejects an already initialized policy.
+pub fn mk_app_state_for_tests_with_pre_genesis_world(world: World) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        AppFixtureWorld::PreGenesis(world),
+        None,
+        None,
+        None,
+        None,
+        (
+            "chain".parse().expect("test chain id"),
+            crate::signed_query_test_network_id(),
+        ),
+        None,
+    )
+}
+
+enum AppFixtureWorld {
+    Ready(World),
+    PreGenesis(World),
+}
+
 pub fn mk_app_state_for_tests_with_world_and_nexus(
     world: World,
     nexus: iroha_config::parameters::actual::Nexus,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        world,
+        AppFixtureWorld::Ready(world),
         None,
         None,
         None,
@@ -682,9 +709,7 @@ fn configure_nexus_fee_admission_for_test(
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 nexus
                     .fees
                     .clone()
@@ -696,7 +721,10 @@ fn configure_nexus_fee_admission_for_test(
     }
     state.set_nexus(nexus.clone()).expect("apply nexus config");
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 pub fn multiple_dataspace_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let secondary_dataspace = DataSpaceId::new(1);
@@ -871,11 +899,21 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     assert_eq!(state.chain_id_ref(), &chain_id);
     assert_eq!(state.network_id_ref(), &network_id);
     assert_eq!(
-        state.nexus_snapshot().fees.per_instruction_fee,
+        state
+            .world_view()
+            .parameters()
+            .root_fees()
+            .unwrap()
+            .per_instruction_fee,
         Quantity::zero()
     );
     assert_eq!(
-        state.nexus_snapshot().fees.per_gas_unit_fee,
+        state
+            .world_view()
+            .parameters()
+            .root_fees()
+            .unwrap()
+            .per_gas_unit_fee,
         Quantity::zero()
     );
     let view = state.view();
@@ -905,7 +943,7 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     drop(kura);
 
     let app = mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        World::default(),
+        AppFixtureWorld::Ready(World::default()),
         None,
         None,
         None,
@@ -937,15 +975,14 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     assert!(!pipeline.parallel_apply);
     assert!(!pipeline.ready_queue_heap);
     assert_eq!(pipeline.workers, 1);
-    let fees = app.state.nexus_snapshot().fees;
-    assert_eq!(
-        fees,
-        *app.state
-            .world_view()
-            .parameters()
-            .root_fees()
-            .expect("fixture committed root fee policy")
-    );
+    assert_eq!(app.state.nexus_snapshot().fees, nexus.fees);
+    let fees = app
+        .state
+        .world_view()
+        .parameters()
+        .root_fees()
+        .expect("fixture committed root fee policy")
+        .clone();
     assert_eq!(
         fees.per_instruction_fee,
         Quantity::zero(),
@@ -959,7 +996,10 @@ pub fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
     assert_initial_nexus_catalog_for_test(state, &nexus);
     let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_state
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
 }
 pub fn configure_private_ingress_routes_for_test(
     app: &mut SharedAppState,
@@ -1011,7 +1051,10 @@ pub fn configure_private_ingress_routes_for_test(
         ],
     );
     let state_view = app_mut.state.view();
-    app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_mut
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
     (restricted_lane, restricted_dataspace)
 }
 /// Execute the original local four-validator committee before decorating offline foreign routes.
@@ -1201,7 +1244,10 @@ pub fn configure_private_ingress_with_offline_foreign_route_for_test(
         ],
     );
     let state_view = app_mut.state.view();
-    app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+    app_mut
+        .queue
+        .reconfigure_nexus(&nexus, &state_view, None)
+        .expect("original State pool admits Queue privacy projection");
     drop(state_view);
     // The peer bindings activate at height one. A committed journal entry makes
     // the same authority height available to the immutable routing state view.
@@ -1273,9 +1319,11 @@ fn autoscale_fixture_declares_its_nominal_identity_and_core_frame_projection() {
     let header = norito::core::Header::read(bytes.as_slice()).unwrap();
     assert_eq!(header.schema, norito::core::schema_hash_for_name(frame));
 }
+type LaneManifestValidatorBinding<'a> = (AccountId, PeerId, Option<&'a str>);
+
 fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,
-    lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
+    lanes: &[(LaneId, Vec<LaneManifestValidatorBinding<'_>>)],
 ) {
     static MANIFEST_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
     let nexus = state.nexus_snapshot();
@@ -1295,8 +1343,10 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
             .lanes()
             .iter()
             .find(|lane| lane.id == *lane_id)
-            .map(|lane| lane.alias.clone())
-            .unwrap_or_else(|| format!("lane-{}", lane_id.as_u32()));
+            .map_or_else(
+                || format!("lane-{}", lane_id.as_u32()),
+                |lane| lane.alias.clone(),
+            );
         let validators_json = validator_bindings
             .iter()
             .map(|(validator, peer_id, torii_url)| {
@@ -1682,7 +1732,6 @@ fn roundtrip_request_for_test(
     )
     .expect("query request should decode deterministically")
 }
-#[cfg(feature = "app_api")]
 pub fn bind_account_alias_for_test(app: &SharedAppState, account_id: &AccountId, alias: &str) {
     let dataspace_catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
     let label =
@@ -1981,10 +2030,13 @@ fn signed_app_headers_for_network(
 ) -> HeaderMap {
     static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
         LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis() as u64;
+    let timestamp_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_millis(),
+    )
+    .expect("fixture timestamp fits u64");
     let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
     let message = crate::canonical_network_request_signature_message(
@@ -2116,7 +2168,7 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
 }
 fn mk_app_state_for_tests_with_world_and_options(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2133,7 +2185,7 @@ fn mk_app_state_for_tests_with_world_and_options(
 }
 fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2151,7 +2203,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2159,7 +2211,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     network_id: NetworkId,
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-        world,
+        AppFixtureWorld::Ready(world),
         iso,
         deploy_limit,
         norito_rpc,
@@ -2169,33 +2221,249 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     )
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-    mut world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    fixture_world: AppFixtureWorld,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
     (chain_id, network_id): (ChainId, NetworkId),
     intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
 ) -> SharedAppState {
+    mk_app_state_for_tests_with_native_scope(
+        fixture_world,
+        iso,
+        deploy_limit,
+        norito_rpc,
+        push,
+        (chain_id, network_id),
+        intended_nexus,
+        None,
+    )
+}
+
+/// Author the signed query for the exact network established by this fixture's genesis.
+pub(crate) fn authorize_native_query_for_fixture(
+    network: NetworkId,
+    request: iroha_data_model::query::QueryRequest,
+    authority: AccountId,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    static NEXT_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let creation_time_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .try_into()
+        .unwrap();
+    let mut nonce = [0_u8; 32];
+    nonce[24..].copy_from_slice(&NEXT_NONCE.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    request.with_authority(
+        network,
+        authority,
+        creation_time_ms,
+        NonZeroU64::new(100_000).unwrap(),
+        nonce,
+    )
+}
+pub(crate) fn signed_native_find_triggers_query_for_fixture(
+    network: NetworkId,
+    authority: AccountId,
+    key: &KeyPair,
+) -> iroha_data_model::query::SignedQuery {
+    authorize_native_query_for_fixture(
+        network,
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
+        authority,
+    )
+    .sign(key)
+}
+fn signed_native_find_active_trigger_ids_query_for_fixture(
+    network: NetworkId,
+    authority: AccountId,
+    key: &KeyPair,
+) -> iroha_data_model::query::SignedQuery {
+    authorize_native_query_for_fixture(network,
+        iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test()), authority).sign(key)
+}
+
+/// Native listener fixtures execute their own signed genesis before any network-bound
+/// AppState owner is constructed. The bare H0 fixture remains deliberately separate.
+pub fn mk_native_app_state_for_tests() -> SharedAppState {
+    mk_native_app_state_for_tests_with_world(World::default())
+}
+
+pub fn mk_native_app_state_for_tests_with_world(world: World) -> SharedAppState {
+    mk_native_app_state_for_tests_with_options_and_scope(
+        world,
+        None,
+        None,
+        None,
+        None,
+        None,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    )
+}
+
+pub fn mk_native_app_state_for_tests_with_world_and_nexus(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> SharedAppState {
+    mk_native_app_state_for_tests_with_options_and_scope(
+        world,
+        None,
+        None,
+        None,
+        None,
+        Some(nexus),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    )
+}
+
+pub fn mk_native_app_state_for_tests_with_options(
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+) -> SharedAppState {
+    mk_native_app_state_for_tests_with_options_and_scope(
+        World::default(),
+        iso,
+        deploy_limit,
+        norito_rpc,
+        push,
+        None,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    )
+}
+
+pub fn mk_native_app_state_for_tests_with_iso_bridge(
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+) -> SharedAppState {
+    mk_native_app_state_for_tests_with_options(iso, None, None, None)
+}
+
+fn mk_native_app_state_for_tests_with_options_and_scope(
+    world: World,
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+    nexus: Option<iroha_config::parameters::actual::Nexus>,
+    root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+) -> SharedAppState {
+    mk_app_state_for_tests_with_native_scope(
+        AppFixtureWorld::PreGenesis(world),
+        iso.as_ref(),
+        deploy_limit,
+        norito_rpc,
+        push,
+        (
+            "chain".parse().unwrap(),
+            crate::signed_query_test_network_id(),
+        ),
+        nexus,
+        Some(root_scope),
+    )
+}
+
+fn mk_app_state_for_tests_with_native_scope(
+    fixture_world: AppFixtureWorld,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+    (chain_id, network_id): (ChainId, NetworkId),
+    intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
+    native_scope: Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+) -> SharedAppState {
+    let (mut world, initialize_crypto_policy) = match fixture_world {
+        AppFixtureWorld::Ready(world) => (world, true),
+        AppFixtureWorld::PreGenesis(world) => (world, false),
+    };
     // These synthetic routing fixtures model a Global root unless their caller explicitly
     // supplied another root (or malformed metadata for a rejection test). An absent root
     // must never gain Global authority in production routing.
-    if !world
-        .view()
-        .parameters()
-        .custom()
-        .contains_key(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
+    if native_scope.is_none()
+        && !world.view().parameters().custom().contains_key(
+            &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
+        )
     {
         crate::test_utils::bind_fixture_root(
             &mut world,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
     }
+    // Ready fixtures model initialized ordinary admission. Original signed genesis
+    // fixtures must author their first ordinary crypto policy during genesis itself.
+    if initialize_crypto_policy {
+        crate::test_utils::author_ready_fixture_crypto_policy(&mut world);
+    } else {
+        assert!(
+            world.view().parameters().crypto_policy().is_none(),
+            "pre-genesis app fixture must receive an uninitialized ordinary crypto policy"
+        );
+    }
     // Minimal core state
     let _ = &push;
     let query_handle = LiveQueryStore::start_test();
-    let has_configured_catalog = intended_nexus.is_some();
-    let (state_inner, kura) = if let Some(nexus) = intended_nexus {
+    let has_configured_catalog = intended_nexus.is_some() || native_scope.is_some();
+    let (state, kura, native_validator) = if let Some(root_scope) = native_scope {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        let mut config = TestChainConfig::new(world, 1_000);
+        config.chain_id = chain_id.clone();
+        config.nexus = intended_nexus;
+        config.root_scope = root_scope;
+        if matches!(
+            root_scope,
+            iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { .. }
+        ) {
+            let fee_domain =
+                iroha_model_base::domain::DomainId::try_new("fees", "native-root-scope").unwrap();
+            config.genesis_instructions.extend([
+                iroha_data_model::isi::Register::domain(iroha_data_model::domain::Domain::new(
+                    fee_domain.clone(),
+                ))
+                .into(),
+                iroha_data_model::isi::Register::asset_definition(
+                    iroha_data_model::asset::AssetDefinition::numeric(
+                        iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                            .fee_asset_id,
+                        "Native root fixture fee",
+                        iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                        Some(fee_domain),
+                    ),
+                )
+                .into(),
+            ]);
+            config
+                .genesis_parameters
+                .push(iroha_data_model::parameter::Parameter::Custom(
+                    iroha_data_model::block::consensus::RootFeePolicy {
+                        base_fee: 1_u32.into(),
+                        per_gas_unit_fee: 1_u32.into(),
+                        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                    }
+                    .into_custom_parameter()
+                    .expect("positive private-root genesis fee policy"),
+                ));
+        }
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare original listener genesis");
+        let genesis_account = AccountId::new(prepared.genesis.public_key().clone());
+        iroha_core::sumeragi::startup::apply_genesis(
+            &prepared.state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            prepared.genesis.consensus_metadata().mode.into(),
+            None,
+        )
+        .expect("execute original listener genesis");
+        assert_eq!(prepared.state.authenticated_root_scope(), Some(root_scope));
+        (
+            prepared.state,
+            prepared.kura,
+            Some(prepared.validator_keys[0].clone()),
+        )
+    } else if let Some(nexus) = intended_nexus {
         let (mut state, kura) =
             IrohaState::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
                 world,
@@ -2209,7 +2477,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         state
             .set_nexus(nexus)
             .expect("apply fixture runtime Nexus settings");
-        (state, kura)
+        (Arc::new(state), kura, None)
     } else {
         let kura = Kura::blank_kura_for_testing();
         let state = IrohaState::new_with_chain_and_network_id_for_testing(
@@ -2219,10 +2487,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             chain_id.clone(),
             network_id,
         );
-        (state, kura)
+        (Arc::new(state), kura, None)
     };
-    {
-        let mut topo_block = state_inner.commit_topology.block();
+    if native_scope.is_none() {
+        let mut topo_block = state.commit_topology.block();
         topo_block.clear();
         let peer_keypair =
             checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
@@ -2230,21 +2498,25 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         topo_block.push(peer_id);
         topo_block.commit();
     }
-    let state = Arc::new(state_inner);
+    let network_id = *state.network_id_ref();
+    let query_handle = state.query_handle.clone();
     // Minimal queue/events
     let events: EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
     if has_configured_catalog {
         let state_view = state.view();
-        queue.reconfigure_nexus(&state.nexus_snapshot(), &state_view, None);
+        queue
+            .reconfigure_nexus(&state.nexus_snapshot(), &state_view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
     // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
     let cfg = crate::test_utils::mk_minimal_root_cfg();
     let kiso = KisoHandle::mock(&cfg);
-    let (_tx, rx) =
-        tokio::sync::watch::channel::<std::collections::HashSet<Peer>>(Default::default());
+    let (_tx, rx) = tokio::sync::watch::channel::<std::collections::HashSet<Peer>>(
+        std::collections::HashSet::default(),
+    );
     let peers = OnlinePeersProvider::new(rx);
     #[cfg(feature = "connect")]
     let connect_cfg = iroha_config::parameters::actual::Connect {
@@ -2308,7 +2580,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let sorafs_site_bindings = None;
     let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let iso_bridge = iso
-        .as_ref()
         .and_then(|cfg| {
             crate::iso20022_bridge::Iso20022BridgeRuntime::from_config(cfg)
                 .expect("iso bridge config for tests should be valid")
@@ -2354,8 +2625,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let operator_auth = Arc::new(
         operator_auth::OperatorAuth::new(
-            iroha_config::parameters::actual::ToriiOperatorAuth::default(),
-            defaults::torii::data_dir(),
+            &(iroha_config::parameters::actual::ToriiOperatorAuth::default()),
+            &(defaults::torii::data_dir()),
             telemetry.clone(),
         )
         .expect("operator auth defaults should be valid"),
@@ -2437,12 +2708,25 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         events,
         kura,
         chain_id: Arc::new(chain_id),
-        signed_query_admission: signed_query_test_admission(),
+        signed_query_admission: Arc::new(
+            routing::SignedQueryAdmission::new(
+                network_id,
+                Duration::from_secs(1),
+                Duration::from_secs(120),
+                NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("listener fixture query admission"),
+        ),
         transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         torii_proxy_max_response_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         query_fanout_working_set_bytes,
+        finality_working_set_bytes: usize::try_from(
+            defaults::torii::FINALITY_MAX_WORKING_SET_BYTES.get(),
+        )
+        .unwrap()
+        .min(query_memory.fanout_pool_bytes),
         query_ingress_envelope: query_memory.ingress,
         torii_proxy_http_ingress_envelope,
         torii_proxy_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -2451,6 +2735,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             query_memory.ingress_slots.get(),
         )),
         query_fanout_inflight,
+        app_routed_read_body_inflight: ByteWeightedMemoryPool::new(
+            query_memory.routed_read_body_pool_bytes,
+        )
+        .expect("default query memory geometry admits retained routed-read bodies"),
         sccp_history: std::sync::Mutex::new(
             iroha_core::smartcontracts::isi::sccp::read::SccpHistoryNodeCache::new(),
         ),
@@ -2461,6 +2749,9 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         app_routed_read_waiters: Arc::new(tokio::sync::Semaphore::new(
             defaults::torii::QUERY_MAX_INFLIGHT.get(),
         )),
+        auth_publication_waiters: auth_publication_waiters(
+            defaults::torii::QUERY_MAX_INFLIGHT.get(),
+        ),
         app_api_routed_read_body_read_timeout: Duration::from_millis(
             defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
         ),
@@ -2483,6 +2774,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         musubi_search: Arc::new(RwLock::new(
             iroha_core::musubi_search::MusubiSearchIndexV1::default(),
         )),
+        #[cfg(feature = "app_api")]
+        explorer_block_summaries: Arc::new(
+            crate::explorer_history::ExplorerBlockSummaryCache::new(
+                crate::explorer_history::EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY,
+            ),
+        ),
         bootle_lantern_issuance_runtime: None,
         #[cfg(feature = "app_api")]
         kagemusha_enrollment: None,
@@ -2574,15 +2871,17 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         da_receipt_log,
         da_replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
         da_receipt_signer,
-        torii_proxy_bridge_signer: checked_torii_test_ed25519_keypair(
-            0xb5,
-            "derive Torii proxy bridge fixture signer",
-        ),
+        torii_proxy_bridge_signer: native_validator.clone().unwrap_or_else(|| {
+            checked_torii_test_ed25519_keypair(0xb5, "derive Torii proxy bridge fixture signer")
+        }),
         vpn_operator_signer: None,
+        runtime_attestation_signer: None,
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
-        recipient_lookup: Arc::new(Default::default()),
+        recipient_lookup: Arc::new(
+            iroha_config::parameters::actual::ToriiRecipientLookup::default(),
+        ),
         #[cfg(feature = "app_api")]
         recipient_lookup_rate_limiter: limits::RateLimiter::new_per_minute(
             Some(defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE),
@@ -2697,12 +2996,11 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         sumeragi: None,
         #[cfg(any(feature = "app_api", feature = "connect"))]
         p2p: None,
-        local_peer_id: None,
+        local_peer_id: native_validator
+            .as_ref()
+            .map(|key| PeerId::new(key.public_key().clone())),
         #[cfg(feature = "connect")]
-        connect_bus: crate::connect::Bus::from_config(
-            &connect_cfg,
-            crate::signed_query_test_network_id(),
-        ),
+        connect_bus: crate::connect::Bus::from_config(&connect_cfg, network_id),
         #[cfg(feature = "connect")]
         connect_enabled: connect_cfg.enabled,
         #[cfg(feature = "push")]
@@ -2717,7 +3015,7 @@ pub async fn mk_norito_rpc_test_harness(cfg: NoritoRpcTransport) -> SharedAppSta
 }
 #[tokio::test]
 async fn runtime_handlers_ok_without_token_and_rate_limit() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // Active ABI version
     let resp = super::handler_runtime_abi_active(
@@ -2756,9 +3054,9 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn explorer_transaction_detail_not_found_returns_json_response() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
-    let missing_hash = "00".repeat(32);
+    let missing_hash = Hash::new(b"uncommitted explorer detail fixture").to_string();
     let uri: axum::http::Uri = format!("/v1/explorer/transactions/{missing_hash}")
         .parse()
         .expect("valid Explorer transaction URI");
@@ -2782,9 +3080,9 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn explorer_instruction_detail_not_found_returns_json_response() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
-    let missing_hash = "00".repeat(32);
+    let missing_hash = Hash::new(b"uncommitted explorer detail fixture").to_string();
     let uri: axum::http::Uri = format!("/v1/explorer/instructions/{missing_hash}/0")
         .parse()
         .expect("valid Explorer instruction URI");
@@ -2808,7 +3106,7 @@ async fn explorer_instruction_detail_not_found_returns_json_response() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn debug_witness_returns_json_body() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let accept = Some(crate::utils::extractors::ExtractAccept(
         HeaderValue::from_static("application/json"),
@@ -2836,7 +3134,7 @@ async fn debug_witness_requires_a_developer_telemetry_profile() {
         (TelemetryProfile::Developer, StatusCode::OK),
         (TelemetryProfile::Full, StatusCode::OK),
     ] {
-        let app = mk_app_state_for_tests();
+        let app = mk_native_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
             .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
         inner.telemetry = inner.telemetry.with_profile(profile);
@@ -2877,7 +3175,7 @@ async fn debug_witness_operator_and_telemetry_profile_matrix() {
         (TelemetryProfile::Developer, StatusCode::OK),
         (TelemetryProfile::Full, StatusCode::OK),
     ] {
-        let app = mk_app_state_for_tests();
+        let app = mk_native_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
             .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
         inner.telemetry = inner.telemetry.with_profile(profile);
@@ -2968,6 +3266,8 @@ async fn debug_witness_operator_and_telemetry_profile_matrix() {
 
 #[tokio::test]
 async fn torii_tx_rate_uses_config_and_queue_default() {
+    // Retain exclusive directory ownership through configuration and Torii teardown.
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
     let mut cfg = crate::test_utils::mk_minimal_root_cfg();
     cfg.torii.tx_rate_per_authority_per_sec = Some(NonZeroU32::new(123).expect("nonzero tx rate"));
     cfg.torii.tx_burst_per_authority = Some(NonZeroU32::new(456).expect("nonzero tx burst"));
@@ -2992,6 +3292,7 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("tx-rate-test"),
         signed_query_test_network_id(),
@@ -3005,9 +3306,12 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3030,6 +3334,8 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_ram_lfe_uses_config_runtime() {
+    // Retain exclusive directory ownership through configuration and Torii teardown.
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
     let mut cfg = crate::test_utils::mk_minimal_root_cfg();
     let signer =
         checked_torii_test_ed25519_keypair(0x9f, "derive Torii RAM-LFE config signer fixture key");
@@ -3063,6 +3369,7 @@ async fn torii_ram_lfe_uses_config_runtime() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("identifier-resolver-config-test"),
         signed_query_test_network_id(),
@@ -3076,9 +3383,12 @@ async fn torii_ram_lfe_uses_config_runtime() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3305,7 +3615,7 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
 
 #[tokio::test]
 async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -3608,6 +3918,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let _torii = Torii::new_with_handle(
         ChainId::from("alias-route-registration-test"),
         signed_query_test_network_id(),
@@ -3621,9 +3932,12 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");

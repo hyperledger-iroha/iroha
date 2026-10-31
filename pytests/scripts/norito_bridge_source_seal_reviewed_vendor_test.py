@@ -17,13 +17,13 @@ SPEC.loader.exec_module(seal)
 REVIEWED_VENDOR_FILES = (
     "vendor/concread/.codespell_ignore",
     "vendor/concread/Cargo.toml.orig",
-    "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/axum-core/Cargo.toml.orig",
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",
+    "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy",
 )
 ROLE_EXAMPLES = REVIEWED_VENDOR_FILES
 
@@ -33,6 +33,8 @@ def public_original(relative: str) -> bytes:
         return b'[package]\nname = "public-synthetic-source"\nversion = "0.0.0"\n'
     if relative.endswith(".codespell_ignore"):
         return b"crate\nser\n"
+    if relative.endswith(".xcprivacy"):
+        return b'<?xml version="1.0"?><plist version="1.0"><dict/></plist>\n'
     # Public patterned bytes exercise binary preservation; these are not curve
     # attestations or key material and confer no cryptographic qualification.
     return bytes(range(256)) * 3 + b"PUBLIC SYNTHETIC VECTOR\x00\xff\n"
@@ -122,6 +124,7 @@ def test_reviewed_vendor_fingerprint_preserves_names_original_bytes_and_lock_dom
 
 
 @pytest.mark.parametrize("relative", [
+    "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
     "vendor/example/Cargo.toml.orig",
     "vendor/aes/Cargo.toml.orig",
     "vendor/aes/tests/data/aes512.blb",
@@ -147,6 +150,9 @@ def test_reviewed_vendor_fingerprint_preserves_names_original_bytes_and_lock_dom
     "vendor/concread/public-sentinel.der",
     "vendor/concread/public-sentinel.pem",
     "vendor/concread/credentials.orig",
+    "vendor/boringssl-swiftpm/Other.xcprivacy",
+    "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy.backup",
+    "vendor/another/PrivacyInfo.xcprivacy",
 ])
 def test_neighbor_or_material_role_is_refused_before_any_open(tmp_path: Path, relative: str) -> None:
     root = tmp_path.resolve()

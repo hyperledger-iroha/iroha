@@ -12,16 +12,21 @@ use iroha_deploy::managed::{
 pub use iroha_deploy::managed::{
     ManagedAttachmentFailure, ManagedAttachmentPhase, ManagedAttachmentStatus,
     ManagedConfirmedAnchor, ManagedContext, ManagedDataspaceStatus, ManagedDeploymentReport,
-    ManagedPhase, ManagedStatus, PreparedLocalnet,
+    ManagedPhase, ManagedStatus, ManagedValidatorState, ManagedValidatorStatus, PreparedLocalnet,
 };
-pub use musubi::deployment_runtime::ContractInput;
 use musubi::deployment_runtime::{AliasSelection, DeploymentRuntime};
+pub use musubi::deployment_runtime::{ContractInput, SavedDeployment};
 pub use musubi::generated_publication::{GeneratedPublishAction, GeneratedPublishOutcome};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
+
+/// Execution gas for desktop views and calls: Kagami's default budget.
+const CONTRACT_GAS_LIMIT: u64 = 1_500_000;
+/// How long a desktop call may sign new work: Kagami's default `--timeout`.
+const CALL_SIGNING_WINDOW_MS: u64 = 60_000;
 
 /// An immutable workspace choice for desktop background actions.
 ///
@@ -429,6 +434,106 @@ impl DeveloperWorkspace {
         }))
     }
 
+    /// List the deployment journals Resume can recover in a captured network, by alias.
+    ///
+    /// # Errors
+    /// Unsafe journal custody, a deployment still running, or a retained plan the generated
+    /// authority cannot authenticate.
+    pub fn saved_deployments(&self, network: &ManagedNetwork) -> Result<Vec<SavedDeployment>> {
+        self.deployment_runtime(network).saved_deployments()
+    }
+
+    /// Read a contract view in the captured network, through the same service as `kagami
+    /// contract view`. Views change nothing and pay no fee.
+    ///
+    /// # Errors
+    /// Invalid alias or request, no completed deployment under the alias, a replaced
+    /// generation, or a failed read.
+    pub fn view_contract(
+        &self,
+        network: &ManagedNetwork,
+        alias: &str,
+        entrypoint: &str,
+        arguments: &str,
+    ) -> Result<iroha_deploy::managed::ManagedContractView> {
+        self.validate_action_network(network)?;
+        let alias: ContractAlias = alias.trim().parse()?;
+        let request = iroha_deploy::managed::ManagedContractViewRequest::parse(
+            entrypoint.trim().to_owned(),
+            arguments,
+            CONTRACT_GAS_LIMIT,
+        )?;
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            network.address_discriminant(),
+        );
+        let deployed = self
+            .deployment_runtime(network)
+            .current_deployment(&alias)?;
+        let view = ManagedStore::open(&self.root)?.view_contract(
+            &network.prepared.context,
+            &deployed.contract,
+            request,
+        )?;
+        network.validate()?;
+        Ok(view)
+    }
+
+    /// Make one bounded mutable call in the captured network, through the same durable service
+    /// as `kagami contract call`; `max_fee` caps every charge in the generated fee asset.
+    ///
+    /// Run this blocking action on the desktop executor. The report names its recovery
+    /// journal; an uncertain outcome is resumed from that journal, never re-signed.
+    ///
+    /// # Errors
+    /// Invalid alias or request, a non-positive fee cap, pending earlier work on the same
+    /// contract, a replaced generation, or a native failure.
+    pub fn call_contract(
+        &self,
+        network: &ManagedNetwork,
+        alias: &str,
+        entrypoint: &str,
+        arguments: &str,
+        max_fee: &str,
+    ) -> Result<iroha_deploy::managed::ManagedContractCallReport> {
+        self.validate_action_network(network)?;
+        let alias: ContractAlias = alias.trim().parse()?;
+        let request = iroha_deploy::managed::ManagedContractViewRequest::parse(
+            entrypoint.trim().to_owned(),
+            arguments,
+            CONTRACT_GAS_LIMIT,
+        )?;
+        let max_fee: iroha_primitives::numeric::Quantity = max_fee
+            .trim()
+            .parse()
+            .map_err(|_| color_eyre::eyre::eyre!("maximum fee must be a positive number"))?;
+        ensure!(!max_fee.is_zero(), "maximum fee must be positive");
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            network.address_discriminant(),
+        );
+        let deployed = self
+            .deployment_runtime(network)
+            .current_deployment(&alias)?;
+        let now = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?;
+        let report = ManagedStore::open(&self.root)?.call_contract(
+            &network.prepared.context,
+            &deployed.contract,
+            &request.entrypoint,
+            request.arguments,
+            iroha_deploy::managed::ManagedContractCallOptions {
+                max_fee,
+                signing_deadline_unix_ms: now.saturating_add(CALL_SIGNING_WINDOW_MS),
+                gas_limit: request.gas_limit,
+                prepare_only: false,
+                readback: None,
+            },
+        )?;
+        Ok(report)
+    }
+
     fn validate_action_network(&self, network: &ManagedNetwork) -> Result<()> {
         ensure!(
             network.root == self.root,
@@ -579,6 +684,34 @@ impl ManagedNetwork {
     /// Invalid index, replaced generation or an invalid SDK authority.
     pub fn ledger_reader(&self, peer: usize) -> Result<iroha::client::AccountClient> {
         self.validate()?;
+        self.account_client(peer)
+    }
+
+    /// Each validator's newest block, read concurrently from its own Torii as the generated
+    /// account, so the validators' chains can be compared.
+    ///
+    /// A validator that fails or does not answer within `timeout` yields its own error in
+    /// place; the other validators' blocks are still returned.
+    ///
+    /// # Errors
+    /// Replaced generation or an invalid SDK authority.
+    pub async fn block_tips(
+        &self,
+        timeout: Duration,
+    ) -> Result<Vec<std::result::Result<Option<crate::state::BlockTip>, crate::StateQueryError>>>
+    {
+        self.validate()?;
+        let readers = (0..self.prepared.peers.len())
+            .map(|peer| self.account_client(peer))
+            .collect::<Result<Vec<_>>>()?;
+        let tips = crate::state::newest_blocks(&readers, timeout).await;
+        // Blocks read while the generation was replaced belong to no displayed network.
+        self.validate()?;
+        Ok(tips)
+    }
+
+    /// The generated account's client at `peer`; callers validate the generation first.
+    fn account_client(&self, peer: usize) -> Result<iroha::client::AccountClient> {
         let endpoint = &self
             .prepared
             .peers
@@ -592,32 +725,160 @@ impl ManagedNetwork {
             .account_client()?)
     }
 
-    /// Compose one exact transaction using this generation's authority and lineage.
+    /// Compose one exact transaction at `peer`, signed with the fee limits that peer quotes.
+    ///
+    /// Admission rejects any charged transaction whose signed intent lacks a limit for each
+    /// fee component, so the payload is prepared, quoted and only then signed. The preview
+    /// carries the quoted maxima for review; nothing is submitted here.
     ///
     /// # Errors
-    /// Stale generation or drafts rejected by the canonical composer.
-    pub fn preview(&self, drafts: &[crate::InstructionDraft]) -> Result<crate::TransactionPreview> {
+    /// Stale generation, drafts rejected by the canonical composer, or a fee quote that is
+    /// unavailable or changes the payer or gas bound.
+    pub async fn preview(
+        &self,
+        peer: usize,
+        drafts: &[crate::InstructionDraft],
+    ) -> Result<crate::TransactionPreview> {
         self.validate()?;
+        ensure!(!drafts.is_empty(), crate::ComposeError::EmptyInstructions);
+        let instructions = self.draft_instructions(drafts)?;
+        let (signed, components) = self.sign_quoted(peer, instructions).await?;
         let _address_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
             self.address_discriminant(),
         );
-        Ok(crate::compose_preview_with_options(
-            self.config.network_id,
+        Ok(crate::TransactionPreview::quoted(
+            signed,
             drafts,
-            &self.signer(),
-            &crate::TransactionComposeOptions::default().with_ttl(Duration::from_secs(300)),
-        )?)
+            &components,
+        ))
+    }
+
+    /// Compose one transaction creating a token the generated account owns, quoted and signed
+    /// at `peer` like [`Self::preview`].
+    ///
+    /// The token lives in `<label>.universal`. Unless the account already holds that domain,
+    /// the transaction first leases it for one year at the name service's exact quote, paid
+    /// in the quoted asset; it then registers `name` there and mints `supply` to the account.
+    /// Owning the definition is what lets the account mint more later. Nothing is submitted.
+    ///
+    /// # Errors
+    /// Stale generation, invalid input, a domain held by another account, an unavailable
+    /// name-service plan or a fee quote as for [`Self::preview`].
+    pub async fn preview_token(
+        &self,
+        peer: usize,
+        name: &str,
+        label: &str,
+        supply: &str,
+    ) -> Result<crate::TransactionPreview> {
+        self.validate()?;
+        let token = crate::TokenDraft::new(name, label, supply, &self.config.account)?;
+        let client = self.sdk_client(peer)?;
+        let policy = self
+            .observer(peer)?
+            .fetch_sns_policy(iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID)
+            .await
+            .map_err(|error| {
+                color_eyre::eyre::eyre!("the name service has no domain policy: {error}")
+            })?;
+        let (lease_instructions, lease) =
+            plan_domain_lease(&client, &policy, &token.domain, &self.config.account).await?;
+        let mut instructions = lease_instructions;
+        instructions.extend(self.draft_instructions(&token.drafts)?);
+        let (signed, components) = self.sign_quoted(peer, instructions).await?;
+        let _address_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.address_discriminant(),
+        );
+        let preview = crate::TransactionPreview::quoted(signed, &token.drafts, &components);
+        Ok(match lease {
+            Some(lease) => preview.with_lease(lease),
+            None => preview,
+        })
+    }
+
+    /// The exact instructions of `drafts`, which the generated signer must be allowed to sign.
+    fn draft_instructions(
+        &self,
+        drafts: &[crate::InstructionDraft],
+    ) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+        let _address_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.address_discriminant(),
+        );
+        self.signer().validate_drafts(drafts)?;
+        Ok(drafts
+            .iter()
+            .map(crate::InstructionDraft::instruction)
+            .collect())
+    }
+
+    /// The generated account's full SDK client at `peer`, for name-service planning.
+    fn sdk_client(&self, peer: usize) -> Result<iroha::client::Client> {
+        let endpoint = &self
+            .prepared
+            .peers
+            .get(peer)
+            .ok_or_else(|| color_eyre::eyre::eyre!("unknown validator index"))?
+            .torii_url;
+        let mut config = self.config.clone();
+        config.torii_api_url = endpoint.parse()?;
+        Ok(iroha::client::Client::builder(config).build()?)
+    }
+
+    /// Prepare `instructions` at `peer`, ask that validator for a fee quote and sign the quoted
+    /// limits; returns the signed transaction with the quote's components.
+    async fn sign_quoted(
+        &self,
+        peer: usize,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> Result<(
+        iroha_data_model::transaction::SignedTransaction,
+        Vec<iroha_torii_shared::FeeQuoteComponent>,
+    )> {
+        use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
+        use iroha_data_model::transaction::FeePaymentIntent;
+        use iroha_model_base::metadata::Metadata;
+
+        let account = self.ledger_reader(peer)?;
+        let mut payload = account.prepare_transaction(
+            AccountTransactionDraft::new(
+                instructions,
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .with_time_to_live(Duration::from_secs(300)),
+        )?;
+        let quote = account
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "validator {} could not quote fees for this transaction: {error}",
+                    peer + 1
+                )
+            })?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "the fee quote changed the payer or gas bound; nothing was signed"
+        );
+        payload.fee_payment = quote.intent;
+        Ok((account.sign_transaction(payload)?, quote.components))
     }
 
     /// Submit a reviewed transaction once, then observe its original hash until the deadline.
     ///
+    /// Rejection and expiry are settled outcomes, not errors: nothing in the transaction
+    /// applied and its hash can never apply later.
+    ///
     /// # Errors
-    /// Wrong generation/authority, rejection or uncertain finality. An error never rebuilds it.
+    /// Wrong generation/authority, or an outcome that remains uncertain at the deadline. An
+    /// error never rebuilds the transaction.
     pub async fn submit(
         &self,
         peer: usize,
         preview: &crate::TransactionPreview,
-    ) -> Result<crate::SmokeCommitSnapshot> {
+    ) -> Result<SubmissionOutcome> {
         ensure!(
             preview.signed_transaction().network_id() == Some(&self.config.network_id),
             "transaction belongs to another network"
@@ -628,19 +889,183 @@ impl ManagedNetwork {
         );
         let client = self.observer(peer)?;
         let reader = self.ledger_reader(peer)?;
-        Ok(client
+        let committed = client
             .submit_and_wait_for_commit(
                 &reader,
                 preview.signed_transaction(),
                 crate::SmokeCommitOptions::new(Duration::from_secs(30)),
             )
-            .await?)
+            .await;
+        Ok(SubmissionOutcome::settle(committed)?)
+    }
+}
+
+/// Most a token's one-year domain lease may cost; the exact quote is reviewed before signing.
+const DOMAIN_LEASE_CAP: u32 = 100;
+/// How long a planned lease quote stays usable: the signed transaction's own lifetime.
+const LEASE_QUOTE_LIFETIME: Duration = Duration::from_secs(300);
+
+/// Plan the name-service lease that gives `owner` the domain `domain` for one year under the
+/// domain namespace's `policy`.
+///
+/// Returns the verified planner instructions, empty when `owner` already holds the domain,
+/// and the lease they take out.
+async fn plan_domain_lease(
+    client: &iroha::client::Client,
+    policy: &iroha_data_model::sns::SuffixPolicyV1,
+    domain: &iroha_model_base::domain::DomainId,
+    owner: &iroha_data_model::account::AccountId,
+) -> Result<(
+    Vec<iroha_data_model::isi::InstructionBox>,
+    Option<crate::DomainLease>,
+)> {
+    use color_eyre::eyre::eyre;
+    use iroha_data_model::{
+        alias_setup::{
+            AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanDispositionV1,
+            AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
+        },
+        asset::id::AssetDefinitionId,
+        isi::alias_setup::EnsureAlias,
+    };
+
+    let payment_asset = AssetDefinitionId::parse_address_literal(&policy.payment_asset_id)?;
+    let valid_until_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .saturating_add(LEASE_QUOTE_LIFETIME)
+        .as_millis();
+    let request = AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
+        AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(
+                domain.clone(),
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+            owner: owner.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: policy.policy_version,
+            expected_payment_asset: payment_asset.clone(),
+            max_amount: DOMAIN_LEASE_CAP.into(),
+            valid_until_ms: u64::try_from(valid_until_ms)?,
+        },
+    )]);
+    let plan = client
+        .plan_alias_setup(&request)
+        .await
+        .map_err(|error| eyre!("{domain} cannot be leased: {error}"))?;
+    if let Some(blocker) = plan.body.blockers.first() {
+        color_eyre::eyre::bail!("{domain} cannot be leased: {}", blocker.remediation);
+    }
+    let resource = plan
+        .body
+        .resources
+        .first()
+        .ok_or_else(|| eyre!("the name service planned nothing for {domain}"))?;
+    let lease = match resource.disposition {
+        AliasPlanDispositionV1::NoOp => None,
+        AliasPlanDispositionV1::Repair => Some(crate::DomainLease {
+            domain: domain.to_string(),
+            years: 1,
+            amount: None,
+            asset_definition: payment_asset.to_string(),
+        }),
+        AliasPlanDispositionV1::Create => {
+            let quote = resource
+                .quote
+                .as_ref()
+                .ok_or_else(|| eyre!("the name service did not quote a lease for {domain}"))?;
+            Some(crate::DomainLease {
+                domain: domain.to_string(),
+                years: 1,
+                amount: Some(quote.exact_amount.to_string()),
+                asset_definition: quote.guard.expected_payment_asset.to_string(),
+            })
+        }
+        AliasPlanDispositionV1::Conflict => color_eyre::eyre::bail!(
+            "{domain} belongs to another account; choose another domain for the token"
+        ),
+    };
+    let instructions = client.verify_alias_setup_plan_for_request(&request, &plan)?;
+    Ok((instructions, lease))
+}
+
+/// How the network settled one reviewed transaction after its single submission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmissionOutcome {
+    /// Committed and applied in the block at this height.
+    Applied {
+        /// Height of the block that applied it.
+        block_height: u64,
+    },
+    /// Committed as rejected: none of its instructions applied.
+    Rejected {
+        /// The validators' reason, such as `Validation failed: Operation is not permitted: …`.
+        reason: String,
+    },
+    /// Expired before any block included it; nothing applied.
+    Expired,
+}
+
+impl SubmissionOutcome {
+    /// Classify an observed commit wait; only uncertain or failed observations stay errors.
+    fn settle(
+        committed: crate::ToriiResult<crate::SmokeCommitSnapshot>,
+    ) -> crate::ToriiResult<Self> {
+        match committed {
+            Ok(commit) => Ok(Self::Applied {
+                block_height: commit.block_height,
+            }),
+            Err(crate::ToriiError::SmokeRejected { reason, .. }) => Ok(Self::Rejected { reason }),
+            Err(crate::ToriiError::SmokeExpired { .. }) => Ok(Self::Expired),
+            Err(error) => Err(error),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submissions_settle_as_applied_rejected_or_expired_and_stay_errors_only_when_uncertain() {
+        let hash = "ab".repeat(32);
+        let commit = crate::SmokeCommitSnapshot {
+            tx_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"reviewed",
+            )),
+            block_height: 5,
+            elapsed: Duration::from_millis(40),
+        };
+        assert_eq!(
+            SubmissionOutcome::settle(Ok(commit)).unwrap(),
+            SubmissionOutcome::Applied { block_height: 5 }
+        );
+        assert_eq!(
+            SubmissionOutcome::settle(Err(crate::ToriiError::SmokeRejected {
+                hash: hash.clone(),
+                reason: "Validation failed: Operation is not permitted: no".into(),
+            }))
+            .unwrap(),
+            SubmissionOutcome::Rejected {
+                reason: "Validation failed: Operation is not permitted: no".into()
+            }
+        );
+        assert_eq!(
+            SubmissionOutcome::settle(Err(crate::ToriiError::SmokeExpired { hash: hash.clone() }))
+                .unwrap(),
+            SubmissionOutcome::Expired
+        );
+        let uncertain =
+            SubmissionOutcome::settle(Err(crate::ToriiError::SmokeAdmissionOutcomeUnknown {
+                hash,
+            }))
+            .unwrap_err();
+        assert!(matches!(
+            uncertain,
+            crate::ToriiError::SmokeAdmissionOutcomeUnknown { .. }
+        ));
+    }
 
     #[test]
     fn desktop_publication_refuses_invalid_input_and_missing_recovery_selection_without_workers() {
@@ -761,7 +1186,7 @@ mod tests {
         .unwrap();
         let alias = "desktop-private";
         let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
-        let spec = iroha_deploy::localnet::PrivateRootSpec {
+        let spec = iroha_deploy::sora_network::PrivateRootSpec {
             parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
                 iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
                     b"desktop parent",
@@ -774,12 +1199,17 @@ mod tests {
         let request = desktop
             .runtime
             .private_root_request("private", Duration::from_secs(120));
+        let failure = store.up_private_root(&request, &spec).unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(request.startup_timeout)
+        );
         assert!(
             matches!(
-                store.up_private_root(&request, &spec),
-                Err(iroha_deploy::managed::Error::Timeout(timeout)) if timeout == request.startup_timeout
+                &failure,
+                iroha_deploy::managed::Error::Invalid(message) if message == &expected
             ),
-            "genuine CLI preparation reaches the original-budget worker-start failure"
+            "genuine CLI preparation must retain the owned worker's listener handoff failure: {failure}"
         );
         let prepared = store.prepared("private").unwrap();
         let owner = prepared.context.load_client_config().unwrap();
@@ -787,12 +1217,16 @@ mod tests {
         assert_create_refuses_retained_context(&desktop, "private");
         let captured = desktop.network(Some("private")).unwrap();
         let failure = desktop.start(&captured).unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(Duration::from_secs(30))
+        );
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
+                Some(iroha_deploy::managed::Error::Invalid(message)) if message == &expected
             ),
-            "desktop restart must reach the original-budget worker-start failure with the same private root: {failure}"
+            "desktop restart must retain the listener handoff failure with the same private root: {failure}"
         );
         assert_eq!(store.prepared("private").unwrap(), prepared);
         let restarted = store
@@ -852,11 +1286,9 @@ mod tests {
         let profiles = iroha_deploy::bootstrap::InstalledNetworkProfiles::new(vec![
             iroha_deploy::bootstrap::InstalledNetworkProfile::new(
                 "fixture".into(),
-                iroha_crypto::KeyPair::from_seed(vec![231; 32], iroha_crypto::Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
-                1,
-                "https://checkpoint.example/release.nrt",
+                "https://network.example/",
+                "fixture-chain".into(),
+                369,
             )
             .unwrap(),
         ])
@@ -917,7 +1349,7 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
         // The native harness does not implement Kagami's worker entry point. Canonical
-        // preparation is real; the original budget expires after that worker exits.
+        // preparation is real; listener handoff detects its exit before adoption.
         for program in ["kagami", "iroha3d"] {
             std::fs::copy(
                 std::env::current_exe().unwrap(),
@@ -932,17 +1364,23 @@ mod tests {
         )
         .unwrap();
         let failure = desktop.create_localnet("fixture").unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(Duration::from_secs(30))
+        );
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
+                Some(iroha_deploy::managed::Error::Invalid(message)) if message == &expected
             ),
-            "genuine generation must reach the original-budget worker-start failure: {failure}"
+            "genuine generation must retain the owned worker's listener handoff failure: {failure}"
         );
         let context = desktop.select("fixture").unwrap();
         assert_create_refuses_retained_context(&desktop, "fixture");
         let network = desktop.network(None).unwrap();
         assert_eq!(network.prepared().peers.len(), 4);
+        // Nothing was deployed, so Resume has nothing to offer.
+        assert!(desktop.saved_deployments(&network).unwrap().is_empty());
         // The selected identity must survive the second metadata read, before credentials
         // or an observation object can be acquired from a replacement generation.
         for field in ["network", "account", "endpoint", "dataspace"] {
@@ -1014,7 +1452,26 @@ mod tests {
             &iroha_test_samples::BOB_ID.to_string(),
         )
         .unwrap();
-        let preview = network.preview(&[draft]).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // No validator runs here to quote fees: the preview refuses rather than signing a
+        // charged transaction without limits, which admission would reject.
+        let refused = runtime
+            .block_on(network.preview(0, std::slice::from_ref(&draft)))
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("could not quote fees"),
+            "{refused}"
+        );
+        let preview = crate::compose_preview_with_options(
+            network.config.network_id,
+            &[draft],
+            &network.signer(),
+            &crate::TransactionComposeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             preview.signed_transaction().authority(),
             network.signer().account_id()
@@ -1027,10 +1484,6 @@ mod tests {
                 .to_string(),
             context.network_id
         );
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let wrong_authority = crate::compose_preview_with_options(
             network.config.network_id,
             &[crate::InstructionDraft::register_account_from_input(
@@ -1141,7 +1594,14 @@ mod tests {
         assert!(network.validate().is_err());
         assert!(network.observer(0).is_err());
         assert!(network.ledger_reader(0).is_err());
-        assert!(network.preview(&[]).is_err());
+        assert!(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(network.preview(0, &[]))
+                .is_err()
+        );
         // Removal after capture refuses all three real action entrances. None may restart a
         // replacement generation or create a missing journal on a different authority.
         assert!(

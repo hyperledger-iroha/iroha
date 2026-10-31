@@ -88,7 +88,6 @@ type Result<T> = std::result::Result<T, AttachmentError>;
 #[norito_schema(name = "iroha_deploy::attachment::AttachmentIdentityV1")]
 pub struct AttachmentIdentity {
     parent_name: String,
-    parent_generation: u64,
     parent_network_id: NetworkId,
     parent_chain_id: String,
     alias: String,
@@ -110,10 +109,9 @@ impl AttachmentIdentity {
         ownership_generation: u64,
         registration: PrivateDataspaceRegistration,
     ) -> Result<Self> {
-        let release = parent.release();
+        let release = parent.metadata();
         let result = Self {
             parent_name: release.network_name.clone(),
-            parent_generation: release.generation,
             parent_network_id: release.network_id,
             parent_chain_id: release.chain_id.clone(),
             alias,
@@ -137,7 +135,6 @@ impl AttachmentIdentity {
             || selector.normalized_label() != self.alias
             || self.registration.scope != scope
             || self.ownership_generation == 0
-            || self.parent_generation == 0
             || self.parent_chain_id.is_empty()
             || self.parent_name.is_empty()
         {
@@ -375,9 +372,7 @@ impl AttachmentStore {
         proof: PrivateDataspaceRecordProof,
         parent: &ParentFinalityStore,
     ) -> Result<ConfirmedAnchor> {
-        if parent.network_name() != self.record.identity.parent_name
-            || parent.generation() != self.record.identity.parent_generation
-        {
+        if parent.network_name() != self.record.identity.parent_name {
             return Err(AttachmentError::Invalid(
                 "parent reset generation differs from attachment",
             ));

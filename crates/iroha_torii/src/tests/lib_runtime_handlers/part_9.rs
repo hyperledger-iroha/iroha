@@ -298,7 +298,7 @@ async fn solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429() {
 }
 #[tokio::test]
 async fn openapi_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -780,7 +780,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                     staker: validator_account_id.clone(),
                     bonded: Quantity::from(1_u64),
                     pending_unbonds: BTreeMap::new(),
-                    metadata: Default::default(),
+                    metadata: iroha_model_base::metadata::Metadata::default(),
                 },
             );
             stake_tx.apply();
@@ -989,7 +989,7 @@ async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() 
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn proof_rate_limit_sets_retry_after_header() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -1063,7 +1063,7 @@ async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() 
 #[cfg(feature = "profiling")]
 #[tokio::test]
 async fn profiling_enforces_token_policy() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1100,7 +1100,7 @@ async fn profiling_enforces_token_policy() {
 #[cfg(feature = "schema")]
 #[tokio::test]
 async fn schema_handler_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let resp = super::handler_schema(
         State(app),
@@ -1115,7 +1115,7 @@ async fn schema_handler_ok() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_handlers_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // Status root
     let resp = super::handler_status_root(
@@ -1225,7 +1225,7 @@ async fn telemetry_handlers_ok() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn telemetry_params_and_bls_keys_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     let resp = super::handler_sumeragi_params(
         State(app.clone()),
@@ -1246,7 +1246,7 @@ async fn telemetry_params_and_bls_keys_ok() {
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn app_api_vk_and_proofs_lists_ok() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
     // List VKs
     let resp = super::handler_list_vk(
@@ -1423,13 +1423,20 @@ struct RuntimeApiRouterFixture {
     _data_dir: tempfile::TempDir,
 }
 impl RuntimeApiRouterFixture {
+    fn native_state(chain_id: &'static str, world: World) -> (Arc<Kura>, Arc<IrohaState>) {
+        let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = ChainId::from(chain_id);
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("runtime router retains its original signed genesis");
+        assert_eq!(
+            chain.state().authenticated_root_scope(),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        );
+        (Arc::clone(chain.kura()), Arc::clone(chain.state()))
+    }
+
     fn standard(chain_id: &'static str) -> Self {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(IrohaState::new_for_testing(
-            World::default(),
-            kura.clone(),
-            LiveQueryStore::start_test(),
-        ));
+        let (kura, state) = Self::native_state(chain_id, World::default());
         Self::with_runtime(
             chain_id,
             kura,
@@ -1488,6 +1495,7 @@ impl RuntimeApiRouterFixture {
             tokio::sync::broadcast::channel(1).0,
         ));
         let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
         let torii = Torii::new_with_handle(
             ChainId::from(chain_id),
             *state.network_id_ref(),
@@ -1501,7 +1509,10 @@ impl RuntimeApiRouterFixture {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            runtime_deps,
+            crate::test_utils::with_private_settlement_test_signers(
+                runtime_deps,
+                &private_settlement_node_key,
+            ),
         )
         .expect("valid Torii runtime API fixture");
         Self {
@@ -1519,10 +1530,21 @@ impl RuntimeApiRouterFixture {
 }
 #[tokio::test]
 async fn node_capabilities_http_bootstraps_without_registered_account() {
-    // This fixture has an empty world and mounts the production route catalog,
-    // including authentication middleware. Calling the handler alone misses
-    // the circular dependency between account registration and SDK preflight.
-    let fixture = RuntimeApiRouterFixture::standard("public-node-capabilities-test");
+    // An unsigned caller needs no registered account to discover the node.
+    // The listener still authenticates its root and ordinary policy through genesis.
+    let (kura, state) =
+        RuntimeApiRouterFixture::native_state("public-node-capabilities-test", World::default());
+    let unregistered = checked_torii_test_account_id(0x35, "unregistered capability caller");
+    assert!(state.world_view().account(&unregistered).is_err());
+    let fixture = RuntimeApiRouterFixture::with_runtime(
+        "public-node-capabilities-test",
+        kura,
+        state,
+        ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
+    );
     for (path, expected) in [
         ("/v1/node/capabilities", StatusCode::OK),
         ("/v1/privacy/capabilities", StatusCode::UNAUTHORIZED),
@@ -1642,12 +1664,10 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(IrohaState::new_for_testing(
+    let (kura, state) = RuntimeApiRouterFixture::native_state(
+        "sorafs-retired-storage-pin-router-test",
         World::default(),
-        kura.clone(),
-        LiveQueryStore::start_test(),
-    ));
+    );
     let storage_dir = tempfile::tempdir().expect("storage tempdir");
     let storage_root = storage_dir
         .path()
@@ -1974,12 +1994,8 @@ async fn appeal_finance_publication_routes_authenticate_before_decoding() {
             .parse()
             .expect("publisher role"),
     );
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(IrohaState::new_for_testing(
-        world,
-        kura.clone(),
-        LiveQueryStore::start_test(),
-    ));
+    let (kura, state) =
+        RuntimeApiRouterFixture::native_state("sorafs-appeal-publication-router-test", world);
     let network_id = *state.network_id_ref();
     let storage_dir = tempfile::tempdir().expect("appeal publication storage tempdir");
     let storage_root = storage_dir
@@ -2235,7 +2251,8 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key = checked_torii_test_ed25519_keypair(0xb4, "contract view caller fixture");
     let caller = AccountId::new(key.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&caller));
+    let network = *app.state.network_id_ref();
     let router = axum::Router::new()
         .route(
             "/v1/contracts/view",
@@ -2275,7 +2292,8 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
             };
             let body = norito::json::to_vec(&body).expect("request JSON");
             let uri = path.parse().expect("request URI");
-            let headers = signed_app_headers(&caller, &key, &Method::POST, &uri, &body);
+            let headers =
+                signed_network_app_headers(&network, &caller, &key, &Method::POST, &uri, &body);
             let mut request = Request::builder()
                 .method(Method::POST)
                 .uri(uri)

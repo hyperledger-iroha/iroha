@@ -1,7 +1,7 @@
 /// Return the explicit MCP decision for a cataloged method/path pair.
 ///
 /// `None` means the operation is not represented by one of `groups`. Callers
-/// which generate tools must treat that as deny: OpenAPI presence alone is not
+/// which generate tools must treat that as deny: `OpenAPI` presence alone is not
 /// authorization to expose a route through MCP.
 fn catalog_mcp_projection_decision(
     groups: &[CatalogProjectionGroup],

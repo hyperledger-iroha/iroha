@@ -40,6 +40,24 @@ fn write_private_test_file(path: &Path, bytes: &[u8]) {
     file.write_all(bytes).expect("write private test file");
     file.sync_all().expect("sync private test file");
 }
+#[test]
+fn backoff_delay_clamps_growth_and_saturates_millisecond_overflow() {
+    let policy = WebhookPolicy {
+        backoff_initial: Duration::from_millis(10),
+        backoff_max: Duration::from_millis(35),
+        ..WebhookPolicy::default()
+    };
+    assert_eq!(backoff_delay(&policy, 1), Duration::from_millis(10));
+    assert_eq!(backoff_delay(&policy, 2), Duration::from_millis(20));
+    assert_eq!(backoff_delay(&policy, u32::MAX), Duration::from_millis(35));
+    let oversized = Duration::from_millis(u64::MAX) + Duration::from_millis(1);
+    let policy = WebhookPolicy {
+        backoff_initial: oversized,
+        backoff_max: oversized,
+        ..policy
+    };
+    assert_eq!(backoff_delay(&policy, 1), Duration::from_millis(u64::MAX));
+}
 fn registry_entry(id: u64, url: String) -> WebhookEntry {
     WebhookEntry {
         id,
@@ -727,7 +745,7 @@ impl Drop for WebhookPolicyGuard {
 fn expect_json_object(value: norito::json::Value, context: &str) -> norito::json::Map {
     match value {
         norito::json::Value::Object(map) => map,
-        _ => panic!("expected object for {context}", context = context),
+        _ => panic!("expected object for {context}"),
     }
 }
 #[test]
@@ -983,10 +1001,7 @@ fn payload_dropped_after_max_attempts() {
     let json = norito::json::to_json_pretty(&payload).expect("serialize pending payload");
     write_private_test_file(&pending_path, json.as_bytes());
     let _http_guard = super::install_http_post_override(|_, _, _| {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "intentional failure",
-        ))
+        Err(std::io::Error::other("intentional failure"))
     });
     let rt = Runtime::new().expect("tokio runtime");
     rt.block_on(async {
@@ -1158,11 +1173,11 @@ fn delivery_worker_times_out_and_continues() {
         let mut timeout_recorded = false;
         for _ in 0..50 {
             let _ = super::process_queue_once().await;
-            if let Ok(contents) = std::fs::read_to_string(&hung_file) {
-                if contents.contains("\"attempts\": 1") {
-                    timeout_recorded = true;
-                    break;
-                }
+            if let Ok(contents) = std::fs::read_to_string(&hung_file)
+                && contents.contains("\"attempts\": 1")
+            {
+                timeout_recorded = true;
+                break;
             }
             sleep(Duration::from_millis(50)).await;
         }
@@ -1204,7 +1219,7 @@ fn delivery_worker_times_out_and_continues() {
 fn expect_json_array(value: norito::json::Value, context: &str) -> Vec<norito::json::Value> {
     match value {
         norito::json::Value::Array(arr) => arr,
-        _ => panic!("expected array for {context}", context = context),
+        _ => panic!("expected array for {context}"),
     }
 }
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
@@ -1655,10 +1670,10 @@ fn enqueue_respects_filter() {
     let files = std::fs::read_dir(queue_dir()).unwrap();
     let count = files
         .filter(|e| {
-            if let Ok(f) = e {
-                if let Some(ext) = f.path().extension() {
-                    return ext == "json";
-                }
+            if let Ok(f) = e
+                && let Some(ext) = f.path().extension()
+            {
+                return ext == "json";
             }
             false
         })
@@ -1740,7 +1755,7 @@ fn enqueue_respects_proof_envelope_hash_filter() {
     let files: Vec<_> = std::fs::read_dir(queue_dir())
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .collect();
     assert_eq!(files.len(), 1);
     let content = std::fs::read_to_string(files[0].path()).unwrap();
@@ -1754,16 +1769,18 @@ fn enqueue_respects_proof_envelope_hash_filter() {
 }
 #[test]
 fn proof_id_eq_matches_only_the_exact_proof() {
+    use iroha_data_model::events::data::{
+        prelude::DataEvent,
+        proof::{ProofEvent, ProofVerified},
+    };
+
     use crate::filter::{FieldPath, FilterExpr};
     let id = iroha_data_model::proof::ProofId {
         backend: "halo2/ipa".into(),
         proof_hash: [0xAA; 32],
     };
-    let id_str = format!("{}", id);
-    use iroha_data_model::events::data::{
-        prelude::DataEvent,
-        proof::{ProofEvent, ProofVerified},
-    };
+    let id_str = format!("{id}");
+
     let ev: iroha_data_model::events::EventBox =
         iroha_data_model::events::EventBox::Data(iroha_data_model::events::SharedDataEvent::from(
             DataEvent::Proof(ProofEvent::Verified(ProofVerified {

@@ -47,10 +47,10 @@ pub(crate) fn authorized(
                 || !has_permission(
                     world,
                     &check.expected_operator,
-                    CanOperateSorafsTopologyApproval {
+                    &(CanOperateSorafsTopologyApproval {
                         deployment_id: deployment_id.clone(),
                     }
-                    .into(),
+                    .into()),
                 )
             {
                 return false;
@@ -61,7 +61,7 @@ pub(crate) fn authorized(
             .into()
         }
     };
-    has_permission(world, authority, permission)
+    has_permission(world, authority, &(permission))
 }
 
 fn rejected(reason: &str) -> InstructionExecutionError {

@@ -194,6 +194,15 @@ fn expiry_deadlines_bind_every_original_signed_wire() -> Result<()> {
 
 #[test]
 fn expiry_certified_public_genesis_retains_inspects_and_blocks_old_resume() -> Result<()> {
+    struct NoTransport;
+    impl DeploymentTransport for NoTransport {
+        fn submit(&self, _: &SignedTransaction) -> Result<()> {
+            panic!("retired journal must not submit")
+        }
+        fn wait(&self, _: HashOf<SignedTransaction>) -> Result<AppliedEvidence> {
+            panic!("retained proof requires no fabricated transaction finality")
+        }
+    }
     use iroha::data_model::transaction::Executable;
     let mut fixture = NativeFinalityFixture::new_with_explicit_parameters();
     let first = fixture.genesis_proof().clone();
@@ -302,15 +311,7 @@ fn expiry_certified_public_genesis_retains_inspects_and_blocks_old_resume() -> R
     let evidence = scan.evidence(&record, &root, &tip.unwrap())?;
     journal.put_exact(MARKER, &evidence)?;
     assert_eq!(retained(&record, &journal)?, Some(evidence.clone()));
-    struct NoTransport;
-    impl DeploymentTransport for NoTransport {
-        fn submit(&self, _: &SignedTransaction) -> Result<()> {
-            panic!("retired journal must not submit")
-        }
-        fn wait(&self, _: HashOf<SignedTransaction>) -> Result<AppliedEvidence> {
-            panic!("retained proof requires no fabricated transaction finality")
-        }
-    }
+
     assert!(
         matches!(inspect_read_record(&record, &journal, &DeploymentReadContext::from(&config), &NoTransport)?,
         JournalDisposition::ValidityWindowElapsed(found) if found == evidence)
@@ -333,22 +334,22 @@ fn expiry_proof_directory_requires_exact_bounded_prefix() -> Result<()> {
         journal.put_exact(bad, &"untrusted")?;
         assert!(
             journal
-                .require_expiry_recovery_entries(MAX_HEIGHT as usize + 5, None)
+                .require_expiry_recovery_entries(usize::try_from(MAX_HEIGHT)? + 5, None)
                 .is_err()
         );
     }
     let journal = Journal::open(&temporary.path().join("valid"), true)?;
     journal.put_exact("expiry-proof-0000000001.json", &"untrusted")?;
-    journal.require_expiry_recovery_entries(MAX_HEIGHT as usize + 5, Some(1))?;
+    journal.require_expiry_recovery_entries(usize::try_from(MAX_HEIGHT)? + 5, Some(1))?;
     assert!(
         journal
-            .require_expiry_recovery_entries(MAX_HEIGHT as usize + 5, Some(2))
+            .require_expiry_recovery_entries(usize::try_from(MAX_HEIGHT)? + 5, Some(2))
             .is_err()
     );
     journal.put_exact("expiry-proof-0000000002.json", &"untrusted")?;
     assert!(
         journal
-            .require_expiry_recovery_entries(MAX_HEIGHT as usize + 5, Some(1))
+            .require_expiry_recovery_entries(usize::try_from(MAX_HEIGHT)? + 5, Some(1))
             .is_err()
     );
     Ok(())

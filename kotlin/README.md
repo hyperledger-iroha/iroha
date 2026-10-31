@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-31 `connect_norito_bridge`
+Account and public-key admission requires the ABI-33 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -20,6 +20,13 @@ I105 strings without surrounding whitespace. For host tests, set
 `IROHA_NATIVE_LIBRARY_PATH` to the absolute directory containing the freshly
 built bridge. Android packages the bridge through the generated native artifact
 pipeline described in `CLAUDE.md`.
+
+`ParliamentApiV1.Proposal.fromJson` validates all 18 SCCP action bodies and the
+exact ordered subject-revision set. It checks numeric and network bounds,
+duplicate registration destinations and the joint parameter constraints before
+a proposal can be drafted. `release_stranded` uses the native account codec for
+its recipient. The node still authenticates live network identity, authority,
+committee/bootstrap evidence and committed state at admission and enactment.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
@@ -41,7 +48,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-31 native bridge for account
+execution still requires a same-source ABI-33 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -160,7 +167,8 @@ aggregate, and exact-total controls. Empty pages can still carry `nextCursor`.
   (with a `LocalSigningContext`) to sign them, which widens visibility into
   restricted dataspaces, or sign one collection with `signedBy(auth)`.
   Signed requests need HTTPS; for a local devnet,
-  `setAllowPlaintextLoopback(true)` admits plain `http` to loopback hosts only.
+  `setAllowLocalDevelopmentHttp(true)` admits plain `http` to localhost, loopback IPs,
+  and private IPv4 addresses at the configured origin.
 
 ## Local confidential proofs
 
@@ -261,6 +269,17 @@ unknown and initial generation needs Native's one-shot fresh-slot grant. It cann
 a replaced rules attribute. The handle's only public operation, `enrollmentEvidence`,
 exports the E5 chain of the native-selected payment key with the adapter's own pre-E5
 check; only the Rust provider's role-checked signers reach the payment key through it.
+
+The Android storage adapter retains an immutable 32-byte `KGMROOT1` witness for
+the custody root in the Context-owned credential-encrypted `no_backup` namespace.
+Reopening requires its exact shape, magic, root inode and UID/GID. The recorded
+initial mount device is an observation because stock Android can renumber mount
+devices across restarts or OS updates; reopening never rewrites that witness.
+All device/inode comparisons between live paths and open descriptors, private
+ownership and single-link checks remain required. This local fence is not an
+independent rollback anchor and does not replace Native key, custody, proof or
+replay validation. This follows the normal-update durability and stock-OS scope
+in [the single design, §1.2–2.1](../specs/kagemusha_single_design_proposal.md#12-scope-of-durability).
 
 ### Android Keystore existence decisions
 
@@ -416,10 +435,11 @@ and transaction ID. The shared Rust corpus in `fixtures/zk/signed_attachments_v1
 pins full payload bytes, carrier options and lane witnesses, explicit account/contract bindings,
 and normalized digest preimages. `Executable.IvmProved` carries bytecode, the claimed overlay,
 and marked event/gas commitments; `withIvmExecutionProof` binds its single execution carrier.
-Its intent projection excludes the generated overlay and output commitments. Typed privacy
-submission projection uses the current Rust model through `PrivacyNativeBridge`, with canonical
-bounded decoding for all twelve protocols in direct and batch forms. This requires the matching
-native bridge; its encode-only projection path grants no privacy construction admission.
+Its intent projection excludes the generated overlay and output commitments. The eleven generic
+privacy submission projections use the current Rust model through `PrivacyNativeBridge`. X.509
+keeps its proof-free request unchanged in the ordered intent and binds its statement through the
+original `ActionStatementV1`. Both routes require the matching native bridge for canonical bounded
+decoding; projection and statement materialization grant no privacy construction admission.
 Cryptographic proof verification and state admission remain node responsibilities.
 
 ### One-shot signed HTTP requests
@@ -494,6 +514,19 @@ pair is single-use: a second signing attempt fails locally with
 The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
 path account to be the same exact canonical I105 account as the signer.
+For a local development node, call
+`ClientConfig.Builder.setAllowLocalDevelopmentHttp(true)` to allow http only when the base URL host is
+loopback (`127.0.0.0/8`, `::1`, `localhost`) or a private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), which covers the Android emulator alias `10.0.2.2` and devices on the same local
+network; all other http hosts stay refused. The option is off by default and is meant for development
+builds only. The request must keep the configured scheme, host and effective port. This opt-in
+also applies to Torii routes that normally require HTTPS explicitly, credentialed transaction
+submission and status reads, and the RPC, confidential-asset, subscription, DA, private-settlement
+and HTTP event-stream clients created from the configuration or transport. These clients' standalone
+builders expose the same default-off option. Request signatures, response verification, and
+redirect/replay restrictions still apply. WebSockets and SoraFS gateways retain their separate
+secure-transport requirements. Android applications must also allow the development destination
+in their debug cleartext/network-security configuration; this SDK option does not override it.
 
 Nearby's `IrohaPeerNearbySessionV1` owns the authenticated IPM1 boundary for Kotlin and Java.
 `seal` accepts an `IrohaPeerWireMessageV1`; `open` returns a verified message for the session's
@@ -622,10 +655,28 @@ signing domains pack the full transcript. The SDK checks the result only as a ca
 Only `artifactManifestDigest` hashes a signed object with SHA-256. Circuit-visible
 object, package, statement, operation and nullifier digests use the canonical
 58-domain Poseidon table. Quota usage is a depth-6 array. A signed blacklist is
-local-only: `KagemushaWalletV1.installBlacklist` stores it on the phone (a replacement's
+local-only: `KagemushaWalletExchangeCallV1.installBlacklist` stores it on the phone (a replacement's
 version must increase), and Native then refuses to pay a listed receiver or
 accept a Payment from a listed payer with `KagemushaWalletExceptionV1.BLOCKED` (-15). No proof,
 wallet state or peer message carries it.
+ABI33 wallet mutations require an explicit logical exchange. Call
+`wallet.beginExchange()` synchronously before UI or worker enqueue, then
+`exchange.admit()` for each accepted task and finish that task after its last
+result. Keep the exchange across confirmation and carrier waits. Fence it with
+`requestEnd()` before enqueueing an off-UI `end()`; end joins accepted tasks.
+Cleanup methods retain the exact review/time origin and remain available after
+the end fence. `observeCreditedForSend` retains receipt custody before Native
+verification; `verifyNextDeferredCredited` and `drainDeferredArchive` expose
+bounded Native maintenance. An explicit drain is not automatic idle progress.
+
+Ledger finality uses the exact retained signed Activate or Unload envelope. Wallet reads
+`activationAttemptOutcome` and `unloadAttemptOutcome` return Native's `Awaiting`,
+`Rejected` or `Confirmed` outcome; only `Confirmed` establishes success. An admitted
+`KagemushaWalletExchangeCallV1` owns attempt retention, finality ingestion and
+`confirmLedgerAttempt`, including its bounded epoch synchronization and asynchronous
+continuations. No caller transaction hash, separate confirmation call or manual
+history walk participates in this contract.
+
 `KagemushaP256Codec` is the P-256 device-key boundary: uncompressed SEC1 public keys
 and fixed-width low-S `r || s` signatures. The Android payment key
 (`kagemusha-wallet-android`) is a `DIGEST_SHA256` KeyMint key that signs exactly the
@@ -645,7 +696,7 @@ application without its own uses `PROTOCOL` (`F0504B45504B524E464301`, the aid-f
 card: an `IrohaPeerAsyncHostApduServiceV1` subclass, whose `applicationIdentifier` matches its
 aid-filter, routes commands to an `IrohaPeerNfcCardApduBridgeV1` around
 `IrohaPeerNfcCardEndpointV1.direct`, initialized with the receiver's native open Request.
-The receiver chooses the amount and calls `KagemushaWalletV1.request(setupId, amount)` (or
+The receiver chooses the amount and calls `KagemushaWalletExchangeCallV1.request(setupId, amount)` (or
 `requestWithFeePolicy`) before presenting the Request. The payer reads it with
 `IrohaPeerNfcReaderExchangeV1.readRequest`, reviews the exact destination, amount and fee
 with `reviewSend`, and approves through hardware confirmation while the same
@@ -683,7 +734,7 @@ NFC Offer/Ask commands have no fallback; GET_INTAKE remains the direct card's
 REQUEST_READY session record.
 
 `KagemushaWalletAccountOriginalV1` encodes and renders the bounded complete
-canonical Norito `AccountId` frame used by `KagemushaWalletV1.reviewSend`.
+canonical Norito `AccountId` frame used by `KagemushaWalletExchangeCallV1.reviewSend`.
 Supply both the receiver's original Request and destination account frame;
 Native authenticates their binding before returning a review. Display the
 reviewed account under the application's independently selected network and
@@ -739,22 +790,34 @@ newly signed Load transaction with that identity is rejected.
 
 Petal Stream (`org.hyperledger.iroha.sdk.offline.petal`) is the animated
 "streaming QR" used to hand an offline payload such as an `IPM1` peer message
-from one screen to a phone camera. Each square frame shows four sakura-blossom
-finders, a `天`-shaped field of 256 tiles (light/dark polarity, lane `P`;
-katakana glyph, lane `K`) and three dotted rings (lane `D`). Every lane is one
-whitened GF(256) Reed–Solomon codeword carrying fountain-coded 16-byte atoms,
-and every fourth frame's lane `D` carries the stream beacon, so any readable
-lane of any frame helps and lost frames only cost time. The Kotlin port is
-pure JVM in `core-jvm` and follows the normative Rust crate
-`crates/iroha_petal`; encoding is bit-identical to it.
+from one screen to a phone camera. Each frame (format 5) is a portrait card of
+1024 × 1668 design units: a square with a band of 306 katakana tiles above and
+below it. The square shows four sakura-blossom finders, a field of 3,376 petals
+on 34 concentric bands cut into four sectors (field lanes `F0`–`F3`, one bit per
+petal; petals inside the SORA `天` are drawn light over a faint `天`, the others
+pink) and three dotted rings (lane `D`). On top of each field lane, the first
+360 of its lit petals (in a fixed shuffled order) are turned by 0°, 45°, 90° or
+135° about their centres: two more bits each, one turn lane per sector
+(`T0`–`T3`) carrying four atoms whose check binds them to their field lane's
+header. Eight tiles of each band are pilots; each of the other 298 shows one bit
+in its polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`, one atom each) and four in its katakana (one of
+イロハニヘトワカレムノケアヒスン: lanes `K0`, `K1`, seven atoms each), bound by a
+CRC-32C to the stream tag, the frame and the lane: up to 53 atoms a frame. Every
+lane is one whitened GF(256) Reed–Solomon codeword carrying fountain-coded
+16-byte atoms, and every fourth frame's lane `D` carries the stream beacon
+(version `0x50`; formats 3, 2 and 1 are refused), so any readable lane of any
+frame helps and lost frames only cost time. The Kotlin port is pure JVM in
+`core-jvm` and follows the normative Rust crate `crates/iroha_petal`; encoding
+and rendering are bit-identical to it.
 
 ```kotlin
 // Sender: frame n of the endless stream, drawn natively or in software.
 val encoder = PetalStreamEncoder(payload, kind)
-petalStreamView.setStream(encoder)           // client-android View, 8 fps by default
+petalStreamView.setStream(encoder)           // client-android View, 12 fps by default
 petalStreamView.start()
 val list = PetalDrawList.of(encoder.cells(n)) // vector shapes for other canvases
-val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3))
+val rgb = PetalRenderer.render(encoder.cells(n), PetalRenderOptions(1024, 3)) // the card, 1668 px tall
 
 // Receiver: camera luma planes into one session; the payload arrives once.
 val session = PetalScanSession()
@@ -763,46 +826,97 @@ session.push(luma, SystemClock.elapsedRealtime()).completed?.let { deliver(it.pa
 ```
 
 `PetalDecoder.decode` locates the finders, tries four rotations and mirrored
-front-camera previews ranked by the ring gates plus the `天` silhouette, reads
-lane `D` first and turns low-confidence cells into Reed–Solomon erasures; a lane
-is only reported when its codeword checks out. When a thumb, a glare or the
-frame edge hides one corner blossom, three blossoms forming a corner still
-locate the code: the fourth corner is inferred, moved to where the dotted rings
-line up, and reported as `PetalDecodedFrame.inferredCorner` (canonical index).
-`PetalScanSession` reads the frames after a decoded one by `PetalDecoder.track`,
-which follows the last pose (at most 500 ms old) instead of searching the whole
-image, and counts both in `stats().tracked` and `stats().inferred`.
-When a capture loses a tile lane, the session holds up to four captures of each
-of six shown frames. It averages patches under their decoded canonical poses,
-first using each capture's finder levels, then the normalised mean raw patches
-for any lane still missing. Only captures whose decoded lane headers agree on
-the stream tag and frame counter share evidence; a recovered lane must name that
-same shown frame. `outcome.merged` names newly recovered tile lanes, while
-`stats().merges`, `stats().mergedP` and `stats().mergedK` count averaging and its
-recoveries. A frame only gains missing lanes. Reset and accepted stream metadata
-replacement drop held evidence; learning the first beacon preserves pre-beacon
-captures.
-The tile lanes `P` and `K` are read in two ways: the *level read* judges every
-8×8 tile patch against the light and dark levels measured at the finders, and a
-lane it cannot decode is retried with the *normalised read*, which rescales each
-patch and each template by its own contrast and erases tiles that lost it, so
-over-exposure, veiling light, glare and shadows cancel out (it only runs when a
-tile lane is missing). Scanners should still ask for about 1280×720 analysis
-frames, set exposure compensation to about −1 EV and fall back to 640×480 (lane
-`K` unreadable) only when the device cannot sustain 5 decoded frames per second;
-see `PetalLumaAdapter` and `specs/petal_stream.md` §8.
+front-camera previews ranked by the ring gates, reads lane `D` first and turns
+low-confidence bytes into Reed–Solomon erasures; a lane is only reported when
+its codeword checks out. Each petal is judged by its brightness against a
+two-means threshold of its sector and colour. A sector the finder levels leave
+unread is read again from *local levels* (every petal rescaled by the darkest
+and brightest petals within 32 units), so shadows, glare, banding and veiling
+light cancel, and while a field lane stays unread the pose is searched for
+radial lens distortion (`PetalDecodedFrame.pose.distortion`). When a thumb, a
+glare or the frame edge hides one corner blossom, three blossoms forming a
+corner still locate the code: the fourth corner is inferred, moved to where the
+dotted rings line up, and reported as `PetalDecodedFrame.inferredCorner`
+(canonical index). `PetalScanSession` reads the frames after a decoded one by
+`PetalDecoder.track`, which follows the last pose and its distortion (at most
+500 ms old) instead of searching the whole image, and counts both in
+`stats().tracked` and `stats().inferred`.
+When a capture loses a field lane, the session holds the petal levels of up to
+four captures of each of six shown frames and reads the missing lanes from
+their mean. Only captures whose decoded lane headers agree on the stream tag and
+frame counter share evidence; a recovered lane must name that same shown frame.
+`outcome.merged` names newly recovered field lanes, while `stats().merges` and
+`stats().mergedLanes` count averaging and its recoveries (`stats().laneD` and
+`stats().fieldLanes` count single-capture reads). A frame only gains missing
+lanes. Reset and accepted stream metadata replacement drop held evidence;
+learning the first beacon preserves pre-beacon captures.
+Every field lane a capture decodes on its own also lets the session read the
+turn lane on top of it (`PetalTurns.readTurns`): each carrier petal is sampled
+in its own outward frame along a cubic correction of the pose fitted to the
+carriers' centroids, the reader fits the blur that best explains the carriers
+and their lit neighbours (and stops when the camera is too soft to show turns),
+and every carrier takes the turn whose template matches best once its
+neighbours, at their own turns, are subtracted. A turn lane is tried once per
+shown frame: the session remembers the last 24 it tried, and after tries that
+read nothing (a camera too soft or too shaky for the turns) it passes over up
+to eight captures before it tries again, because reading turns costs a slow
+phone core several times a frame's decode. `outcome.turned` names the turn
+lanes of a capture by the digits of their field lanes, and `stats().turnTries`
+and `stats().turnLanes` count the tries and the lanes read. `PetalTurns.observedTurns` reports the fitted
+blur and every carrier's decided turn for diagnostics, and
+`PetalFrameCells.turn`, `withTurns` and `turnWord` expose the turns of a frame.
+The bands are read from every capture whose square decoded
+(`PetalKana.readKana`): the square's pose, extended beyond the square, places
+every tile; each band's pilots are found by a small search around their places,
+an affine correction fitted to their offsets moves every tile, and the pilots
+pick the blur of the glyph templates and the levels that tell light tiles from
+dark ones. Each data tile then takes the polarity its level shows and the
+katakana whose template correlates best, and a lane passes when its check
+matches the square's frame or the frame before or after it (a rolling shutter
+can show a band of a neighbouring frame). The session reads each band once per
+shown frame, with its own back-off, and the bands go first: a capture whose
+bands read a kana lane tries the turn lanes too only when its work and the
+session's last turn try fit a 30 fps camera's frame time
+(`PetalScanSession.CAPTURE_BUDGET_MILLIS`); otherwise that shown frame's turn
+lanes wait for its next capture. The session times its work on the monotonic
+clock, and a `PetalWorkCost` given to its constructor puts a model's costs in
+place of the measured times (tests do). `outcome.kana` names the kana lanes of
+a capture (`P0K0P1K1` for all four), `stats().kanaTries` and
+`stats().kanaLanes` count the tries and the lanes read, `stats().spareTurns`
+the captures that had time for the turn lanes too, and `PetalKana.observeBand`
+reports every tile's decision. `PetalFrameCells.kanaGlyph`, `isKanaLight` and
+`withKana` expose the tiles of a frame.
+On a Pixel 6 held to its four Cortex-A55 cores, decoding simulated 720p
+captures, a tracked capture costs about 14 ms, the turn lanes about 75 ms and
+both bands about 36 ms. Read on one capture, turns and bands together took
+longer than a frame is shown at 12 fps, and the session decoded only six camera
+frames a second; with the bands first (no capture there has time to spare
+for the turns as well) it decodes 14–19, and a 12 KB Payment
+shown upright at 12 fps arrives in 1.7–1.9 s on a sharp camera (format 3:
+1.8 s), 1.9–2.1 s on an older one (2.5 s) and 1.8–1.9 s on one too soft for the
+turns (3.1 s). In the reference simulation it takes 1.2, 1.3 and 1.75 s where
+the decoder keeps up with every camera frame, and a fast decoder whose camera
+gives it only 15 frames a second still reads both on one capture (1.2 s on the
+sharp camera, against 1.6 s with the turns always left to a later capture); see
+`specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`
-adds `PetalStreamView`, `PetalCanvasRenderer` and the dependency-free
-`PetalLumaAdapter` (CameraX `ImageAnalysis`, Camera2 `ImageReader` and Camera1
-NV21 previews); they use API 19 or older platform calls.
+adds `PetalStreamView` (the portrait card, as large as the view allows),
+`PetalCanvasRenderer` (one path per colour, every lit petal antialiased, turned
+and notched: the notch tells a petal from one turned by half a turn; the tiles
+rounded and their katakana stroked with round caps) and the dependency-free
+`PetalLumaAdapter` (CameraX
+`ImageAnalysis`, Camera2 `ImageReader` and Camera1 NV21 previews); they use
+API 19 or older platform calls.
 
-The tests check every section of `../fixtures/petal/petal_stream_v1.json`,
-decode the golden camera captures of `../fixtures/petal/petal_captures_v1.json`
-with exactly the lanes and inferred corners the reference reads, and track its
-golden frame pairs, recover the missing lanes of its noisy and banded merge
-sets, and refuse lanes from mixed-frame captures:
+The tests check every section of `../fixtures/petal/petal_stream_v5.json`
+(carrier orders, the katakana tiles and glyphs, turn and kana whitening, atom
+ids and both readers' template probes included), decode the golden camera
+captures of `../fixtures/petal/petal_captures_v5.json` with exactly the lanes,
+turn lanes, kana lanes, inferred corners, poses and Reed–Solomon corrections the
+reference reads, track its golden frame pairs, recover the missing lanes of its
+noisy merge set, and refuse lanes from mixed-frame captures:
 
 ```bash
 ./gradlew :core-jvm:test --tests '*Petal*' --console=plain
@@ -941,7 +1055,7 @@ every connection.
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` exposes local build metadata only.
+`PrivacyNativeBridge` exposes local build metadata and canonical request-binding helpers.
 `compiledProfileCatalogV1()` returns this binary's canonical typed
 `PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
@@ -950,13 +1064,42 @@ absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
 committed `/v1/privacy/capabilities` manifest from live Torii.
 `HttpClientTransport.getPrivacyCapabilities(canonicalAuth)` performs a one-shot
-authenticated HTTPS fetch for `ClientConfig`'s immutable local network, verifies
-the exact response URL and bounded Norito body, and native-validates its signatures
-and deployment network before privately binding its origin. Public archive decoding
+authenticated HTTPS fetch (or explicitly opted-in local HTTP) for `ClientConfig`'s immutable local
+network, verifies
+the exact response URL and bounded Norito body, and native-validates the canonical
+manifest and its digest. Both native and managed admission require the manifest's
+authoritative top-level `network_id` to equal that network, including when every
+protocol is unavailable, before privately binding its origin. Public archive decoding
 is inspection-only and cannot mint admission. Native construction validates the
 selected activation and limits; the transaction encoder also requires the token's
 network to equal the enclosing transaction network. Java consumers use this same
 Kotlin-owned boundary.
+
+The runtime manifest carries `version`, `network_id`, `committed_height`,
+`consensus_policy`, the twelve canonical `protocols` rows, and `manifest_digest`.
+A supported compiled profile with active committed policy is `available`; an
+unsupported or inactive protocol is `unavailable` for its exact closed reason.
+Documentary release and deployment qualification are separate diagnostics and do
+not grant runtime admission. Availability is per protocol; it retains the current
+network, compiled tuple, policy, cryptographic, permission, replay and resource
+checks without requiring all twelve protocols to be available.
+
+X.509 remains unavailable with `joint-security-reduction-incomplete` because its
+joint Fiat–Shamir security reduction is incomplete. Its request-binding helpers
+remain inspectable, but the current catalog cannot authorize X.509 submission.
+
+X.509 uses `SubmitPrivacyZkX509CertificateV1.fromStatementV1` with the independent
+statement and attachment action ordinal. Its context retains the separate privacy ordinal and
+zero derived intent. Supply the explicit `plannedProofOccurrenceV1` descriptor before
+`materializeStatementV1` derives the original payload binding; replace that occurrence with
+the raw proof, preserve its index and kind, and bind the final attachment statements before
+signing. `toInstructionBoxV1` requires current capability admission. The request contains no
+proof bytes; the signed `Proof`/`ActionProof` occurrence owns the proof.
+
+`ci/check_privacy_jvm_sdk.sh` selects both the Kotlin X.509 producer tests and the Java
+consumer tests alongside canonical transaction, attachment, signer, hash and fixture controls
+and its existing suites. Their native execution requires a matching bridge and authentically
+regenerated Exact12 and signed-attachment fixtures.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.
@@ -1022,9 +1165,9 @@ export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
 | Tool | Version | Required For |
 |------|---------|-------------|
 | JDK | 21 | All modules |
-| Android SDK | compileSdk 35 | `client-android` |
-| Rust | exactly 1.93.1 | Native `.so` build |
-| Android NDK | exactly 28.0.12674087-beta2 (r28-beta2) | Native `.so` build |
+| Android SDK | compileSdk 37 | `client-android` |
+| Rust | exactly 1.99.1 | Native `.so` build |
+| Android NDK | exactly 30.0.16248370 (r30) | Native `.so` build |
 | `cargo-ndk` | exactly 4.1.2 | Native `.so` build |
 
 ### Step 1: Build core-jvm
@@ -1049,13 +1192,13 @@ The `libconnect_norito_bridge.so` files are **not tracked in git** — they are 
 
 ```bash
 # Install Rust Android targets
-rustup target add --toolchain 1.93.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add --toolchain 1.99.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
 # Install cargo-ndk
 cargo install cargo-ndk --version 4.1.2 --locked
 
 # Select the authenticated Android NDK and an external artifact root
-export ANDROID_NDK_HOME=/absolute/path/to/android-ndk/28.0.12674087
+export ANDROID_NDK_HOME=/absolute/path/to/android-ndk/30.0.16248370
 export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-artifacts
 mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ```
@@ -1104,7 +1247,7 @@ This Gradle task (and every `client-android` release assembly):
 The isolated Python helpers use `-B` to prevent bytecode cache writes from
 changing the authenticated source inventory during configuration and validation.
 
-AGP 9.0.1 registers both generated directories through
+AGP 9.4.1 registers both generated directories through
 `addGeneratedSourceDirectory`, so the release AAR preserves those exact bytes
 and embeds the provenance at
 `assets/iroha/native-build-provenance-v1.json`. `src/main/jniLibs` is excluded;
@@ -1143,7 +1286,7 @@ an empty provenance marker and grants no provider, proving, hardware or release
 qualification. The `privacyProductionEnabled` property has been removed.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
-executables from exact Rust 1.93.1. It requires one job, incremental compilation
+executables from exact Rust 1.99.1. It requires one job, incremental compilation
 off and offline dependency resolution, then invokes stock Cargo through
 cargo-ndk with the authenticated root manifest and lock:
 
@@ -1477,8 +1620,8 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 
 | Dependency | Version | Used By | Risk |
 |-----------|---------|---------|------|
-| `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
-| `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
+| `org.bouncycastle:bcprov-jdk18on` | 1.86 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
+| `com.github.luben:zstd-jni` | 1.5.7-25 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
 
 
 `KagemushaWalletEnrollmentV1` is the thin Android E2–E6 handle registered by trusted
@@ -1540,3 +1683,14 @@ handle only releases ownership. The marker frame is published before an immutabl
 selection, and nothing is returned until both are durable; a missing selected original is
 refused. Recovery may complete a missing selection for a present valid original. This local
 mechanism does not establish protection against complete filesystem rollback.
+
+### X.509 ownership signing
+
+`ZkX509SigningPreparationV1.prepareOwnershipSigningV1` delegates canonical
+Norito X.509 statement preparation to the existing native privacy bridge. Its
+`message` is for a P-256 `SHA256withECDSA` signer; `digest` is for a prehash signer.
+The application keeps its certificate subject key and normalizes the returned
+signature to low-s fixed 64-byte `r || s` before witness construction. Java callers
+use the same static Kotlin factory and defensive `getMessage()`/`getDigest()`
+accessors. Native unavailability is an explicit error. This API does not acquire
+authoritative State, prove credentials, pair hosts, submit, or establish readiness.

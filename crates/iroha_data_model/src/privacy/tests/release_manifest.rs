@@ -283,18 +283,6 @@ fn synthetic_valid_deployment(
         network_id,
         genesis_hash: *network_id.as_bytes(),
         release_manifest_digest,
-        activation_transaction_digest: PrivacyReleaseArtifactDigestV1::new(raw(221)),
-        activations: PrivacyProtocolIdV1::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, protocol_id)| PrivacyDeploymentActivationV1 {
-                protocol_id,
-                // Catalog order is identity order, not an activation chronology.
-                activation_height: 21_u64
-                    .checked_sub(u64::try_from(index).expect("small activation index"))
-                    .expect("the twelve fixture heights remain positive"),
-            })
-            .collect(),
         validator_roster_digest: PrivacyReleaseArtifactDigestV1::new([0; 32]),
         endpoint_version: endpoint_version.clone(),
         convergence_height: 200,
@@ -352,13 +340,12 @@ fn synthetic_valid_deployment(
 
 fn synthetic_qualified_capability_rows(
     release: &PrivacyExact12ReleaseManifestV1,
-    deployment: &PrivacyExact12DeploymentQualificationV1,
+    _deployment: &PrivacyExact12DeploymentQualificationV1,
 ) -> Vec<PrivacyCapabilityRowV1> {
     release
         .protocols
         .iter()
-        .zip(&deployment.activations)
-        .map(|(binding, deployed)| {
+        .map(|binding| {
             let protocol_limits = protocol_limits(binding.protocol_id);
             let profile = PrivacyCompiledProfileSnapshotV1 {
                 protocol_id: binding.protocol_id,
@@ -374,23 +361,7 @@ fn synthetic_qualified_capability_rows(
             PrivacyCapabilityRowV1 {
                 protocol_id: binding.protocol_id,
                 compiled_profile: PrivacyCompiledProfileResultV1::Available(profile),
-                activation: Some(PrivacyProtocolActivationRecordV1 {
-                    protocol_id: binding.protocol_id,
-                    proof_system_id: binding.proof_system_id,
-                    engine_id: binding.engine_id,
-                    parameter_id: binding.parameter_id,
-                    parameter_digest: binding.parameter_digest,
-                    verifier_digest: binding.verifier_digest,
-                    statement_schema_digest: binding.statement_schema_digest,
-                    engine_manifest_digest: binding.engine_manifest_digest,
-                    lifecycle: PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                        proposed_at_height: 1,
-                        activated_at_height: deployed.activation_height,
-                        state_since_height: deployed.activation_height,
-                    }),
-                    protocol_limits,
-                    pending_protocol_limits_tightening: None,
-                }),
+                policy: None,
             }
         })
         .collect()
@@ -466,7 +437,7 @@ fn synthetic_release_and_deployment_validate_and_roundtrip() {
 }
 
 #[test]
-fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
+fn exact12_diagnostic_evidence_links_full_manifests_and_all_twelve_profiles() {
     let release = synthetic_valid_release_manifest();
     let deployment = synthetic_valid_deployment(release.manifest_digest);
     let qualification = PrivacyExact12QualificationRecordV1 {
@@ -501,17 +472,17 @@ fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
         Err(PrivacyExact12QualificationRecordValidationErrorV1::ReleaseManifestDigest)
     );
 
-    let mut wrong_height_rows = rows;
-    let Some(activation) = &mut wrong_height_rows[0].activation else {
-        unreachable!("qualified fixture has every activation")
+    // External release evidence still binds the semantic profile tuple; it has no authority
+    // to require an activation record or an ordinary optional limits policy.
+    let mut wrong_profile_rows = rows;
+    let PrivacyCompiledProfileResultV1::Available(profile) =
+        &mut wrong_profile_rows[0].compiled_profile
+    else {
+        unreachable!("fixture supplies compiled profile snapshots")
     };
-    let PrivacyProtocolLifecycleV1::Active(lifecycle) = &mut activation.lifecycle else {
-        unreachable!("qualified fixture uses active lifecycles")
-    };
-    lifecycle.activated_at_height += 1;
-    lifecycle.state_since_height += 1;
+    profile.parameter_digest = PrivacyParameterDigestV1::new(raw(244));
     assert_eq!(
-        qualification.validate_against_snapshot(200, &wrong_height_rows),
+        qualification.validate_against_snapshot(200, &wrong_profile_rows),
         Err(PrivacyExact12QualificationRecordValidationErrorV1::ProtocolBinding)
     );
 }
@@ -531,19 +502,16 @@ pub fn generated_instruction_qualification() -> PrivacyExact12QualificationRecor
 }
 
 #[test]
-fn qualified_capability_archive_accepts_complete_signed_evidence() {
+fn documentary_evidence_validation_is_separate_from_runtime_capability() {
     let release = synthetic_valid_release_manifest();
     let deployment = synthetic_valid_deployment(release.manifest_digest);
     let mut snapshot = capability_snapshot();
+    snapshot.network_id = deployment.network_id;
     snapshot.committed_height = deployment.convergence_height;
     snapshot.protocols = synthetic_qualified_capability_rows(&release, &deployment);
-    snapshot.qualification = Some(PrivacyExact12QualificationRecordV1 {
-        release_manifest: release,
-        deployment_qualification: deployment,
-    });
     let manifest = snapshot
         .exact12_capability_manifest_v1()
-        .expect("project complete synthetic signed qualification");
+        .expect("committed policies");
     assert!(
         manifest
             .protocols
@@ -552,51 +520,40 @@ fn qualified_capability_archive_accepts_complete_signed_evidence() {
     );
     let archive = manifest
         .canonical_bytes()
-        .expect("encode qualified capabilities");
+        .expect("canonical runtime capabilities");
     assert!(archive.len() <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1);
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),
-        PrivacyCapabilityArchiveValidationStatusV1::Valid,
-        "the native SDK boundary must admit all 48 stage receipts and 54 artifacts"
+        PrivacyCapabilityArchiveValidationStatusV1::Valid
     );
-    let mut missing_evidence = manifest.clone();
-    let release = &mut missing_evidence
-        .qualification
-        .as_mut()
-        .expect("complete qualification")
-        .release_manifest;
-    release.stage_receipts.clear();
-    release.proof_artifacts.clear();
-    release.audits.clear();
-    release.release_signatures.clear();
-    missing_evidence.manifest_digest = missing_evidence
-        .computed_manifest_digest()
-        .expect("rebind the outer manifest to the missing evidence");
-    let missing_archive =
-        norito::encode_canonical(&missing_evidence).expect("encode missing release evidence");
-    assert_eq!(
-        validate_privacy_capability_archive_v1(&missing_archive),
-        PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest,
-        "nonzero claim digests cannot replace signed release evidence"
-    );
-    let mut hostile = manifest;
-    hostile
-        .qualification
-        .as_mut()
-        .expect("complete qualification")
-        .release_manifest
-        .release_signatures[0]
-        .signature = Signature::from_bytes(&vec![
+    // Documentary claims still validate rigorously in their own owner. Invalid or absent
+    // evidence cannot certify a release, and cannot revoke an unrelated valid operation.
+    let mut missing_evidence = release.clone();
+    missing_evidence.stage_receipts.clear();
+    missing_evidence.proof_artifacts.clear();
+    missing_evidence.audits.clear();
+    missing_evidence.release_signatures.clear();
+    assert!(missing_evidence.validate().is_err());
+    let mut hostile = release;
+    hostile.release_signatures[0].signature = Signature::from_bytes(&vec![
         1;
         PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1
             + 1
     ]);
-    let hostile_archive = norito::encode_canonical(&hostile).expect("encode oversized signature");
-    assert!(hostile_archive.len() <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1);
+    assert!(hostile.validate().is_err());
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&archive),
+        PrivacyCapabilityArchiveValidationStatusV1::Valid
+    );
+    // Runtime archives retain their intrinsic catalog cardinality after removal of evidence;
+    // exceeding it is an invalid manifest, not an unfinished local decoder attempt.
+    let mut oversized = manifest;
+    oversized.protocols =
+        vec![oversized.protocols[0]; PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 + 1];
+    let hostile_archive = norito::encode_canonical(&oversized).expect("oversized runtime sequence");
     assert_eq!(
         validate_privacy_capability_archive_v1(&hostile_archive),
-        PrivacyCapabilityArchiveValidationStatusV1::DecodeResourceLimit,
-        "qualification support must not remove nested sequence limits"
+        PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest
     );
 }
 
@@ -1201,9 +1158,7 @@ fn release_manifest_carrying_another_catalog_commitment_fails_to_decode() {
     let release = synthetic_valid_release_manifest();
     assert_eq!(release.validate(), Ok(()));
     let encoded = release.encode();
-    let commitment = PrivacyExact12CatalogCommitmentV1::canonical()
-        .digest()
-        .to_le_bytes();
+    let commitment = *PrivacyExact12CatalogCommitmentV1::canonical().as_bytes();
     let offset = encoded
         .windows(commitment.len())
         .position(|window| window == commitment)
@@ -1221,6 +1176,29 @@ fn release_manifest_carrying_another_catalog_commitment_fails_to_decode() {
         assert!(
             PrivacyExact12ReleaseManifestV1::decode(&mut substituted.as_slice()).is_err(),
             "a release manifest with another catalog commitment must not decode"
+        );
+    }
+}
+
+#[test]
+fn deployment_diagnostics_reject_retired_activation_evidence_fields() {
+    let release = synthetic_valid_release_manifest();
+    let deployment = synthetic_valid_deployment(release.manifest_digest);
+    deployment
+        .validate()
+        .expect("real diagnostic bindings remain enforced in the synthetic fixture");
+    let json = norito::json::to_json(&deployment).unwrap();
+    for field in ["activation_transaction_digest", "activations"] {
+        let mut value: norito::json::Value = norito::json::from_json(&json).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_json::<PrivacyExact12DeploymentQualificationV1>(
+                &norito::json::to_json(&value).unwrap()
+            )
+            .is_err()
         );
     }
 }

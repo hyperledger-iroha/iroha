@@ -1,6 +1,6 @@
 // Test-only exact-lift arithmetic for diagnostic vectors; not secure application encryption.
 import {createHash, randomBytes} from 'node:crypto';
-import {chacha20orig} from '@noble/ciphers/chacha';
+import {chacha20orig} from '@noble/ciphers/chacha.js';
 import {blake2b256} from '../../src/blake2b.js';
 import {crc64Xz} from '../../src/crc64Xz.js';
 import {normalizeIdentifierInput} from '../../src/normalizers.js';

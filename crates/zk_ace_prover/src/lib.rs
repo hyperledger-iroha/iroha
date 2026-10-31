@@ -897,6 +897,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected entropy failure")
@@ -923,19 +924,19 @@ mod tests {
                 [0; 32],
                 [1; 32],
                 [2; 32],
-                ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityRoot,
+                ZkAcePrivacyWitnessValidationErrorV1::IdentityRoot,
             ),
             (
                 [1; 32],
                 [0; 32],
                 [2; 32],
-                ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityBlinding,
+                ZkAcePrivacyWitnessValidationErrorV1::IdentityBlinding,
             ),
             (
                 [1; 32],
                 [2; 32],
                 [0; 32],
-                ZkAcePrivacyWitnessValidationErrorV1::ZeroReplaySecret,
+                ZkAcePrivacyWitnessValidationErrorV1::ReplaySecret,
             ),
         ] {
             assert!(matches!(

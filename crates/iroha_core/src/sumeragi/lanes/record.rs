@@ -22,7 +22,7 @@ mod decode;
 use crate::sumeragi::durable_qc_codec::QcRef;
 pub(in crate::sumeragi) use decode::LaneRecordDecode;
 
-/// The only lane record, in fixed order: header, original availability, payload, CommitQC.
+/// The only lane record, in fixed order: header, original availability, payload, `CommitQC`.
 /// Both bulk domains are funded in the reader's original pool; this remains untrusted.
 #[derive(Debug, norito::Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::sumeragi::lanes::LaneRecord")]
@@ -51,7 +51,7 @@ impl LaneRecord {
     }
 
     /// Cross-check disk identities against the store's independently selected historical source.
-    /// This checks consistency only; it does not authenticate a CommitQC.
+    /// This checks consistency only; it does not authenticate a `CommitQC`.
     pub(in crate::sumeragi) fn check_context(
         &self,
         source: &AvailabilitySource,

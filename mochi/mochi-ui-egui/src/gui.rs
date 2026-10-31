@@ -1,6 +1,7 @@
 //! Desktop views over Kagami's shared, persistent managed workspace.
 
 mod accounts;
+mod block_view;
 mod brand;
 mod chrome;
 mod develop;
@@ -8,15 +9,18 @@ mod endpoints;
 mod home;
 mod ledger;
 mod theme;
+mod viz;
 mod widgets;
 
 use eframe::egui;
+use iroha_data_model::prelude::Quantity;
 use mochi_core::{
     ManagedBlockStream, ManagedEventStream, StatePage, StateQueryKind, TransactionPreview,
     developer::{
         ContractInput, DeveloperWorkspace, GeneratedPublishAction, GeneratedPublishOutcome,
         ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedContext, ManagedDataspaceStatus,
-        ManagedNetwork, ManagedPhase, ManagedStatus, PreparedLocalnet,
+        ManagedNetwork, ManagedPhase, ManagedStatus, ManagedValidatorStatus, PreparedLocalnet,
+        SavedDeployment, SubmissionOutcome,
     },
     run_state_query,
 };
@@ -95,6 +99,8 @@ struct Selection {
     network: ManagedNetwork,
     phase: ManagedPhase,
     running: usize,
+    /// Per-validator process observations from the same status as `running`.
+    validators: Vec<ManagedValidatorStatus>,
     failure: Option<String>,
     attachment: UiResult<Option<ManagedAttachmentStatus>>,
 }
@@ -137,6 +143,7 @@ fn load_network_selection(
         network,
         phase: status.phase,
         running: status.running_peers,
+        validators: status.validators,
         failure: status.failure,
         attachment: attachment.map(|status| status.map(|status| status.attachment)),
     })
@@ -239,17 +246,40 @@ enum Message {
     Reset(UiResult<Vec<String>>),
     Ledger(UiResult<accounts::LedgerSnapshot>),
     State(UiResult<StatePage>),
+    /// A block read on demand for the drill-down, with its received frame length.
+    Block {
+        height: u64,
+        result: UiResult<(std::sync::Arc<iroha_data_model::block::SignedBlock>, usize)>,
+    },
     Logs(UiResult<String>),
-    Submitted(UiResult<String>),
+    /// A transaction signed with quoted fee limits; quick actions also carry their drafts.
+    Previewed {
+        result: UiResult<TransactionPreview>,
+        drafts: Option<String>,
+    },
+    /// The reviewed transaction's single submission settled, or its outcome stayed unknown.
+    Submitted {
+        hash: String,
+        result: UiResult<SubmissionOutcome>,
+    },
     Review {
+        summary: Vec<String>,
         evidence: String,
         decision: Sender<bool>,
     },
     Progress(String),
     Deployed {
+        /// The deployed contract, ready to call; absent when deployment failed.
+        prefill: Option<CallPrefill>,
         result: UiResult<String>,
         refreshed: UiResult<Opened>,
     },
+    /// A contract view or call finished; `mutated` marks calls, which can change balances.
+    ContractResult {
+        mutated: bool,
+        result: UiResult<String>,
+    },
+    SavedDeployments(UiResult<Vec<SavedDeployment>>),
     Published {
         result: UiResult<PublicationOutput>,
         refreshed: UiResult<Opened>,
@@ -262,9 +292,24 @@ enum Message {
         name: String,
         result: UiResult<Option<ManagedDataspaceStatus>>,
     },
+    /// Every validator's newest block, read from the generation `prepared` names.
+    BlockTips {
+        prepared: PreparedLocalnet,
+        tips: UiResult<Vec<home::TipObservation>>,
+    },
+}
+
+/// The call card's fields after a deployment: the alias and any initialization hook to run.
+struct CallPrefill {
+    alias: String,
+    entrypoint: Option<String>,
+    arguments: Option<String>,
 }
 
 struct Review {
+    /// What will be deployed, where, and the most it can cost.
+    summary: Vec<String>,
+    /// The exact preflight as canonical JSON, shown on request.
     evidence: String,
     decision: Sender<bool>,
 }
@@ -297,7 +342,7 @@ impl LocalnetDialog {
     ) -> Option<LocalnetDialogAction> {
         let palette = theme::palette(context);
         let mut action = None;
-        let modal = egui::Modal::new(egui::Id::new("new-localnet")).show(context, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("new-localnet")).show(context, |ui| {
             ui.set_width(440.0);
             widgets::card_title(ui, icon::NEW, "New localnet");
             ui.add_space(4.0);
@@ -454,6 +499,8 @@ struct Desktop {
     busy: bool,
     /// Presentation only: the pending task was started by the developer, not by polling.
     foreground: bool,
+    /// Presentation only: when the pending task started, for its elapsed-time label.
+    busy_since: Instant,
     workspace_path: WorkspacePath,
     workspace: Option<DeveloperWorkspace>,
     names: Vec<String>,
@@ -477,6 +524,8 @@ struct Desktop {
     /// Structured blocks from the observed validator's canonical stream, newest first.
     blocks_feed: VecDeque<ledger::BlockRow>,
     latest_height: Option<u64>,
+    /// Every validator's newest block, compared on Home; cleared with the network.
+    block_tips: home::BlockTips,
     /// Accounts and holdings from the observed validator; cleared with the network.
     ledger: Option<accounts::LedgerSnapshot>,
     ledger_error: Option<String>,
@@ -490,6 +539,8 @@ struct Desktop {
     /// `None` reads the supervisor log.
     logs_source: Option<usize>,
     endpoint_peer: usize,
+    /// The block drilled into from the Blocks view.
+    block_view: Option<block_view::BlockView>,
     query: StateQueryKind,
     page: Option<StatePage>,
     filter: String,
@@ -509,17 +560,29 @@ struct Desktop {
     quantity: String,
     destination: String,
     preview: Option<TransactionPreview>,
-    submitted_hash: Option<String>,
+    /// The reviewed transaction's single submission and how it settled.
+    submission: Option<develop::Submission>,
+    /// Presentation only: scroll the review card into view on its next frame.
+    reveal_review: bool,
     contract_path: String,
     contract_alias: String,
     package: String,
     contract: String,
     locked: bool,
     journal_path: String,
+    /// Deployments whose quoted fees fit `auto_approve_cap` in one fee asset skip review.
+    auto_approve: bool,
+    auto_approve_cap: String,
+    /// Resumable deployment journals in the selected network; `None` reads them again.
+    saved_deployments: Option<UiResult<Vec<SavedDeployment>>>,
     review: Option<Review>,
     receipt: Option<String>,
     publication: PublicationForm,
     publication_output: Option<PublicationOutput>,
+    /// Chart arrivals and celebration petals.
+    motion: viz::Motion,
+    /// The Contracts view's call and view form.
+    call: develop::CallForm,
 }
 
 impl Desktop {
@@ -549,6 +612,7 @@ impl Desktop {
             epoch: 0,
             busy: false,
             foreground: false,
+            busy_since: Instant::now(),
             workspace_path: WorkspacePath::new(path),
             workspace: None,
             names: Vec::new(),
@@ -571,6 +635,7 @@ impl Desktop {
             brand: None,
             blocks_feed: VecDeque::new(),
             latest_height: None,
+            block_tips: home::BlockTips::default(),
             ledger: None,
             ledger_error: None,
             ledger_stale: false,
@@ -581,6 +646,7 @@ impl Desktop {
             activity_filter: String::new(),
             logs_source: None,
             endpoint_peer: 0,
+            block_view: None,
             query: StateQueryKind::Accounts,
             page: None,
             filter: String::new(),
@@ -594,17 +660,23 @@ impl Desktop {
             quantity: "1".into(),
             destination: String::new(),
             preview: None,
-            submitted_hash: None,
+            submission: None,
+            reveal_review: false,
             contract_path: String::new(),
             contract_alias: String::new(),
             package: String::new(),
             contract: String::new(),
             locked: false,
             journal_path: String::new(),
+            auto_approve: false,
+            auto_approve_cap: "100".into(),
+            saved_deployments: None,
             review: None,
             receipt: None,
             publication: PublicationForm::default(),
             publication_output: None,
+            motion: viz::Motion::default(),
+            call: develop::CallForm::default(),
         }
     }
 
@@ -618,6 +690,7 @@ impl Desktop {
     fn spawn_task(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
         self.busy = true;
         self.foreground = false;
+        self.busy_since = Instant::now();
         let sender = self.sender.clone();
         let epoch = self.epoch;
         std::thread::spawn(move || {
@@ -634,7 +707,12 @@ impl Desktop {
         self.logs.clear();
         self.activity.clear();
         self.blocks_feed.clear();
+        self.motion.clear_blocks();
+        self.block_view = None;
+        self.call.output = None;
+        self.saved_deployments = None;
         self.latest_height = None;
+        self.block_tips = home::BlockTips::default();
         self.ledger = None;
         self.ledger_error = None;
         self.ledger_stale = false;
@@ -644,7 +722,7 @@ impl Desktop {
         self.logs_source = None;
         self.endpoint_peer = 0;
         self.preview = None;
-        self.submitted_hash = None;
+        self.submission = None;
         self.receipt = None;
         self.publication_output = None;
         self.publication.operation_id.clear();
@@ -907,8 +985,16 @@ impl Desktop {
                 continue;
             }
             match message {
-                Message::Review { evidence, decision } => {
-                    self.review = Some(Review { evidence, decision });
+                Message::Review {
+                    summary,
+                    evidence,
+                    decision,
+                } => {
+                    self.review = Some(Review {
+                        summary,
+                        evidence,
+                        decision,
+                    });
                     continue;
                 }
                 Message::Progress(progress) => {
@@ -922,6 +1008,10 @@ impl Desktop {
                             self.attachment_progress = Some(status);
                         }
                     }
+                    continue;
+                }
+                Message::BlockTips { prepared, tips } => {
+                    self.record_block_tips(&prepared, tips);
                     continue;
                 }
                 _ => {
@@ -965,7 +1055,10 @@ impl Desktop {
                         Err(error) => self.error = Some(error),
                     }
                     match result {
-                        Ok(selected) => self.install_selection(selected),
+                        Ok(selected) => {
+                            self.install_selection(selected);
+                            self.motion.celebrate();
+                        }
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -995,15 +1088,77 @@ impl Desktop {
                     Ok(logs) => self.logs = logs,
                     Err(error) => self.error = Some(error),
                 },
-                Message::Submitted(result) => match result {
-                    Ok(message) => {
-                        self.notice = Some(message);
+                Message::Block { height, result } => {
+                    // A read for a block the developer has since left is dropped.
+                    if let Some(view) = self
+                        .block_view
+                        .as_mut()
+                        .filter(|view| view.height == height)
+                    {
+                        view.receive(result);
+                    }
+                }
+                Message::ContractResult { mutated, result } => {
+                    if mutated && result.is_ok() {
                         self.ledger_stale = true;
+                    }
+                    self.call.output = Some(result);
+                }
+                Message::SavedDeployments(result) => self.saved_deployments = Some(result),
+                Message::Previewed { result, drafts } => match result {
+                    Ok(preview) => {
+                        if let Some(drafts) = drafts {
+                            self.drafts = drafts;
+                        }
+                        self.preview = Some(preview);
+                        self.submission = None;
+                        self.reveal_review = true;
                     }
                     Err(error) => self.error = Some(error),
                 },
-                Message::Deployed { result, refreshed } => {
+                Message::Submitted { hash, result } => {
+                    // Rejected transactions still pay their fees, so balances change either way.
+                    self.ledger_stale = true;
+                    if let Ok(SubmissionOutcome::Applied { block_height }) = &result {
+                        self.notice = Some(format!("Applied in block {block_height}."));
+                        // A token just created is the one to mint next.
+                        if let Some(definition) = self
+                            .preview
+                            .as_ref()
+                            .filter(|preview| preview.hash() == hash)
+                            .and_then(develop::created_token)
+                        {
+                            self.quick.definition = definition;
+                            self.quick.kind = accounts::QuickKind::Mint;
+                        }
+                    }
+                    if let Some(submission) = self
+                        .submission
+                        .as_mut()
+                        .filter(|submission| submission.hash == hash)
+                    {
+                        submission.outcome = Some(result);
+                        self.reveal_review = true;
+                    }
+                }
+                Message::Deployed {
+                    prefill,
+                    result,
+                    refreshed,
+                } => {
                     self.review = None;
+                    // Deploying and resuming both change which journals are resumable.
+                    self.saved_deployments = None;
+                    if let Some(prefill) = prefill {
+                        self.call.alias = prefill.alias;
+                        if let Some(entrypoint) = prefill.entrypoint {
+                            self.call.entrypoint = entrypoint;
+                        }
+                        if let Some(arguments) = prefill.arguments {
+                            self.call.arguments = arguments;
+                        }
+                        self.call.output = None;
+                    }
                     match refreshed {
                         Ok(opened) => self.install_observed_workspace(opened),
                         Err(_) if result.is_ok() => {
@@ -1018,7 +1173,10 @@ impl Desktop {
                         }
                     }
                     match result {
-                        Ok(receipt) => self.receipt = Some(receipt),
+                        Ok(receipt) => {
+                            self.receipt = Some(receipt);
+                            self.motion.celebrate();
+                        }
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -1059,7 +1217,8 @@ impl Desktop {
                 }
                 Message::Review { .. }
                 | Message::Progress(_)
-                | Message::AttachmentObserved { .. } => {}
+                | Message::AttachmentObserved { .. }
+                | Message::BlockTips { .. } => {}
             }
         }
         if let Some((_, receiver)) = self.blocks.as_mut() {
@@ -1070,9 +1229,12 @@ impl Desktop {
             );
             drain_stream(receiver, &mut self.activity, block_activity, |event| {
                 if let mochi_core::BlockStreamEvent::Block {
-                    summary, raw_len, ..
+                    summary,
+                    block,
+                    raw_len,
                 } = event
-                    && let Some(height) = ledger::record_block(feed, summary, *raw_len)
+                    && let Some(height) =
+                        ledger::record_block(feed, summary, Some(block.clone()), *raw_len)
                 {
                     *latest = Some(latest.map_or(height, |current| current.max(height)));
                     *stale = true;
@@ -1093,6 +1255,16 @@ impl Desktop {
         {
             self.refresh_selection();
         }
+        // An opened block that the feed no longer holds is read from the observed validator.
+        if !self.busy
+            && self.ready()
+            && self
+                .block_view
+                .as_ref()
+                .is_some_and(block_view::BlockView::wants_body)
+        {
+            self.fetch_open_block();
+        }
         // Balances follow committed blocks; idle chains make no blocks and cause no queries.
         let wanted = self.ledger_stale || (self.ledger.is_none() && self.ledger_error.is_none());
         if wanted
@@ -1102,6 +1274,7 @@ impl Desktop {
         {
             self.refresh_ledger();
         }
+        self.poll_block_tips();
     }
 
     fn refresh_ledger(&mut self) {
@@ -1132,6 +1305,8 @@ impl Desktop {
         self.events = None;
         self.page = None;
         self.blocks_feed.clear();
+        self.motion.clear_blocks();
+        self.block_view = None;
         self.latest_height = None;
         self.ledger = None;
         self.ledger_error = None;
@@ -1145,7 +1320,7 @@ impl Desktop {
                 .raw
                 .dropped_files
                 .iter()
-                .filter_map(|file| file.path.clone())
+                .map(|file| file.path().to_path_buf())
                 .collect::<Vec<_>>()
         });
         let Some(path) = dropped.into_iter().next() else {
@@ -1192,9 +1367,11 @@ impl Desktop {
         self.spawn(move || {
             Message::State((|| {
                 let client = network.observer(peer).map_err(|e| e.to_string())?;
+                let reader = network.ledger_reader(peer).map_err(|e| e.to_string())?;
                 let result = handle
                     .block_on(run_state_query(
                         client,
+                        &reader,
                         &network.signer(),
                         network.address_discriminant(),
                         kind,
@@ -1209,6 +1386,17 @@ impl Desktop {
     }
 
     fn deploy(&mut self, resume: bool) {
+        let auto_cap = if self.auto_approve {
+            match self.auto_approve_cap.trim().parse::<Quantity>() {
+                Ok(cap) if !cap.is_zero() => Some(cap),
+                _ => {
+                    self.error = Some("Automatic approval needs a positive fee cap.".into());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let Some(workspace) = self.workspace.clone() else {
             return;
         };
@@ -1235,10 +1423,32 @@ impl Desktop {
         self.spawn(move || {
             let result = (|| {
                 let mut review = |preflight: &mochi_core::developer::DeploymentPreflight| {
+                    if let Some(cap) = &auto_cap
+                        && let Some(fees) =
+                            fee_totals(preflight).and_then(|totals| within_cap(&totals, cap))
+                    {
+                        // The developer opted in; Activity keeps what was approved and why.
+                        let _ = sender.send((
+                            epoch,
+                            Message::Progress(format!(
+                                "Approved {} automatically: fees {fees}, within the {cap} cap",
+                                preflight.contract_alias
+                            )),
+                        ));
+                        return Ok(());
+                    }
+                    let summary = deployment_summary(preflight);
                     let evidence = norito::json::to_string_pretty(&preflight.to_json()?)?;
                     let (decision, answer) = mpsc::channel();
                     sender
-                        .send((epoch, Message::Review { evidence, decision }))
+                        .send((
+                            epoch,
+                            Message::Review {
+                                summary,
+                                evidence,
+                                decision,
+                            },
+                        ))
                         .map_err(|_| std::io::Error::other("desktop closed before review"))?;
                     if !answer.recv().unwrap_or(false) {
                         return Err(
@@ -1247,8 +1457,8 @@ impl Desktop {
                     }
                     Ok(())
                 };
-                let mut progress = |event| {
-                    let _ = sender.send((epoch, Message::Progress(format!("{event:?}"))));
+                let mut progress = |event: mochi_core::developer::DeploymentProgress| {
+                    let _ = sender.send((epoch, Message::Progress(event.to_string())));
                 };
                 let completed = if resume {
                     workspace.resume(&path, captured.as_ref(), &mut review, &mut progress)
@@ -1278,10 +1488,30 @@ impl Desktop {
                     &norito::json::to_string_pretty(&run.to_json().map_err(|e| e.to_string())?)
                         .map_err(|e| e.to_string())?,
                 );
-                Ok(result)
+                let prefill = CallPrefill {
+                    alias: run.receipt.contract_alias.to_string(),
+                    entrypoint: run
+                        .lifecycle
+                        .as_ref()
+                        .map(|guidance| guidance.hook.name.clone()),
+                    arguments: run.lifecycle.as_ref().map(|guidance| {
+                        develop::argument_template(guidance.hook.params.iter().map(|parameter| {
+                            (parameter.name.as_str(), parameter.type_name.as_str())
+                        }))
+                    }),
+                };
+                Ok((result, prefill))
             })();
+            let (result, prefill) = match result {
+                Ok((receipt, prefill)) => (Ok(receipt), Some(prefill)),
+                Err(error) => (Err(error), None),
+            };
             let refreshed = inspect_workspace_selection(workspace, captured);
-            Message::Deployed { result, refreshed }
+            Message::Deployed {
+                prefill,
+                result,
+                refreshed,
+            }
         });
     }
 
@@ -1343,26 +1573,49 @@ impl Desktop {
         let width = (viewport.width() - 48.0).clamp(160.0, 760.0);
         let evidence_height = (viewport.height() - 220.0).clamp(40.0, 400.0);
         // Only the explicit buttons decide; clicking outside the dialog withholds approval.
-        egui::Modal::new(egui::Id::new("deployment-review")).show(context, |ui| {
+        egui::Modal::new(egui::Id::unique("deployment-review")).show(context, |ui| {
             ui.set_width(width);
             widgets::card_title(ui, icon::CONTRACTS, "Review deployment");
-            ui.label(
-                egui::RichText::new("Review the exact deployment and quoted fees")
-                    .strong()
-                    .color(palette.text),
-            );
-            egui::Frame::new()
-                .fill(palette.inset)
-                .corner_radius(egui::CornerRadius::same(10))
-                .inner_margin(egui::Margin::same(10))
+            if review.summary.is_empty() {
+                ui.label(
+                    egui::RichText::new("Review the exact deployment and quoted fees")
+                        .strong()
+                        .color(palette.text),
+                );
+            }
+            for (index, line) in review.summary.iter().enumerate() {
+                let text = egui::RichText::new(line).color(palette.text);
+                ui.add(
+                    egui::Label::new(if index == 0 {
+                        text.strong().size(15.0)
+                    } else {
+                        text
+                    })
+                    .wrap(),
+                );
+            }
+            ui.add_space(4.0);
+            // The exact signed plan stays one click away; the summary above is what most
+            // reviews need. Without a summary the plan is the review, so it starts open.
+            egui::CollapsingHeader::new("Exact signed plan and quotes")
+                .id_salt("deployment-review-evidence")
+                .default_open(review.summary.is_empty())
                 .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(evidence_height)
+                    egui::Frame::new()
+                        .fill(palette.inset)
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(10))
                         .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(&review.evidence).monospace())
-                                    .wrap(),
-                            );
+                            egui::ScrollArea::vertical()
+                                .max_height(evidence_height)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&review.evidence).monospace(),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
                         });
                 });
             ui.add_space(4.0);
@@ -1390,7 +1643,7 @@ impl Desktop {
             return;
         }
         let palette = theme::palette(context);
-        let modal = egui::Modal::new(egui::Id::new("private-dataspace")).show(context, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("private-dataspace")).show(context, |ui| {
             ui.set_width(460.0);
             widgets::card_title(ui, icon::PRIVATE, "Private dataspace");
             ui.add_space(4.0);
@@ -1468,7 +1721,7 @@ impl Desktop {
             return;
         }
         let palette = theme::palette(context);
-        let modal = egui::Modal::new(egui::Id::new("reset-environment")).show(context, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("reset-environment")).show(context, |ui| {
             ui.set_width(440.0);
             widgets::card_title(ui, icon::RESET, "Reset local environment?");
             ui.add_space(4.0);
@@ -1521,39 +1774,40 @@ impl Desktop {
 }
 
 impl Desktop {
-    fn show(&mut self, context: &egui::Context) {
-        let palette = theme::palette(context);
-        self.accept_dropped_files(context);
-        egui::TopBottomPanel::top("header")
+    fn show(&mut self, ui: &mut egui::Ui) {
+        let context = ui.ctx().clone();
+        let palette = theme::palette(&context);
+        self.accept_dropped_files(&context);
+        egui::Panel::top("header")
             .frame(
                 egui::Frame::new()
                     .fill(palette.panel)
                     .inner_margin(egui::Margin::symmetric(16, 8)),
             )
-            .show(context, |ui| self.header(ui));
-        egui::TopBottomPanel::top("status")
+            .show(ui, |ui| self.header(ui));
+        egui::Panel::top("status")
             .frame(
                 egui::Frame::new()
                     .fill(palette.panel)
                     .inner_margin(egui::Margin::symmetric(20, 8)),
             )
-            .show(context, |ui| self.status_strip(ui));
-        egui::SidePanel::left("navigation")
+            .show(ui, |ui| self.status_strip(ui));
+        egui::Panel::left("navigation")
             .resizable(false)
-            .exact_width(200.0)
+            .exact_size(200.0)
             .frame(
                 egui::Frame::new()
                     .fill(palette.panel)
                     .inner_margin(egui::Margin::symmetric(10, 8)),
             )
-            .show(context, |ui| self.navigation(ui));
+            .show(ui, |ui| self.navigation(ui));
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(palette.background)
                     .inner_margin(egui::Margin::symmetric(24, 16)),
             )
-            .show(context, |ui| {
+            .show(ui, |ui| {
                 self.banners(ui);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -1576,7 +1830,7 @@ impl Desktop {
                     let rect = ui.max_rect();
                     let painter = context.layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
-                        egui::Id::new("mochi-drop-overlay"),
+                        egui::Id::unique("mochi-drop-overlay"),
                     ));
                     painter.rect_filled(
                         rect,
@@ -1598,26 +1852,27 @@ impl Desktop {
                     );
                 }
             });
-        self.reset_dialog(context);
+        self.reset_dialog(&context);
         if let Some(dialog) = &mut self.localnet_dialog
-            && let Some(action) = dialog.show(context, &self.names, self.busy)
+            && let Some(action) = dialog.show(&context, &self.names, self.busy)
         {
             self.localnet_dialog = None;
             if let LocalnetDialogAction::Start(name) = action {
                 self.start_localnet(name);
             }
         }
-        self.private_dataspace_dialog(context);
-        self.review_dialog(context);
-        widgets::show_toasts(context);
+        self.private_dataspace_dialog(&context);
+        self.review_dialog(&context);
+        viz::paint_shower(&context, &mut self.motion);
+        widgets::show_toasts(&context);
         context.request_repaint_after(Duration::from_millis(100));
     }
 }
 
 impl eframe::App for Desktop {
-    fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
-        self.show(context);
+        self.show(ui);
     }
 }
 
@@ -1659,6 +1914,58 @@ fn complete_localnet_start(
     });
     let names = names();
     Message::LocalnetStarted { result, names }
+}
+
+/// What a deployment review approves: the contract, its address and the most it can cost.
+fn deployment_summary(preflight: &mochi_core::developer::DeploymentPreflight) -> Vec<String> {
+    let mut lines = vec![match &preflight.previous_contract_address {
+        Some(previous) => format!("Upgrade {} (replaces {previous})", preflight.contract_alias),
+        None => format!("Deploy {} as a new contract", preflight.contract_alias),
+    }];
+    lines.push(format!("Address {}", preflight.contract_address));
+    let count = preflight.fee_quotes.len();
+    let fees = match fee_totals(preflight) {
+        Some(totals) if totals.is_empty() => "no fees".to_owned(),
+        Some(totals) => totals
+            .iter()
+            .map(|(asset, total)| format!("up to {total} {asset}"))
+            .collect::<Vec<_>>()
+            .join(" + "),
+        None => "too large to total".to_owned(),
+    };
+    lines.push(format!(
+        "{count} signed transaction{} · fees {fees}",
+        if count == 1 { "" } else { "s" }
+    ));
+    lines
+}
+
+/// Quoted maximum fees per fee asset, in quote order; `None` if a total overflows.
+fn fee_totals(
+    preflight: &mochi_core::developer::DeploymentPreflight,
+) -> Option<Vec<(String, Quantity)>> {
+    let mut totals: Vec<(String, Quantity)> = Vec::new();
+    for component in preflight
+        .fee_quotes
+        .iter()
+        .flat_map(|quote| &quote.components)
+    {
+        let asset = component.asset_definition_id.to_string();
+        match totals.iter_mut().find(|(known, _)| *known == asset) {
+            Some((_, total)) => *total = total.checked_add(&component.max_amount).ok()?,
+            None => totals.push((asset, component.max_amount.clone())),
+        }
+    }
+    Some(totals)
+}
+
+/// The fees an automatic-approval cap admits: one fee asset, totalling at most `cap`.
+fn within_cap(totals: &[(String, Quantity)], cap: &Quantity) -> Option<String> {
+    match totals {
+        [] => Some("none".to_owned()),
+        [(asset, total)] if total <= cap => Some(format!("up to {total} {asset}")),
+        _ => None,
+    }
 }
 
 fn require_ready_localnet(phase: ManagedPhase, failure: Option<&str>) -> UiResult<()> {
@@ -1716,12 +2023,14 @@ fn fetch_ledger(
     peer: usize,
 ) -> UiResult<accounts::LedgerSnapshot> {
     let client = network.observer(peer).map_err(|e| e.to_string())?;
+    let reader = network.ledger_reader(peer).map_err(|e| e.to_string())?;
     let signer = network.signer();
     let discriminant = network.address_discriminant();
     let query = |kind, size| {
         handle
             .block_on(run_state_query(
                 client.clone(),
+                &reader,
                 &signer,
                 discriminant,
                 kind,
@@ -1822,10 +2131,22 @@ fn drain_stream<T: Clone>(
 mod tests {
     use super::*;
 
+    /// Run a frame for shape and interaction assertions without a texture renderer.
+    pub(super) fn run_headless_frame(
+        context: &egui::Context,
+        input: egui::RawInput,
+        draw: impl FnMut(&mut egui::Ui),
+    ) -> egui::FullOutput {
+        let mut output = context.run_ui(input, draw);
+        // These tests inspect shapes and input effects; no renderer owns their textures.
+        output.textures_delta.clear();
+        output
+    }
+
     pub(super) fn render_frame(
         context: &egui::Context,
         events: Vec<egui::Event>,
-        draw: &mut impl FnMut(&egui::Context),
+        draw: &mut impl FnMut(&mut egui::Ui),
     ) -> egui::FullOutput {
         render_sized_frame(context, egui::vec2(1280.0, 900.0), events, draw)
     }
@@ -1834,9 +2155,10 @@ mod tests {
         context: &egui::Context,
         size: egui::Vec2,
         events: Vec<egui::Event>,
-        draw: &mut impl FnMut(&egui::Context),
+        draw: &mut impl FnMut(&mut egui::Ui),
     ) -> egui::FullOutput {
-        context.run(
+        run_headless_frame(
+            context,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
@@ -1865,7 +2187,7 @@ mod tests {
     pub(super) fn click_label(
         context: &egui::Context,
         label: &str,
-        mut draw: impl FnMut(&egui::Context),
+        mut draw: impl FnMut(&mut egui::Ui),
     ) {
         // A window needs its measured previous frame before testing pointer hit regions.
         let _ = render_frame(context, Vec::new(), &mut draw);
@@ -1963,7 +2285,7 @@ mod tests {
         let context = egui::Context::default();
         let mut requested = None;
         click_label(&context, "Create localnet", |context| {
-            if let Some(action) = dialog.show(context, &names, false) {
+            if let Some(action) = dialog.show(context.ctx(), &names, false) {
                 requested = Some(action);
             }
         });
@@ -1981,7 +2303,7 @@ mod tests {
             let mut dialog = LocalnetDialog { name: name.into() };
             let mut requested = None;
             click_label(&context, "Create localnet", |context| {
-                if let Some(action) = dialog.show(context, &names, busy) {
+                if let Some(action) = dialog.show(context.ctx(), &names, busy) {
                     requested = Some(action);
                 }
             });
@@ -1991,7 +2313,7 @@ mod tests {
         let mut dialog = LocalnetDialog::new(&names);
         let mut requested = None;
         click_label(&context, "Cancel", |context| {
-            if let Some(action) = dialog.show(context, &names, false) {
+            if let Some(action) = dialog.show(context.ctx(), &names, false) {
                 requested = Some(action);
             }
         });
@@ -2223,6 +2545,7 @@ mod tests {
                 .send((
                     0,
                     Message::Review {
+                        summary: Vec::new(),
                         evidence: "exact original signed intent and quoted fees".into(),
                         decision,
                     },
@@ -2250,12 +2573,40 @@ mod tests {
     }
 
     #[test]
+    fn deployment_review_leads_with_its_summary_and_keeps_the_plan_one_click_away() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        let (decision, answer) = mpsc::channel();
+        desktop.review = Some(Review {
+            summary: vec![
+                "Deploy hello.universal as a new contract".into(),
+                "1 signed transaction · fees up to 0.003 xor".into(),
+            ],
+            evidence: "exact signed plan evidence".into(),
+            decision,
+        });
+        let context = egui::Context::default();
+        let _ = render_frame(&context, Vec::new(), &mut |context| desktop.show(context));
+        let output = render_frame(&context, Vec::new(), &mut |context| desktop.show(context));
+        assert!(text_position(&output, "Deploy hello.universal as a new contract").is_some());
+        assert!(text_position(&output, "1 signed transaction · fees up to 0.003 xor").is_some());
+        assert!(text_position(&output, "exact signed plan evidence").is_none());
+        click_label(&context, "Exact signed plan and quotes", |context| {
+            desktop.show(context)
+        });
+        let output = render_frame(&context, Vec::new(), &mut |context| desktop.show(context));
+        assert!(text_position(&output, "exact signed plan evidence").is_some());
+        assert!(matches!(answer.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
     fn deployment_review_cancel_from_another_view_withholds_approval() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         desktop.busy = true;
         desktop.view = View::Activity;
         let (decision, answer) = mpsc::channel();
         desktop.review = Some(Review {
+            summary: Vec::new(),
             evidence: "exact retained plan".into(),
             decision,
         });
@@ -2273,6 +2624,7 @@ mod tests {
         desktop.view = View::Home;
         let (decision, answer) = mpsc::channel();
         desktop.review = Some(Review {
+            summary: Vec::new(),
             evidence: "a long original signed transaction and exact fee evidence ".repeat(300),
             decision,
         });
@@ -2314,6 +2666,163 @@ mod tests {
     }
 
     #[test]
+    fn deployments_prefill_the_call_card_and_failures_leave_it_alone() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop.call.output = Some(Ok("an earlier view".into()));
+        desktop
+            .sender
+            .send((
+                0,
+                Message::Deployed {
+                    prefill: Some(CallPrefill {
+                        alias: "counter.universal".into(),
+                        entrypoint: Some("hajimari".into()),
+                        arguments: Some(r#"{"start": 0}"#.into()),
+                    }),
+                    result: Ok("Applied on localnet local".into()),
+                    refreshed: Err("observation unavailable".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.call.alias, "counter.universal");
+        assert_eq!(desktop.call.entrypoint, "hajimari");
+        assert_eq!(desktop.call.arguments, r#"{"start": 0}"#);
+        assert!(
+            desktop.call.output.is_none(),
+            "a new deployment clears old results"
+        );
+        // The celebration paints over every view without taking input.
+        let context = egui::Context::default();
+        let _ = render_frame(&context, Vec::new(), &mut |ui| desktop.show(ui));
+        desktop.call.alias = "typed.universal".into();
+        desktop
+            .sender
+            .send((
+                desktop.epoch,
+                Message::Deployed {
+                    prefill: None,
+                    result: Err("refused before dispatch".into()),
+                    refreshed: Err("observation unavailable".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.call.alias, "typed.universal");
+    }
+
+    #[test]
+    fn contract_results_show_in_the_call_card_and_calls_mark_balances_stale() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        for (mutated, result, stale) in [
+            (false, Ok("{\n  \"cups\": 3\n}".to_owned()), false),
+            (true, Err("maximum fee must be positive".to_owned()), false),
+            (
+                true,
+                Ok("counter.universal `bump` applied on local".to_owned()),
+                true,
+            ),
+        ] {
+            desktop.ledger_stale = false;
+            desktop.busy = true;
+            desktop
+                .sender
+                .send((
+                    desktop.epoch,
+                    Message::ContractResult {
+                        mutated,
+                        result: result.clone(),
+                    },
+                ))
+                .unwrap();
+            desktop.poll();
+            assert!(!desktop.busy);
+            assert_eq!(desktop.call.output, Some(result));
+            assert_eq!(desktop.ledger_stale, stale);
+        }
+    }
+
+    #[test]
+    fn automatic_approval_admits_one_fee_asset_within_its_cap() {
+        let quantity = |value: &str| value.parse::<Quantity>().unwrap();
+        let cap = quantity("100");
+        assert_eq!(within_cap(&[], &cap).as_deref(), Some("none"));
+        assert_eq!(
+            within_cap(&[("xor#sora".into(), quantity("100"))], &cap).as_deref(),
+            Some("up to 100 xor#sora")
+        );
+        assert_eq!(
+            within_cap(&[("xor#sora".into(), quantity("100.001"))], &cap),
+            None
+        );
+        assert_eq!(
+            within_cap(
+                &[
+                    ("xor#sora".into(), quantity("1")),
+                    ("val#sora".into(), quantity("1"))
+                ],
+                &cap
+            ),
+            None,
+            "mixed fee assets always ask first"
+        );
+    }
+
+    #[test]
+    fn automatic_approval_needs_a_positive_cap_before_anything_starts() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.auto_approve = true;
+        for cap in ["0", "", "ten"] {
+            desktop.error = None;
+            desktop.auto_approve_cap = cap.into();
+            desktop.deploy(false);
+            assert!(!desktop.busy, "{cap:?}");
+            assert_eq!(
+                desktop.error.as_deref(),
+                Some("Automatic approval needs a positive fee cap."),
+                "{cap:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_deployments_fill_the_resume_picker_until_a_deploy_or_network_change() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        let saved = vec![SavedDeployment {
+            alias: "Counter::universal".parse().unwrap(),
+            journal: PathBuf::from("state/deployments/local/slot/commit"),
+            has_receipt: false,
+        }];
+        desktop.busy = true;
+        desktop
+            .sender
+            .send((desktop.epoch, Message::SavedDeployments(Ok(saved.clone()))))
+            .unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert_eq!(desktop.saved_deployments, Some(Ok(saved.clone())));
+        // Deploying or resuming changes which journals are resumable, so the picker reloads.
+        desktop.busy = true;
+        desktop
+            .sender
+            .send((
+                desktop.epoch,
+                Message::Deployed {
+                    prefill: None,
+                    result: Err("deployment cancelled before dispatch".into()),
+                    refreshed: Err("generation was replaced".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert_eq!(desktop.saved_deployments, None);
+        desktop.saved_deployments = Some(Ok(saved));
+        desktop.clear_network();
+        assert_eq!(desktop.saved_deployments, None);
+    }
+
+    #[test]
     fn completed_deployment_survives_failed_workspace_refresh() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         desktop.busy = true;
@@ -2322,6 +2831,7 @@ mod tests {
             .send((
                 0,
                 Message::Deployed {
+                    prefill: None,
                     result: Ok(
                         "Applied on private dataspace original; exact retained receipt".into(),
                     ),
@@ -2357,6 +2867,7 @@ mod tests {
             .send((
                 desktop.epoch,
                 Message::Deployed {
+                    prefill: None,
                     result: Ok(receipt.into()),
                     refreshed: Err("original workspace observation unavailable".into()),
                 },
@@ -2436,6 +2947,7 @@ mod tests {
             .send((
                 0,
                 Message::Deployed {
+                    prefill: None,
                     result: Ok("Original Applied deployment receipt".into()),
                     refreshed: Err("original workspace observation unavailable".into()),
                 },
@@ -2452,6 +2964,7 @@ mod tests {
         // Exercise the real foreground task owner and failed Deployed completion path. No
         // native deployment or authenticated plan is fabricated by this presentation control.
         desktop.spawn(|| Message::Deployed {
+            prefill: None,
             result: Err("new deployment refused before dispatch".into()),
             refreshed: Err("new workspace observation unavailable".into()),
         });
@@ -2542,8 +3055,8 @@ mod tests {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         desktop.private_dialog = true;
         let context = egui::Context::default();
-        let output = context.run(egui::RawInput::default(), |context| {
-            desktop.private_dataspace_dialog(context)
+        let output = run_headless_frame(&context, egui::RawInput::default(), |context| {
+            desktop.private_dataspace_dialog(context.ctx())
         });
         assert!(!output.shapes.is_empty());
         assert!(!desktop.busy);
@@ -2586,7 +3099,7 @@ mod tests {
         assert_eq!(activity.back().unwrap().chars().count(), 4096);
     }
 
-    fn observation_context() -> ManagedContext {
+    pub(super) fn observation_context() -> ManagedContext {
         // Public metadata only; these controls never construct a signer, native worker or receipt.
         ManagedContext {
             name: "local".into(),
@@ -2606,6 +3119,7 @@ mod tests {
             phase: ManagedPhase::Stopped,
             running_peers: 0,
             failure: None,
+            validators: Vec::new(),
         }
     }
 
@@ -2783,6 +3297,7 @@ mod tests {
             .send((
                 desktop.epoch,
                 Message::Deployed {
+                    prefill: None,
                     result: Ok("new verified deployment receipt".into()),
                     refreshed: Err("captured workspace unavailable".into()),
                 },
@@ -2865,6 +3380,7 @@ mod tests {
             .send((
                 1,
                 Message::Review {
+                    summary: Vec::new(),
                     evidence: "old fees".into(),
                     decision,
                 },
@@ -2886,6 +3402,7 @@ mod tests {
             .send((
                 0,
                 Message::Review {
+                    summary: Vec::new(),
                     evidence: "quoted fees".into(),
                     decision,
                 },
@@ -2903,7 +3420,7 @@ mod tests {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
         let context = egui::Context::default();
         for view in View::ALL {
-            let output = context.run(egui::RawInput::default(), |context| {
+            let output = run_headless_frame(&context, egui::RawInput::default(), |context| {
                 egui::CentralPanel::default().show(context, |ui| match view {
                     View::Home => desktop.home(ui),
                     View::Accounts => desktop.accounts(ui),
@@ -2944,13 +3461,24 @@ mod tests {
     }
 
     fn drop_file(desktop: &mut Desktop, path: PathBuf) {
+        #[derive(Debug)]
+        struct NativeDrop(PathBuf);
+
+        impl egui::DroppedFile for NativeDrop {
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                std::fs::read(&self.0).map_err(|error| error.to_string())
+            }
+        }
+
         let context = egui::Context::default();
-        let _ = context.run(
+        let _ = run_headless_frame(
+            &context,
             egui::RawInput {
-                dropped_files: vec![egui::DroppedFile {
-                    path: Some(path),
-                    ..Default::default()
-                }],
+                dropped_files: vec![std::sync::Arc::new(NativeDrop(path))],
                 ..Default::default()
             },
             |context| desktop.show(context),
@@ -2987,7 +3515,9 @@ mod tests {
             created_ms: 0,
             genesis: false,
             bytes: 10,
+            body: None,
         });
+        desktop.open_block(3);
         desktop.latest_height = Some(3);
         desktop.ledger_error = Some("original validator observation".into());
         desktop.busy = true;
@@ -2997,6 +3527,10 @@ mod tests {
         desktop.observe_peer(2);
         assert_eq!(desktop.peer, 2);
         assert!(desktop.blocks_feed.is_empty());
+        assert!(
+            desktop.block_view.is_none(),
+            "the opened block came from the old validator"
+        );
         assert!(desktop.latest_height.is_none());
         assert!(desktop.ledger.is_none());
         assert!(desktop.ledger_error.is_none());
@@ -3025,7 +3559,14 @@ mod tests {
     #[test]
     fn submissions_mark_balances_stale_and_background_work_stays_quiet() {
         let mut desktop = Desktop::model(PathBuf::from("unused"));
-        desktop.spawn(|| Message::Submitted(Ok("Applied original in block 4".into())));
+        desktop.submission = Some(develop::Submission {
+            hash: "original".into(),
+            outcome: None,
+        });
+        desktop.spawn(|| Message::Submitted {
+            hash: "original".into(),
+            result: Ok(SubmissionOutcome::Applied { block_height: 4 }),
+        });
         assert!(desktop.busy && desktop.foreground);
         let completion = desktop
             .receiver
@@ -3035,12 +3576,52 @@ mod tests {
         desktop.poll();
         assert!(!desktop.busy && !desktop.foreground);
         assert!(desktop.ledger_stale);
+        assert_eq!(desktop.notice.as_deref(), Some("Applied in block 4."));
         assert_eq!(
-            desktop.notice.as_deref(),
-            Some("Applied original in block 4")
+            desktop.submission.as_ref().unwrap().outcome,
+            Some(Ok(SubmissionOutcome::Applied { block_height: 4 }))
+        );
+        assert!(
+            desktop.reveal_review,
+            "the settled review scrolls into view"
         );
         desktop.spawn_task(|| Message::Logs(Ok("background".into())));
         assert!(desktop.busy && !desktop.foreground);
+    }
+
+    #[test]
+    fn rejections_settle_on_the_review_card_without_a_banner_and_ignore_other_hashes() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.submission = Some(develop::Submission {
+            hash: "original".into(),
+            outcome: None,
+        });
+        let rejected = SubmissionOutcome::Rejected {
+            reason: "Validation failed: Operation is not permitted: no".into(),
+        };
+        for (hash, result) in [
+            ("another", Ok(SubmissionOutcome::Expired)),
+            ("original", Ok(rejected.clone())),
+        ] {
+            desktop
+                .sender
+                .send((
+                    desktop.epoch,
+                    Message::Submitted {
+                        hash: hash.into(),
+                        result,
+                    },
+                ))
+                .unwrap();
+        }
+        desktop.poll();
+        assert_eq!(
+            desktop.submission.as_ref().unwrap().outcome,
+            Some(Ok(rejected)),
+            "only the original hash settles the review"
+        );
+        assert!(desktop.ledger_stale, "rejected transactions still pay fees");
+        assert!(desktop.error.is_none() && desktop.notice.is_none());
     }
 }
 

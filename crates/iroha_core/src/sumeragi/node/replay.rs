@@ -2,6 +2,9 @@
 //!
 //! There is no imported State checkpoint, signer, transaction builder or work journal here.
 //! The FASTPQ worker retains this continuation and its original source while unavailable.
+//! [`check`] replays a copied store the same way for `iroha3d --check-replay`.
+
+pub mod check;
 
 use super::*;
 use crate::{
@@ -23,6 +26,9 @@ pub enum NativeReplaySeedError {
     /// A seed can be captured only before genesis, never from current World state.
     #[error("replay seed requires original pre-genesis State")]
     NotEmpty,
+    /// A restored-State seed requires a State restored at a positive height.
+    #[error("restored replay seed requires a State restored from a snapshot")]
+    NotRestored,
 }
 
 /// Original pre-genesis input identity and public policy snapshots.
@@ -70,7 +76,61 @@ impl NativeReplaySeed {
             return Err(NativeReplaySeedError::NotEmpty);
         }
         drop(view);
-        Ok(Self {
+        Ok(Self::from_state(
+            state,
+            kura_config,
+            genesis_account,
+            consensus_mode,
+            state.nexus_snapshot(),
+            state.lane_manifests.read().clone(),
+            state.lane_compliance_engine(),
+        ))
+    }
+
+    /// Capture the original pre-genesis inputs for a State restored from a snapshot (E56).
+    ///
+    /// Process policies are installed from the same configuration as on a fresh State. The
+    /// restored lane catalogs are those of its height, so the caller supplies the configured
+    /// pre-genesis Nexus and manifests (`crate::state::pregenesis_lane_policy`) that a fresh
+    /// State installs before genesis, which the isolated replay starts from again.
+    ///
+    /// # Errors
+    /// A State not restored at a positive height, or an original State-view refusal.
+    pub fn capture_restored(
+        state: &State,
+        kura_config: config::Kura,
+        genesis_account: AccountId,
+        consensus_mode: ConsensusMode,
+        nexus: config::Nexus,
+        manifests: crate::governance::manifest::LaneManifestRegistryHandle,
+        compliance: Option<Arc<crate::compliance::LaneComplianceEngine>>,
+    ) -> Result<Self, NativeReplaySeedError> {
+        let view = state.try_view_once()?;
+        if view.height() == 0 || view.native_execution_tip().is_none() {
+            return Err(NativeReplaySeedError::NotRestored);
+        }
+        drop(view);
+        Ok(Self::from_state(
+            state,
+            kura_config,
+            genesis_account,
+            consensus_mode,
+            nexus,
+            manifests,
+            compliance,
+        ))
+    }
+
+    fn from_state(
+        state: &State,
+        kura_config: config::Kura,
+        genesis_account: AccountId,
+        consensus_mode: ConsensusMode,
+        nexus: config::Nexus,
+        manifests: crate::governance::manifest::LaneManifestRegistryHandle,
+        compliance: Option<Arc<crate::compliance::LaneComplianceEngine>>,
+    ) -> Self {
+        Self {
             source: state.kura_handle(),
             budget: state.ivm_execution_budget(),
             chain: state.chain_id_ref().clone(),
@@ -81,15 +141,15 @@ impl NativeReplaySeed {
             pipeline: state.installed_pipeline().clone(),
             zk: state.installed_zk().clone(),
             crypto: state.crypto(),
-            nexus: state.nexus_snapshot(),
+            nexus,
             oracle: state.oracle.clone(),
             fraud: state.fraud_monitoring.clone(),
             governance: state.gov.clone(),
             content: state.content.clone(),
             settlement: state.settlement,
-            manifests: state.lane_manifests.read().clone(),
-            compliance: state.lane_compliance_engine(),
-        })
+            manifests,
+            compliance,
+        }
     }
 
     pub(crate) fn belongs_to(&self, state: &State) -> bool {
@@ -101,6 +161,10 @@ impl NativeReplaySeed {
 
     // A failed initial bootstrap publishes only into its own disposable Kura.
     // Rebuilding that unfinished local seed cannot change the original source.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn begin(
         &self,
         target: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -138,7 +202,10 @@ impl NativeReplaySeed {
                 genesis_account: self.genesis_account.clone(),
                 consensus_mode: self.consensus_mode,
             },
-            Some((self.source.store_root().join("lanes"), target.height())),
+            Some(IsolatedSource {
+                lanes: self.source.store_root().join("lanes"),
+                fastpq_target: Some(target.height()),
+            }),
         )?;
         check_replay_deadline(deadline)?;
         let scope = state
@@ -203,7 +270,7 @@ impl NativeReplaySeed {
             &self.nexus.dataspace_catalog,
         )?;
         let query = crate::query::store::LiveQueryStore::from_config(
-            Default::default(),
+            config::LiveQueryStore::default(),
             iroha_futures::supervisor::ShutdownSignal::new(),
         )
         .into_inert_handle();
@@ -245,7 +312,7 @@ impl NativeReplaySeed {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum IsolatedReplayError {
+pub enum IsolatedReplayError {
     #[error("isolated replay step deadline expired")]
     Deadline,
     #[error("isolated replay source: {0}")]
@@ -280,7 +347,7 @@ pub(crate) enum IsolatedReplayError {
 
 /// Exact completed isolated replay transport, still untrusted by FASTPQ until
 /// the original source reader joins the complete tape to its independent target.
-pub(crate) struct ReplayedNativeTransport {
+pub struct ReplayedNativeTransport {
     kura: Arc<Kura>,
     target: ReplayTarget,
 }
@@ -305,6 +372,10 @@ impl ReplayTarget {
     }
 }
 impl ReplayedNativeTransport {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn into_for(
         self,
         native: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -319,8 +390,8 @@ impl ReplayedNativeTransport {
 }
 
 /// The existing startup executor, retained at one exact next height. Its source
-/// KuraBlockStore only reads; its prepared owner only publishes into temporary Kura.
-pub(crate) struct IsolatedNativeReplay {
+/// `KuraBlockStore` only reads; its prepared owner only publishes into temporary Kura.
+pub struct IsolatedNativeReplay {
     prepared: Prepared,
     source: KuraBlockStore,
     pending: Option<(AvailableBody, Qc)>,
@@ -331,6 +402,10 @@ pub(crate) struct IsolatedNativeReplay {
 impl IsolatedNativeReplay {
     /// Cooperative finite continuation. The caller retains the original target,
     /// deadline and refusal. No intermediate height is a FASTPQ cursor completion.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn advance(
         &mut self,
         target: &super::super::certified_chain::AuthenticatedExecutionBlock,
@@ -399,8 +474,9 @@ impl IsolatedNativeReplay {
                 .ok_or(IsolatedReplayError::Identity(
                     "replay has no applied native result",
                 ))?;
+            let target_iroha_hash = target.block_hash();
             if tip.height() != target.height()
-                || tip.iroha_hash() != target.block_hash()
+                || tip.iroha_hash() != target_iroha_hash
                 || tip.core_hash() != target.core_hash()
                 || tip.result() != target.result()
                 || tip.root_scope() != target.root_scope()
@@ -422,6 +498,10 @@ impl IsolatedNativeReplay {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn check_replay_deadline(deadline: Instant) -> Result<(), IsolatedReplayError> {
     if Instant::now() >= deadline {
         Err(IsolatedReplayError::Deadline)
@@ -434,7 +514,7 @@ fn check_replay_deadline(deadline: Instant) -> Result<(), IsolatedReplayError> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) fn original_source_fixture_for_test(
+pub fn original_source_fixture_for_test(
     seed_count: usize,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,

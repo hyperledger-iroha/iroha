@@ -868,7 +868,7 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
             proposal.set_npos_consensus_effects(Some(NposConsensusEffects {
                 parent_service_commit_qc,
                 evidence_admissions: vec![proof.clone()],
-                penalty_actions: Default::default(),
+                penalty_actions: iroha_data_model::consensus::NposPenaltyActions::default(),
             }));
         },
     );
@@ -1206,13 +1206,13 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
     };
     let first = signed_vote(71);
     let second = signed_vote(72);
-    assert!(deliver(&mut kernel, &from, first.clone()).is_empty());
-    let mut bad_signature = second.clone();
+    assert!(deliver(&mut kernel, &from, first).is_empty());
+    let mut bad_signature = second;
     bad_signature.sig.0[0] ^= 1;
-    let mut foreign_epoch = second.clone();
+    let mut foreign_epoch = second;
     foreign_epoch.epoch.epoch += 1;
     foreign_epoch.sig = signer.sign(&foreign_epoch.preimage()).unwrap();
-    let mut foreign_instance = second.clone();
+    let mut foreign_instance = second;
     foreign_instance.instance.0[0] ^= 1;
     foreign_instance.sig = signer.sign(&foreign_instance.preimage()).unwrap();
     for invalid in [bad_signature, foreign_epoch, foreign_instance] {
@@ -1221,17 +1221,14 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
             "unauthenticated or foreign votes cannot become slash evidence"
         );
     }
-    let mut reports = deliver(&mut kernel, &from, second.clone());
+    let mut reports = deliver(&mut kernel, &from, second);
     assert_eq!(
         reports.len(),
         1,
         "the actual detector reports the conflicting slot"
     );
     let report = reports.pop().unwrap();
-    assert_eq!(
-        report,
-        Evidence::VoteEquivocation(first.clone(), second.clone())
-    );
+    assert_eq!(report, Evidence::VoteEquivocation(first, second));
     for replay in [first, second] {
         assert!(
             deliver(&mut kernel, &from, replay).is_empty(),
@@ -1241,6 +1238,14 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
     report
 }
 
+fn original_lane_fee_policy() -> iroha_data_model::block::consensus::RootFeePolicy {
+    iroha_data_model::block::consensus::RootFeePolicy {
+        fee_asset_id: iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id,
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    }
+}
+
 fn fund_original_validator_in_signed_genesis(
     config: &mut crate::sumeragi::test_chain::TestChainConfig,
 ) {
@@ -1248,7 +1253,7 @@ fn fund_original_validator_in_signed_genesis(
     use iroha_data_model::{Registrable, domain::Domain};
     use iroha_data_model::{
         account::{Account, AccountId},
-        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetId},
         isi::RegisterPublicLaneValidator,
         nexus::PublicLaneMonetaryPlanV1,
     };
@@ -1277,21 +1282,40 @@ fn fund_original_validator_in_signed_genesis(
     )
     .unwrap();
     nexus.configured_lane_catalog = nexus.lane_catalog.clone();
-    nexus.staking.max_slash_bps = 1_000;
     let sink = AccountId::new(
         KeyPair::from_seed(vec![0xE3; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
-    nexus.staking.slash_sink_account_id = sink.to_string();
-    let staking = &nexus.staking;
-    let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
+    let definition = iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        .xor_asset_definition_id;
+    // These scenarios exercise paid ordinary work. Author its positive schedule
+    // in the original signed genesis instead of the helper's zero-rate default.
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            original_lane_fee_policy()
+                .into_custom_parameter()
+                .expect("complete original signed fee author input"),
+        ));
+    let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(definition.clone());
+    staking.max_slash_bps = 1_000;
+    staking.slash_sink_account_id = sink.clone();
+    let escrow = staking.stake_escrow_account_id.clone();
+    let selected = config.genesis_parameters.iter_mut().filter(|parameter| matches!(parameter,
+        iroha_data_model::parameter::Parameter::Custom(custom)
+            if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
+    )).collect::<Vec<_>>();
     assert_eq!(
-        definition,
-        iroha_data_model::parameter::system::SumeragiNposParameters::default()
-            .xor_asset_definition_id
+        selected.len(),
+        1,
+        "the original fixture has exactly one author policy"
     );
-    let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+    *selected.into_iter().next().unwrap() = iroha_data_model::parameter::Parameter::Custom(
+        staking
+            .into_custom_parameter()
+            .expect("complete original signed staking author input"),
+    );
     assert_ne!(escrow, sink, "a slash must physically leave stake escrow");
     let source_asset = AssetId::new(definition.clone(), validator.clone());
     let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
@@ -1425,7 +1449,27 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
             .get(&stake_key)
             .unwrap()
             .0;
-        let sink = AccountId::parse_encoded(&view.nexus().staking.slash_sink_account_id).unwrap();
+        assert_eq!(
+            view.world().parameters().root_fees(),
+            Some(&original_lane_fee_policy()),
+            "paid staking operations use the exact original signed fee schedule"
+        );
+        let committed_policy = view.world().parameters().staking_policy().unwrap();
+        assert_eq!(
+            committed_policy.max_slash_bps, 1_000,
+            "the signed original genesis authors the actual slash fraction"
+        );
+        assert_eq!(
+            &committed_policy.stake_asset_id,
+            escrow.definition(),
+            "retained original liability keeps its exact authored asset"
+        );
+        assert_eq!(
+            &committed_policy.stake_escrow_account_id,
+            escrow.account(),
+            "retained original liability keeps its exact authored custody"
+        );
+        let sink = committed_policy.slash_sink_account_id.clone();
         (
             escrow.clone(),
             AssetId::with_scope(escrow.definition().clone(), sink, *escrow.scope()),
@@ -1589,12 +1633,16 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
             .expect("authenticated next carrier schedule")
             .params
             .block_time_ms;
-        let delay_ms = u64::try_from(view.nexus().staking.unbonding_delay.as_millis())
-            .expect("configured unbonding delay fits the fixture clock");
+        let delay_ms = view
+            .world()
+            .parameters()
+            .staking_policy()
+            .unwrap()
+            .unbonding_delay_ms;
         schedule_created_at_ms
             .checked_add(cadence_ms)
             .and_then(|time| time.checked_add(delay_ms))
-            .expect("exact configured unbond release time")
+            .expect("exact committed unbond release time")
     };
     let schedule = sign_paid(
         &chain,
@@ -2110,8 +2158,8 @@ fn local_proposer_keeps_earlier_selection_and_effects_when_later_report_retries(
     // keeps the earlier report and the proposal keeps its effects.
     let effects = derive(high).expect("the smallest admitting pool yields proposal effects");
     assert_eq!(
-        effects.evidence_admissions,
-        [root.clone()],
+        effects.evidence_admissions.as_slice(),
+        std::slice::from_ref(&root),
         "HC914 a retryable later report must not abort the proposal effects"
     );
     assert!(effects.penalty_actions.is_empty());

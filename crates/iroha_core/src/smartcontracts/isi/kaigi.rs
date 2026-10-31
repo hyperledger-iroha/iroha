@@ -5,7 +5,6 @@ use crate::{
     state::{StateReadOnly, StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::Hash;
-#[cfg(test)]
 use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     HasMetadata, Identifiable,
@@ -29,12 +28,12 @@ use iroha_data_model::{
         KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1, KAIGI_MAX_PARTICIPANTS_V1,
         KAIGI_MAX_USAGE_COMMITMENTS_V1, KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1,
         KAIGI_RECORD_MAX_JSON_BYTES_V1, KAIGI_RELAY_ALLOWLIST_MAX_ENTRIES_V1,
-        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
-        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1, KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1, KaigiId,
-        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord,
-        KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayManifest, KaigiRelayRegistration,
-        KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
-        kaigi_relay_metadata_key,
+        KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
+        KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1, KaigiId, KaigiParticipantCommitment,
+        KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRecord, KaigiRelayAllowlist,
+        KaigiRelayFeedback, KaigiRelayManifest, KaigiRelayRegistration, KaigiStatus,
+        kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
+        kaigi_relay_metadata_key, parse_kaigi_relay_hpke_key_v1,
     },
     prelude::{AccountId, Domain, Json},
     query::error::FindError,
@@ -423,7 +422,7 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                             &context,
                             Some(&stored.commitment),
                         )?;
-                        record.push_nullifier(provided_nullifier.clone());
+                        record.push_nullifier(*provided_nullifier);
                     }
                 }
                 record.status = KaigiStatus::Ended;
@@ -669,7 +668,7 @@ impl Execute for RegisterKaigiRelay {
                 "Kaigi relay registry is at its {KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1}-entry limit"
             )));
         }
-        let value = norito::core::classify_decode_attempt(|| Json::try_new(registration.clone()))
+        let value = norito::core::classify_decode_attempt(|| Json::try_new(&registration))
             .map_err(|error| {
                 canonical_decode_attempt_error(error, |error| Error::Conversion(error.to_string()))
             })
@@ -1104,7 +1103,7 @@ fn store_record_with_previous_dependencies(
     validate_kaigi_record_v1(record).map_err(|message| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(message))
     })?;
-    let value = norito::core::classify_decode_attempt(|| Json::try_new(record.clone()))
+    let value = norito::core::classify_decode_attempt(|| Json::try_new(record))
         .map_err(|error| {
             canonical_decode_attempt_error(error, |error| Error::Conversion(error.to_string()))
         })
@@ -1124,24 +1123,26 @@ fn store_record_with_previous_dependencies(
     )?;
     storage_reservation_v1::enforce(state_transaction, record, &value)?;
     let previous_dependencies = if let Some(previous) = known_previous_dependencies {
-        previous.clone()
+        std::borrow::Cow::Borrowed(previous)
     } else {
-        state_transaction
-            .world
-            .domain(domain_id)?
-            .metadata()
-            .get(&key)
-            .map(|value| {
-                decode_stored_kaigi_record(domain_id, &key, value)
-                    .map(|record| active_call_dependency_accounts(&record))
-            })
-            .transpose()
-            .map_err(|error| {
-                state_transaction
-                    .world
-                    .attempt_error_to_instruction_error(error)
-            })?
-            .unwrap_or_default()
+        std::borrow::Cow::Owned(
+            state_transaction
+                .world
+                .domain(domain_id)?
+                .metadata()
+                .get(&key)
+                .map(|value| {
+                    decode_stored_kaigi_record(domain_id, &key, value)
+                        .map(|record| active_call_dependency_accounts(&record))
+                })
+                .transpose()
+                .map_err(|error| {
+                    state_transaction
+                        .world
+                        .attempt_error_to_instruction_error(error)
+                })?
+                .unwrap_or_default(),
+        )
     };
     let next_dependencies = active_call_dependency_accounts(record);
     let dependency = (KAIGI_DEPENDENCY_ACTIVE_CALL, domain_id.clone(), key.clone());
@@ -1191,6 +1192,12 @@ fn ensure_kaigi_json_len(actual: usize, limit: usize, label: &str) -> Result<(),
     }
     Ok(())
 }
+/// Check a retained scalar log for duplicates without per-entry tree allocations.
+fn scalars_are_unique(scalars: impl Iterator<Item = KaigiAuthorizationScalarV1>) -> bool {
+    let mut sorted = scalars.collect::<Vec<_>>();
+    sorted.sort_unstable();
+    sorted.windows(2).all(|pair| pair[0] != pair[1])
+}
 fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
     let participant_limit = match record.max_participants {
         Some(0) => return Err("Kaigi max_participants must be greater than zero".into()),
@@ -1234,12 +1241,12 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
             "Kaigi roster commitments exceed the effective {participant_limit}-entry limit"
         ));
     }
-    let mut commitments = BTreeSet::new();
-    if record
-        .roster_commitments
-        .iter()
-        .any(|entry| !commitments.insert(&entry.commitment))
-    {
+    if !scalars_are_unique(
+        record
+            .roster_commitments
+            .iter()
+            .map(|entry| entry.commitment),
+    ) {
         return Err("Kaigi roster commitments must be unique".into());
     }
     if record.nullifier_log.len() > KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1 {
@@ -1247,12 +1254,7 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
             "Kaigi nullifier log exceeds the {KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1}-entry limit"
         ));
     }
-    let mut nullifiers = BTreeSet::new();
-    if record
-        .nullifier_log
-        .iter()
-        .any(|entry| !nullifiers.insert(&entry.digest))
-    {
+    if !scalars_are_unique(record.nullifier_log.iter().map(|entry| entry.digest)) {
         return Err("Kaigi nullifiers must be unique".into());
     }
     if record.usage_commitments.len() > KAIGI_MAX_USAGE_COMMITMENTS_V1 {
@@ -1260,12 +1262,7 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
             "Kaigi usage commitments exceed the {KAIGI_MAX_USAGE_COMMITMENTS_V1}-entry limit"
         ));
     }
-    let mut usage_commitments = BTreeSet::new();
-    if record
-        .usage_commitments
-        .iter()
-        .any(|commitment| !usage_commitments.insert(commitment))
-    {
+    if !scalars_are_unique(record.usage_commitments.iter().copied()) {
         return Err("Kaigi usage commitments must be unique".into());
     }
     if record.roster_root != KaigiRecord::compute_roster_root(&record.roster_commitments) {
@@ -1425,7 +1422,7 @@ fn store_relay_feedback(
     let key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })?;
-    let value = norito::core::classify_decode_attempt(|| Json::try_new(feedback.clone()))
+    let value = norito::core::classify_decode_attempt(|| Json::try_new(feedback))
         .map_err(|error| {
             canonical_decode_attempt_error(error, |error| Error::Conversion(error.to_string()))
         })
@@ -1581,6 +1578,10 @@ pub(crate) fn is_reserved_kaigi_metadata_key(key: &Name) -> bool {
         || literal.starts_with("kaigi_relay_feedback__")
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The dependency retains its original budgeted decoded record without an additional uncharged allocation"
+)]
 enum IndexedKaigiDependency {
     ActiveCall(KaigiRecord),
     RelayRegistration,
@@ -2220,6 +2221,94 @@ fn persisted_kaigi_rekey_component(
     }
     visited
 }
+/// One account's standing in a call, as a client needs it before acting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KaigiParticipationViewV1 {
+    /// Whether the account belongs to the host's rekey lineage.
+    pub is_host: bool,
+    /// Retained subject that the next authorization proof must bind.
+    ///
+    /// This is the original account, which differs from the queried account
+    /// after an account-ID rekey.
+    pub original_account: AccountId,
+    /// Whether the account is the host or currently holds roster membership.
+    pub active: bool,
+    /// Private calls only: zero for the host, otherwise the live participation's
+    /// sequence or the only sequence the next join may prove.
+    pub sequence: Option<u64>,
+    /// Private calls only: the stored host or live participant commitment.
+    pub active_commitment: Option<KaigiAuthorizationScalarV1>,
+}
+
+/// Project an account's standing in a call through its persisted rekey lineage.
+///
+/// The ledger, not the client, owns the participation sequence, so a prover has
+/// to read it before it can authorize a join or leave. An account with no
+/// retained participation may still join, starting from sequence one.
+///
+/// # Errors
+/// Fails on malformed rekey history, or when one lineage owns several subjects.
+pub fn kaigi_participation_view_v1(
+    world: &impl WorldReadOnly,
+    record: &KaigiRecord,
+    account: &AccountId,
+) -> Result<KaigiParticipationViewV1, Error> {
+    let graph = persisted_kaigi_rekey_graph(world, [account.clone()])?;
+    let component = persisted_kaigi_rekey_component(&graph.neighbours, account);
+    let private = record.privacy_mode == KaigiPrivacyMode::ZkRosterV1;
+    if component.contains(&record.host) {
+        return Ok(KaigiParticipationViewV1 {
+            is_host: true,
+            original_account: record.host.clone(),
+            active: true,
+            sequence: private.then_some(0),
+            active_commitment: record
+                .host_commitment
+                .as_ref()
+                .map(|commitment| commitment.commitment),
+        });
+    }
+    if !private {
+        let member = record
+            .participants
+            .iter()
+            .find(|participant| component.contains(*participant));
+        return Ok(KaigiParticipationViewV1 {
+            is_host: false,
+            original_account: member.unwrap_or(account).clone(),
+            active: member.is_some(),
+            sequence: None,
+            active_commitment: None,
+        });
+    }
+    let mut owners = record
+        .private_participation
+        .entries()
+        .iter()
+        .filter(|entry| component.contains(entry.original_account()));
+    let owner = owners.next();
+    if owners.next().is_some() {
+        return Err(privacy_error(
+            "multiple retained Kaigi subjects share one account rekey lineage",
+        ));
+    }
+    Ok(owner.map_or_else(
+        || KaigiParticipationViewV1 {
+            is_host: false,
+            original_account: account.clone(),
+            active: false,
+            sequence: Some(1),
+            active_commitment: None,
+        },
+        |entry| KaigiParticipationViewV1 {
+            is_host: false,
+            original_account: entry.original_account().clone(),
+            active: entry.active_commitment().is_some(),
+            sequence: Some(entry.sequence()),
+            active_commitment: entry.active_commitment(),
+        },
+    ))
+}
 fn record_has_participant_in_active_lineage(
     state_transaction: &StateTransaction<'_, '_>,
     record: &KaigiRecord,
@@ -2239,15 +2328,19 @@ fn record_has_participant_in_active_lineage(
                 "multiple retained Kaigi subjects share one account rekey lineage",
             ));
         }
-        return match first.filter(|entry| entry.active_commitment().is_some()) {
-            Some(entry) => accounts_share_active_lineage_with_graph(
-                state_transaction,
-                entry.original_account(),
-                account,
-                graph,
-            ),
-            None => Ok(false),
-        };
+        return first
+            .filter(|entry| entry.active_commitment().is_some())
+            .map_or_else(
+                || Ok(false),
+                |entry| {
+                    accounts_share_active_lineage_with_graph(
+                        state_transaction,
+                        entry.original_account(),
+                        account,
+                        graph,
+                    )
+                },
+            );
     }
     Ok(
         !record_participant_indexes_in_active_lineage(state_transaction, record, account, graph)?
@@ -2273,18 +2366,18 @@ fn record_participant_indexes_in_active_lineage(
                 .into(),
         ));
     }
-    if let Some(&index) = indexes.first() {
-        if !accounts_share_active_lineage_with_graph(
+    if let Some(&index) = indexes.first()
+        && !accounts_share_active_lineage_with_graph(
             state_transaction,
             &record.participants[index],
             account,
             graph,
-        )? {
-            return Err(Error::InvariantViolation(
-                "persisted Kaigi participant lineage disagrees with active account-id rekey state"
-                    .into(),
-            ));
-        }
+        )?
+    {
+        return Err(Error::InvariantViolation(
+            "persisted Kaigi participant lineage disagrees with active account-id rekey state"
+                .into(),
+        ));
     }
     Ok(indexes)
 }
@@ -2322,15 +2415,17 @@ fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
     Ok(())
 }
 fn validate_relay_hpke_public_key(hpke_public_key: &[u8]) -> Result<(), Error> {
-    if hpke_public_key.is_empty() {
-        return Err(relay_error("relay HPKE public key must be non-empty"));
-    }
-    if hpke_public_key.len() > KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 {
-        return Err(relay_error(format!(
-            "relay HPKE public key must not exceed {KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1} bytes"
-        )));
-    }
-    Ok(())
+    parse_kaigi_relay_hpke_key_v1(hpke_public_key)
+        .map(|_| ())
+        .map_err(|error| relay_error(error.to_string()))
+}
+/// A well-formed relay key descriptor for tests; different seeds give different keys.
+#[cfg(test)]
+pub(crate) fn test_relay_hpke_key(seed: u8) -> Vec<u8> {
+    use iroha_data_model::kaigi::{KaigiRelayHpkeSuiteV1, encode_kaigi_relay_hpke_key_v1};
+    let suite = KaigiRelayHpkeSuiteV1::MlKem768AuthPsk;
+    encode_kaigi_relay_hpke_key_v1(suite, &vec![seed; suite.public_key_len()])
+        .expect("the key has its suite's exact length")
 }
 fn decode_stored_relay_registration(
     domain_id: &DomainId,
@@ -2515,30 +2610,30 @@ where
             let literal = key.as_ref();
             let (kind, accounts) = if literal.starts_with("kaigi__") {
                 let record = decode_stored_kaigi_record(domain.id(), key, value)?;
-                if record.status == KaigiStatus::Active {
-                    if let Some(manifest) = record.relay_manifest.as_ref() {
-                        for hop in &manifest.hops {
-                            match relay_keys.get(&hop.relay_id) {
-                                None => {
-                                    return Err(Error::InvariantViolation(
+                if record.status == KaigiStatus::Active
+                    && let Some(manifest) = record.relay_manifest.as_ref()
+                {
+                    for hop in &manifest.hops {
+                        match relay_keys.get(&hop.relay_id) {
+                            None => {
+                                return Err(Error::InvariantViolation(
                                         format!(
                                             "active Kaigi {} manifest relay {} has no registered descriptor at restore",
                                             record.id, hop.relay_id
                                         )
                                         .into(),
                                     ).into());
-                                }
-                                Some(registered_key) if registered_key != &hop.hpke_public_key => {
-                                    return Err(Error::InvariantViolation(
+                            }
+                            Some(registered_key) if registered_key != &hop.hpke_public_key => {
+                                return Err(Error::InvariantViolation(
                                         format!(
                                             "active Kaigi {} manifest relay {} HPKE key differs from its registered descriptor at restore",
                                             record.id, hop.relay_id
                                         )
                                         .into(),
                                     ).into());
-                                }
-                                Some(_) => {}
                             }
+                            Some(_) => {}
                         }
                     }
                 }
@@ -2758,13 +2853,11 @@ fn validate_private_participation_lineages(
         return Ok(());
     }
     let mut endpoints = BTreeSet::new();
-    for owner in std::iter::once(&record.host).chain(
-        record
-            .private_participation
-            .entries()
-            .iter()
-            .map(|entry| entry.original_account()),
-    ) {
+    for owner in
+        std::iter::once(&record.host).chain(record.private_participation.entries().iter().map(
+            iroha_data_model::kaigi::participation::KaigiPrivateParticipationV1::original_account,
+        ))
+    {
         // Independent components get independent work bounds. Combining all
         // participants here would reject valid calls after unrelated rekeys.
         let graph = persisted_kaigi_rekey_graph(world, [owner.clone()])?;
@@ -3692,7 +3785,7 @@ mod tests {
         let (mut private, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
         private.roster_commitments = hashes[..KAIGI_MAX_PARTICIPANTS_V1]
             .iter()
-            .cloned()
+            .copied()
             .map(|commitment| KaigiParticipantCommitment { commitment })
             .collect();
         private.roster_root = KaigiRecord::compute_roster_root(&private.roster_commitments);
@@ -3704,7 +3797,7 @@ mod tests {
         }
         validate_kaigi_record_v1(&private).expect("exact private roster limit is valid");
         private.roster_commitments.push(KaigiParticipantCommitment {
-            commitment: hashes[KAIGI_MAX_PARTICIPANTS_V1].clone(),
+            commitment: hashes[KAIGI_MAX_PARTICIPANTS_V1],
         });
         assert!(
             validate_kaigi_record_v1(&private)
@@ -3715,14 +3808,14 @@ mod tests {
         let (mut private, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
         private.nullifier_log = hashes[..KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1]
             .iter()
-            .cloned()
+            .copied()
             .map(|digest| KaigiParticipantNullifier { digest })
             .collect();
         private.status = KaigiStatus::Ended;
         private.ended_at_ms = Some(private.created_at_ms);
         validate_kaigi_record_v1(&private).expect("exact terminal nullifier limit is valid");
         private.nullifier_log.push(KaigiParticipantNullifier {
-            digest: hashes[KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1].clone(),
+            digest: hashes[KAIGI_MAX_NULLIFIER_LOG_ENTRIES_V1],
         });
         assert!(
             validate_kaigi_record_v1(&private)
@@ -3737,7 +3830,7 @@ mod tests {
         validate_kaigi_record_v1(&private).expect("exact usage commitment limit is valid");
         private
             .usage_commitments
-            .push(hashes[KAIGI_MAX_USAGE_COMMITMENTS_V1].clone());
+            .push(hashes[KAIGI_MAX_USAGE_COMMITMENTS_V1]);
         private.segments_recorded = private.segments_recorded.saturating_add(1);
         assert!(
             validate_kaigi_record_v1(&private)
@@ -3906,10 +3999,10 @@ mod tests {
         let (mut record, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
         record.roster_commitments = vec![
             KaigiParticipantCommitment {
-                commitment: duplicate.clone(),
+                commitment: duplicate,
             },
             KaigiParticipantCommitment {
-                commitment: duplicate.clone(),
+                commitment: duplicate,
             },
         ];
         assert!(
@@ -3919,12 +4012,8 @@ mod tests {
         );
         record.roster_commitments.clear();
         record.nullifier_log = vec![
-            KaigiParticipantNullifier {
-                digest: duplicate.clone(),
-            },
-            KaigiParticipantNullifier {
-                digest: duplicate.clone(),
-            },
+            KaigiParticipantNullifier { digest: duplicate },
+            KaigiParticipantNullifier { digest: duplicate },
         ];
         assert!(
             validate_kaigi_record_v1(&record)
@@ -3932,7 +4021,7 @@ mod tests {
                 .contains("nullifiers must be unique")
         );
         record.nullifier_log.clear();
-        record.usage_commitments = vec![duplicate.clone(), duplicate];
+        record.usage_commitments = vec![duplicate, duplicate];
         record.segments_recorded = 2;
         assert!(
             validate_kaigi_record_v1(&record)
@@ -4000,19 +4089,17 @@ mod tests {
         });
     }
     #[test]
-    fn relay_hpke_public_key_validation_enforces_v1_byte_boundaries() {
+    fn relay_hpke_public_key_validation_requires_exact_suite_framing() {
+        let valid = test_relay_hpke_key(0xA5);
+        assert!(validate_relay_hpke_public_key(&valid).is_ok());
         assert!(validate_relay_hpke_public_key(&[]).is_err());
-        assert!(
-            validate_relay_hpke_public_key(&vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1])
-                .is_ok()
-        );
-        assert!(
-            validate_relay_hpke_public_key(&vec![
-                0xA5;
-                KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
-            ])
-            .is_err()
-        );
+        assert!(validate_relay_hpke_public_key(&valid[..valid.len() - 1]).is_err());
+        let mut overlong = valid.clone();
+        overlong.push(0);
+        assert!(validate_relay_hpke_public_key(&overlong).is_err());
+        let mut unknown_suite = valid;
+        unknown_suite[..2].copy_from_slice(&0x7777_u16.to_le_bytes());
+        assert!(validate_relay_hpke_public_key(&unknown_suite).is_err());
     }
     #[test]
     fn relay_manifest_validation_enforces_rules() {
@@ -4028,17 +4115,17 @@ mod tests {
             hops: vec![
                 KaigiRelayHop {
                     relay_id: hop_a.clone(),
-                    hpke_public_key: vec![1, 2, 3],
+                    hpke_public_key: test_relay_hpke_key(1),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: hop_b.clone(),
-                    hpke_public_key: vec![4, 5, 6],
+                    hpke_public_key: test_relay_hpke_key(4),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: hop_c.clone(),
-                    hpke_public_key: vec![7, 8, 9],
+                    hpke_public_key: test_relay_hpke_key(7),
                     weight: 1,
                 },
             ],
@@ -4048,10 +4135,9 @@ mod tests {
         let mut invalid = valid.clone();
         invalid.hops[1].hpke_public_key.clear();
         assert!(validate_relay_manifest(&invalid).is_err());
-        let mut oversized_key = valid.clone();
-        oversized_key.hops[1].hpke_public_key =
-            vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
-        assert!(validate_relay_manifest(&oversized_key).is_err());
+        let mut overlong_key = valid.clone();
+        overlong_key.hops[1].hpke_public_key.push(0);
+        assert!(validate_relay_manifest(&overlong_key).is_err());
         let mut zero_weight = valid.clone();
         zero_weight.hops[0].weight = 0;
         assert!(validate_relay_manifest(&zero_weight).is_err());
@@ -4075,17 +4161,17 @@ mod tests {
             hops: vec![
                 KaigiRelayHop {
                     relay_id: retired_relay.clone(),
-                    hpke_public_key: vec![1],
+                    hpke_public_key: test_relay_hpke_key(1),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: active_relay.clone(),
-                    hpke_public_key: vec![2],
+                    hpke_public_key: test_relay_hpke_key(2),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: third_relay.clone(),
-                    hpke_public_key: vec![3],
+                    hpke_public_key: test_relay_hpke_key(3),
                     weight: 1,
                 },
             ],
@@ -4127,7 +4213,7 @@ mod tests {
                     .expect("later independent alias reassignment");
                 stx.world.replace_account_rekey_record(history);
                 stx.world
-                    .insert_account_alias_binding(alias.clone(), new_alias_owner.clone());
+                    .insert_account_alias_binding(&(alias.clone()), &(new_alias_owner.clone()));
 
                 assert!(
                     accounts_share_active_lineage(stx, &retired, &active)
@@ -4624,13 +4710,26 @@ mod tests {
     {
         with_state_transaction_at(0, f);
     }
-    fn with_state_transaction_at<F>(creation_time_ms: u64, mut f: F)
+    pub(super) fn with_state_transaction_at<F>(creation_time_ms: u64, mut f: F)
     where
         F: FnMut(&mut StateTransaction<'_, '_>),
     {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query);
+        let mut world = World::default();
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
+            )
+            .expect("explicit component account crypto policy");
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -4655,15 +4754,24 @@ mod tests {
             .iter()
             .cloned()
             .map(|account| Account::new(account).build(&ALICE_ID));
-        let state = State::new(
-            World::with(
-                [seeded_domain],
-                seeded_accounts,
-                std::iter::empty::<AssetDefinition>(),
-            ),
-            kura,
-            query,
+        let mut world = World::with(
+            [seeded_domain],
+            seeded_accounts,
+            std::iter::empty::<AssetDefinition>(),
         );
+        // This isolated component fixture authors its predecessor policy explicitly.
+        // It does not claim original signed genesis or consensus publication.
+        world
+            .set_parameter_for_testing(
+                iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                ])
+                .unwrap()
+                .into_parameter()
+                .unwrap(),
+            )
+            .expect("explicit component account crypto policy");
+        let state = State::new(world, kura, query);
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -4720,7 +4828,7 @@ mod tests {
                 .expect("canonical account-id rekey fixture"),
         );
         stx.world
-            .insert_account_alias_binding(alias, active.clone());
+            .insert_account_alias_binding(&(alias), &(active.clone()));
     }
     #[test]
     fn transparent_join_and_leave_updates_participants_only() {
@@ -5798,7 +5906,7 @@ mod tests {
                 .insert(allowlist_key, allowlist_json);
             let registration = KaigiRelayRegistration {
                 relay_id: relay_id.clone(),
-                hpke_public_key: vec![0xAA],
+                hpke_public_key: test_relay_hpke_key(0xAA),
                 bandwidth_class: 1,
             };
             let result = RegisterKaigiRelay {
@@ -5838,7 +5946,7 @@ mod tests {
             let error = RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -5885,7 +5993,7 @@ mod tests {
             RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -5918,7 +6026,7 @@ mod tests {
             RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -5964,7 +6072,7 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &relay_id,
-                (KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), key),
+                &(KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), key),
             );
 
             let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&other))
@@ -5985,7 +6093,7 @@ mod tests {
                 let descriptor_key = kaigi_relay_metadata_key(&key_relay).expect("descriptor key");
                 let descriptor = KaigiRelayRegistration {
                     relay_id: payload_relay.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 };
                 stx.world
@@ -6004,7 +6112,7 @@ mod tests {
                 seed_kaigi_account_dependency_for_testing(
                     stx,
                     &key_relay,
-                    descriptor_dependency.clone(),
+                    &(descriptor_dependency.clone()),
                 );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
@@ -6053,7 +6161,7 @@ mod tests {
                 seed_kaigi_account_dependency_for_testing(
                     stx,
                     &key_relay,
-                    feedback_dependency.clone(),
+                    &(feedback_dependency.clone()),
                 );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
@@ -6083,7 +6191,7 @@ mod tests {
                 seed_kaigi_account_dependency_for_testing(
                     stx,
                     &key_relay,
-                    (
+                    &(
                         KAIGI_DEPENDENCY_RELAY_FEEDBACK,
                         home.clone(),
                         correct_feedback_key,
@@ -6119,7 +6227,7 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &relay_id,
-                (
+                &(
                     KAIGI_DEPENDENCY_RELAY_FEEDBACK,
                     unrelated.clone(),
                     missing_key,
@@ -6165,7 +6273,7 @@ mod tests {
             let error = RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: retired_relay.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -6177,7 +6285,7 @@ mod tests {
             RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: active_relay.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -6224,9 +6332,9 @@ mod tests {
                 .metadata_mut()
                 .insert(allowlist_key, allowlist_json);
             let registrations = [
-                (relay_a.clone(), vec![1, 2, 3]),
-                (relay_b.clone(), vec![4, 5, 6]),
-                (relay_c.clone(), vec![7, 8, 9]),
+                (relay_a.clone(), test_relay_hpke_key(1)),
+                (relay_b.clone(), test_relay_hpke_key(4)),
+                (relay_c.clone(), test_relay_hpke_key(7)),
             ];
             for (relay, hpke_key) in &registrations {
                 RegisterKaigiRelay {
@@ -6268,17 +6376,17 @@ mod tests {
                 hops: vec![
                     KaigiRelayHop {
                         relay_id: relay_a.clone(),
-                        hpke_public_key: vec![1, 2, 3],
+                        hpke_public_key: test_relay_hpke_key(1),
                         weight: 1,
                     },
                     KaigiRelayHop {
                         relay_id: relay_b.clone(),
-                        hpke_public_key: vec![4, 5, 6],
+                        hpke_public_key: test_relay_hpke_key(4),
                         weight: 1,
                     },
                     KaigiRelayHop {
                         relay_id: relay_c.clone(),
-                        hpke_public_key: vec![7, 8, 9],
+                        hpke_public_key: test_relay_hpke_key(7),
                         weight: 1,
                     },
                 ],
@@ -6415,7 +6523,7 @@ mod tests {
         let domain_id = DomainId::try_new("relay", "universal").expect("domain id");
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
-            hpke_public_key: vec![0x10, 0x20, 0x30],
+            hpke_public_key: test_relay_hpke_key(0x10),
             bandwidth_class: 5,
         };
         with_state_transaction(|stx| {
@@ -6427,16 +6535,18 @@ mod tests {
                 .expect("register relay account");
             add_relay_to_allowlist(stx, &domain_id, &relay_id);
             stx.world.take_external_events();
-            let oversized_error = RegisterKaigiRelay {
+            let mut overlong_key = registration.hpke_public_key.clone();
+            overlong_key.push(0);
+            let overlong_error = RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1],
+                    hpke_public_key: overlong_key,
                     bandwidth_class: 5,
                 },
             }
             .execute(&relay_id, stx)
-            .expect_err("oversized relay key must fail before persistence or event emission");
-            assert_smart_contract_error(oversized_error, "must not exceed 4096 bytes");
+            .expect_err("an overlong relay key must fail before persistence or event emission");
+            assert_smart_contract_error(overlong_error, "must contain exactly 1184 key bytes");
             let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
             assert!(
                 stx.world
@@ -6535,7 +6645,9 @@ mod tests {
                 if index < KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
                     let registration = KaigiRelayRegistration {
                         relay_id: relay_id.clone(),
-                        hpke_public_key: vec![u8::try_from(index % 251).expect("bounded byte") + 1],
+                        hpke_public_key: test_relay_hpke_key(
+                            u8::try_from(index % 251).expect("bounded byte") + 1,
+                        ),
                         bandwidth_class: 1,
                     };
                     let registration_key =
@@ -6554,7 +6666,7 @@ mod tests {
                     seed_kaigi_account_dependency_for_testing(
                         stx,
                         &relay_id,
-                        (
+                        &(
                             KAIGI_DEPENDENCY_RELAY_REGISTRATION,
                             domain_id.clone(),
                             registration_key,
@@ -6571,7 +6683,7 @@ mod tests {
 
             let rotated = KaigiRelayRegistration {
                 relay_id: existing.clone(),
-                hpke_public_key: vec![0xAA, 0xBB],
+                hpke_public_key: test_relay_hpke_key(0xAB),
                 bandwidth_class: 2,
             };
             RegisterKaigiRelay {
@@ -6587,7 +6699,7 @@ mod tests {
 
             let rejected = KaigiRelayRegistration {
                 relay_id: new_relay.clone(),
-                hpke_public_key: vec![0xCC],
+                hpke_public_key: test_relay_hpke_key(0xCC),
                 bandwidth_class: 1,
             };
             let error = RegisterKaigiRelay {
@@ -6615,7 +6727,7 @@ mod tests {
             seed_kaigi_account_dependency_for_testing(
                 stx,
                 &new_relay,
-                (
+                &(
                     KAIGI_DEPENDENCY_RELAY_REGISTRATION,
                     domain_id.clone(),
                     rejected_key,
@@ -6813,7 +6925,7 @@ mod tests {
                     .expect("register relay domain");
                 let registration = KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 };
                 stx.world
@@ -6909,7 +7021,7 @@ mod tests {
             RegisterKaigiRelay {
                 relay: KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 },
             }
@@ -7004,7 +7116,7 @@ mod tests {
             registration_key.clone(),
             Json::try_new(KaigiRelayRegistration {
                 relay_id: relay_id.clone(),
-                hpke_public_key: vec![0xAA],
+                hpke_public_key: test_relay_hpke_key(0xAA),
                 bandwidth_class: 1,
             })
             .expect("serialize relay registration"),
@@ -7111,7 +7223,7 @@ mod tests {
             seed_relay_primary_alias_for_testing(stx, &home, &relay_id);
             let registration = KaigiRelayRegistration {
                 relay_id: relay_id.clone(),
-                hpke_public_key: vec![0xAA],
+                hpke_public_key: test_relay_hpke_key(0xAA),
                 bandwidth_class: 1,
             };
             stx.world
@@ -7152,7 +7264,7 @@ mod tests {
             add_relay_to_allowlist(stx, &domain_id, &relay_id);
             let registration = KaigiRelayRegistration {
                 relay_id: relay_id.clone(),
-                hpke_public_key: vec![0xAA],
+                hpke_public_key: test_relay_hpke_key(0xAA),
                 bandwidth_class: 1,
             };
             stx.world
@@ -7338,7 +7450,7 @@ mod tests {
                 add_relay_to_allowlist(stx, &domain_id, &relay_id);
                 let registration = KaigiRelayRegistration {
                     relay_id: relay_id.clone(),
-                    hpke_public_key: vec![0xAA],
+                    hpke_public_key: test_relay_hpke_key(0xAA),
                     bandwidth_class: 1,
                 };
                 RegisterKaigiRelay {
@@ -7419,7 +7531,7 @@ mod tests {
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
                         relay_id: retired_relay.clone(),
-                        hpke_public_key: vec![0xAA],
+                        hpke_public_key: test_relay_hpke_key(0xAA),
                         bandwidth_class: 1,
                     },
                 }
@@ -7465,7 +7577,7 @@ mod tests {
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
                         relay_id: expired_relay.clone(),
-                        hpke_public_key: vec![0xAA],
+                        hpke_public_key: test_relay_hpke_key(0xAA),
                         bandwidth_class: 1,
                     },
                 }
@@ -7477,7 +7589,7 @@ mod tests {
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
                         relay_id: new_relay.clone(),
-                        hpke_public_key: vec![0xBB],
+                        hpke_public_key: test_relay_hpke_key(0xBB),
                         bandwidth_class: 1,
                     },
                 }
@@ -7710,9 +7822,7 @@ mod tests {
                 .parse()
                 .expect("metadata limit parameter id");
             stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     limit_id,
                     Json::new(1_u64),
                 )))
@@ -8221,17 +8331,16 @@ mod tests {
             assert_eq!(load_call_record(stx, &call), persisted);
             assert!(stx.world.take_external_events().is_empty());
 
-            let mut oversized_key = sample_manifest();
-            oversized_key.hops[0].hpke_public_key =
-                vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1];
-            persisted.relay_manifest = Some(oversized_key);
+            let mut overlong_key = sample_manifest();
+            overlong_key.hops[0].hpke_public_key.push(0);
+            persisted.relay_manifest = Some(overlong_key);
             stx.world
                 .domain_mut(&domain)
                 .expect("domain")
                 .metadata_mut()
                 .insert(
                     key,
-                    Json::try_new(persisted.clone()).expect("serialize oversized relay key"),
+                    Json::try_new(persisted.clone()).expect("serialize overlong relay key"),
                 );
 
             let error = RecordKaigiUsage {
@@ -8242,7 +8351,7 @@ mod tests {
                 proof: None,
             }
             .execute(&host, stx)
-            .expect_err("a persisted oversized relay key must fail closed");
+            .expect_err("a persisted overlong relay key must fail closed");
             assert_invariant_error(error, "relay manifest violates V1 constraints");
             assert_eq!(load_call_record(stx, &call), persisted);
             assert!(stx.world.take_external_events().is_empty());
@@ -8849,6 +8958,97 @@ mod tests {
         });
     }
     #[test]
+    fn participation_view_follows_rekey_lineage_through_leave_and_rejoin() {
+        let (mut record, host, original) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let (successor, _) = gen_account_in("nexus");
+        let (stranger, _) = gen_account_in("nexus");
+        let domain = record.id.domain_id.clone();
+        let commitment = sample_commitment();
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[host.clone(), successor.clone(), stranger.clone()],
+            |stx| {
+                seed_active_account_id_rekey_lineage(
+                    stx,
+                    "participation-view",
+                    &original,
+                    &successor,
+                );
+                // A first join is admissible at sequence one for the signer itself.
+                assert_eq!(
+                    kaigi_participation_view_v1(&stx.world, &record, &successor).unwrap(),
+                    KaigiParticipationViewV1 {
+                        is_host: false,
+                        original_account: successor.clone(),
+                        active: false,
+                        sequence: Some(1),
+                        active_commitment: None,
+                    }
+                );
+                record
+                    .private_participation
+                    .commit_join(&original, 1, commitment.commitment)
+                    .unwrap();
+                record.push_commitment(commitment);
+                // Either end of the lineage resolves to the retained original subject.
+                for account in [&original, &successor] {
+                    assert_eq!(
+                        kaigi_participation_view_v1(&stx.world, &record, account).unwrap(),
+                        KaigiParticipationViewV1 {
+                            is_host: false,
+                            original_account: original.clone(),
+                            active: true,
+                            sequence: Some(1),
+                            active_commitment: Some(commitment.commitment),
+                        }
+                    );
+                }
+                record
+                    .private_participation
+                    .commit_leave(&original, 1, commitment.commitment)
+                    .unwrap();
+                assert!(record.remove_commitment(&commitment));
+                // Leaving consumes the sequence, so the view names the next join's.
+                let departed =
+                    kaigi_participation_view_v1(&stx.world, &record, &successor).unwrap();
+                assert_eq!(departed.original_account, original);
+                assert_eq!(departed.sequence, Some(2));
+                assert!(!departed.active);
+                assert_eq!(departed.active_commitment, None);
+                assert_eq!(
+                    record
+                        .private_participation
+                        .prepare_join(&departed.original_account)
+                        .unwrap(),
+                    2
+                );
+                // Another account's retained participation stays invisible to this one.
+                assert_eq!(
+                    kaigi_participation_view_v1(&stx.world, &record, &stranger)
+                        .unwrap()
+                        .sequence,
+                    Some(1)
+                );
+                // The host always proves at sequence zero with its stored opening.
+                let hosted = kaigi_participation_view_v1(&stx.world, &record, &host).unwrap();
+                assert!(hosted.is_host && hosted.active);
+                assert_eq!(hosted.original_account, host);
+                assert_eq!(hosted.sequence, Some(0));
+                // One lineage must never own two subjects.
+                let mut duplicate = record.clone();
+                let other = KaigiParticipantCommitment {
+                    commitment: test_scalar(31),
+                };
+                duplicate
+                    .private_participation
+                    .commit_join(&successor, 1, other.commitment)
+                    .unwrap();
+                duplicate.push_commitment(other);
+                assert!(kaigi_participation_view_v1(&stx.world, &duplicate, &successor).is_err());
+            },
+        );
+    }
+    #[test]
     fn participant_lookup_rejects_multiple_ids_from_one_rekey_component_atomically() {
         let (domain, host, retired_participant) = sample_ids();
         let (active_participant, _) = gen_account_in("nexus");
@@ -9007,7 +9207,7 @@ mod tests {
             .expect("relay account exists")
             .set_label(Some(alias.clone()));
         stx.world
-            .insert_account_alias_binding(alias, relay_id.clone());
+            .insert_account_alias_binding(&(alias), &(relay_id.clone()));
     }
     fn expire_relay_primary_alias_for_testing(
         stx: &mut StateTransaction<'_, '_>,
@@ -9047,11 +9247,11 @@ mod tests {
     fn seed_kaigi_account_dependency_for_testing(
         stx: &mut StateTransaction<'_, '_>,
         account: &AccountId,
-        dependency: KaigiAccountDependencyLocator,
+        dependency: &KaigiAccountDependencyLocator,
     ) {
         apply_kaigi_account_dependency_replacement(
             stx,
-            &dependency,
+            dependency,
             &BTreeSet::new(),
             &BTreeSet::from([account.clone()]),
         );
@@ -9142,17 +9342,17 @@ mod tests {
             hops: vec![
                 KaigiRelayHop {
                     relay_id: relay_a,
-                    hpke_public_key: vec![1, 2, 3],
+                    hpke_public_key: test_relay_hpke_key(1),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: relay_b,
-                    hpke_public_key: vec![4, 5, 6],
+                    hpke_public_key: test_relay_hpke_key(4),
                     weight: 1,
                 },
                 KaigiRelayHop {
                     relay_id: relay_c,
-                    hpke_public_key: vec![7, 8, 9],
+                    hpke_public_key: test_relay_hpke_key(7),
                     weight: 1,
                 },
             ],
@@ -9161,20 +9361,20 @@ mod tests {
     }
     fn extract_roster_summary(events: &[EventBox]) -> Option<KaigiRosterSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiRosterSummary(summary)) = ev.as_ref() {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiRosterSummary(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })
     }
     fn extract_registration_summary(events: &[EventBox]) -> Option<KaigiRelayRegistrationSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiRelayRegistered(summary)) = ev.as_ref() {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiRelayRegistered(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })
@@ -9183,43 +9383,41 @@ mod tests {
         events: &[EventBox],
     ) -> Option<KaigiRelayUnregistrationSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiRelayUnregistered(summary)) = ev.as_ref()
-                {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiRelayUnregistered(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })
     }
     fn extract_status_summary(events: &[EventBox]) -> Option<KaigiStatusSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiStatusChanged(summary)) = ev.as_ref() {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiStatusChanged(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })
     }
     fn extract_manifest_summary(events: &[EventBox]) -> Option<KaigiRelayManifestSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiRelayManifestUpdated(summary)) =
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiRelayManifestUpdated(summary)) =
                     ev.as_ref()
-                {
-                    return Some(summary.clone());
-                }
+            {
+                return Some(summary.clone());
             }
             None
         })
     }
     fn extract_usage_summary(events: &[EventBox]) -> Option<KaigiUsageSummary> {
         events.iter().find_map(|event| {
-            if let EventBox::Data(ev) = event {
-                if let DataEvent::Domain(DomainEvent::KaigiUsageSummary(summary)) = ev.as_ref() {
-                    return Some(summary.clone());
-                }
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::KaigiUsageSummary(summary)) = ev.as_ref()
+            {
+                return Some(summary.clone());
             }
             None
         })

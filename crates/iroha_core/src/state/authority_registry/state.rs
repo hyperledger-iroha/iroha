@@ -67,8 +67,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:lane_manifests:v1", encoder: "state::authority_registry::lane_manifest_policy::canonical_preimage_once; exact installed effective/current/baseline source bytes, bound catalog and retained predecessor; rejects provisional emergency authority", layout: V1_LAYOUT })));
     provisional_emergency_lane_manifests_consumed: bool => ("state.provisional_emergency_lane_manifests_consumed",
         Role::Local("One-shot pre-authentication startup latch; provisional empty authority is never a finalized execution source"));
-    lane_privacy_registry: PublicationRwLock<LanePrivacyRegistryHandle> => ("state.lane_privacy_registry",
-        Role::Derived { sources: &["state.lane_manifests"], check: DerivationCheck::Rebuild("State startup, restore and lifecycle publication reconstruct exact privacy commitments from manifests; tx::enforce_lane_policies and Queue admission rebuild from their manifest snapshot; autonomous merge compares the projection") });
+    lane_privacy_registry: PublicationRwLock<LanePrivacyRegistry> => ("state.lane_privacy_registry",
+        Role::Derived { sources: &["state.lane_manifests"], check: DerivationCheck::Rebuild("State prepares exact privacy commitments from manifest authority in the original World pool before publication; lifecycle apply and carrier publication carry that admitted owner, and Queue startup shares it; actual tx admission derives from its exact manifest snapshot, while Queue reuses a matching source/pool cache entry or prepares a matching projection before mutation; autonomous merge compares the projection") });
     lane_compliance: parking_lot::RwLock<Option<Arc<LaneComplianceEngine>>> => ("state.lane_compliance",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:lane_compliance:v1", encoder: "compliance::authority::LaneComplianceAuthorityV1::from_engine; exact optional enforcement mode and ordered canonical LaneCompliancePolicy values", layout: V1_LAYOUT })));
     da_index_hydration_fence: parking_lot::Mutex<()> => ("state.da_index_hydration_fence",
@@ -102,7 +102,7 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
     oracle: iroha_config::parameters::actual::Oracle => ("state.oracle",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:oracle:v1", encoder: "state::authority_registry::oracle_policy::OraclePolicyV1::from_actual; oracle state transitions and execution_policy_digest_v1", layout: V1_LAYOUT })));
     crypto: PublicationRwLock<Arc<iroha_config::parameters::actual::Crypto>> => ("state.crypto",
-        Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:crypto:v1", encoder: "state::authority_registry::crypto_policy::CryptoAdmissionPolicyV1::from_actual; transaction/account admission and IVM SM host policy", layout: V1_LAYOUT })));
+        Role::Local("Local key-generation defaults and portable/backend implementation selection; ordinary algorithm/curve admission is the canonical world.parameters crypto_admission_policy_v1 and mandatory SM semantics have no local gate"));
     nexus: PublicationRwLock<iroha_config::parameters::actual::Nexus> => ("state.nexus",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:nexus:v1", encoder: "state::authority_registry::nexus_policy::canonical_preimage_once; exact effective policy from generation-bound canonical runtime, protected World catalog, materialized manifests, and installed compliance", layout: V1_LAYOUT })));
     canonical_runtime: Cell<SnapshotNexusRuntime> => ("state.canonical_runtime",

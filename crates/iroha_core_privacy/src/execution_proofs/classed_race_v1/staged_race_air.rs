@@ -240,7 +240,7 @@ fn inverse_small(value: i64) -> F {
                 }
             })
             .collect()
-    })[value as usize]
+    })[usize::try_from(value).expect("bounded circuit index")]
 }
 impl StagedClassedRaceAirV1 {
     pub(super) fn compile(
@@ -327,15 +327,22 @@ impl StagedClassedRaceAirV1 {
         let phase = row % phases;
         let (stage, left, right) = self.stages[phase];
         let final_row = (replay.frames.len() + 1) * phases;
-        let (rain, wind) = environment::weather(replay.track, tick.min(MAX_TICKS as usize) as u32);
+        let (rain, wind) = environment::weather(
+            replay.track,
+            u32::try_from(tick.min(MAX_TICKS as usize)).expect("bounded circuit index"),
+        );
         let mut fixed = vec![
-            tick.min(MAX_TICKS as usize) as i64,
+            i64::try_from(tick.min(MAX_TICKS as usize)).expect("bounded circuit index"),
             i64::from(tick < replay.frames.len()),
             i64::from(row == 0),
             i64::from(row + 1 < size),
             i64::from(row == final_row),
             i64::from(checkpoint.is_some_and(|tick| row == tick as usize * phases)),
-            i64::from(phase == 0 && tick < replay.frames.len() && tick % BATCH_TICKS as usize == 0),
+            i64::from(
+                phase == 0
+                    && tick < replay.frames.len()
+                    && tick.is_multiple_of(BATCH_TICKS as usize),
+            ),
             rain,
             wind,
         ];
@@ -346,7 +353,10 @@ impl StagedClassedRaceAirV1 {
             i64::from(
                 phase == 0
                     && replay.dnf_events.iter().any(|event| {
-                        event.tick as usize == tick && event.slots.contains(&(slot as u8))
+                        event.tick as usize == tick
+                            && event
+                                .slots
+                                .contains(&u8::try_from(slot).expect("bounded player slot"))
                     }),
             )
         }));
@@ -504,14 +514,13 @@ impl StagedClassedRaceAirV1 {
             post_running = post_running.add(remains.mul(unfinished));
             for i in 0..7 {
                 let mut delta = F::ZERO;
-                for stage in 0..STAGES {
+                for (stage, selected) in stages.iter().enumerate() {
                     let l = self.packed.read(stage, self.outputs[stage][i], bank, fixed);
                     let r = self
                         .packed
                         .read(stage, self.outputs[stage][7 + i], bank, fixed);
-                    delta = delta.add(
-                        stages[stage].mul(left.mul(l.sub(car[i])).add(right.mul(r.sub(car[i])))),
-                    );
+                    delta = delta
+                        .add(selected.mul(left.mul(l.sub(car[i])).add(right.mul(r.sub(car[i])))));
                 }
                 if i == 6 {
                     delta = delta.add(event.mul(alive).mul(fixed[0].add(F::ONE).sub(car[6])));
@@ -531,8 +540,8 @@ impl StagedClassedRaceAirV1 {
         }
         for index in 0..4 {
             let mut expected = F::ZERO;
-            for stage in 0..STAGES {
-                expected = expected.add(stages[stage].mul(self.packed.read(
+            for (stage, selected) in stages.iter().enumerate() {
+                expected = expected.add(selected.mul(self.packed.read(
                     stage,
                     self.outputs[stage][14 + index],
                     bank,
@@ -901,10 +910,14 @@ mod tests {
         );
     }
 
-    fn check_isolated_tick(state: ClassedRaceStateV1, controls: Vec<u16>) {
+    fn check_isolated_tick(state: &ClassedRaceStateV1, controls: Vec<u16>) {
         use super::super::race_air::ClassedRaceAirV1;
         let tick = state.tick;
-        let mut data = replay(state.track, state.cars.len() as u8, tick + 1);
+        let mut data = replay(
+            state.track,
+            u8::try_from(state.cars.len()).expect("bounded fixture value"),
+            tick + 1,
+        );
         data.frames[tick as usize].controls = controls;
         let mut expected = state.clone();
         step_classed_race_v1(&mut expected, &data.frames[tick as usize]).unwrap();
@@ -959,14 +972,14 @@ mod tests {
                 .unwrap();
                 state.tick = 101;
                 for (slot, car) in state.cars.iter_mut().enumerate() {
-                    car.progress_mm =
-                        classed_track_length_v1(state.track) * segment / 12 + slot as i64 * 9;
+                    car.progress_mm = classed_track_length_v1(state.track) * segment / 12
+                        + i64::try_from(slot).expect("bounded fixture value") * 9;
                     car.lateral_mm = [-15_300, 15_300, -6000, 6000, -1, 0, 1, 2][slot];
                     car.speed_mm_per_tick = [0, 3300, 3299, 2640, 2639, 100, 1, 3300][slot];
                     car.boost_energy = [0, 24, 25, 1000, 999, 1, 26, 25][slot];
                     car.lateral_velocity_mm_per_tick = if slot % 2 == 0 { -320 } else { 320 };
                 }
-                check_isolated_tick(state, vec![mask; 8]);
+                check_isolated_tick(&state, vec![mask; 8]);
             }
         }
         let mut state = initial_classed_race_state_v1(
@@ -978,8 +991,8 @@ mod tests {
         state.tick = 101;
         let finish = classed_track_length_v1(state.track) * LAPS;
         for (slot, car) in state.cars.iter_mut().enumerate() {
-            car.progress_mm = finish - 1000 - slot as i64;
-            car.lateral_mm = slot as i32;
+            car.progress_mm = finish - 1000 - i64::try_from(slot).expect("bounded fixture value");
+            car.lateral_mm = i32::try_from(slot).expect("bounded fixture value");
             car.speed_mm_per_tick = 3300;
         }
         state.cars[1].progress_mm = finish;
@@ -988,7 +1001,7 @@ mod tests {
         state.cars[3].progress_mm = finish;
         state.cars[3].finish_tick = Some(99);
         state.cars[3].dnf_tick = Some(100);
-        check_isolated_tick(state, vec![33; 8]);
+        check_isolated_tick(&state, vec![33; 8]);
     }
 
     #[test]
@@ -1006,34 +1019,40 @@ mod tests {
                 for (slot, car) in state.cars.iter_mut().enumerate() {
                     let cell = slot % 12;
                     car.progress_mm = environment::centers(track)[cell] - 1_500;
-                    car.lateral_mm = environment::laterals(track)[cell] as i32;
+                    car.lateral_mm = i32::try_from(environment::laterals(track)[cell])
+                        .expect("bounded fixture value");
                     car.speed_mm_per_tick = 3_300;
                     car.lateral_velocity_mm_per_tick = if slot % 2 == 0 { -320 } else { 320 };
                 }
-                check_isolated_tick(state, vec![33 | 16 | 4; 8]);
+                check_isolated_tick(&state, vec![33 | 16 | 4; 8]);
             }
             for cell in 0..12 {
                 for offset in [-9_001, -9_000, -1, 0, 9_000, 9_001] {
                     let mut state =
                         initial_classed_race_state_v1(ClassedRaceClassV1::TouringS1, track, 8)
                             .unwrap();
-                    state.tick = environment::rain_pattern(track)
-                        .iter()
-                        .position(|rain| *rain == 1)
-                        .unwrap() as u32
+                    state.tick = u32::try_from(
+                        environment::rain_pattern(track)
+                            .iter()
+                            .position(|rain| *rain == 1)
+                            .unwrap(),
+                    )
+                    .expect("bounded fixture value")
                         * environment::WEATHER_TICKS
                         + 1;
                     for (slot, car) in state.cars.iter_mut().enumerate() {
                         car.progress_mm = environment::centers(track)[cell] + offset;
-                        car.lateral_mm = (environment::laterals(track)[cell]
-                            + [-1_401, -1_400, -1_300, 0, 1_299, 1_300, 1_400, 1_401][slot])
-                            as i32;
+                        car.lateral_mm = i32::try_from(
+                            environment::laterals(track)[cell]
+                                + [-1_401, -1_400, -1_300, 0, 1_299, 1_300, 1_400, 1_401][slot],
+                        )
+                        .expect("bounded fixture value");
                         car.speed_mm_per_tick = 3_300;
                         car.lateral_velocity_mm_per_tick = 0;
                     }
                     // A removed car at the same object must remain frozen while others hit it.
                     state.cars[7].dnf_tick = Some(state.tick - 1);
-                    check_isolated_tick(state, vec![33; 8]);
+                    check_isolated_tick(&state, vec![33; 8]);
                 }
             }
         }
@@ -1091,7 +1110,14 @@ mod tests {
                     let line = |length: usize, salt: i64| {
                         (0..length)
                             .map(|i| {
-                                field((i as i64 * 19 + salt + seed) * t + (i as i64 * 7 + salt * 3))
+                                field(
+                                    (i64::try_from(i).expect("bounded fixture value") * 19
+                                        + salt
+                                        + seed)
+                                        * t
+                                        + (i64::try_from(i).expect("bounded fixture value") * 7
+                                            + salt * 3),
+                                )
                             })
                             .collect::<Vec<_>>()
                     };

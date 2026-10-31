@@ -70,7 +70,7 @@ fn producer_copy_physical_byte_and_root_refusals_keep_original_charges_and_retry
             .unwrap()
             .initialized_parent(parent, &pool)
             .unwrap()
-            .map(|bytes| bytes.as_ptr());
+            .map(<[u8]>::as_ptr);
         assert_eq!(retained.is_some(), step == 1);
         assert!(copy.get(parent, &pool).is_err());
         let (result, denied) = refuse_one_layout_during(layout, || copy.prepare(parent, &pool));
@@ -96,7 +96,7 @@ fn producer_copy_physical_byte_and_root_refusals_keep_original_charges_and_retry
                 .unwrap()
                 .initialized_parent(parent, &pool)
                 .unwrap()
-                .map(|bytes| bytes.as_ptr()),
+                .map(<[u8]>::as_ptr),
             retained
         );
         assert_eq!(pool.reserved_bytes(), baseline + demand);

@@ -187,7 +187,7 @@ fn bsc_receipt_ancestry_retains_milliseconds_and_profile_window() {
             SccpNetworkV1::BscMainnet,
             &GENESIS_PROFILES,
             &anchor,
-            &[header.clone()],
+            std::slice::from_ref(&header),
             1
         )
         .is_ok()
@@ -232,7 +232,7 @@ fn signed_raw(selected: ReceiptTarget, nonce: u64) -> Vec<u8> {
     .sign(&EvmSigningKey::from_secret([7; 32]).unwrap())
     .unwrap()
     .raw()
-    .to_vec()
+    .clone()
 }
 
 fn rpc_receipt(hash: [u8; 32], index: u64, success: bool) -> EvmReceipt {
@@ -299,7 +299,6 @@ impl InclusionFixture {
             false,
         ))
         .unwrap();
-        let mut receipt = receipt;
         receipt.block_hash = header.hash;
         Self {
             raw,
@@ -662,6 +661,10 @@ fn receipt_budget_preserves_an_existing_owner_and_deadline() {
         network: target.network,
         contract: target.contract,
         code_hash: target.code_hash,
+        fee_caps: iroha_sccp_wallet::pure::evm::EvmFeeCapsV1 {
+            max_fee_per_gas: 1,
+            max_total_fee: 1,
+        },
     };
     let budget = client.transport().budget();
     let owner = budget.start(Duration::from_secs(60));
@@ -688,6 +691,10 @@ fn receipt_budget_owns_only_its_new_deadline_and_refuses_expiry() {
         network: target.network,
         contract: target.contract,
         code_hash: target.code_hash,
+        fee_caps: iroha_sccp_wallet::pure::evm::EvmFeeCapsV1 {
+            max_fee_per_gas: 1,
+            max_total_fee: 1,
+        },
     };
     let budget = client.transport().budget();
     assert!(transport.receipt_budget(Duration::ZERO).is_err());
@@ -795,6 +802,10 @@ fn receipt_torii_reads_share_deadline_and_authority() {
         network: target.network,
         contract: target.contract,
         code_hash: target.code_hash,
+        fee_caps: iroha_sccp_wallet::pure::evm::EvmFeeCapsV1 {
+            max_fee_per_gas: 1,
+            max_total_fee: 1,
+        },
     };
     let timeout = Duration::from_secs(60);
     let (source, observed) = receipt_authority_fixture(timeout, timeout, false);
@@ -861,6 +872,10 @@ fn receipt_torii_stalled_reads_are_canceled_without_retry() {
                 network: target.network,
                 contract: target.contract,
                 code_hash: target.code_hash,
+                fee_caps: iroha_sccp_wallet::pure::evm::EvmFeeCapsV1 {
+                    max_fee_per_gas: 1,
+                    max_total_fee: 1,
+                },
             };
             let bound = Duration::from_millis(100);
             let (source, observed) = receipt_authority_fixture(configured, bound, true);
@@ -898,6 +913,10 @@ fn receipt_torii_client_refuses_missing_or_expired_budget() {
         network: target.network,
         contract: target.contract,
         code_hash: target.code_hash,
+        fee_caps: iroha_sccp_wallet::pure::evm::EvmFeeCapsV1 {
+            max_fee_per_gas: 1,
+            max_total_fee: 1,
+        },
     };
     let (source, observed) = receipt_authority_fixture(Duration::ZERO, Duration::ZERO, false);
     assert!(transport.receipt_authority_client(&source).is_err());

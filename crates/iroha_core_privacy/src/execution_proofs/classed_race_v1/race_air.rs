@@ -343,15 +343,18 @@ impl ClassedRaceAirV1 {
             return Err(ClassedRaceSimulationErrorV1::TickSequence);
         }
         let spec = class_performance_v1(replay.class_id);
-        let (rain, wind) = environment::weather(replay.track, (row as u32).min(MAX_TICKS));
+        let (rain, wind) = environment::weather(
+            replay.track,
+            (u32::try_from(row).expect("bounded circuit index")).min(MAX_TICKS),
+        );
         let mut fixed = vec![
-            row as i64,
+            i64::try_from(row).expect("bounded circuit index"),
             i64::from(row < replay.frames.len()),
             i64::from(row == 0),
             i64::from(row + 1 < size),
             i64::from(row == replay.frames.len()),
-            i64::from(checkpoint_tick == Some(row as u32)),
-            i64::from(row < replay.frames.len() && row % BATCH_TICKS as usize == 0),
+            i64::from(checkpoint_tick == Some(u32::try_from(row).expect("bounded circuit index"))),
+            i64::from(row < replay.frames.len() && row.is_multiple_of(BATCH_TICKS as usize)),
             rain,
             wind,
         ];
@@ -376,8 +379,12 @@ impl ClassedRaceAirV1 {
             let dnf = replay
                 .dnf_events
                 .iter()
-                .find(|event| event.tick == row as u32)
-                .is_some_and(|event| event.slots.contains(&(slot as u8)));
+                .find(|event| event.tick == u32::try_from(row).expect("bounded circuit index"))
+                .is_some_and(|event| {
+                    event
+                        .slots
+                        .contains(&u8::try_from(slot).expect("bounded player slot"))
+                });
             fixed.extend([
                 acceleration,
                 steer,
@@ -558,13 +565,14 @@ mod tests {
             let mut state = initial_classed_race_state_v1(data.class_id, data.track, 8).unwrap();
             state.tick = 101;
             for (slot, car) in state.cars.iter_mut().enumerate() {
-                car.progress_mm = classed_track_length_v1(data.track) * 5 / 12 + slot as i64 * 10;
+                car.progress_mm = classed_track_length_v1(data.track) * 5 / 12
+                    + i64::try_from(slot).expect("bounded fixture value") * 10;
                 car.lateral_mm = match slot {
                     0 => -STATE_LATERAL_LIMIT,
                     1 => STATE_LATERAL_LIMIT,
                     2 => -6000,
                     3 => 6000,
-                    _ => slot as i32 - 5,
+                    _ => i32::try_from(slot).expect("bounded fixture value") - 5,
                 };
                 car.lateral_velocity_mm_per_tick = if slot % 2 == 0 { -320 } else { 320 };
                 car.speed_mm_per_tick = [0, 1, 100, 2639, 2640, 2999, 3299, 3300][slot];

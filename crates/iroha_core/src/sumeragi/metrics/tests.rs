@@ -551,7 +551,11 @@ fn live_writers_move_every_exported_sumeragi_family() {
     recorder.applied(9, body.header().height);
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
     crate::telemetry::record_state_tx_queue_backpressure(
-        &telemetry, 3, 8, 64, 128, true, true, true, 700,
+        &telemetry,
+        (3, 8),
+        (64, 128),
+        (true, true, true),
+        700,
     );
 
     let exposition = metrics.try_to_string().unwrap();

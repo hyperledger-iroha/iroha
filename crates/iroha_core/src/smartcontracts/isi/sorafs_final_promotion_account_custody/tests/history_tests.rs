@@ -200,7 +200,7 @@ fn account_rotation_preserves_first_use_indexes_and_rejects_retired_signer_or_at
             }
             assert_eq!(
                 apply(
-                    instruction(tx, Action::Configure(encode(&reused).unwrap())),
+                    &(instruction(tx, Action::Configure(encode(&reused).unwrap()))),
                     &f.manager,
                     tx
                 ),

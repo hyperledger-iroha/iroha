@@ -114,8 +114,8 @@ def policy(root):
             and all(isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name) for name in required),
             "current Node export policy is not a literal exact inventory")
     return {"required": sorted(set(required) | set(owner.REQUIRED_SYMBOLS["node"])),
-            "forbidden": sorted(owner.RETIRED_PROTOCOL_SYMBOLS["node"]), "abi_version": 31,
-            "required_results": {"connectNoritoBridgeAbiVersion": 31, "securePrivateFileAbiVersion": 1}}
+            "forbidden": sorted(owner.RETIRED_PROTOCOL_SYMBOLS["node"]), "abi_version": 33,
+            "required_results": {"connectNoritoBridgeAbiVersion": 33, "securePrivateFileAbiVersion": 1}}
 
 
 def local_policy(scope, profile):
@@ -230,6 +230,9 @@ def environment(root, config, output):
     return {"HOME": str(Path.home()), "PATH": tool_path(config),
             "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": str(temporary),
             "RUSTC": config["rustc"], "RUSTDOC": config["rustdoc"],
+            # Cargo retains failed rustc -vV probes in a warm target. Re-query
+            # the pinned compiler so a repaired wrapper startup is observed.
+            "CARGO_CACHE_RUSTC_INFO": "0",
             "SDKROOT": config["sdk"], "MACOSX_DEPLOYMENT_TARGET": "13.0",
             "DEVELOPER_DIR": config["developer_dir"], "NODE_OPTIONS": "",
             # Client-side sccache creates a per-process Unix socket under TMPDIR;
@@ -273,7 +276,7 @@ def validate_config(root, config):
     require(Path(config["python"]).resolve() == Path(sys.executable).resolve(), "Python owner differs")
     node = shutil.which("node", path=tool_path(config))
     require(node and Path(config["node"]) == Path(node).resolve(strict=True), "Node tool differs from the actual local recipe")
-    toolchain = Path.home() / ".rustup/toolchains" / ("1.93.1-" + HOSTS[platform.machine()]) / "bin"
+    toolchain = Path.home() / ".rustup/toolchains" / ("1.99.1-" + HOSTS[platform.machine()]) / "bin"
     require(all(Path(config[key]) == toolchain / key for key in ("cargo", "rustc", "rustdoc")), "Rust tools do not name the pinned stock toolchain")
     developer = Path(config["developer_dir"])
     require(developer.resolve(strict=True) == developer, "developer directory is not canonical")
@@ -282,7 +285,7 @@ def validate_config(root, config):
             and config["codesign"] == "/usr/bin/codesign", "local native tools differ from stock Apple tools")
     sdk = developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
     require(Path(config["sdk"]) == sdk and sdk.resolve(strict=True) == sdk, "macOS SDK is not canonical")
-    require(tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"] == "1.93.1", "workspace Rust toolchain differs")
+    require(tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"] == "1.99.1", "workspace Rust toolchain differs")
 
 
 def current_consumed(root, metadata, before, receipts):
@@ -323,7 +326,7 @@ def check_child(receipt, argv, root, env, log):
 def check_probe(proof, selected_policy):
     require(set(proof) == {"abi_version", "exports", "forbidden", "required_exports", "required_results",
                           "signing_independent_emitted", "signing_independent_artifact"}
-            and type(proof["abi_version"]) is int and proof["abi_version"] == 31 and proof["forbidden"] == []
+            and type(proof["abi_version"]) is int and proof["abi_version"] == 33 and proof["forbidden"] == []
             and proof["required_exports"] == selected_policy["required"]
             and proof["required_results"] == selected_policy["required_results"]
             and all(type(value) is int for value in proof["required_results"].values())

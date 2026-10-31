@@ -96,7 +96,8 @@ mod tests {
     #[test]
     fn nexus_consensus_policy_digest_is_stable_across_replayed_topology_progress() {
         let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid default policy");
         let mut progressed = baseline.clone();
         progressed.autoscale.last_transition_height = 42;
         progressed.lane_catalog = LaneCatalog::new(
@@ -113,7 +114,8 @@ mod tests {
         .expect("valid progressed lane catalog");
         progressed.lane_config = LaneConfig::from_catalog(&progressed.lane_catalog);
         assert_eq!(
-            nexus_consensus_policy_digest(&progressed).expect("valid progressed policy"),
+            nexus_consensus_policy_digest(&progressed, Some(&progressed.fees))
+                .expect("valid progressed policy"),
             expected,
             "height-local topology progress must not lock a lagging peer out of block sync"
         );
@@ -125,7 +127,8 @@ mod tests {
             baseline.configured_dataspace_catalog,
             baseline.dataspace_catalog
         );
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid baseline policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid baseline policy");
         let mut expanded = baseline.clone();
         expanded.dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -142,13 +145,15 @@ mod tests {
             baseline.dataspace_catalog
         );
         assert_eq!(
-            nexus_consensus_policy_digest(&expanded).expect("valid expanded runtime policy"),
+            nexus_consensus_policy_digest(&expanded, Some(&expanded.fees))
+                .expect("valid expanded runtime policy"),
             expected,
             "committed runtime geometry does not rewrite the immutable execution policy"
         );
         expanded.configured_dataspace_catalog = expanded.dataspace_catalog.clone();
         assert_ne!(
-            nexus_consensus_policy_digest(&expanded).expect("valid different configured policy"),
+            nexus_consensus_policy_digest(&expanded, Some(&expanded.fees))
+                .expect("valid different configured policy"),
             expected,
             "a local baseline addition must remain execution-policy drift"
         );
@@ -156,7 +161,8 @@ mod tests {
     #[test]
     fn nexus_consensus_policy_digest_binds_configured_lane_catalog() {
         let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid default policy");
         let mut different_genesis = baseline;
         different_genesis.configured_lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane bound"),
@@ -171,7 +177,7 @@ mod tests {
         )
         .expect("valid configured lane catalog");
         assert_ne!(
-            nexus_consensus_policy_digest(&different_genesis)
+            nexus_consensus_policy_digest(&different_genesis, Some(&different_genesis.fees))
                 .expect("valid different configured policy"),
             expected,
             "validators configured with different genesis lane catalogs must not share a policy digest"
@@ -180,18 +186,88 @@ mod tests {
     #[test]
     fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
         let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid default policy");
         let mut operational_drift = baseline;
         operational_drift.registry.manifest_directory = Some(PathBuf::from("/srv/lane-manifests"));
         operational_drift.registry.cache_directory = Some(PathBuf::from("/var/cache/lanes"));
         operational_drift.registry.poll_interval = Duration::from_secs(17);
         operational_drift.compliance.policy_dir = Some(PathBuf::from("/srv/lane-policies"));
         assert_eq!(
-            nexus_consensus_policy_digest(&operational_drift).expect("valid operational drift"),
+            nexus_consensus_policy_digest(&operational_drift, Some(&operational_drift.fees))
+                .expect("valid operational drift"),
             expected,
             "filesystem placement and local worker cadence must not partition validators"
         );
     }
+
+    #[test]
+    fn frozen_private_settlement_v1_matches_original_commitment_bytes_and_position() {
+        // Independently encoded from the declarations/defaults at 90ea8ea33b, using
+        // norito.md: little-endian scalars/u64 counts and compact field/element lengths.
+        // This literal was not captured from the implementation under test.
+        let expected = hex::decode(concat!(
+            "02010002ff0008201c00000000000008b00400000000000008b004000000000000",
+            "08b0040000000000001c0400000000000000040010000004004000000400000100",
+            "0400000400080000800000000000080000100000000000080000400000000000",
+            "0840420f0000000000040001000008000000c0000000000201000b0100000000000000020100",
+        ))
+        .unwrap();
+        assert_eq!(
+            NexusConsensusAtomicPrivateSettlementV1::frozen_v1().encode(),
+            expected,
+            "the signed V1 baseline cannot follow current defaults"
+        );
+
+        let nexus = Nexus::default();
+        let preimage = nexus_consensus_policy_preimage_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut remaining = preimage.as_slice();
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(remaining, 0x02)
+                .expect("canonical V1 field prefix");
+            let (field, rest) = remaining[prefix..].split_at(len);
+            fields.push(field);
+            remaining = rest;
+        }
+        assert_eq!(fields.len(), 21, "the original V1 field count is frozen");
+        assert_eq!(
+            fields[11], expected,
+            "private settlement stays after AXT and before governance"
+        );
+    }
+
+    #[test]
+    fn private_sidecar_capacity_does_not_change_payment_consensus_identity() {
+        let baseline = Nexus::default();
+        let pipeline = Pipeline::default();
+        let policy = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees)).unwrap();
+        let amx =
+            sumeragi_nexus_amx_context_hash(&baseline, Some(&baseline.fees), &pipeline, &[], &[]);
+        let mut records = baseline.clone();
+        records.atomic_private_settlement.sidecar_max_records = NonZeroU32::new(1).unwrap();
+        let mut bytes = baseline;
+        bytes.atomic_private_settlement.sidecar_max_total_bytes = NonZeroU64::new(1).unwrap();
+        for (label, changed) in [("record capacity", records), ("byte capacity", bytes)] {
+            assert_eq!(
+                nexus_consensus_policy_digest(&changed, Some(&changed.fees)).unwrap(),
+                policy,
+                "local private sidecar {label} must not alter payment consensus identity"
+            );
+            assert_eq!(
+                sumeragi_nexus_amx_context_hash(&changed, Some(&changed.fees), &pipeline, &[], &[]),
+                amx,
+                "local private sidecar {label} must not alter AMX authority"
+            );
+        }
+    }
+
     #[test]
     fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
         let mut left = Nexus::default();
@@ -221,8 +297,8 @@ mod tests {
         .expect("valid configured catalog");
 
         assert_eq!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            nexus_consensus_policy_digest(&left, Some(&left.fees)).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right, Some(&right.fees)).expect("valid right policy"),
             "lane descriptions and operator metadata must not partition validators"
         );
 
@@ -238,15 +314,17 @@ mod tests {
         )
         .expect("valid configured catalog");
         assert_ne!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&functional).expect("valid functional policy"),
+            nexus_consensus_policy_digest(&left, Some(&left.fees)).expect("valid left policy"),
+            nexus_consensus_policy_digest(&functional, Some(&functional.fees))
+                .expect("valid functional policy"),
             "typed scheduler policy must partition validators"
         );
     }
     #[test]
     fn nexus_consensus_policy_digest_changes_for_each_decision_policy_family() {
         let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid default policy");
         let mut threshold_drift = baseline.clone();
         threshold_drift.autoscale.scale_out_latency_ratio = f64::from_bits(
             threshold_drift
@@ -256,7 +334,8 @@ mod tests {
                 .saturating_add(1),
         );
         assert_ne!(
-            nexus_consensus_policy_digest(&threshold_drift).expect("valid threshold drift"),
+            nexus_consensus_policy_digest(&threshold_drift, Some(&threshold_drift.fees))
+                .expect("valid threshold drift"),
             expected,
             "exact f64 policy bits must be committed"
         );
@@ -270,30 +349,30 @@ mod tests {
             },
         });
         assert_ne!(
-            nexus_consensus_policy_digest(&routing_drift).expect("valid routing drift"),
+            nexus_consensus_policy_digest(&routing_drift, Some(&routing_drift.fees))
+                .expect("valid routing drift"),
             expected
         );
         let mut staking_drift = baseline.clone();
-        staking_drift.staking.min_validator_stake = staking_drift
-            .staking
-            .min_validator_stake
-            .try_add(&Quantity::one())
-            .expect("test stake remains representable");
+        staking_drift.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
         assert_ne!(
-            nexus_consensus_policy_digest(&staking_drift).expect("valid staking drift"),
+            nexus_consensus_policy_digest(&staking_drift, Some(&staking_drift.fees))
+                .expect("valid staking drift"),
             expected
         );
         let mut committee_drift = baseline;
         committee_drift.endorsement.quorum = committee_drift.endorsement.quorum.saturating_add(1);
         assert_ne!(
-            nexus_consensus_policy_digest(&committee_drift).expect("valid committee drift"),
+            nexus_consensus_policy_digest(&committee_drift, Some(&committee_drift.fees))
+                .expect("valid committee drift"),
             expected
         );
     }
     #[test]
     fn nexus_consensus_policy_digest_changes_for_execution_and_da_policy_drift() {
         let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let expected = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees))
+            .expect("valid default policy");
         let mut dataspace_drift = baseline.clone();
         dataspace_drift.configured_dataspace_catalog =
             DataSpaceCatalog::new(vec![DataSpaceMetadata {
@@ -302,7 +381,8 @@ mod tests {
             }])
             .expect("valid dataspace committee drift");
         assert_ne!(
-            nexus_consensus_policy_digest(&dataspace_drift).expect("valid dataspace drift"),
+            nexus_consensus_policy_digest(&dataspace_drift, Some(&dataspace_drift.fees))
+                .expect("valid dataspace drift"),
             expected,
             "dataspace fault tolerance changes the 3f+1 lane committee"
         );
@@ -314,7 +394,7 @@ mod tests {
             }])
             .expect("valid dataspace identifier catalog");
         assert_ne!(
-            nexus_consensus_policy_digest(&dataspace_id_drift)
+            nexus_consensus_policy_digest(&dataspace_id_drift, Some(&dataspace_id_drift.fees))
                 .expect("digest does not perform cross-catalog validation"),
             expected,
             "dataspace identities used for committee lookup must be committed"
@@ -322,13 +402,15 @@ mod tests {
         let mut fee_drift = baseline.clone();
         fee_drift.fees.per_byte_fee = Quantity::from(123_456_u32);
         assert_ne!(
-            nexus_consensus_policy_digest(&fee_drift).expect("valid fee drift"),
+            nexus_consensus_policy_digest(&fee_drift, Some(&fee_drift.fees))
+                .expect("valid fee drift"),
             expected
         );
         let mut axt_drift = baseline.clone();
         axt_drift.axt.max_clock_skew_ms = axt_drift.axt.max_clock_skew_ms.saturating_add(1);
         assert_ne!(
-            nexus_consensus_policy_digest(&axt_drift).expect("valid AXT drift"),
+            nexus_consensus_policy_digest(&axt_drift, Some(&axt_drift.fees))
+                .expect("valid AXT drift"),
             expected
         );
         let mut commit_drift = baseline.clone();
@@ -336,7 +418,8 @@ mod tests {
             NonZeroU16::new(commit_drift.commit.window_slots.get().saturating_add(1))
                 .expect("nonzero commit window");
         assert_ne!(
-            nexus_consensus_policy_digest(&commit_drift).expect("valid commit drift"),
+            nexus_consensus_policy_digest(&commit_drift, Some(&commit_drift.fees))
+                .expect("valid commit drift"),
             expected
         );
         let mut da_drift = baseline;
@@ -344,43 +427,44 @@ mod tests {
             NonZeroU16::new(da_drift.da.sample_size_max.get().saturating_add(1))
                 .expect("nonzero DA sample size");
         assert_ne!(
-            nexus_consensus_policy_digest(&da_drift).expect("valid DA drift"),
+            nexus_consensus_policy_digest(&da_drift, Some(&da_drift.fees)).expect("valid DA drift"),
             expected
         );
     }
     #[test]
-    fn nexus_staking_work_bounds_are_signed_by_both_consensus_projections() {
+    fn nexus_validator_modes_and_capacity_are_signed_by_both_consensus_projections() {
         let baseline = Nexus::default();
+        let pipeline = Pipeline::default();
         let baseline_policy =
-            nexus_consensus_policy_digest(&baseline).expect("valid default Nexus policy");
-
-        let mut share_bound_drift = baseline.clone();
-        share_bound_drift.staking.max_stake_shares_per_validator = NonZeroU32::new(
-            share_bound_drift
-                .staking
-                .max_stake_shares_per_validator
-                .get()
-                + 1,
-        )
-        .expect("incremented share bound stays non-zero");
-        let mut pending_bound_drift = baseline;
-        pending_bound_drift.staking.max_pending_unbonds_per_share = NonZeroU32::new(
-            pending_bound_drift
-                .staking
-                .max_pending_unbonds_per_share
-                .get()
-                + 1,
-        )
-        .expect("incremented pending-unbond bound stays non-zero");
-
+            nexus_consensus_policy_digest(&baseline, Some(&baseline.fees)).unwrap();
+        let baseline_amx =
+            sumeragi_nexus_amx_context_hash(&baseline, Some(&(baseline).fees), &pipeline, &[], &[]);
+        let mut public = baseline.clone();
+        public.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
+        let mut restricted = baseline.clone();
+        restricted.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+        let mut capacity = baseline;
+        capacity.staking.max_validators = NonZeroU32::new(33).unwrap();
         for (label, changed) in [
-            ("stake-share bound", share_bound_drift),
-            ("pending-unbond bound", pending_bound_drift),
+            ("public mode", public),
+            ("restricted mode", restricted),
+            ("capacity", capacity),
         ] {
             assert_ne!(
-                nexus_consensus_policy_digest(&changed).expect("valid changed Nexus policy"),
+                nexus_consensus_policy_digest(&changed, Some(&changed.fees)).unwrap(),
                 baseline_policy,
-                "{label} must change the canonical Nexus policy digest"
+                "{label}"
+            );
+            assert_ne!(
+                sumeragi_nexus_amx_context_hash(
+                    &changed,
+                    Some(&(changed).fees),
+                    &pipeline,
+                    &[],
+                    &[]
+                ),
+                baseline_amx,
+                "{label}"
             );
         }
     }
@@ -405,8 +489,8 @@ mod tests {
         right.configured_dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
             .expect("valid reordered dataspace catalog");
         assert_eq!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            nexus_consensus_policy_digest(&left, Some(&left.fees)).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right, Some(&right.fees)).expect("valid right policy"),
             "catalog iteration order is not a committee policy input"
         );
     }
@@ -428,8 +512,8 @@ mod tests {
         right.endorsement.committee_keys = BTreeSet::from([first.clone(), second]);
 
         assert_eq!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            nexus_consensus_policy_digest(&left, Some(&left.fees)).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right, Some(&right.fees)).expect("valid right policy"),
             "the typed endorsement committee set has one canonical policy projection"
         );
 
@@ -439,8 +523,8 @@ mod tests {
             .clone();
         right.endorsement.committee_keys = BTreeSet::from([first, replacement]);
         assert_ne!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&right).expect("valid changed policy"),
+            nexus_consensus_policy_digest(&left, Some(&left.fees)).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right, Some(&right.fees)).expect("valid changed policy"),
             "changing the canonical endorsement committee set must change the policy digest"
         );
     }
@@ -449,7 +533,7 @@ mod tests {
         let mut nexus = Nexus::default();
         nexus.autoscale.scale_in_utilization_ratio = f64::NAN;
         assert!(matches!(
-            nexus_consensus_policy_digest(&nexus),
+            nexus_consensus_policy_digest(&nexus, Some(&nexus.fees)),
             Err(NexusConsensusPolicyDigestError::InvalidRatio {
                 field: "nexus.autoscale.scale_in_utilization_ratio",
                 ..
@@ -461,24 +545,40 @@ mod tests {
         let mut nexus = Nexus::default();
         nexus.compliance.enabled = true;
         assert_eq!(
-            nexus_consensus_policy_digest(&nexus),
+            nexus_consensus_policy_digest(&nexus, Some(&nexus.fees)),
             Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest)
         );
-        let left = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x11; 32]))
-            .expect("bound compliance policy set");
-        let right = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x12; 32]))
-            .expect("bound compliance policy set");
+        let left = nexus_consensus_policy_digest_with_compliance(
+            &nexus,
+            Some(&nexus.fees),
+            Some([0x11; 32]),
+        )
+        .expect("bound compliance policy set");
+        let right = nexus_consensus_policy_digest_with_compliance(
+            &nexus,
+            Some(&nexus.fees),
+            Some([0x12; 32]),
+        )
+        .expect("bound compliance policy set");
         assert_ne!(left, right);
     }
     #[test]
     fn nexus_consensus_policy_digest_binds_loaded_lane_manifest_policy_set() {
         let nexus = Nexus::default();
-        let left =
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x21; 32]))
-                .expect("bound lane manifest policy set");
-        let right =
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x22; 32]))
-                .expect("bound lane manifest policy set");
+        let left = nexus_consensus_policy_digest_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            Some([0x21; 32]),
+        )
+        .expect("bound lane manifest policy set");
+        let right = nexus_consensus_policy_digest_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            Some([0x22; 32]),
+        )
+        .expect("bound lane manifest policy set");
         assert_ne!(left, right);
     }
     #[test]
@@ -487,33 +587,253 @@ mod tests {
         let nexus = Nexus::default();
         let compliance = None;
         let manifests = Some([0x31; 32]);
-        let preimage =
-            nexus_consensus_policy_preimage_with_runtime_policies(&nexus, compliance, manifests)
-                .expect("canonical Nexus preimage");
-        let digest =
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, compliance, manifests)
-                .expect("Nexus digest");
+        let preimage = nexus_consensus_policy_preimage_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            compliance,
+            manifests,
+        )
+        .expect("canonical Nexus preimage");
+        let digest = nexus_consensus_policy_digest_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            compliance,
+            manifests,
+        )
+        .expect("Nexus digest");
         assert_eq!(
             digest,
             <[u8; 32]>::from(Hash::new_from_chunks(&[DOMAIN, preimage.as_slice()]))
         );
         let _ambient = norito::core::DecodeFlagsGuard::enter(0);
         assert_eq!(
-            nexus_consensus_policy_preimage_with_runtime_policies(&nexus, compliance, manifests)
-                .expect("ambient-independent preimage"),
+            nexus_consensus_policy_preimage_with_runtime_policies(
+                &nexus,
+                Some(&nexus.fees),
+                compliance,
+                manifests
+            )
+            .expect("ambient-independent preimage"),
             preimage
         );
         assert_eq!(
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, compliance, manifests)
-                .expect("ambient-independent digest"),
+            nexus_consensus_policy_digest_with_runtime_policies(
+                &nexus,
+                Some(&nexus.fees),
+                compliance,
+                manifests
+            )
+            .expect("ambient-independent digest"),
             digest
         );
     }
+    #[test]
+    fn original_fee_payload_borrow_preserves_owned_option_and_record_bytes() {
+        use iroha_data_model::block::consensus::RootFeePolicy;
+        use norito::core::{DecodeFlagsGuard, PayloadRef, SerializePayload, serialize_to_buffer};
+
+        #[derive(Encode)]
+        struct OwnedFees {
+            fees: Option<RootFeePolicy>,
+        }
+        #[derive(Encode)]
+        struct BorrowedFees<'a> {
+            fees: Option<PayloadRef<'a, RootFeePolicy>>,
+        }
+
+        for present in [false, true] {
+            let owned = OwnedFees {
+                fees: present.then(|| Nexus::default().fees),
+            };
+            let borrowed = BorrowedFees {
+                fees: owned.fees.as_ref().map(PayloadRef),
+            };
+            if let (Some(original), Some(view)) = (&owned.fees, &borrowed.fees) {
+                assert!(std::ptr::eq(original, view.0));
+                assert_eq!(view.encoded_len_hint(), original.encoded_len_hint());
+                assert_eq!(view.encoded_len_exact(), original.encoded_len_exact());
+            }
+            assert_eq!(borrowed.fees.encode(), owned.fees.encode());
+            assert_eq!(borrowed.encode(), owned.encode());
+            assert_eq!(
+                borrowed.fees.encoded_len_hint(),
+                owned.fees.encoded_len_hint()
+            );
+            assert_eq!(
+                borrowed.fees.encoded_len_exact(),
+                owned.fees.encoded_len_exact()
+            );
+            for flags in [0, norito::core::default_encode_flags()] {
+                let _flags = DecodeFlagsGuard::enter(flags);
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                serialize_to_buffer(&borrowed, &mut actual).unwrap();
+                serialize_to_buffer(&owned, &mut expected).unwrap();
+                assert_eq!(actual, expected, "present={present}, flags={flags}");
+            }
+        }
+        assert_eq!(None::<PayloadRef<'_, RootFeePolicy>>.encode(), [0]);
+    }
+
+    #[test]
+    fn nexus_policy_requires_explicit_original_fees_and_preserves_absence() {
+        let nexus = Nexus::default();
+        let original = nexus.fees.clone();
+        let manifests = Some([0x31; 32]);
+        let digest = nexus_consensus_policy_digest_with_runtime_policies(
+            &nexus,
+            Some(&original),
+            None,
+            manifests,
+        )
+        .unwrap();
+        let absent =
+            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, None, manifests)
+                .unwrap();
+        assert_ne!(
+            absent, digest,
+            "absence differs from a present authored fee schedule"
+        );
+        let mut local_drift = nexus.clone();
+        local_drift.fees.per_byte_fee = Quantity::from(812_u32);
+        local_drift
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .clear();
+        assert_eq!(
+            nexus_consensus_policy_digest_with_runtime_policies(
+                &local_drift,
+                Some(&original),
+                None,
+                manifests,
+            )
+            .unwrap(),
+            digest,
+            "local fee recipe is not a substitute for original authority",
+        );
+        assert_eq!(
+            nexus_consensus_policy_digest_with_runtime_policies(
+                &local_drift,
+                None,
+                None,
+                manifests,
+            )
+            .unwrap(),
+            absent,
+            "pre-genesis absence must not materialize local defaults",
+        );
+        let mut changed = original.clone();
+        changed.per_gas_unit_fee = Quantity::from(99_u32);
+        assert_ne!(
+            nexus_consensus_policy_digest_with_runtime_policies(
+                &nexus,
+                Some(&changed),
+                None,
+                manifests,
+            )
+            .unwrap(),
+            digest,
+            "the supplied complete original policy is bound",
+        );
+        let flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        assert_eq!(
+            Some(norito::core::PayloadRef(&original)).encode(),
+            Some(original.clone()).encode(),
+            "borrowed and owned optional monetary codec relations agree"
+        );
+        assert_eq!(
+            None::<norito::core::PayloadRef<'_, iroha_data_model::block::consensus::RootFeePolicy>>
+                .encode(),
+            None::<iroha_data_model::block::consensus::RootFeePolicy>.encode()
+        );
+        drop(flags);
+    }
+
+    #[test]
+    fn nexus_amx_binds_one_original_fee_policy_without_local_or_address_context() {
+        use iroha_data_model::{
+            account::address::ChainDiscriminantGuard,
+            nexus::{decode_nexus_amx_context_v1, tag},
+        };
+        let nexus = Nexus::default();
+        let pipeline = Pipeline::default();
+        let mut original = nexus.fees.clone();
+        original
+            .successful_claim_fee_exempt_authorities
+            .try_insert(original.fee_sink_account_id.clone())
+            .unwrap();
+        original
+            .successful_claim_fee_exempt_authorities
+            .try_insert(original.sponsor_vault_custody_account_id.clone())
+            .unwrap();
+        assert_eq!(original.successful_claim_fee_exempt_authorities.len(), 2);
+        let original_preimage =
+            sumeragi_nexus_amx_context_preimage(&nexus, Some(&original), &pipeline, &[], &[]);
+        let absent = sumeragi_nexus_amx_context_preimage(&nexus, None, &pipeline, &[], &[]);
+        assert_ne!(original_preimage, absent);
+        decode_nexus_amx_context_v1(&original_preimage).unwrap();
+        decode_nexus_amx_context_v1(&absent).unwrap();
+        let mut local_drift = nexus.clone();
+        local_drift.fees.per_byte_fee = Quantity::from(812_u32);
+        local_drift
+            .fees
+            .successful_claim_fee_exempt_authorities
+            .clear();
+        assert_eq!(
+            sumeragi_nexus_amx_context_preimage(&local_drift, Some(&original), &pipeline, &[], &[]),
+            original_preimage
+        );
+        assert_eq!(
+            sumeragi_nexus_amx_context_preimage(&local_drift, None, &pipeline, &[], &[]),
+            absent
+        );
+        let mut changed = original.clone();
+        changed.per_gas_unit_fee = Quantity::from(99_u32);
+        assert_ne!(
+            sumeragi_nexus_amx_context_preimage(&nexus, Some(&changed), &pipeline, &[], &[]),
+            original_preimage
+        );
+        let field = tag::ROOT_FEE_POLICY.as_bytes();
+        let offsets: Vec<_> = original_preimage
+            .windows(field.len())
+            .enumerate()
+            .filter_map(|(i, bytes)| (bytes == field).then_some(i))
+            .collect();
+        assert_eq!(offsets.len(), 1);
+        let length_offset = offsets[0] + field.len();
+        let length = usize::try_from(u64::from_le_bytes(
+            original_preimage[length_offset..length_offset + 8]
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        let value = &original_preimage[length_offset + 8..length_offset + 8 + length];
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        assert_eq!(value, Some(norito::core::PayloadRef(&original)).encode());
+        assert_eq!(
+            value,
+            Some(original.clone()).encode(),
+            "the AMX fee field keeps the owned canonical Option payload"
+        );
+        for chain in [0, 369, 753, 65535] {
+            let _address = ChainDiscriminantGuard::enter(chain);
+            let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+            assert_eq!(
+                sumeragi_nexus_amx_context_preimage(&nexus, Some(&original), &pipeline, &[], &[]),
+                original_preimage,
+                "typed fee custody and canonical layout ignore author rendering context"
+            );
+            assert_eq!(
+                sumeragi_nexus_amx_context_hash(&nexus, Some(&original), &pipeline, &[], &[]),
+                Hash::new(&original_preimage)
+            );
+        }
+    }
+
     fn execution_policy_hash(config: &Root) -> [u8; 32] {
         execution_policy_digest_v1(
             &config.pipeline,
             &config.oracle,
-            &config.crypto,
             &config.fraud_monitoring,
             &config.gov,
             &config.content,
@@ -522,6 +842,41 @@ mod tests {
             [0x22; 32],
         )
     }
+    #[test]
+    fn frozen_runtime_provenance_v1_matches_original_commitment_bytes() {
+        // Independently encoded from the five ordered fields at 90ea8ea33b and its
+        // Optional/false/false/empty/zero baseline. Values retain their original types:
+        // u8, bool, bool, Vec<Vec<u8>>, u64, wrapped in the named V1 field sequence.
+        let expected = concat!(
+            "0500000000000000362b2a676f7665726e616e63652e72756e74696d655f757067",
+            "726164655f70726f76656e616e63652e6d6f6465090100000000000000013e3332",
+            "676f7665726e616e63652e72756e74696d655f757067726164655f70726f76656e",
+            "616e63652e726571756972655f73626f6d090100000000000000003e3332676f76",
+            "65726e616e63652e72756e74696d655f757067726164655f70726f76656e616e63",
+            "652e726571756972655f736c736109010000000000000000483635676f7665726e",
+            "616e63652e72756e74696d655f757067726164655f70726f76656e616e63652e74",
+            "7275737465645f7369676e65727310080000000000000000000000000000004c3a",
+            "39676f7665726e616e63652e72756e74696d655f757067726164655f70726f7665",
+            "6e616e63652e7369676e61747572655f7468726573686f6c641008000000000000",
+            "000000000000000000",
+        );
+        let mut policy = ExecutionPolicyFieldsV1::default();
+        policy.push_frozen_runtime_provenance_v1();
+        assert_eq!(hex::encode(policy.fields.encode()), expected);
+    }
+
+    #[test]
+    fn local_crypto_generation_and_backend_choices_cannot_change_execution_policy_digest() {
+        let baseline = super::sora_profile_tests::minimal_root();
+        let expected = execution_policy_hash(&baseline);
+        let mut changed = baseline.clone();
+        changed.crypto.default_hash = "sm3-256".to_owned();
+        changed.crypto.sm2_distid_default = "another local generation DistID".to_owned();
+        changed.crypto.enable_sm_openssl_preview = !changed.crypto.enable_sm_openssl_preview;
+        changed.crypto.sm_intrinsics = SmIntrinsicsPolicy::ForceDisable;
+        assert_eq!(execution_policy_hash(&changed), expected);
+    }
+
     #[test]
     fn execution_policy_digest_binds_every_process_local_decision_family() {
         let baseline = super::sora_profile_tests::minimal_root();
@@ -536,9 +891,6 @@ mod tests {
         let mut changed = baseline.clone();
         changed.pipeline.overlay_max_bytes = changed.pipeline.overlay_max_bytes.saturating_add(1);
         assert_changed("pipeline validity policy", changed);
-        let mut changed = baseline.clone();
-        changed.crypto.default_hash.push_str("-different");
-        assert_changed("cryptographic admission policy", changed);
         let mut changed = baseline.clone();
         changed.oracle.history_depth =
             NonZeroUsize::new(changed.oracle.history_depth.get().saturating_add(1))
@@ -614,7 +966,6 @@ mod tests {
                 execution_policy_digest_v1(
                     &fixed.pipeline,
                     &fixed.oracle,
-                    &fixed.crypto,
                     &fixed.fraud_monitoring,
                     &fixed.gov,
                     &fixed.content,
@@ -764,16 +1115,23 @@ mod tests {
     }
     #[test]
     fn sumeragi_default_nexus_amx_hash_is_stable() {
+        let profile = crate::profile::Profile::compiled(crate::profile::ProfileId::IrohaDevV1)
+            .expect("complete authored staking recipe");
         assert_eq!(
-            Nexus::default().staking.stake_asset_id,
-            Nexus::default().fees.fee_asset_id.canonical_address(),
-            "recommended staking custody and fees must use the canonical XOR asset",
+            profile.genesis_recipe().public_lane_staking.stake_asset_id,
+            profile.genesis_recipe().root_fees.fee_asset_id,
+            "recommended authored staking and fees must use the canonical XOR asset",
         );
-        let hash =
-            sumeragi_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
+        let hash = sumeragi_nexus_amx_context_hash(
+            &Nexus::default(),
+            Some(&(Nexus::default()).fees),
+            &Pipeline::default(),
+            &[],
+            &[],
+        );
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+            "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -800,8 +1158,20 @@ mod tests {
             .expect("valid reordered dataspace catalog");
 
         assert_eq!(
-            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(
+                &left,
+                Some(&(left).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &right,
+                Some(&(right).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
             "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
         );
     }
@@ -861,13 +1231,27 @@ mod tests {
         right.routing_policy.rules[0].matcher.description = Some("right routing note".to_owned());
 
         assert_eq!(
-            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(
+                &left,
+                Some(&(left).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &right,
+                Some(&(right).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
             "operator-only lane/dataspace descriptions, lane metadata, and routing descriptions must not affect consensus"
         );
     }
     #[test]
     fn sumeragi_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+        use iroha_data_model::block::consensus::RootFeeExemptions;
+
         let authority = |seed| {
             AccountId::new(
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -880,25 +1264,52 @@ mod tests {
         let authority_b = authority(2);
         let authority_c = authority(3);
         let mut left = Nexus::default();
-        left.fees.successful_claim_fee_exempt_authorities = BTreeSet::from([
+        left.fees.successful_claim_fee_exempt_authorities = RootFeeExemptions::try_from_iter([
             authority_b.clone(),
             authority_a.clone(),
             authority_a.clone(),
-        ]);
+        ])
+        .expect("fixture fee exemptions");
         let mut right = left.clone();
         right.fees.successful_claim_fee_exempt_authorities =
-            BTreeSet::from([authority_a, authority_b]);
+            RootFeeExemptions::try_from_iter([authority_a, authority_b])
+                .expect("fixture fee exemptions");
 
         assert_eq!(
-            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(
+                &left,
+                Some(&(left).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &right,
+                Some(&(right).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
             "set order and duplicate entries must not affect the signed Nexus/AMX commitment"
         );
 
-        right.fees.successful_claim_fee_exempt_authorities = BTreeSet::from([authority_c]);
+        right.fees.successful_claim_fee_exempt_authorities =
+            RootFeeExemptions::try_from_iter([authority_c]).expect("fixture fee exemption");
         assert_ne!(
-            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(
+                &left,
+                Some(&(left).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &right,
+                Some(&(right).fees),
+                &Pipeline::default(),
+                &[],
+                &[]
+            ),
             "changing the canonical authority set must change the signed commitment"
         );
     }
@@ -929,11 +1340,18 @@ mod tests {
     fn sumeragi_nexus_amx_hash_binds_every_projection_category() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
-        let baseline = sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
+        let baseline =
+            sumeragi_nexus_amx_context_hash(&nexus, Some(&(nexus).fees), &pipeline, &[], &[]);
         let assert_nexus_change = |label: &str, changed: Nexus| {
             assert_ne!(
                 baseline,
-                sumeragi_nexus_amx_context_hash(&changed, &pipeline, &[], &[]),
+                sumeragi_nexus_amx_context_hash(
+                    &changed,
+                    Some(&(changed).fees),
+                    &pipeline,
+                    &[],
+                    &[]
+                ),
                 "{label} must change the signed Nexus/AMX commitment"
             );
         };
@@ -950,12 +1368,8 @@ mod tests {
         changed.routing_policy.default_lane = LaneId::new(1);
         assert_nexus_change("routing policy", changed);
         let mut changed = nexus.clone();
-        changed.staking.min_validator_stake = changed
-            .staking
-            .min_validator_stake
-            .try_add(&Quantity::one())
-            .expect("test stake remains representable");
-        assert_nexus_change("staking policy", changed);
+        changed.staking.max_validators = NonZeroU32::new(33).unwrap();
+        assert_nexus_change("validator capacity", changed);
         let mut changed = nexus.clone();
         changed.fees.sponsor_vault_custody_account_id = AccountId::new(
             KeyPair::try_from_seed(vec![0xF5; 32], Algorithm::Ed25519)
@@ -1008,13 +1422,19 @@ mod tests {
         changed_pipeline.amx_per_instruction_ns += 1;
         assert_ne!(
             baseline,
-            sumeragi_nexus_amx_context_hash(&nexus, &changed_pipeline, &[], &[]),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &changed_pipeline,
+                &[],
+                &[]
+            ),
             "deterministic AMX budgets must change the signed commitment"
         );
         let active = [test_active_validator(0xA1, LaneId::SINGLE)];
         assert_ne!(
             baseline,
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &active, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, Some(&(nexus).fees), &pipeline, &active, &[]),
             "staged active validators must change the signed commitment"
         );
         let lifecycle = [SumeragiLaneLifecycleEntry {
@@ -1025,21 +1445,51 @@ mod tests {
         }];
         assert_ne!(
             baseline,
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &lifecycle
+            ),
             "lane lifecycle history must change the signed commitment"
         );
         let mut changed_generation = lifecycle;
         changed_generation[0].generation += 1;
         assert_ne!(
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_generation),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &lifecycle
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &changed_generation
+            ),
             "retained lane generation must be committed independently of the current catalog"
         );
         let mut changed_lifecycle = lifecycle;
         changed_lifecycle[0].activation_height += 1;
         assert_ne!(
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &lifecycle
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &changed_lifecycle
+            ),
             "activation height must be committed independently of the current catalog"
         );
         let retained_with_retired_lane = [
@@ -1052,8 +1502,20 @@ mod tests {
             },
         ];
         assert_ne!(
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &retained_with_retired_lane,),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &lifecycle
+            ),
+            sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &[],
+                &retained_with_retired_lane,
+            ),
             "retired lane lineage must remain committed after catalog removal"
         );
     }
@@ -1066,8 +1528,8 @@ mod tests {
         let forward = [first.clone(), second.clone()];
         let reverse = [second, first];
         assert_eq!(
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &forward, &[]),
-            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &reverse, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, Some(&(nexus).fees), &pipeline, &forward, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, Some(&(nexus).fees), &pipeline, &reverse, &[]),
         );
         let first_lifecycle = SumeragiLaneLifecycleEntry {
             lane_id: LaneId::new(1),
@@ -1084,12 +1546,14 @@ mod tests {
         assert_eq!(
             sumeragi_nexus_amx_context_hash(
                 &nexus,
+                Some(&(nexus).fees),
                 &pipeline,
                 &[],
                 &[first_lifecycle, second_lifecycle],
             ),
             sumeragi_nexus_amx_context_hash(
                 &nexus,
+                Some(&(nexus).fees),
                 &pipeline,
                 &[],
                 &[second_lifecycle, first_lifecycle],
@@ -1247,28 +1711,36 @@ mod tests {
         let cases = [
             (
                 "default",
-                sumeragi_nexus_amx_context_hash(&Nexus::default(), &pipeline, &[], &[]),
-                "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+                sumeragi_nexus_amx_context_hash(
+                    &Nexus::default(),
+                    Some(&(Nexus::default()).fees),
+                    &pipeline,
+                    &[],
+                    &[],
+                ),
+                "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
             ),
             (
                 "sora",
                 sumeragi_nexus_amx_context_hash(
                     &sora_three_lane_nexus(),
+                    Some(&(sora_three_lane_nexus()).fees),
                     &pipeline,
                     &golden_validators(),
                     &golden_lineage()[..3],
                 ),
-                "5bf597842b80453ea6aa1a63d986d1298f5db9ac35c8440bb85b5a8c7c9cf351",
+                "c73eac6773210f04e0136882903a1d9c8222740b19f6a664b43933920e54c8fd",
             ),
             (
                 "taira",
                 sumeragi_nexus_amx_context_hash(
                     &taira,
+                    Some(&(taira).fees),
                     &pipeline,
                     &golden_validators(),
                     &golden_lineage(),
                 ),
-                "f93a860a9606b62422d2b7fc9bd5560cb4ded174b09d083695f6afbb82ed565d",
+                "70968361b56d3429985653e174bc46cbc52638af3539a461a730d07ae360d22d",
             ),
         ];
         let mut failures = Vec::new();
@@ -1299,11 +1771,22 @@ mod tests {
                 golden_lineage(),
             ),
         ] {
-            let preimage =
-                sumeragi_nexus_amx_context_preimage(&nexus, &pipeline, &validators, &lineage);
+            let preimage = sumeragi_nexus_amx_context_preimage(
+                &nexus,
+                Some(&(nexus).fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
             assert_eq!(
                 Hash::new(&preimage),
-                sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &validators, &lineage),
+                sumeragi_nexus_amx_context_hash(
+                    &nexus,
+                    Some(&(nexus).fees),
+                    &pipeline,
+                    &validators,
+                    &lineage
+                ),
                 "{label}: the hash is the hash of the preimage"
             );
             let catalog = decode_nexus_amx_context_v1(&preimage)
@@ -1338,6 +1821,7 @@ mod tests {
         let taira = taira_eight_lane_nexus();
         let catalog = decode_nexus_amx_context_v1(&sumeragi_nexus_amx_context_preimage(
             &taira,
+            Some(&(taira).fees),
             &pipeline,
             &[],
             &[],
@@ -1359,6 +1843,223 @@ mod tests {
                 .all(|rule| rule.lane() != LaneId::new(5)),
             "the fresh Taira catalog routes bpng by target dataspace only"
         );
+    }
+    /// The field-level view walks every field the writer emits, names each node value by its
+    /// configuration key, and a changed node value differs in exactly that key.
+    #[test]
+    fn sumeragi_nexus_amx_context_fields_name_each_changed_config_key() {
+        use iroha_data_model::nexus::{
+            NexusAmxContextFieldOriginV1::{Genesis, NodeConfig},
+            diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+        };
+        let pipeline = Pipeline::default();
+        let preimage = |nexus: &Nexus,
+                        validators: &[GenesisActiveNexusLaneRecord],
+                        lineage: &[SumeragiLaneLifecycleEntry]| {
+            sumeragi_nexus_amx_context_preimage(
+                nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                validators,
+                lineage,
+            )
+        };
+        for (label, nexus, validators, lineage) in [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ] {
+            let fields = nexus_amx_context_fields_v1(&preimage(&nexus, &validators, &lineage))
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let value = |path: &str| {
+                fields
+                    .iter()
+                    .find(|field| field.path == path)
+                    .map(|field| (field.origin, field.value.clone()))
+            };
+            assert_eq!(
+                value("nexus.lane_count"),
+                Some((
+                    NodeConfig,
+                    nexus.lane_catalog.lane_count().get().to_string()
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.fusion.exit_teu"),
+                Some((NodeConfig, nexus.fusion.exit_teu.to_string())),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.autoscale.scale_out_latency_ratio"),
+                Some((
+                    NodeConfig,
+                    format!("{:?}", nexus.autoscale.scale_out_latency_ratio)
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.da.audit.interval_ms"),
+                Some((NodeConfig, nexus.da.audit.interval.as_millis().to_string())),
+                "{label}"
+            );
+            for dataspace in nexus.dataspace_catalog.entries() {
+                assert_eq!(
+                    value(&format!(
+                        "nexus.dataspace_catalog[id={}].alias",
+                        dataspace.id
+                    )),
+                    Some((NodeConfig, format!("{:?}", dataspace.alias))),
+                    "{label}"
+                );
+            }
+            for field in &fields {
+                let genesis = [
+                    "nexus.lane_lifecycle[",
+                    "nexus.autoscale.last_transition_height",
+                    "root.",
+                    "staged.",
+                    "pipeline.",
+                ]
+                .iter()
+                .any(|prefix| field.path.starts_with(prefix))
+                    || (field.path.starts_with("nexus.lane_catalog[")
+                        && (field.path.ends_with(".version") || field.path.ends_with(".metadata")));
+                let origin = if genesis { Genesis } else { NodeConfig };
+                assert_eq!(field.origin, origin, "{label}: {}", field.path);
+            }
+        }
+        let validators = golden_validators();
+        let lineage = golden_lineage();
+        let taira = taira_eight_lane_nexus();
+        let mut node = taira.clone();
+        node.fusion.exit_teu = node.fusion.exit_teu.checked_add(1).unwrap();
+        node.autoscale.cooldown_blocks = node.autoscale.cooldown_blocks.checked_add(1).unwrap();
+        node.da.rotation.latency_decay /= 2.0;
+        let diffs = diff_nexus_amx_context_v1(
+            &preimage(&taira, &validators, &lineage),
+            &preimage(&node, &validators, &lineage),
+        )
+        .expect("both contexts come from the writer");
+        assert_eq!(
+            diffs
+                .iter()
+                .map(|diff| (diff.path.as_str(), diff.origin, diff.actual.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "nexus.fusion.exit_teu",
+                    NodeConfig,
+                    Some(node.fusion.exit_teu.to_string())
+                ),
+                (
+                    "nexus.autoscale.cooldown_blocks",
+                    NodeConfig,
+                    Some(node.autoscale.cooldown_blocks.to_string())
+                ),
+                (
+                    "nexus.da.rotation.latency_decay",
+                    NodeConfig,
+                    Some(format!("{:?}", node.da.rotation.latency_decay))
+                ),
+            ]
+        );
+    }
+    /// Emit the actual default/Sora/Taira test-owner preimages without rewriting golden pins.
+    /// Explicit authored fee recipes here are test inputs, never runtime policy fallbacks.
+    #[test]
+    #[ignore = "explicit native capture of public configuration fixtures; retain stdout"]
+    fn capture_nexus_policy_and_amx_preimages() {
+        let pipeline = Pipeline::default();
+        let cases = [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ];
+        for (label, nexus, validators, lineage) in cases {
+            // Capture the exact three AMX inputs used by the existing golden tests.
+            let encoded = sumeragi_nexus_amx_context_preimage(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            let expected = sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            assert_eq!(Hash::new(&encoded), expected);
+            let record = norito::json!({
+                "schema_version": 1,
+                "kind": "nexus_amx",
+                "case": label,
+                "original_fees": "authored_test_recipe",
+                "domain_hex": "",
+                "encoded_hex": (hex::encode(&encoded)),
+                "preimage_hex": (hex::encode(&encoded)),
+                "digest_hex": (hex::encode(<[u8; 32]>::from(expected))),
+                "recommended_template_hex": (hex::encode(
+                    iroha_data_model::block::consensus::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH
+                )),
+            });
+            println!(
+                "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                norito::json::to_json(&record).unwrap()
+            );
+            // Nexus policy is a separate owner from both compiled-profile and AMX hashes.
+            // Preserve the meaningful distinction between no original fees and an authored policy.
+            for (fee_case, fees) in [("absent", None), ("authored", Some(&nexus.fees))] {
+                let encoded =
+                    nexus_consensus_policy_preimage_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let expected =
+                    nexus_consensus_policy_digest_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let domain = b"iroha:nexus:consensus-policy:v1\0";
+                let preimage = [domain.as_slice(), encoded.as_slice()].concat();
+                assert_eq!(<[u8; 32]>::from(Hash::new(&preimage)), expected);
+                let record = norito::json!({
+                    "schema_version": 1,
+                    "kind": "nexus_policy",
+                    "case": (format!("{label}/{fee_case}")),
+                    "original_fees": fee_case,
+                    "compliance_policy": "absent",
+                    "lane_manifest_policy": "absent",
+                    "domain_hex": (hex::encode(domain)),
+                    "encoded_hex": (hex::encode(&encoded)),
+                    "preimage_hex": (hex::encode(&preimage)),
+                    "digest_hex": (hex::encode(expected)),
+                });
+                println!(
+                    "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                    norito::json::to_json(&record).unwrap()
+                );
+            }
+        }
     }
 }
 #[cfg(test)]

@@ -196,9 +196,7 @@ fn state_with(policy: Option<&PipelineValidityPolicyV1>) -> State {
     if let Some(policy) = policy {
         let mut block = world.block();
         block
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
             .expect("the fixture pipeline policy is valid");
         block.commit();
     }
@@ -605,10 +603,11 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         let mut block = state.block(header(2));
         let mut transaction = block.transaction();
         let mut declares = ExecutorDataModel::default();
-        declares
-            .parameters
-            .insert(PipelineValidityPolicyV1::parameter_id(), attacker);
-        transaction.world.apply_executor_data_model(declares);
+        declares.parameters.insert(attacker);
+        transaction
+            .world
+            .apply_executor_data_model(declares)
+            .unwrap();
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed)),
@@ -626,7 +625,8 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
         );
         transaction
             .world
-            .apply_executor_data_model(ExecutorDataModel::default());
+            .apply_executor_data_model(ExecutorDataModel::default())
+            .unwrap();
         assert_eq!(
             committed(transaction.world.parameters.get()),
             Ok(Some(installed)),
@@ -638,11 +638,13 @@ fn executor_reconciliation_cannot_replace_or_remove_the_committed_policy() {
     let mut block = state.block(header(2));
     let mut transaction = block.transaction();
     let mut declares = ExecutorDataModel::default();
-    declares.parameters.insert(
-        PipelineValidityPolicyV1::parameter_id(),
-        committed_policy().into_custom_parameter(),
-    );
-    transaction.world.apply_executor_data_model(declares);
+    declares
+        .parameters
+        .insert(committed_policy().into_custom_parameter());
+    transaction
+        .world
+        .apply_executor_data_model(declares)
+        .unwrap();
     assert_eq!(committed(transaction.world.parameters.get()), Ok(None));
     assert!(
         crate::state::consensus_owned_custom_parameter_ids()
@@ -687,8 +689,10 @@ fn alice_chain(
     CertifiedTestChain::from_prepared(prepared).expect("genesis applies")
 }
 
+type CertifiedHistoryRow = (Vec<u8>, Vec<u8>, String, Vec<u8>);
+
 /// What consensus certifies for every committed height.
-fn certified_history(chain: &CertifiedTestChain) -> Vec<(Vec<u8>, Vec<u8>, String, Vec<u8>)> {
+fn certified_history(chain: &CertifiedTestChain) -> Vec<CertifiedHistoryRow> {
     (1..=chain.height())
         .map(|height| {
             let committed = chain.committed(height);
@@ -1060,14 +1064,18 @@ fn committed_fees_use_one_predecessor_for_quotes_execution_and_effects() {
     for divergent in [false, true] {
         let mut config = TestChainConfig::new(alice_world([Permission::from(CanSetParameters)]), 0);
         config.genesis_key = ALICE_KEYPAIR.clone();
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = asset.clone();
-        nexus.fees.fee_sink_account_id = BOB_ID.clone();
-        config.nexus = Some(nexus);
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        fees.base_fee = Quantity::zero();
+        fees.per_byte_fee = Quantity::zero();
+        fees.per_instruction_fee = Quantity::zero();
+        fees.per_gas_unit_fee = Quantity::zero();
+        fees.fee_asset_id = asset.clone();
+        fees.fee_sink_account_id = BOB_ID.clone();
+        config.genesis_parameters.push(Parameter::Custom(
+            fees.into_custom_parameter()
+                .expect("explicit signed fee policy"),
+        ));
+        config.nexus = Some(iroha_config::parameters::actual::Nexus::default());
         config.genesis_instructions = vec![
             Register::asset_definition(AssetDefinition::numeric(
                 asset.clone(),
@@ -1082,7 +1090,7 @@ fn committed_fees_use_one_predecessor_for_quotes_execution_and_effects() {
             )
             .into(),
         ];
-        config.genesis_parameters = vec![
+        config.genesis_parameters.extend([
             parameter("ivm_gas_tech_account_id", Json::new(BOB_ID.to_string())),
             parameter(
                 "ivm_gas_accepted_assets",
@@ -1096,7 +1104,7 @@ fn committed_fees_use_one_predecessor_for_quotes_execution_and_effects() {
                 ))
                 .unwrap(),
             ),
-        ];
+        ]);
         let mut prepared = CertifiedTestChain::prepare(config).unwrap();
         if divergent {
             let state = Arc::get_mut(&mut prepared.state).unwrap();

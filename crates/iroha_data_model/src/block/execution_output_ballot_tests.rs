@@ -191,7 +191,7 @@ fn identical_anonymous_inputs_keep_distinct_results_and_canonical_source_positio
             0,
             BTreeMap::new(),
             vec![],
-            Default::default(),
+            crate::nexus::AxtPolicySnapshot::default(),
             BTreeSet::new(),
             &limits,
         )
@@ -367,6 +367,11 @@ fn ordinary_network_and_internal_outputs_refuse_ballot_rejection_reasons() {
                     &mut output.failure_root,
                     &mut output.completions,
                 ),
+                ExecutionOutputV1::NetworkWithLifecycle(_)
+                | ExecutionOutputV1::PipelineWithLifecycle(_)
+                | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                    unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+                }
                 ExecutionOutputV1::Network(_) => unreachable!(),
             };
             *result =

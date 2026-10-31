@@ -1,6 +1,6 @@
 """Unit and adversarial tests for `scripts/contract_artifact_corridor.py` (SCCP v1, `specs/sccp.md` §5.5).
 
-The corridor pins the native Solidity 0.8.31 compiler for Ethereum and BSC,
+The corridor pins the native Solidity 0.8.38 compiler for Ethereum and BSC,
 compiles `contracts/evm/sccp/SccpTairaXor.sol` and its one imported library
 with the cancun legacy-pipeline settings, and locks the creation code and the
 runtime template with its named immutable references. These tests use a
@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import contract_artifact_corridor as corridor  # noqa: E402
 
 
-SOURCE_HEADER = "// SPDX-License-Identifier: Apache-2.0\npragma solidity 0.8.31;\n"
+SOURCE_HEADER = "// SPDX-License-Identifier: Apache-2.0\npragma solidity 0.8.38;\n"
 CONTRACT_HEADER = SOURCE_HEADER + corridor.SCCP_LIBRARY_IMPORT + "\n"
 LIBRARY_TEXT = SOURCE_HEADER + "library BLS12_381 {}\n"
 IMMUTABLE_IDS = {name: str(100 + index) for index, name in enumerate(corridor.EXPECTED_IMMUTABLES)}
@@ -61,13 +61,13 @@ def fake_spec(target: str, payload: bytes) -> corridor.CompilerSpec:
         url=f"https://example.invalid/{target}-solc",
         sha256=hashlib.sha256(payload).hexdigest(),
         format=fmt,
-        reported_version=f"0.8.31+commit.{target}.Test",
+        reported_version=f"0.8.38+commit.{target}.Test",
     )
     return corridor.CompilerSpec(
         target=target,
         identity=f"test-{target}",
         banner=f"{target} test banner",
-        reported_version=f"0.8.31+commit.{target}",
+        reported_version=f"0.8.38+commit.{target}",
         artifacts={platform_name: artifact},
     )
 
@@ -118,7 +118,7 @@ def fake_output(runtime_tail: str = "aa") -> Mapping[str, object]:
 
     runtime = bytearray(32 * len(IMMUTABLE_IDS)) + bytes.fromhex(runtime_tail)
     references = {ast_id: [{"start": 32 * index, "length": 32}] for index, ast_id in enumerate(IMMUTABLE_IDS.values())}
-    metadata = json.dumps({"compiler": {"version": "0.8.31+commit.evm"}, "settings": {"evmVersion": "cancun"}})
+    metadata = json.dumps({"compiler": {"version": "0.8.38+commit.evm"}, "settings": {"evmVersion": "cancun"}})
     library_runtime = "73" + "00" * 20 + "3014"
     return {
         "sources": {
@@ -229,7 +229,7 @@ def test_committed_compiler_lock_pins_only_the_evm_compiler() -> None:
     assert config.size_limits == {"evm": {"creation_bytecode_bytes": 49152, "runtime_bytecode_bytes": 24576}}
     assert set(config.compilers) == {"evm"}
     assert set(config.compilers["evm"].artifacts) == set(corridor.PLATFORMS)
-    assert config.compilers["evm"].reported_version == "0.8.31+commit.fd3a2265"
+    assert config.compilers["evm"].reported_version == "0.8.38+commit.1835d247"
     lock = json.loads(corridor.DEFAULT_COMPILER_LOCK.read_text(encoding="utf-8"))
     assert set(lock) == {"schema", "compilers", "settings", "sources", "size_limits"}
 
@@ -325,7 +325,7 @@ def test_compiler_lock_rejects_every_identity_or_digest_downgrade(
         lock["compilers"][target][field] = replacement
     path = tmp_path / "compiler-lock.json"
     path.write_text(json.dumps(lock), encoding="utf-8")
-    with pytest.raises(corridor.CorridorError, match="reviewed native Solidity 0.8.31 release"):
+    with pytest.raises(corridor.CorridorError, match="reviewed native Solidity 0.8.38 release"):
         corridor.load_corridor_config(path)
 
 
@@ -838,8 +838,8 @@ def test_source_policy_admits_only_the_bls_library_import() -> None:
 @pytest.mark.parametrize(
     ("source", "message"),
     [
-        ("pragma solidity 0.8.31;\ncontract A {}\n", "SPDX"),
-        ("// SPDX-License-Identifier: Apache-2.0\npragma solidity ^0.8.31;\ncontract A {}\n", "pragma"),
+        ("pragma solidity 0.8.38;\ncontract A {}\n", "SPDX"),
+        ("// SPDX-License-Identifier: Apache-2.0\npragma solidity ^0.8.38;\ncontract A {}\n", "pragma"),
         (SOURCE_HEADER + "pragma abicoder v2;\ncontract A {}\n", "pragma"),
         (SOURCE_HEADER + "contract A { function f(bytes memory b) internal pure { delete b[0]; } }\n", "delete"),
         (SOURCE_HEADER + "contract A layout at 0x10 {}\n", "storage layout"),
@@ -947,16 +947,16 @@ def test_source_map_uses_remaining_aggregate_compiler_input_budget(
     (
         "pragma solidity 0.8.30;",
         "pragma solidity 0.7.6;",
-        "pragma solidity ^0.8.31;",
-        "pragma solidity =0.8.31;",
-        "pragma  solidity 0.8.31;",
-        "pragma solidity /* hidden range */ >=0.8.31 <0.9.0;",
-        "pragma solidity 0.8.31/* hidden terminator */;",
-        "pragma solidity 0.8.31;\npragma solidity 0.8.31;",
-        "pragma solidity 0.8.31;\npragma experimental ABIEncoderV2;",
-        "pragma solidity 0.8.31;\npragma abicoder v1;",
-        "pragma solidity\n0.8.31;",
-        "pragma solidity 0.8.31",
+        "pragma solidity ^0.8.38;",
+        "pragma solidity =0.8.38;",
+        "pragma  solidity 0.8.38;",
+        "pragma solidity /* hidden range */ >=0.8.38 <0.9.0;",
+        "pragma solidity 0.8.38/* hidden terminator */;",
+        "pragma solidity 0.8.38;\npragma solidity 0.8.38;",
+        "pragma solidity 0.8.38;\npragma experimental ABIEncoderV2;",
+        "pragma solidity 0.8.38;\npragma abicoder v1;",
+        "pragma solidity\n0.8.38;",
+        "pragma solidity 0.8.38",
     ),
 )
 def test_source_policy_rejects_noncanonical_duplicate_and_obfuscated_pragmas(tmp_path: Path, directive: str) -> None:
@@ -974,7 +974,7 @@ def test_source_policy_ignores_fake_pragmas_in_comments_and_strings(tmp_path: Pa
         "// SPDX-License-Identifier: Apache-2.0\n"
         "// pragma solidity ^0.8.0;\n"
         "/* pragma experimental ABIEncoderV2; */\n"
-        "pragma solidity 0.8.31;\n"
+        "pragma solidity 0.8.38;\n"
         f"{corridor.SCCP_LIBRARY_IMPORT}\n"
         'contract SccpTairaXor { string constant TEXT = "pragma solidity ^0.7.0; \\" delete"; }\n'
     )
@@ -1185,17 +1185,17 @@ def test_compiler_diagnostics_and_metadata_are_strict() -> None:
     ):
         with pytest.raises(corridor.CorridorError, match=message):
             corridor._reject_compiler_diagnostics(output, "evm")
-    good = json.dumps({"compiler": {"version": "0.8.31+commit.x"}, "settings": {"evmVersion": "cancun"}})
-    metadata, encoded = corridor._metadata_record(good, "x", "0.8.31+commit.x")
+    good = json.dumps({"compiler": {"version": "0.8.38+commit.x"}, "settings": {"evmVersion": "cancun"}})
+    metadata, encoded = corridor._metadata_record(good, "x", "0.8.38+commit.x")
     assert encoded == corridor.canonical_json_bytes(metadata)
     for value, message in (
         (good, "compiler identity mismatch"),
-        (json.dumps({"compiler": {"version": "0.8.31+commit.y"}, "settings": {"evmVersion": "prague"}}), "EVM version"),
-        (json.dumps({"compiler": {"version": "0.8.31+commit.y"}, "settings": {"evmVersion": "cancun", "viaIR": True}}), "pipeline"),
+        (json.dumps({"compiler": {"version": "0.8.38+commit.y"}, "settings": {"evmVersion": "prague"}}), "EVM version"),
+        (json.dumps({"compiler": {"version": "0.8.38+commit.y"}, "settings": {"evmVersion": "cancun", "viaIR": True}}), "pipeline"),
         ({"compiler": {}}, "JSON text"),
     ):
         with pytest.raises(corridor.CorridorError, match=message):
-            corridor._metadata_record(value, "x", "0.8.31+commit.y")
+            corridor._metadata_record(value, "x", "0.8.38+commit.y")
 
 
 def test_manifest_integrity_and_source_binding(tmp_path: Path) -> None:
@@ -1456,7 +1456,7 @@ def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
     tooling = ROOT / "scripts" / "contract_tooling" / "evm-runtime"
     package = json.loads((tooling / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((tooling / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["dependencies"] == {"@noble/curves": "1.2.0", "ethers": "6.16.0", "@nomicfoundation/edr": "0.12.1"}
+    assert package["dependencies"] == {"@noble/curves": "2.4.0", "@noble/hashes": "2.4.0", "ethers": "6.17.0", "@nomicfoundation/edr": "0.25.0"}
     assert package["overrides"] == {"ws": "8.21.0"}
     assert_registry_locked(package_lock)
     assert package_lock["packages"][""]["dependencies"] == package["dependencies"]
@@ -1469,20 +1469,20 @@ def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
         "reported the wrong chain id",
         'path.basename(packageRoot), "edr"',
         'path.basename(path.dirname(path.dirname(packageRoot))), "node_modules"',
-        'metadata.version, "0.12.1"',
+        'metadata.version, "0.25.0"',
         "context.createProvider(edr.L1_CHAIN_TYPE",
         "bailOnTransactionFailure: true",
         "allowUnlimitedContractSize: false",
         "this.closed = true",
         "this.provider = null",
-        'new Map([["prague", edr.SpecId.Prague], ["osaka", edr.SpecId.Osaka]])',
+        'new Map([["prague", edr.L1Hardfork.Prague], ["osaka", edr.L1Hardfork.Osaka]])',
         "HARDFORKS.has(hardfork)",
         "...edr.l1GenesisState(specId)",
         "hardfork: edr.l1HardforkToString(specId)",
         "allowBlocksWithSameTimestamp: this.allowBlocksWithSameTimestamp",
     ):
         assert required in provider, required
-    assert "edr.SpecId.Osaka)" not in provider, "no hardfork is fixed outside the option table"
+    assert "edr.L1Hardfork.Osaka)" not in provider, "no hardfork is fixed outside the option table"
 
 
 def test_evm_smoke_script_uses_the_authenticated_corridor_and_audited_runtime() -> None:

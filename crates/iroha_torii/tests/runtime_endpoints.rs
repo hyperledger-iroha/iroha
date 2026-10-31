@@ -1,145 +1,66 @@
-//! Integration coverage for runtime upgrade endpoints.
+//! Integration coverage for the runtime change-set endpoints.
 #![cfg(feature = "app_api")]
 use axum::{extract::Path as AxPath, response::IntoResponse as _};
-use iroha_data_model::runtime::{
-    RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
-};
-use iroha_torii::{
-    handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade, test_utils::random_authority,
-};
-use std::vec::Vec;
-struct SimpleItem {
-    record: RuntimeUpgradeRecord,
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
+use iroha_torii::{handle_runtime_cancel_upgrade, handle_runtime_upgrades_list};
+use std::sync::Arc;
+
+fn conversion_message(error: iroha_torii::Error) -> String {
+    match error {
+        iroha_torii::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) => message,
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
+
 #[tokio::test]
-async fn runtime_activate_and_cancel_validate_identifiers() {
-    // Case 1: malformed hex should return a conversion error
-    let err = handle_runtime_activate_upgrade(AxPath("xyz".to_string()))
+async fn runtime_cancel_validates_identifiers_and_drafts_a_proposal() {
+    let error = handle_runtime_cancel_upgrade(AxPath("xyz".to_string()))
         .await
-        .expect_err("expected invalid hex rejection");
-    match err {
-        iroha_torii::Error::Query(vf) => match vf {
-            iroha_data_model::ValidationFail::QueryFailed(qf) => match qf {
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg) => {
-                    assert_eq!(msg, "invalid id");
-                }
-                other => panic!("unexpected query failure variant: {other:?}"),
-            },
-            other => panic!("unexpected validation fail: {other:?}"),
-        },
-        other => panic!("unexpected error type: {other:?}"),
-    }
-    // Case 2: good hex but wrong length (31 bytes)
-    let bad_len_hex = "aa".repeat(31);
-    let err = handle_runtime_activate_upgrade(AxPath(bad_len_hex))
+        .expect_err("malformed hex");
+    assert_eq!(conversion_message(error), "invalid id");
+    let error = handle_runtime_cancel_upgrade(AxPath("aa".repeat(31)))
         .await
-        .expect_err("expected invalid length rejection");
-    match err {
-        iroha_torii::Error::Query(vf) => match vf {
-            iroha_data_model::ValidationFail::QueryFailed(qf) => match qf {
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg) => {
-                    assert_eq!(msg, "invalid id length");
-                }
-                other => panic!("unexpected query failure variant: {other:?}"),
-            },
-            other => panic!("unexpected validation fail: {other:?}"),
-        },
-        other => panic!("unexpected error type: {other:?}"),
-    }
-    // Case 3: cancel endpoint mirrors the same validation
-    let err = handle_runtime_cancel_upgrade(AxPath("gh".to_string()))
+        .expect_err("31 bytes");
+    assert_eq!(conversion_message(error), "invalid id length");
+
+    let draft = handle_runtime_cancel_upgrade(AxPath(hex::encode([0x11; 32])))
         .await
-        .expect_err("expected invalid hex rejection for cancel");
-    match err {
-        iroha_torii::Error::Query(vf) => match vf {
-            iroha_data_model::ValidationFail::QueryFailed(qf) => match qf {
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(msg) => {
-                    assert_eq!(msg, "invalid id");
-                }
-                other => panic!("unexpected query failure variant: {other:?}"),
-            },
-            other => panic!("unexpected validation fail: {other:?}"),
-        },
-        other => panic!("unexpected error type: {other:?}"),
-    }
-    // Router-style response (200) is sufficient for a well-formed id
-    let ok_id = RuntimeUpgradeId([0x11; 32]);
-    let ok_resp = handle_runtime_activate_upgrade(AxPath(hex::encode(ok_id.0)))
-        .await
-        .expect("expected successful activation skeleton")
-        .into_response();
-    assert_eq!(ok_resp.status(), http::StatusCode::OK);
+        .expect("a well-formed change-set identity");
+    let [instruction] = draft.tx_instructions.as_slice() else {
+        panic!("one drafted instruction");
+    };
+    assert_eq!(
+        instruction.wire_id,
+        "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+    );
+    assert_eq!(draft.into_response().status(), http::StatusCode::OK);
 }
+
 #[tokio::test]
-async fn runtime_upgrades_list_sorted_by_window() {
-    let authority = random_authority();
-    let manifests = vec![
-        RuntimeUpgradeManifest {
-            name: "ABI v1 (late)".into(),
-            description: "Third".into(),
-            abi_version: 1,
-            abi_hash: [0x03; 32],
-            added_syscalls: vec![],
-            added_pointer_types: vec![],
-            start_height: 10,
-            end_height: 18,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        },
-        RuntimeUpgradeManifest {
-            name: "ABI v1 (early)".into(),
-            description: "First".into(),
-            abi_version: 1,
-            abi_hash: [0x01; 32],
-            added_syscalls: vec![],
-            added_pointer_types: vec![],
-            start_height: 2,
-            end_height: 5,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        },
-        RuntimeUpgradeManifest {
-            name: "ABI v1 (mid)".into(),
-            description: "Second".into(),
-            abi_version: 1,
-            abi_hash: [0x02; 32],
-            added_syscalls: vec![],
-            added_pointer_types: vec![],
-            start_height: 6,
-            end_height: 9,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        },
-    ];
-    let mut items: Vec<SimpleItem> = manifests
-        .into_iter()
-        .enumerate()
-        .map(|(idx, manifest)| SimpleItem {
-            record: RuntimeUpgradeRecord {
-                manifest,
-                status: RuntimeUpgradeStatus::Proposed,
-                proposer: authority.account.clone(),
-                created_height: idx as u64,
-            },
-        })
-        .collect();
-    items.sort_by_key(|it| {
-        (
-            it.record.manifest.start_height,
-            it.record.manifest.abi_version,
-        )
-    });
-    let order: Vec<(u64, u16)> = items
-        .iter()
-        .map(|it| {
-            (
-                it.record.manifest.start_height,
-                it.record.manifest.abi_version,
-            )
-        })
-        .collect();
-    assert_eq!(order, vec![(2, 1), (6, 1), (10, 1)]);
+async fn runtime_upgrades_list_reports_the_founded_selection() {
+    let state = State::new_for_testing(
+        iroha_core::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let response = handle_runtime_upgrades_list(Arc::new(state))
+        .await
+        .expect("list");
+    assert!(
+        response.items.is_empty(),
+        "a new World records no change set"
+    );
+    assert_eq!(
+        response.selection_id_hex,
+        hex::encode(response.selection.id().expect("selection identity").0)
+    );
+    assert_eq!(
+        response.selection,
+        iroha_core::runtime::release_catalog()
+            .expect("release catalog")
+            .baseline,
+        "a new World executes the baseline"
+    );
 }

@@ -61,7 +61,7 @@ use iroha_data_model::{
         zk_ace_pack_bytes_to_field_limbs,
     },
 };
-use rand::{TryCryptoRng, TryRngCore};
+use rand::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::Zeroizing;
 /// Internal, fixed AIR projection of the typed privacy statement.
@@ -155,12 +155,7 @@ fn air_public_transcript_parts_v1(
         destination,
         public_inputs.asset.aid_bytes().to_vec(),
         public_inputs.amount.to_be_bytes().to_vec(),
-        public_inputs
-            .verifier_key_id
-            .backend
-            .as_str()
-            .as_bytes()
-            .to_vec(),
+        public_inputs.verifier_key_id.backend.as_bytes().to_vec(),
         public_inputs.verifier_key_id.name.as_bytes().to_vec(),
     ])
 }
@@ -254,7 +249,7 @@ pub(crate) const CANONICAL_PROOF_BYTES_V1: usize = PROOF_WIRE_MAGIC_V1.len()
     + DEEP_OPENING_BYTES
     + SECURITY_LANES * ((FRI_ROUNDS + 1) * HASH_BYTES + TERMINAL_SIZE * EXTENSION_FIELD_BYTES)
     + QUERY_COUNT * QUERY_PROOF_BYTES;
-const _: () = assert!(QUERY_COUNT >= 64 && QUERY_COUNT % 8 == 0);
+const _: () = assert!(QUERY_COUNT >= 64 && QUERY_COUNT.is_multiple_of(8));
 const _: () = assert!(CANONICAL_PROOF_BYTES_V1 == 2_131_222);
 /// Hard ceiling enforced before the fixed-shape parser allocates proof vectors.
 pub(crate) const MAX_PROOF_BYTES: usize = CANONICAL_PROOF_BYTES_V1;
@@ -269,7 +264,7 @@ pub(crate) const AIR_TOTAL_DEGREE_V1: usize = maximum_air_constraint_degree_v1()
 pub(crate) const REDUCED_AIR_DEGREE_V1: usize = AIR_TOTAL_DEGREE_V1 - 1;
 const _: () = assert!(AIR_TOTAL_DEGREE_V1 == 2);
 /// Complete consensus-relevant algebraic and commitment profile.
-pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|outer-digest=sha3-384-opaque48|inner-air-hash=poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6:canonical=6xu64le|outer-digest-domain=privacy-sha3-384-be-v1:catalog+protocol+profile+tree-role+phase+level+index+counter|air-public-transcript=sha3-384-opaque48:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri136:formula=2d(e*n-deep+n-fri)+n-fri:required416:provided512|lde_rows=32768|blowup=8|next-row-stride=8|constraint-lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded36865:sampling-cardinality=p^4-36865:trace-z-gz:composition-z:multi-point-trace-quotients|queries=136|query-schedule=sha3-384-fisher-yates:full-u64-be-rejection:unique-without-replacement:hypergeometric<=independent-power|merkle=sha3-384-opaque48:binary:typed-leaf-and-node-domains|fri=fp4-fold2:rounds11:terminal16:degree2:code-degree-exclusive6144:domain32768:rho=3/16:m=3:alpha-squared=49/192:unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=11x2:sum-a=22|fri-mask=fp4:coefficients6143:degree-exclusive6143:protocol3-optimized-k5120:actual-code-k6144:max-structured-batch-degree5117:root-before-batch-challenges|soundness=exact-integer-rational:haboeck-theorem2+theorem8:field-size=p^4:fri-query=(49/192)^68<2^-133:deep-k-plus6146:deep-constraint-count172:deep-identity-degree-bound18433:deep-denominator=p^4-36865:rbr-certified-bits=129:classical-rom-bcs-work-normalized-bits128:random-oracle-bits384:max-query-work-log2=252|qrom-qualification=unavailable-pending-independent-fiat-shamir-reduction+sha3-384-outer-and-constrained-poseidon-collision-and-multi-target-accounting+review|wire=ZKA1:fixed-shape:scalars-big-endian:outer-digest48-opaque-bytes:2131222|max-proof-bytes=2131222|activation=unavailable|domains=all-stark-commitments-and-transcript-phases-use-privacy-sha3-384-be-v1";
+pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|outer-digest=sha3-384-opaque48|inner-air-hash=poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6:canonical=6xu64le|outer-digest-domain=privacy-sha3-384-be-v1:catalog-native-blake3-256-raw32+protocol+profile+tree-role+phase+level+index+counter|air-public-transcript=sha3-384-opaque48:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri136:formula=2d(e*n-deep+n-fri)+n-fri:required416:provided512|lde_rows=32768|blowup=8|next-row-stride=8|constraint-lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded36865:sampling-cardinality=p^4-36865:trace-z-gz:composition-z:multi-point-trace-quotients|queries=136|query-schedule=sha3-384-fisher-yates:full-u64-be-rejection:unique-without-replacement:hypergeometric<=independent-power|merkle=sha3-384-opaque48:binary:typed-leaf-and-node-domains|fri=fp4-fold2:rounds11:terminal16:degree2:code-degree-exclusive6144:domain32768:rho=3/16:m=3:alpha-squared=49/192:unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=11x2:sum-a=22|fri-mask=fp4:coefficients6143:degree-exclusive6143:protocol3-optimized-k5120:actual-code-k6144:max-structured-batch-degree5117:root-before-batch-challenges|soundness=exact-integer-rational:haboeck-theorem2+theorem8:field-size=p^4:fri-query=(49/192)^68<2^-133:deep-k-plus6146:deep-constraint-count172:deep-identity-degree-bound18433:deep-denominator=p^4-36865:rbr-certified-bits=129:classical-rom-bcs-work-normalized-bits128:random-oracle-bits384:max-query-work-log2=252|qrom-qualification=unavailable-pending-independent-fiat-shamir-reduction+sha3-384-outer-and-constrained-poseidon-collision-and-multi-target-accounting+review|wire=ZKA1:fixed-shape:scalars-big-endian:outer-digest48-opaque-bytes:2131222|max-proof-bytes=2131222|activation=unavailable|domains=all-stark-commitments-and-transcript-phases-use-privacy-sha3-384-be-v1";
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 511;
 const TRACE_MASK_COEFFICIENTS: usize = MASK_DEGREE + 1;
@@ -289,7 +284,7 @@ const TRACE_NEXT_STRIDE: usize = 1 << BLOWUP_LOG2;
 /// required classical soundness margin.
 #[doc(hidden)]
 pub const FRI_ROUNDS: usize = TRACE_LOG2 as usize - 1;
-const TERMINAL_LOG2: u8 = LDE_LOG2 - FRI_ROUNDS as u8;
+const TERMINAL_LOG2: u8 = LDE_LOG2 - (TRACE_LOG2 - 1);
 const TERMINAL_SIZE: usize = 1 << TERMINAL_LOG2;
 const TERMINAL_DEGREE_BOUND: usize = 2;
 const FRI_AFFINE_ORACLE_COUNT: usize = TRACE_WIDTH + 2 * SECURITY_LANES;
@@ -560,7 +555,7 @@ impl U576V1 {
             let product = u128::from(*limb)
                 .checked_mul(u128::from(multiplier))?
                 .checked_add(carry)?;
-            *limb = product as u64;
+            *limb = u64::try_from(product & u128::from(u64::MAX)).expect("low limb fits u64");
             carry = product >> 64;
         }
         (carry == 0).then_some(self)
@@ -609,7 +604,7 @@ impl U576V1 {
 fn compiled_fri_theorem_profile_v1() -> Result<FriTheoremProfileV1, ZkAceStarkError> {
     let lde_root = primitive_root(LDE_LOG2)?;
     let trace_root = primitive_root(TRACE_LOG2)?;
-    let domains_are_smooth_and_disjoint = LDE_SIZE % TRACE_SIZE == 0
+    let domains_are_smooth_and_disjoint = LDE_SIZE.is_multiple_of(TRACE_SIZE)
         && lde_root.pow((LDE_SIZE / TRACE_SIZE) as u128) == trace_root
         && F(FIELD_GENERATOR).pow(LDE_SIZE as u128) != F::ONE;
     Ok(FriTheoremProfileV1 {
@@ -675,8 +670,8 @@ fn validate_fri_theorem_profile_v1(profile: FriTheoremProfileV1) -> Result<(), Z
         .ok_or(ZkAceStarkError::ProfileMismatch)?;
     let query_denominator =
         U576V1::checked_pow_small(192, half_queries).ok_or(ZkAceStarkError::ProfileMismatch)?;
-    let query_error_is_below_2_pow_minus_133 =
-        profile.query_count % 2 == 0 && query_numerator.strictly_less_than(query_denominator);
+    let query_error_is_below_2_pow_minus_133 = profile.query_count.is_multiple_of(2)
+        && query_numerator.strictly_less_than(query_denominator);
     let rate_is_three_sixteenths = profile
         .code_degree_bound_exclusive
         .checked_mul(16)
@@ -1178,7 +1173,7 @@ fn replay_message_words() -> Vec<MessageWord> {
 
 fn append_poseidon_permutation(schedule: &mut Vec<ScheduleRow>, lane: usize) {
     for round in 0..POSEIDON_ROUNDS {
-        let full = round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57;
+        let full = !(POSEIDON_FULL_ROUNDS_HALF..POSEIDON_FULL_ROUNDS_HALF + 57).contains(&round);
         schedule.push(ScheduleRow {
             op: if full {
                 ScheduleOp::FullRound { lane, round }
@@ -1512,10 +1507,10 @@ fn build_trace_material(
         }
         let observed_output = row[STATE_OFFSET];
         trace_rows.push(row);
-        if let ScheduleOp::Output { output_index } = schedule_row.op {
-            if observed_output != public_outputs[output_index] {
-                return Err(ZkAceStarkError::WitnessRelation);
-            }
+        if let ScheduleOp::Output { output_index } = schedule_row.op
+            && observed_output != public_outputs[output_index]
+        {
+            return Err(ZkAceStarkError::WitnessRelation);
         }
         fixed_rows.push(fixed);
     }
@@ -1525,7 +1520,7 @@ fn build_trace_material(
         public_outputs,
     })
 }
-fn masked_lde_columns<R: TryRngCore>(
+fn masked_lde_columns<R: TryRng>(
     base_columns: &[Vec<F>],
     rng: &mut R,
 ) -> Result<MaskedTraceMaterial, ZkAceStarkError> {
@@ -2354,18 +2349,28 @@ fn deep_trace_interpolant(
         .mul(inverse_point_delta)
         .add(next.mul(x.sub(deep_point)).mul(inverse_point_delta.neg()))
 }
+#[derive(Clone, Copy)]
+struct DeepFriValuesV1<'a> {
+    point: E,
+    current: &'a [E],
+    next: &'a [E],
+    composition: E,
+}
 fn mix_deep_fri_opening(
     x: F,
     trace_row: &[F],
     composition: E,
     fri_mask: E,
-    deep_point: E,
-    deep_trace_current: &[E],
-    deep_trace_next: &[E],
-    deep_composition: E,
+    deep: DeepFriValuesV1<'_>,
     trace_mix: &[E],
     composition_mix: E,
 ) -> Result<E, ZkAceStarkError> {
+    let DeepFriValuesV1 {
+        point: deep_point,
+        current: deep_trace_current,
+        next: deep_trace_next,
+        composition: deep_composition,
+    } = deep;
     if trace_row.len() != TRACE_WIDTH
         || deep_trace_current.len() != TRACE_WIDTH
         || deep_trace_next.len() != TRACE_WIDTH
@@ -2429,13 +2434,16 @@ fn mix_fri_base(
     fri_mask: &[E],
     trace_lde: &[Vec<F>],
     composition: &[E],
-    deep_point: E,
-    deep_trace_current: &[E],
-    deep_trace_next: &[E],
-    deep_composition: E,
+    deep: DeepFriValuesV1<'_>,
     trace_mix: &[E],
     composition_mix: E,
 ) -> Result<Vec<E>, ZkAceStarkError> {
+    let DeepFriValuesV1 {
+        point: deep_point,
+        current: deep_trace_current,
+        next: deep_trace_next,
+        composition: deep_composition,
+    } = deep;
     if fri_mask.len() != LDE_SIZE
         || trace_lde.len() != TRACE_WIDTH
         || trace_lde.iter().any(|column| column.len() != LDE_SIZE)
@@ -2674,7 +2682,7 @@ fn validate_fri_mask_coefficients_v1(coefficients: &[E]) -> Result<(), ZkAceStar
     }
     Ok(())
 }
-fn fri_mask_material<R: TryRngCore>(
+fn fri_mask_material<R: TryRng>(
     lane: usize,
     rng: &mut R,
 ) -> Result<FriMaskMaterial, ZkAceStarkError> {
@@ -2769,7 +2777,7 @@ fn proof_query(
 /// Construct a canonical masked proof using a caller-supplied fallible RNG.
 ///
 /// The injected RNG exists for deterministic known-answer tests and explicit entropy-failure tests.
-/// Product callers use [`rand::rngs::OsRng`]. All deterministic profile, public-input, and witness
+/// Product callers use [`rand::rngs::SysRng`]. All deterministic profile, public-input, and witness
 /// checks complete before one shared checked entropy session is opened for both masking phases.
 pub(super) fn prove_zk_ace_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -2858,10 +2866,12 @@ pub(super) fn prove_zk_ace_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
             &fri_masks[lane].values,
             trace_lde,
             &compositions[lane],
-            deep_point,
-            &deep_trace_current,
-            &deep_trace_next,
-            deep_composition_values[lane],
+            DeepFriValuesV1 {
+                point: deep_point,
+                current: &deep_trace_current,
+                next: &deep_trace_next,
+                composition: deep_composition_values[lane],
+            },
             &trace_mix,
             composition_mix,
         )?;
@@ -2991,7 +3001,7 @@ fn verify_fri_query(
     let mut domain_shift = F(FIELD_GENERATOR);
     let mut domain_root = primitive_root(LDE_LOG2)?;
     let mut expected = expected_base_value;
-    for round in 0..FRI_ROUNDS {
+    for (round, beta) in lane_betas.iter().copied().enumerate() {
         let opening = &lane_query.rounds[round];
         let low = opening.low;
         let high = opening.high;
@@ -3025,7 +3035,6 @@ fn verify_fri_query(
             return Err(ZkAceStarkError::FriOpening);
         }
         let x = domain_shift.mul(domain_root.pow(low_index as u128));
-        let beta = lane_betas[round];
         expected = fri_fold_pair(low, high, beta, x)?;
         layer_index = low_index;
         layer_size = half;
@@ -3117,14 +3126,14 @@ pub(super) fn verify_zk_ace_stark_v1(
     }
     let deep_fixed = fixed_row_at_extension_point(&fixed_schedule, deep_point)?;
     let extension_public_outputs = public_outputs.map(E::from_base);
-    for lane in 0..SECURITY_LANES {
+    for (lane, lane_alphas) in alphas.iter().enumerate().take(SECURITY_LANES) {
         let expected_deep_composition = constraint_quotient_value(
             deep_point,
             &proof.deep_trace_current,
             &proof.deep_trace_next,
             &deep_fixed,
             &extension_public_outputs,
-            &alphas[lane],
+            lane_alphas,
         )?;
         if proof.deep_composition_values[lane] != expected_deep_composition {
             return Err(ZkAceStarkError::ConstraintOpening);
@@ -3212,10 +3221,12 @@ pub(super) fn verify_zk_ace_stark_v1(
                 &current,
                 composition_values[lane],
                 fri_mask_values[lane],
-                deep_point,
-                &proof.deep_trace_current,
-                &proof.deep_trace_next,
-                proof.deep_composition_values[lane],
+                DeepFriValuesV1 {
+                    point: deep_point,
+                    current: &proof.deep_trace_current,
+                    next: &proof.deep_trace_next,
+                    composition: proof.deep_composition_values[lane],
+                },
                 &trace_mix[lane],
                 composition_mix[lane],
             )?;
@@ -3244,7 +3255,8 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::{collections::BTreeSet, str::FromStr as _, sync::OnceLock};
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -3317,7 +3329,7 @@ mod tests {
         let _guard = proof_test_guard();
         FIXTURE.get_or_init(|| {
             let (public_inputs, witness) = public_inputs_and_witness();
-            let mut rng = StdRng::from_seed([0x5A; 32]);
+            let mut rng = ChaCha12Rng::from_seed([0x5A; 32]);
             let proof = prove_zk_ace_stark_v1_with_rng(&public_inputs, &witness, &mut rng)
                 .expect("construct sound deterministic fixture");
             (public_inputs, proof)
@@ -3510,10 +3522,7 @@ mod tests {
         );
         assert_eq!(parts[12], public_inputs.asset.aid_bytes());
         assert_eq!(parts[13], public_inputs.amount.to_be_bytes());
-        assert_eq!(
-            parts[14],
-            public_inputs.verifier_key_id.backend.as_str().as_bytes()
-        );
+        assert_eq!(parts[14], public_inputs.verifier_key_id.backend.as_bytes());
         assert_eq!(parts[15], public_inputs.verifier_key_id.name.as_bytes());
     }
     #[test]
@@ -3683,18 +3692,21 @@ mod tests {
     }
     #[derive(Debug)]
     struct MaxValueRng;
-    impl RngCore for MaxValueRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for MaxValueRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xFF);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0xFF);
+            })
         }
     }
-    impl rand::CryptoRng for MaxValueRng {}
+    impl rand::TryCryptoRng for MaxValueRng {}
     #[test]
     fn constant_entropy_fails_the_shared_health_preflight() {
         let (public_inputs, witness) = public_inputs_and_witness();
@@ -4049,7 +4061,7 @@ mod tests {
         let (public_inputs, first) = fixture();
         let (_, witness) = public_inputs_and_witness();
         let _guard = proof_test_guard();
-        let mut rng = StdRng::from_seed([0xA5; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA5; 32]);
         let second = prove_zk_ace_stark_v1_with_rng(public_inputs, &witness, &mut rng)
             .expect("second masked proof");
         assert_ne!(first, &second);
@@ -4073,8 +4085,9 @@ mod tests {
     }
     #[test]
     fn every_public_relation_binding_rejects_replay() {
+        type WitnessMutation = (&'static str, fn(&mut ZkAceAirRelationInputsV1));
         let (public_inputs, proof) = fixture();
-        let mutations: [(&str, fn(&mut ZkAceAirRelationInputsV1)); 14] = [
+        let mutations: [WitnessMutation; 14] = [
             ("version", |value| value.version ^= 1),
             ("identity", |value| value.identity_commitment[0] ^= 1),
             ("transfer", |value| value.tx_digest[0] ^= 1),

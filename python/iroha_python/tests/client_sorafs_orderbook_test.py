@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import iroha_torii_client.orderbook_submission as orderbook_submission
 import pytest
 import requests
-from iroha_torii_client.tests.orderbook_submission_test import (
-    IDENTITY,
-    SIGNER,
-    Verifier,
-    stock_session,
-)
-from iroha_torii_client.tests.orderbook_submission_test import (
-    Response as OrderbookResponse,
-)
 from requests.structures import CaseInsensitiveDict
 
 import iroha_python.client as client_module
@@ -31,6 +24,25 @@ from iroha_python import (
 from iroha_python.crypto import NetworkId
 
 from .helpers import StubResponse
+
+# Test helpers are not shipped in the Torii wheel. Load their exact source file
+# without adding source SDK packages to the installed-package import path.
+_SUPPORT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "iroha_torii_client/tests/orderbook_submission_test.py"
+)
+_SUPPORT_SPEC = importlib.util.spec_from_file_location(
+    "_iroha_orderbook_submission_test_support", _SUPPORT_PATH
+)
+assert _SUPPORT_SPEC is not None and _SUPPORT_SPEC.loader is not None
+_SUPPORT = importlib.util.module_from_spec(_SUPPORT_SPEC)
+_SUPPORT_SPEC.loader.exec_module(_SUPPORT)
+assert _SUPPORT.orderbook_submission is orderbook_submission
+IDENTITY = _SUPPORT.IDENTITY
+SIGNER = _SUPPORT.SIGNER
+Verifier = _SUPPORT.Verifier
+stock_session = _SUPPORT.stock_session
+OrderbookResponse = _SUPPORT.Response
 
 
 class SequencedSession(requests.Session):

@@ -126,7 +126,7 @@ fn shared_error(error: PrepaidSharedError) -> GenerationRecordError {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,
@@ -461,7 +461,7 @@ impl RetainedSccpGeneration {
         keys: &[[u8; 48]],
         members: &[Option<MemberRef<'_>>],
     ) -> Result<Demand, GenerationRecordError> {
-        if !iroha_data_model::block::consensus::is_valid_committee_size(keys.len())
+        if !iroha_model_base::topology::is_valid_committee_size(keys.len())
             || keys.len() != members.len()
         {
             return Err(GenerationRecordError::Invalid("committee geometry"));

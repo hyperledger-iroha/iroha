@@ -1,7 +1,7 @@
 //! Tests for peer serialization
 
 use iroha_crypto::KeyPair;
-use iroha_data_model::prelude::Peer;
+use iroha_model_base::peer::Peer;
 use iroha_primitives::addr::SocketAddr;
 #[test]
 fn peer_serialization_roundtrip() {

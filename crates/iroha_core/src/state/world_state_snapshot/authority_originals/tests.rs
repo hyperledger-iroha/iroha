@@ -657,6 +657,114 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
             )
             .is_err()
     );
+
+    // The exact catalog ceiling cannot fit while this same request pool is occupied.
+    // Assert its demand to prove refusal occurred after snapshot acquisition, at
+    // the changed producer boundary, rather than at an earlier generic buffer.
+    let decode_bytes = iroha_data_model::nexus::MAX_NEXUS_RUNTIME_CATALOG_BYTES * 16;
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - decode_bytes + 1)
+        .unwrap();
+    let called = Cell::new(false);
+    let error = chain
+        .state()
+        .with_native_account_alias_originals_v1(&tip, &account, &name, &budget, |_, _, _, _| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(!called.get());
+    let WorldStateSnapshotError::Allocation(iroha_allocation::AllocationRefusal::Capacity {
+        requested_bytes,
+        limit_bytes,
+        ..
+    }) = error
+    else {
+        panic!("original request catalog reservation was erased: {error}");
+    };
+    assert_eq!(requested_bytes, decode_bytes);
+    assert_eq!(limit_bytes, budget.limit_bytes());
+    drop(occupied);
+    assert_eq!(budget.reserved_bytes(), 0);
+    chain
+        .state()
+        .with_native_account_alias_originals_v1(&tip, &account, &name, &budget, |_, _, _, _| Ok(()))
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), 0);
+
+    // Successful decode is followed by the shared projection's structure check.
+    // Its final counted JSON allocation must keep the *same* cumulative owner.
+    // Measure at callback entry: the final coherent-cut recheck also decodes
+    // parameters, but happens after the producer has already borrowed its rows.
+    let measured = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    let producer_bytes = Cell::new(0);
+    measured
+        .with(|| {
+            chain.state().with_native_account_alias_originals_v1(
+                &tip,
+                &account,
+                &name,
+                &budget,
+                |_, _, _, _| {
+                    producer_bytes.set(measured.consumed_allocated_bytes());
+                    Ok(())
+                },
+            )
+        })
+        .unwrap();
+    assert!(measured.consumed_allocated_bytes() >= producer_bytes.get());
+    let original_bytes = usize::try_from(producer_bytes.get()).unwrap();
+    assert!(original_bytes > 0);
+    let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        original_bytes - 1,
+        usize::MAX,
+    ));
+    let error = context
+        .with(|| {
+            chain.state().with_native_account_alias_originals_v1(
+                &tip,
+                &account,
+                &name,
+                &budget,
+                |_, _, _, _| {
+                    called.set(true);
+                    Ok(())
+                },
+            )
+        })
+        .unwrap_err();
+    assert!(!called.get());
+    let WorldStateSnapshotError::CatalogProjection(
+        crate::state::LaneLifecycleError::ParameterDeferred(original),
+    ) = error
+    else {
+        panic!("actual catalog projection must retain its already classified cause: {error}");
+    };
+    let cause = original
+        .decode_refusal()
+        .expect("original projection decoder refusal");
+    assert_eq!(
+        cause.kind(),
+        norito::core::DecodeLocalRefusalKind::EnclosingLimit
+    );
+    assert!(matches!(cause.resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit }
+        if limit == (original_bytes - 1) as u64 && attempted > limit));
+    assert_eq!(budget.reserved_bytes(), 0);
+    chain
+        .state()
+        .with_native_account_alias_originals_v1(&tip, &account, &name, &budget, |_, _, _, _| Ok(()))
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 fn identifier_original_pair() -> (
@@ -1086,6 +1194,92 @@ fn retail_originals_require_both_exact_same_cut_rows_and_finite_budget() {
     );
     assert!(!called.get());
     assert_eq!(budget.reserved_bytes(), before);
+}
+
+#[test]
+fn account_catalog_decode_retains_actual_scoped_refusal_and_same_source_retry() {
+    use iroha_data_model::nexus::NexusRuntimeCatalogV1;
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: Hash::new(b"original physical baseline"),
+        baseline_manifests_hash: Hash::new(b"original native manifest baseline"),
+        dataspaces: Vec::new(),
+        manifests: Vec::new(),
+    };
+    let parameter = runtime.clone().into_custom_parameter().unwrap();
+    let original = parameter.clone();
+    for work in [true, false] {
+        let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            if work { 1 } else { usize::MAX },
+            if work { usize::MAX } else { 0 },
+            usize::MAX,
+        ));
+        let mut captured = None;
+        let refusal = context
+            .with(|| {
+                norito::core::classify_decode_attempt(|| {
+                    let error = decode_account_runtime_catalog(&parameter).unwrap_err();
+                    let WorldStateSnapshotError::Catalog(original) = error else {
+                        panic!("catalog producer must retain its original decoder cause: {error}");
+                    };
+                    let cause = original
+                        .into_decode_error()
+                        .expect("original resource cause");
+                    let norito::Error::ScopedDecodeResource(scope) = &cause else {
+                        panic!("actual catalog read must retain its enclosing owner");
+                    };
+                    captured = Some(scope.clone());
+                    Err::<(), _>(cause)
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            refusal.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(refusal.local_refusal().is_some());
+        assert!(
+            matches!(refusal.error(), norito::Error::ScopedDecodeResource(scope)
+            if Some(scope) == captured.as_ref())
+        );
+        let replay = context
+            .with(|| norito::core::classify_decode_attempt(|| Err::<(), _>(refusal.into_error())))
+            .unwrap_err();
+        assert_eq!(replay.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+        assert!(replay.local_refusal().is_none());
+        assert_eq!(parameter, original);
+        assert!(parameter.payload().ptr_eq(original.payload()));
+        assert_eq!(decode_account_runtime_catalog(&parameter).unwrap(), runtime);
+    }
+}
+
+#[test]
+fn account_catalog_decode_keeps_malformed_and_wrong_identity_rejections() {
+    use iroha_data_model::{
+        nexus::{NexusCatalogValidationError, NexusRuntimeCatalogV1},
+        parameter::CustomParameter,
+    };
+    let malformed = CustomParameter::new(
+        NexusRuntimeCatalogV1::parameter_id(),
+        iroha_primitives::json::Json::new(norito::json!({"version": "not a number"})),
+    );
+    let error = decode_account_runtime_catalog(&malformed).unwrap_err();
+    let WorldStateSnapshotError::Catalog(original) = error else {
+        panic!("the completed malformed source must keep its typed cause: {error}");
+    };
+    assert!(matches!(
+        original.into_decode_error(),
+        Err(NexusCatalogValidationError::Json(_))
+    ));
+    let unrelated = CustomParameter::new(
+        "unrelated_catalog".parse().unwrap(),
+        iroha_primitives::json::Json::new(()),
+    );
+    assert!(matches!(decode_account_runtime_catalog(&unrelated),
+        Err(WorldStateSnapshotError::Invalid(reason))
+        if reason == "World authority protected catalog identity differs"));
 }
 
 #[test]

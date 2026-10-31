@@ -6,6 +6,10 @@ use crate::state::{
     StateBlock, block_field::AggregatePublication, is_stable_state_view_generation,
 };
 /// Retain the real ten Set targets/common mode and original State pool through all outcomes.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     table: ActionTable,

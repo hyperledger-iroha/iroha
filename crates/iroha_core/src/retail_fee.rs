@@ -162,7 +162,7 @@ fn predecessors(
                 .map_err(|e| norito_decode_attempt_error(e, |e| e.to_string()))
         })
         .transpose()
-        .map(|value| value.unwrap_or_default())
+        .map(std::option::Option::unwrap_or_default)
 }
 /// Settle the old identity before its balances move during native controller recovery.
 pub(crate) fn prepare_rekey(
@@ -468,9 +468,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
         };
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(
+            .set_parameter_for_testing(Parameter::Custom(
                 empty
                     .clone()
                     .into_custom_parameter()
@@ -497,9 +495,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
         assert_eq!(registry(&transaction.world).unwrap(), Some(empty));
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(parameter.clone()))
+            .set_parameter_for_testing(Parameter::Custom(parameter.clone()))
             .unwrap();
         // Typed JSON also charges its owned strings and vectors to total
         // allocation. Exercise that independent caller limit on the real registry.
@@ -544,9 +540,7 @@ fn retail_registry_preserves_original_json_scope_and_completed_malformed_diagnos
                 .to_string();
         transaction
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(malformed.clone()))
+            .set_parameter_for_testing(Parameter::Custom(malformed.clone()))
             .unwrap();
         let rejected = registry(&transaction.world).unwrap_err();
         assert!(
@@ -575,11 +569,7 @@ fn stored_balance(
     world: &impl WorldReadOnly,
     id: &AssetId,
 ) -> Result<u64, InstructionExecutionError> {
-    world
-        .assets()
-        .get(id)
-        .map(|v| minor(v.as_ref()))
-        .unwrap_or(Ok(0))
+    world.assets().get(id).map_or(Ok(0), |v| minor(v.as_ref()))
 }
 fn set_balance(
     world: &mut WorldTransaction<'_, '_>,
@@ -1087,14 +1077,12 @@ pub(crate) fn admit_deferred(
 ) -> Result<(), TransactionRejectionReason> {
     let mut reviewed = None;
     for instruction in instructions {
-        if let Some(log) = instruction.as_any().downcast_ref::<Log>() {
-            if let Some(assessment) = decode_assessment_marker(log)
+        if let Some(log) = instruction.as_any().downcast_ref::<Log>()
+            && let Some(assessment) = decode_assessment_marker(log)
                 .map_err(|error| transaction_marker_error(stx, error))?
-            {
-                if reviewed.replace(assessment).is_some() {
-                    return Err(rejection("duplicate retail assessment markers"));
-                }
-            }
+            && reviewed.replace(assessment).is_some()
+        {
+            return Err(rejection("duplicate retail assessment markers"));
         }
     }
     if let Some(assessment) = reviewed {
@@ -1479,9 +1467,10 @@ pub(crate) fn process_idle_accounts(
             return Ok(());
         }
     };
-    let lower = cursor
-        .map(std::ops::Bound::Excluded)
-        .unwrap_or_else(|| std::ops::Bound::Included(STATE_PREFIX.parse().expect("retail prefix")));
+    let lower = cursor.map_or_else(
+        || std::ops::Bound::Included(STATE_PREFIX.parse().expect("retail prefix")),
+        std::ops::Bound::Excluded,
+    );
     let keys: Vec<_> = stx
         .world
         .smart_contract_state
@@ -1571,10 +1560,10 @@ pub(crate) fn process_idle_accounts(
             // Idle settlements always write protected account/receipt state or
             // their cursor. This child journal excludes earlier applied siblings;
             // an empty sweep must not manufacture a committed fragment.
-            if stx.world.smart_contract_state.touched_entries().len() != 0 {
-                if let Err(error) = stx.apply_retail_maintenance(witness) {
-                    iroha_logger::warn!(%error, "retail fee idle settlement State publication refused");
-                }
+            if stx.world.smart_contract_state.touched_entries().len() != 0
+                && let Err(error) = stx.apply_retail_maintenance(witness)
+            {
+                iroha_logger::warn!(%error, "retail fee idle settlement State publication refused");
             }
         }
         Err(error) => {

@@ -96,6 +96,10 @@ fn public_url_deadline_and_memory_policy_refuse_before_dispatch() {
     let client = PublicHttpClient::with_transport(transport.clone());
     for value in [
         "http://releases.example/checkpoint.nrt",
+        "http://localhost/native",
+        "http://10.0.0.1/native",
+        "http://127.0.0.1.example/native",
+        "ftp://127.0.0.1/native",
         "https://user:secret@releases.example/checkpoint.nrt",
         "https://releases.example/checkpoint.nrt?token=secret",
         "https://releases.example/checkpoint.nrt#fragment",
@@ -117,6 +121,21 @@ fn public_url_deadline_and_memory_policy_refuse_before_dispatch() {
         Err(PublicHttpError::Deadline)
     );
     assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn explicit_numeric_loopback_public_reads_bypass_proxies_without_relaxing_remote_tls() {
+    let transport = Transport::new(StatusCode::OK, vec![7]);
+    let client = PublicHttpClient::with_transport(transport.clone());
+    for value in ["http://127.0.0.1:18080/native", "http://[::1]:18080/native"] {
+        let url = value.parse().unwrap();
+        assert_eq!(client.get_bytes_blocking(&url, deadline(), 1).unwrap(), [7]);
+    }
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.direct_loopback
+        && request.headers.is_empty()
+        && request.body.is_empty()));
 }
 
 #[test]

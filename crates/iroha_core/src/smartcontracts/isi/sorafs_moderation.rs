@@ -6,7 +6,9 @@ use crate::{
     smartcontracts::isi::sorafs_pop_registry::{
         read_active_publications, read_pinned_publications,
     },
-    state::{StateBlock, StateStorageAdmissionError, StateTransaction, WorldReadOnly},
+    state::{
+        StateBlock, StateStorageAdmissionError, StateTransaction, WorldReadOnly, WorldTransaction,
+    },
 };
 #[cfg(test)]
 use iroha_data_model::sorafs::moderation_ledger::{
@@ -197,9 +199,7 @@ impl VerifiedModerationChallengeBondMovement {
         }
     }
     fn settlement(
-        case_id: String,
-        round_id: String,
-        challenge_id: String,
+        (case_id, round_id, challenge_id): (String, String, String),
         decision: ModerationChallengeDecisionV1,
         leg: ModerationChallengeBondSettlementLeg,
         source_id: AssetId,
@@ -330,6 +330,10 @@ struct ModerationPersistedEventV1 {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1"
 )]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Canonical journal fields identify the last committed event and retain their serialized names"
+)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -433,12 +437,12 @@ fn require_pinned_pop_snapshot(
     read_pinned_publications(
         state_transaction.world(),
         snapshot.issuer_policy_digest,
-        snapshot.commitment_root,
-        snapshot.commitment_tree_version,
-        snapshot.revocation_root,
-        snapshot.revocation_list_version,
-        snapshot.registry_audit_sequence,
-        snapshot.registry_audit_head,
+        (snapshot.commitment_root, snapshot.commitment_tree_version),
+        (snapshot.revocation_root, snapshot.revocation_list_version),
+        (
+            snapshot.registry_audit_sequence,
+            snapshot.registry_audit_head,
+        ),
     )
 }
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
@@ -548,8 +552,7 @@ fn lock_moderation_challenge_bond(
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
             settlement_amount.as_numeric(),
             numeric_spec,
-        )
-        .map_err(InstructionExecutionError::from)?;
+        )?;
     }
     let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
     let destination_id = AssetId::new(asset_definition_id.clone(), escrow_account.clone());
@@ -620,9 +623,11 @@ fn settle_moderation_challenge_bond(
             record.challenger.clone(),
         );
         let movement = VerifiedModerationChallengeBondMovement::settlement(
-            record.case_id.clone(),
-            record.round_id.clone(),
-            record.challenge_id.clone(),
+            (
+                record.case_id.clone(),
+                record.round_id.clone(),
+                record.challenge_id.clone(),
+            ),
             decision,
             ModerationChallengeBondSettlementLeg::Refund,
             source_id.clone(),
@@ -640,9 +645,11 @@ fn settle_moderation_challenge_bond(
             record.bond.slash_receiver_account.clone(),
         );
         let movement = VerifiedModerationChallengeBondMovement::settlement(
-            record.case_id.clone(),
-            record.round_id.clone(),
-            record.challenge_id.clone(),
+            (
+                record.case_id.clone(),
+                record.round_id.clone(),
+                record.challenge_id.clone(),
+            ),
             decision,
             ModerationChallengeBondSettlementLeg::Slash,
             source_id,
@@ -786,36 +793,73 @@ fn decode_state_with_current<T>(
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
+    decode_state_with_owner(bytes, label, current, None)
+}
+fn decode_state_with_owner<T>(
+    bytes: &[u8],
+    label: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
     if bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
-        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
-            bytes.len(),
-            STATE_LIMITS,
-        ),
-    }
-    .map_err(InstructionExecutionError::Query)?;
-    let (value, allocation_bytes) = if current.is_some() {
-        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_canonical_with_limits::<T>(bytes, limits)
-        });
-        (value, Some(usage.total_allocated_bytes()))
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    bytes.len(),
+                    STATE_LIMITS,
+                )
+            },
+            |current| current.decode_limits(bytes.len(), STATE_LIMITS),
+        )
+        .map_err(InstructionExecutionError::Query)?;
+    let decoded = if owner.is_some() {
+        crate::execution_attempt::canonical_policy_decode(owner, bytes, limits)
+            .map(|value| (value, None))
     } else {
-        (decode_canonical_with_limits::<T>(bytes, limits), None)
+        norito::core::classify_decode_attempt(|| {
+            // Reserve the fixed moderation/query limits for deterministic policy;
+            // the caller's enclosing limit retains its original attempt ownership.
+            if current.is_some() {
+                let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+                    decode_canonical_with_limits::<T>(bytes, limits)
+                });
+                value.map(|value| (value, Some(usage.total_allocated_bytes())))
+            } else {
+                decode_canonical_with_limits::<T>(bytes, limits).map(|value| (value, None))
+            }
+        })
+        .map_err(norito::CanonicalDecodeControlError::Decode)
     };
-    let value = value.map_err(|error| {
-        if crate::smartcontracts::isi::query::singular_query_limits_active()
-            && error.is_decode_resource_limit()
-        {
-            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
-            corrupt_state(format!("{label} state is not exact canonical Norito"))
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
+    let (value, allocation_bytes) = decoded.map_err(|error| {
+        let rejected = |error: norito::CanonicalDecodeControlError| {
+            let error = match error {
+                norito::CanonicalDecodeControlError::Decode(error) => error.into_error(),
+                error => return corrupt_state(format!("failed to decode {label}: {error}")),
+            };
+            if crate::smartcontracts::isi::query::singular_query_limits_active()
+                && error.is_decode_resource_limit()
+            {
+                InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+            } else if matches!(error, norito::Error::NonCanonicalEncoding) {
+                corrupt_state(format!("{label} state is not exact canonical Norito"))
+            } else {
+                corrupt_state(format!("failed to decode {label}: {error}"))
+            }
+        };
+        match owner {
+            Some(owner) => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, rejected),
+            ),
+            None => rejected(error),
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current, allocation_bytes) {
@@ -855,14 +899,18 @@ where
             bytes.len()
         )));
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), PAYLOAD_LIMITS),
-        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
-            bytes.len(),
-            PAYLOAD_LIMITS,
-        ),
-    }
-    .map_err(InstructionExecutionError::Query)?;
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    bytes.len(),
+                    PAYLOAD_LIMITS,
+                )
+            },
+            |current| current.decode_limits(bytes.len(), PAYLOAD_LIMITS),
+        )
+        .map_err(InstructionExecutionError::Query)?;
     let (value, allocation_bytes) = if current.is_some() {
         let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
             decode_canonical_with_limits::<T>(bytes, limits)
@@ -1408,6 +1456,13 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
     world: &impl WorldReadOnly,
     custody_asset: &AssetId,
 ) -> Result<Quantity, InstructionExecutionError> {
+    unsettled_moderation_bond_liability_with_owner(world, custody_asset, None)
+}
+fn unsettled_moderation_bond_liability_with_owner(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Quantity, InstructionExecutionError> {
     let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
         .expect("static moderation challenge prefix is valid");
     let mut liability = Quantity::zero();
@@ -1416,7 +1471,7 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
             break;
         }
         let candidate: ModerationChallengeRecordV1 =
-            decode_state_with_current(payload, "moderation challenge", None)?;
+            decode_state_with_owner(payload, "moderation challenge", None, owner)?;
         if challenge_key(
             &candidate.case_id,
             &candidate.round_id,
@@ -1427,11 +1482,13 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
                 "moderation challenge custody key does not match its record",
             ));
         }
-        let record = read_challenge(
+        let record = read_challenge_with_owner(
             world,
             &candidate.case_id,
             &candidate.round_id,
             &candidate.challenge_id,
+            None,
+            owner,
         )?
         .ok_or_else(|| {
             corrupt_state("moderation challenge disappeared during custody validation")
@@ -1459,7 +1516,28 @@ pub(in crate::smartcontracts::isi) fn ensure_moderation_bond_reserve_after_debit
     custody_asset: &AssetId,
     balance_after: &Quantity,
 ) -> Result<(), InstructionExecutionError> {
-    let liability = unsettled_moderation_bond_liability(world, custody_asset)?;
+    ensure_moderation_bond_reserve_after_debit_with_owner(world, custody_asset, balance_after, None)
+}
+/// Preserve the original local decoder refusal across every retained challenge recheck.
+pub(in crate::smartcontracts::isi) fn ensure_moderation_bond_reserve_after_debit_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    custody_asset: &AssetId,
+    balance_after: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    ensure_moderation_bond_reserve_after_debit_with_owner(
+        world,
+        custody_asset,
+        balance_after,
+        Some(world),
+    )
+}
+fn ensure_moderation_bond_reserve_after_debit_with_owner(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+    balance_after: &Quantity,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<(), InstructionExecutionError> {
+    let liability = unsettled_moderation_bond_liability_with_owner(world, custody_asset, owner)?;
     if balance_after < &liability {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -1479,8 +1557,7 @@ fn ensure_moderation_bond_custody_fully_backed(
     let balance = world
         .assets()
         .get(custody_asset)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(Quantity::zero);
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone());
     ensure_moderation_bond_reserve_after_debit(world, custody_asset, &balance)
 }
 fn read_policy_for_current(
@@ -2419,7 +2496,16 @@ fn read_case_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
+    read_case_with_owner(world, case_id, round_id, current, None)
+}
+fn read_case_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -2428,7 +2514,7 @@ fn read_case_with_current(
         return Ok(None);
     };
     let record: ModerationCaseRecordV1 =
-        decode_state_with_current(bytes, "moderation case", current.as_deref_mut())?;
+        decode_state_with_owner(bytes, "moderation case", current.as_deref_mut(), owner)?;
     record
         .spec
         .validate()
@@ -2486,7 +2572,8 @@ fn read_case_with_current(
         }
     }
     let mut transient_current = moderation_transient_current(current.as_deref())?;
-    let outcome = read_outcome_with_current(world, case_id, round_id, transient_current.as_mut())?;
+    let outcome =
+        read_outcome_with_owner(world, case_id, round_id, transient_current.as_mut(), owner)?;
     match (record.status, outcome) {
         (ModerationCaseStatusV1::Finalized, Some(outcome))
             if outcome.quorum == record.spec.quorum
@@ -2704,7 +2791,17 @@ fn read_challenge_with_current(
     case_id: &str,
     round_id: &str,
     challenge_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
+    read_challenge_with_owner(world, case_id, round_id, challenge_id, current, None)
+}
+fn read_challenge_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     let Some(bytes) =
         world
@@ -2714,7 +2811,7 @@ fn read_challenge_with_current(
         return Ok(None);
     };
     let record: ModerationChallengeRecordV1 =
-        decode_state_with_current(bytes, "moderation challenge", current.as_deref_mut())?;
+        decode_state_with_owner(bytes, "moderation challenge", current.as_deref_mut(), owner)?;
     if record.case_id != case_id
         || record.round_id != round_id
         || record.challenge_id != challenge_id
@@ -2732,8 +2829,10 @@ fn read_challenge_with_current(
         ));
     }
     let mut transient_current = moderation_transient_current(current.as_deref())?;
-    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
-        .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
+    let case = read_case_with_owner(world, case_id, round_id, transient_current.as_mut(), owner)?
+        .ok_or_else(|| {
+        corrupt_state("stored moderation challenge has no authoritative case")
+    })?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
         || record.raised_at_unix_ms > case.spec.challenge_submission_deadline_unix_ms
         || record.bond.asset_definition_id != case.policy.challenge_voting_asset_id
@@ -2828,6 +2927,15 @@ fn read_outcome_with_current(
     round_id: &str,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
+    read_outcome_with_owner(world, case_id, round_id, current, None)
+}
+fn read_outcome_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&outcome_key(case_id, round_id))
@@ -2835,7 +2943,7 @@ fn read_outcome_with_current(
         return Ok(None);
     };
     let record: ModerationOutcomeRecordV1 =
-        decode_state_with_current(bytes, "moderation outcome", current)?;
+        decode_state_with_owner(bytes, "moderation outcome", current, owner)?;
     let kind_consistent = match record.kind {
         ModerationOutcomeKindV1::Decided(choice) => {
             record.votes_total >= u32::from(record.quorum)
@@ -3013,56 +3121,53 @@ fn emit_moderation_ledger_event(
     };
     let head = read_event_journal_head(state_transaction.world())?;
     ensure_no_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("moderation event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_state("moderation event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_state("moderation event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_state(
-                        "moderation event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            (sequence, event_index)
-        }
-        None => {
-            let policy = read_policy(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first moderation event has no active policy"))?;
-            let status = read_status(state_transaction.world())?
-                .ok_or_else(|| corrupt_state("first moderation event has no ledger status"))?;
-            let counters_empty = status.appeal_intakes == 0
-                && status.eligibility_proofs == 0
-                && status.panel_selections == 0
-                && status.assignment_acceptances == 0
-                && status.failover_replacements == 0
-                && status.failed_panel_formations == 0
-                && status.open_cases == 0
-                && status.finalized_cases == 0
-                && status.commitments == 0
-                && status.reveals == 0
-                && status.challenges == 0
-                && status.outcomes == 0
-                && status.no_shows == 0;
-            if kind != SorafsModerationLedgerEventKind::PolicyActivated
-                || case_id.is_some()
-                || round_id.is_some()
-                || policy.policy.revision != 1
-                || !counters_empty
-            {
+                .ok_or_else(|| corrupt_state("moderation event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_state(
-                    "moderation event journal must begin with the initial policy activation",
+                    "moderation event target height regressed behind the journal head",
                 ));
             }
-            (1, 0)
+        };
+        (sequence, event_index)
+    } else {
+        let policy = read_policy(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first moderation event has no active policy"))?;
+        let status = read_status(state_transaction.world())?
+            .ok_or_else(|| corrupt_state("first moderation event has no ledger status"))?;
+        let counters_empty = status.appeal_intakes == 0
+            && status.eligibility_proofs == 0
+            && status.panel_selections == 0
+            && status.assignment_acceptances == 0
+            && status.failover_replacements == 0
+            && status.failed_panel_formations == 0
+            && status.open_cases == 0
+            && status.finalized_cases == 0
+            && status.commitments == 0
+            && status.reveals == 0
+            && status.challenges == 0
+            && status.outcomes == 0
+            && status.no_shows == 0;
+        if kind != SorafsModerationLedgerEventKind::PolicyActivated
+            || case_id.is_some()
+            || round_id.is_some()
+            || policy.policy.revision != 1
+            || !counters_empty
+        {
+            return Err(corrupt_state(
+                "moderation event journal must begin with the initial policy activation",
+            ));
         }
+        (1, 0)
     };
     let key = event_key(sequence);
     if state_transaction
@@ -3120,6 +3225,24 @@ impl Execute for SetSorafsModerationPolicy {
             return Err(invalid_parameter(
                 "moderation challenge policy must match the consensus governance voting asset and custody accounts",
             ));
+        }
+        // Challenge settlement moves value under protocol custody, which skips the SCCP
+        // escrow guards: refuse escrow ids here rather than fail a settlement (§4.15).
+        for (role, account) in [
+            ("bond escrow", &self.policy.challenge_escrow_account),
+            (
+                "slash receiver",
+                &self.policy.challenge_slash_receiver_account,
+            ),
+        ] {
+            if crate::smartcontracts::isi::sccp::escrow::is_route_escrow_id(
+                state_transaction.network_id(),
+                account,
+            ) {
+                return Err(invalid_parameter(format!(
+                    "moderation challenge {role} cannot be an SCCP route escrow"
+                )));
+            }
         }
         let now = block_time_ms(state_transaction)?;
         let digest = self.policy.digest().map_err(|error| {

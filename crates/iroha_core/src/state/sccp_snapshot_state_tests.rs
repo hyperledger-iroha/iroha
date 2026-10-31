@@ -38,7 +38,12 @@ fn original_allocation_refusal(error: &StateRestoreError) -> &AllocationRefusal 
 
 /// Return a World whose every SCCP map and cell holds a current value and an undo record.
 pub(crate) fn sccp_world() -> World {
-    let world = World::default();
+    populate_sccp_world(World::default())
+}
+
+/// Populate both SCCP cuts after the caller seeds explicit component parameters.
+/// The caller's original parameter owner is preserved; no policy is inserted here.
+pub(crate) fn populate_sccp_world(world: World) -> World {
     let budget = world.sccp_committee_generations.allocation_budget().clone();
     {
         let mut block = world.block();

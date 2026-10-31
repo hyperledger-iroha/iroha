@@ -108,6 +108,10 @@ pub(super) struct CompletedPayload {
 }
 
 /// Clock waiting keeps the existing driver's timed retry armed without inventing new work.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub(super) fn check_proposer_clock(
     creation_time: Duration,
     wall_time: Duration,
@@ -155,9 +159,10 @@ impl Worker<'_> {
     ) {
         let header = source.header();
         if self.incoming_lane_reads.as_ref().is_some_and(|original| {
+            let origin_view_matches = original.view == header.origin_view;
             original.instance != header.instance
                 || original.height != header.height
-                || original.view != header.origin_view
+                || !origin_view_matches
                 || original.block_hash != block_hash
         }) {
             self.cancel_incoming_lane_reads();
@@ -204,6 +209,10 @@ impl Worker<'_> {
 
     /// Resume a partial or completed job only under its fresh physical parent, exact current lane
     /// proposal and original Queue admission. A transient refusal preserves the paid job.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn retained_payload_build_is_current(
         &mut self,
         scope: OriginalPayloadScope,
@@ -224,14 +233,14 @@ impl Worker<'_> {
             ));
         }
         let source = original.job.source();
-        let same_merges = match source.block.lane_merge() {
-            Some(section) => {
+        let same_merges = source
+            .block
+            .lane_merge()
+            .map_or(merges.merges.is_empty(), |section| {
                 section.merges == merges.merges
                     && section.time_floor_ms == merges.time_floor_ms
                     && section.merged_count == 0
-            }
-            None => merges.merges.is_empty(),
-        };
+            });
         let current = if original.scope != scope
             || !crate::state::is_stable_state_view_generation(scope.generation, generation)
             || !scope.matches_tip(current_view, self.applied)
@@ -271,9 +280,7 @@ impl Worker<'_> {
     /// Reclaim only proven selected-input withdrawal without acquiring a State view.
     /// Lane-only work has no Queue residence deadline and stays owned for source retry.
     pub(super) fn partial_payload_expiry_wait(&mut self) -> Option<Duration> {
-        let Some(original) = self.payload_build.as_ref() else {
-            return None;
-        };
+        let original = self.payload_build.as_ref()?;
         let source = original.job.source();
         if source.block.network_entrypoint_count() == 0 {
             return None;
@@ -334,6 +341,10 @@ impl Worker<'_> {
     }
 
     /// Only a fresh physical canonical parent and current original Queue lease permit a lend.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn reusable_completed_payload(
         &mut self,
         scope: OriginalPayloadScope,
@@ -468,7 +479,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             time,
         )
         .unwrap();
@@ -975,6 +990,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_refuses_substituted_original_parent_and_resumes_same_paid_wire() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         struct OriginalJournal {
             path: std::path::PathBuf,
             saved: std::path::PathBuf,
@@ -1021,6 +1039,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_preserves_actual_reader_release_and_native_capacity_refusal() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             task::{Context, Poll, Waker},
@@ -1228,6 +1249,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_idle_expiry_wakes_original_commit_with_live_execution() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use crate::sumeragi::driver::{
             exec::{ExecDone, ExecOp, ExecSched, ExecutionRegistrations},
             persist::Backoff,
@@ -1253,7 +1277,7 @@ mod tests {
             let original_source = live.source.clone();
             let original_result = live.result;
             let mut scheduler = ExecSched::new(1, Backoff::default(), scheduler_registration);
-            scheduler.bind_release_thread(original_thread);
+            scheduler.bind_release_thread(&original_thread);
             scheduler.commit(body.clone(), qc.clone());
             let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
                 panic!("the actual completed execution enters original certificate preparation");
@@ -1391,6 +1415,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_cannot_adopt_same_hash_readmission_as_its_original_selection() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, clock, time) = attach_queue(chain, worker);
             let (_pointer, hash) = stage_original_partial(worker, &queue);
@@ -1447,6 +1474,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_rechecks_actual_mandatory_lane_growth_and_mixed_queue_withdrawal() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         lanes::merge::with_original_lane_merge_fixture(
             |chain, lane_blocks, certify, [first, second]| {
                 super::super::publication_tests::with_worker_chain(
@@ -2130,6 +2160,9 @@ mod tests {
 
     #[test]
     fn completed_original_payload_refund_callback_follows_the_original_build_source_and_fences() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             sync::{
@@ -2180,7 +2213,11 @@ mod tests {
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap();

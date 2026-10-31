@@ -2368,6 +2368,10 @@ impl BoundPairCanonicalProbe {
         });
         Self
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "Borrowing the observation guard retains the active thread-local probe until counting completes."
+    )]
     fn count(&self) -> usize {
         SIDECAR_DIRECTORY_CANONICALIZATIONS
             .with(|count| count.get().expect("active resolution probe"))

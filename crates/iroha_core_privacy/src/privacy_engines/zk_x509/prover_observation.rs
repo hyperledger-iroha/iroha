@@ -103,8 +103,10 @@ pub(super) enum PhaseV1 {
     MainJointPointPreparation,
     MainProofEncoding,
     CaJointFinalization,
+    CompositionShaFixedRows,
+    CompositionShaFixedInverseTransform,
 }
-const PHASES: [PhaseV1; 73] = [
+const PHASES: [PhaseV1; 75] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -178,6 +180,8 @@ const PHASES: [PhaseV1; 73] = [
     PhaseV1::MainJointPointPreparation,
     PhaseV1::MainProofEncoding,
     PhaseV1::CaJointFinalization,
+    PhaseV1::CompositionShaFixedRows,
+    PhaseV1::CompositionShaFixedInverseTransform,
 ];
 
 /// Static public labels of [`PHASES`] in the shared phase tree, in that order.
@@ -255,6 +259,8 @@ const PHASE_LABELS_V1: [&str; PHASES.len()] = [
     "MainJointPointPreparation",
     "MainProofEncoding",
     "CaJointFinalization",
+    "CompositionShaFixedRows",
+    "CompositionShaFixedInverseTransform",
 ];
 
 /// Workload label of the X509 credential prover in the shared phase tree.
@@ -386,6 +392,10 @@ impl ObservationV1 {
         Self(core::marker::PhantomData)
     }
     /// Record the size of the encoded public proof. Only the length is taken.
+    #[expect(
+        clippy::unused_self,
+        reason = "the observation guard proves ownership of this thread-local measurement"
+    )]
     pub(super) fn record_proof_bytes_v1(&self, bytes: u64) {
         ACTIVE.with(|active| {
             if let Some(session) = active
@@ -399,6 +409,10 @@ impl ObservationV1 {
     }
     /// Retain a raw producer failure in the shared record. Both arguments are
     /// literals: an error payload cannot be recorded.
+    #[expect(
+        clippy::unused_self,
+        reason = "the observation guard proves ownership of this thread-local measurement"
+    )]
     pub(super) fn record_failure_v1(&self, stage: &'static str, code: &'static str) {
         ACTIVE.with(|active| {
             if let Some(session) = active
@@ -410,6 +424,10 @@ impl ObservationV1 {
             }
         });
     }
+    #[expect(
+        clippy::unused_self,
+        reason = "consuming the observation guard closes its thread-local measurement"
+    )]
     pub(super) fn finish_v1(self) -> ReceiptV1 {
         let mut receipt = ACTIVE.with(|active| {
             active
@@ -666,7 +684,7 @@ impl ReceiptV1 {
     }
     pub(super) fn public_text_v1(&self) -> String {
         let mut text = format!(
-            "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-and-original-mask-replay\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
+            "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-original-mask-replay-and-public-fixed-setup\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
             self.policies,
             self.cpu_calls,
             self.cpu_columns,
@@ -955,7 +973,9 @@ mod tests {
                 "JointPointDerivation",
                 "MainJointPointPreparation",
                 "MainProofEncoding",
-                "CaJointFinalization"
+                "CaJointFinalization",
+                "CompositionShaFixedRows",
+                "CompositionShaFixedInverseTransform"
             ]
         );
     }
@@ -963,7 +983,7 @@ mod tests {
     #[test]
     fn joint_completion_phases_record_success_error_and_unwind() {
         let observation = ObservationV1::begin_v1();
-        for phase in PHASES[65..].iter().copied() {
+        for phase in PHASES[65..73].iter().copied() {
             PhaseTimerV1::start_v1(phase).complete_v1();
             drop(PhaseTimerV1::start_v1(phase));
             let result = std::panic::catch_unwind(|| {
@@ -975,7 +995,7 @@ mod tests {
         observation.record_failure_v1("producer", "error");
         let receipt = observation.finish_v1();
         let record = receipt.measurement_v1().unwrap();
-        for phase in PHASES[65..].iter().copied() {
+        for phase in PHASES[65..73].iter().copied() {
             let flat = receipt.phases[phase as usize];
             let (_, node) = tree_node(record, PHASE_LABELS_V1[phase as usize]);
             assert_eq!(
@@ -1010,7 +1030,7 @@ mod tests {
         let (_, nested) = tree_node(record, "CompositionCaLinks");
         assert_eq!(nested.parent, Some(deep_index));
         assert_eq!((deep.calls, deep.completed, deep.interrupted), (1, 1, 0));
-        for label in &PHASE_LABELS_V1[65..] {
+        for label in &PHASE_LABELS_V1[65..73] {
             let (_, node) = tree_node(record, label);
             assert_eq!(node.parent, Some(0));
             assert_eq!((node.calls, node.completed, node.interrupted), (1, 1, 0));
@@ -1028,7 +1048,7 @@ mod tests {
 
     #[test]
     fn fine_phase_inventory_is_fixed_unique_and_preserves_every_old_phase() {
-        assert_eq!(PHASES.len(), 73);
+        assert_eq!(PHASES.len(), 75);
         let observation = ObservationV1::begin_v1();
         for (index, phase) in PHASES.iter().copied().enumerate() {
             assert_eq!(phase as usize, index);
@@ -1044,7 +1064,7 @@ mod tests {
             text.lines()
                 .filter(|line| line.starts_with("phase="))
                 .count(),
-            73
+            75
         );
         for phase in [
             PhaseV1::Composition,
@@ -1053,6 +1073,10 @@ mod tests {
             PhaseV1::CompositionFp4Evaluations,
             PhaseV1::SourceStrictDerBase,
             PhaseV1::SourceP256ScalarBitBusAux,
+            PhaseV1::MainFriMaskCommitment,
+            PhaseV1::CaJointOracleCommitment,
+            PhaseV1::MainProofEncoding,
+            PhaseV1::CaJointFinalization,
         ] {
             assert!(text.contains(&format!("phase={phase:?} calls=1 completed=1")));
         }
@@ -1077,7 +1101,9 @@ mod tests {
         let text = receipt.public_text_v1();
         assert!(text.contains("BaseSampleAndCommit") && text.contains("AuxSampleAndCommit"));
         assert!(!text.contains("BaseMasks") && !text.contains("AuxMasks"));
-        assert!(text.contains("native_replay_scope=initial-resident-and-original-mask-replay"));
+        assert!(text.contains(
+            "native_replay_scope=initial-resident-original-mask-replay-and-public-fixed-setup"
+        ));
     }
 
     #[test]
@@ -1196,7 +1222,7 @@ mod tests {
 
     #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
-        // Diagnostic-only fixed public counters: 73 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let observation = ObservationV1::begin_v1();
         std::thread::spawn(|| completed_transform_v1(true, 8))
@@ -1225,12 +1251,43 @@ mod tests {
         assert_eq!(receipt.phases[PhaseV1::Preparation as usize].completed, 1);
     }
     #[test]
+    fn previously_unattributed_operations_preserve_success_error_and_unwind_counts() {
+        let phases = [
+            PhaseV1::MainFriMaskCommitment,
+            PhaseV1::CaJointOracleCommitment,
+            PhaseV1::MainProofEncoding,
+            PhaseV1::CaJointFinalization,
+        ];
+        let observation = ObservationV1::begin_v1();
+        for phase in phases {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+            drop(PhaseTimerV1::start_v1(phase));
+            let _ = std::panic::catch_unwind(|| {
+                let _timer = PhaseTimerV1::start_v1(phase);
+                panic!("synthetic unfinished public operation");
+            });
+        }
+        let receipt = observation.finish_v1();
+        for phase in phases {
+            let count = receipt.phases[phase as usize];
+            assert_eq!(count.calls, 3);
+            assert_eq!(count.completed, 1);
+            assert_eq!(count.interrupted, 2);
+            assert_eq!(count.unwound, 1);
+        }
+        assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+    }
+
+    #[test]
     fn composition_subphases_preserve_bounded_thread_scoped_error_and_unwind_counts() {
         // These observations are wall time around the original serial caller's
         // whole parallel operation, never per-worker field data or CPU time.
         let phases = [
             PhaseV1::CompositionArithmeticFixedRows,
             PhaseV1::CompositionArithmeticFixedInverseTransform,
+            PhaseV1::CompositionShaFixedRows,
+            PhaseV1::CompositionShaFixedInverseTransform,
             PhaseV1::CompositionRegistration,
             PhaseV1::CompositionTraceCache,
             PhaseV1::CompositionDenominators,
@@ -1256,7 +1313,7 @@ mod tests {
         .join()
         .unwrap();
         let receipt = observation.finish_v1();
-        // Diagnostic-only fixed public counters: 73 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         for phase in phases {
             let count = receipt.phases[phase as usize];
@@ -1299,7 +1356,7 @@ mod tests {
             assert_eq!(count.unwound, 1);
         }
         assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
-        // Diagnostic-only fixed public counters: 73 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let next = ObservationV1::begin_v1();
         stale.complete_v1();

@@ -97,6 +97,8 @@ impl RecordSnapshot {
             .map(|bytes| (bytes.len(), *Hash::new(bytes).as_ref()));
         #[cfg(test)]
         snapshot_root_scope_tests::after_record(self)?;
+        #[cfg(test)]
+        tree_snapshot_tests::after_container_record(self, observed)?;
         if observed != self.observed {
             return Err(invalid("retained enrollment body material changed"));
         }
@@ -113,6 +115,8 @@ impl RecordSnapshot {
         };
         #[cfg(test)]
         snapshot_root_scope_tests::after_record(self)?;
+        #[cfg(test)]
+        tree_snapshot_tests::after_container_record(self, observed)?;
         if observed != self.observed {
             return Err(invalid("retained enrollment body material changed"));
         }
@@ -163,7 +167,19 @@ impl NamesSnapshot {
     }
     fn revalidate(&self) -> Result<()> {
         // entries brackets the native census with fresh directory revalidation.
-        if self.directory.entries(self.maximum)? != self.names {
+        let names = self.directory.entries(self.maximum)?;
+        #[cfg(test)]
+        tree_snapshot_tests::after_container_names(self, &names)?;
+        if names != self.names {
+            return Err(invalid("retained enrollment namespace changed"));
+        }
+        self.revalidate_reserved()
+    }
+    fn revalidate_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
+        let names = reader.entries(self.maximum)?;
+        #[cfg(test)]
+        tree_snapshot_tests::after_container_names(self, &names)?;
+        if names != self.names {
             return Err(invalid("retained enrollment namespace changed"));
         }
         self.revalidate_reserved()
@@ -176,6 +192,26 @@ struct Snapshot {
     names: Vec<NamesSnapshot>,
     root: Option<Arc<PrivateDirectory>>,
 }
+// Only the existing container reader is shared. The parent tree keeps its enrollment
+// anchor, and every body retains its original suffix entry and exit. No reader survives
+// this one synchronous pass or supplies source validity to a later call.
+struct SnapshotContainerRead<'borrow, 'scope> {
+    directory: &'borrow PrivateDirectory,
+    reader: &'borrow mut iroha_fs::PrivateReadScope<'scope>,
+}
+impl SnapshotContainerRead<'_, '_> {
+    fn covers(&self, directory: &PrivateDirectory) -> bool {
+        !norito::core::decode_limits_active() && std::ptr::eq(self.directory, directory)
+    }
+}
+fn reuse_snapshot_container() -> bool {
+    #[cfg(test)]
+    if tree_snapshot_tests::original_container_recipe() {
+        return false;
+    }
+    !norito::core::decode_limits_active()
+}
+
 /// Borrowed coverage of one exact immutable snapshot chain during a closed read-only pass.
 /// Construction and membership stay with the sole snapshot owner; no token is retained.
 pub(in crate::managed) struct SnapshotReadPass<'a> {
@@ -212,12 +248,66 @@ impl Snapshot {
         let _snapshot_timing = finish_timing::phase(finish_timing::Phase::SnapshotRevalidate);
         self.tree_root().map_or_else(
             || self.revalidate_in_tree(None),
-            |root| {
-                root.read_tree_scope(|tree| {
-                    self.revalidate_in_tree_with_root(Some(tree), Some(root))
-                })
-            },
+            |root| root.read_tree_scope(|tree| self.revalidate_with_container(tree, root)),
         )
+    }
+    fn revalidate_with_container(
+        &self,
+        tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
+        root: &PrivateDirectory,
+    ) -> Result<()> {
+        if !reuse_snapshot_container()
+            || self
+                .tree_root()
+                .is_none_or(|selected| !std::ptr::eq(selected, root))
+        {
+            return self.revalidate_in_tree_with_root(Some(tree), Some(root));
+        }
+        // The exact bounded layout has one container immediately after its sole base.
+        // Borrow its owners from the same chain, without collecting or reopening them.
+        let mut container = self;
+        while let Some(previous) = &container.previous {
+            if previous.previous.is_none() {
+                let Some(names) = container.names.first() else {
+                    break;
+                };
+                #[cfg(test)]
+                {
+                    // Keep the original pre-recursion visit accounting even when the base
+                    // refuses before any container/body read. These nodes are not counted twice.
+                    let mut visited = self;
+                    while !std::ptr::eq(visited, previous.as_ref()) {
+                        shared_snapshot_tests::snapshot_visit();
+                        visited = visited.previous.as_deref().expect("admitted snapshot base");
+                    }
+                }
+                // Preserve every base-root read and the independent external reference
+                // before the first container observation, including their original errors.
+                previous.revalidate_in_tree_with_root(Some(tree), Some(root))?;
+                if !reuse_snapshot_container() {
+                    return self.revalidate_in_scope(Some(tree), Some(root), Some(previous), None);
+                }
+                // Persistent container refusal at this exit overrides every ordinary
+                // later body result. Intermediate changes restored before a fresh body
+                // suffix check or this exit may be unseen; this is not an atomic snapshot.
+                return tree.read_scope_with_tree(&names.directory, |tree, reader| {
+                    #[cfg(test)]
+                    tree_snapshot_tests::container_entered();
+                    let mut container = SnapshotContainerRead {
+                        directory: &names.directory,
+                        reader,
+                    };
+                    self.revalidate_in_scope(
+                        Some(tree),
+                        Some(root),
+                        Some(previous),
+                        Some(&mut container),
+                    )
+                });
+            }
+            container = previous;
+        }
+        self.revalidate_in_tree_with_root(Some(tree), Some(root))
     }
     // Only the immutable layout produced below opts into a common-ancestry bracket.
     // This selects a read strategy, never source validity or native ancestry eligibility.
@@ -314,11 +404,22 @@ impl Snapshot {
     }
     fn revalidate_in_tree_with_root(
         &self,
-        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
         canonical_root: Option<&PrivateDirectory>,
     ) -> Result<()> {
+        self.revalidate_in_scope(tree, canonical_root, None, None)
+    }
+    fn revalidate_in_scope(
+        &self,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        canonical_root: Option<&PrivateDirectory>,
+        completed_base: Option<&Snapshot>,
+        mut container: Option<&mut SnapshotContainerRead<'_, '_>>,
+    ) -> Result<()> {
         #[cfg(test)]
-        shared_snapshot_tests::snapshot_visit();
+        if completed_base.is_none() {
+            shared_snapshot_tests::snapshot_visit();
+        }
         let mut index = 0;
         if let Some(root) = &self.root {
             if tree.is_some()
@@ -354,8 +455,15 @@ impl Snapshot {
                 inventory?;
             }
         }
-        if let Some(previous) = &self.previous {
-            previous.revalidate_in_tree_with_root(tree.as_deref_mut(), canonical_root)?;
+        if let Some(previous) = &self.previous
+            && completed_base.is_none_or(|base| !std::ptr::eq(base, previous.as_ref()))
+        {
+            previous.revalidate_in_scope(
+                tree.as_deref_mut(),
+                canonical_root,
+                completed_base,
+                container.as_deref_mut(),
+            )?;
         }
         while index < self.records.len() {
             let mut end = index + 1;
@@ -373,26 +481,40 @@ impl Snapshot {
                     }
                     Ok::<_, crate::managed::Error>(())
                 };
-                // The base root and singleton external reference keep their full checks.
-                match (self.root.is_none(), tree.as_deref_mut()) {
-                    (true, Some(tree)) => tree.read_scope(&self.records[index].directory, read)?,
-                    _ => self.records[index].directory.read_scope(read)?,
+                // Recheck the actual borrowed owner and decoder state at every use.
+                if let Some(container) = container
+                    .as_deref_mut()
+                    .filter(|scope| scope.covers(&self.records[index].directory))
+                {
+                    read(container.reader)?;
+                } else {
+                    // The base root and singleton external reference keep their full checks.
+                    match (self.root.is_none(), tree.as_deref_mut()) {
+                        (true, Some(tree)) => {
+                            tree.read_scope(&self.records[index].directory, read)?
+                        }
+                        _ => self.records[index].directory.read_scope(read)?,
+                    }
                 }
             }
             index = end;
         }
         for names in &self.names {
-            match tree.as_deref_mut() {
-                Some(tree) => tree.read_scope(&names.directory, |reader| {
-                    if reader.entries(names.maximum)? != names.names {
-                        return Err(invalid("retained enrollment namespace changed"));
-                    }
-                    names.revalidate_reserved()?;
-                    Ok::<_, crate::managed::Error>(())
-                })?,
-                None => names.revalidate()?,
+            if let Some(container) = container
+                .as_deref_mut()
+                .filter(|scope| scope.covers(&names.directory))
+            {
+                names.revalidate_in_scope(container.reader)?;
+            } else {
+                match tree.as_deref_mut() {
+                    Some(tree) => tree
+                        .read_scope(&names.directory, |reader| names.revalidate_in_scope(reader))?,
+                    None => names.revalidate()?,
+                }
             }
         }
+        #[cfg(test)]
+        tree_snapshot_tests::after_container_node(self)?;
         Ok(())
     }
 }
@@ -2610,7 +2732,7 @@ impl BodyHistory {
                                     finish_timing::phase(finish_timing::Phase::WalletRetire);
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .retire(&account, &attempt.wallet_path())
+                                    .retire(&account, attempt.directory())
                             },
                         )?;
                         #[cfg(test)]
@@ -2629,7 +2751,7 @@ impl BodyHistory {
                                     finish_timing::phase(finish_timing::Phase::WalletRetire);
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .retire(&account, &attempt.wallet_path())
+                                    .retire(&account, attempt.directory())
                             },
                         )?;
                         #[cfg(test)]
@@ -2995,3 +3117,7 @@ pub(in crate::managed) mod metadata_reuse_tests;
 #[cfg(test)]
 #[path = "body_history/signing_boundary_tests.rs"]
 mod signing_boundary_tests;
+
+#[cfg(test)]
+#[path = "body_history/attempts_root_scope_tests.rs"]
+pub(in crate::managed) mod attempts_root_scope_tests;

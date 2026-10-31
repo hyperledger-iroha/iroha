@@ -79,9 +79,9 @@ def test_wrong_stale_cabi_or_non_napi_emitter_cannot_substitute_for_real_napi(ch
 
 def probe_fixture():
     policy = {'required': ['connectNoritoBridgeAbiVersion', 'securePrivateFileAbiVersion'],
-              'forbidden': ['retiredMethod'], 'abi_version': 31,
-              'required_results': {'connectNoritoBridgeAbiVersion': 31, 'securePrivateFileAbiVersion': 1}}
-    proof = {'abi_version': 31, 'exports': policy['required'], 'forbidden': [],
+              'forbidden': ['retiredMethod'], 'abi_version': 33,
+              'required_results': {'connectNoritoBridgeAbiVersion': 33, 'securePrivateFileAbiVersion': 1}}
+    proof = {'abi_version': 33, 'exports': policy['required'], 'forbidden': [],
              'required_exports': policy['required'], 'required_results': policy['required_results'],
              'signing_independent_emitted': 'a' * 64, 'signing_independent_artifact': 'a' * 64}
     return proof, policy
@@ -109,10 +109,10 @@ def test_real_consumer_abi_export_and_signing_only_derivation_cannot_be_relabell
 
 def test_current_repository_node_policy_combines_all_original_required_methods():
     selected = unit.policy(ROOT)
-    assert selected['abi_version'] == 31
+    assert selected['abi_version'] == 33
     assert {'noritoEncodeInstruction', 'privacyCompiledProfileCatalogV1', 'privateSettlementVerifyCommitteeProofResponseV1',
             'securePrivateFileRead', 'compileKotodama', 'buildKaigiUsageProofV1'} <= set(selected['required'])
-    assert selected['required_results'] == {'connectNoritoBridgeAbiVersion': 31, 'securePrivateFileAbiVersion': 1}
+    assert selected['required_results'] == {'connectNoritoBridgeAbiVersion': 33, 'securePrivateFileAbiVersion': 1}
 
 
 def test_alias_receipt_duplicate_and_wrong_digest_refuse(tmp_path):
@@ -248,12 +248,14 @@ def test_closed_environment_binds_actual_apple_tools_without_serialized_or_calle
     output.mkdir(parents=True, mode=0o700); (output / 'temporary').mkdir(mode=0o700)
     monkeypatch.setenv('TMPDIR', '/unrelated/caller/temporary')
     monkeypatch.setenv('SCCACHE_CLIENT_SIDE', '1')
+    monkeypatch.setenv('CARGO_CACHE_RUSTC_INFO', '1')
     selected = unit.environment(root, config, output)
     assert selected['CC'] == config['clang'] and selected['CXX'] == '/stock/apple/bin/clang++'
     assert selected['AR'] == '/stock/apple/bin/ar' and selected['RANLIB'] == '/stock/apple/bin/ranlib'
     assert selected['NODE_OPTIONS'] == ''
     assert selected['TMPDIR'] == str(output / 'temporary')
     assert selected['SCCACHE_CLIENT_SIDE'] == '0'
+    assert selected['CARGO_CACHE_RUSTC_INFO'] == '0'
     assert selected['PATH'] == unit.tool_path(config) == '/stock/rust/bin:/opt/homebrew/bin:/usr/bin:/bin'
     assert not {'CARGO_BUILD_JOBS', 'CARGO_INCREMENTAL', 'RUSTFLAGS', 'RUSTC_WRAPPER',
                 'IROHA_GIT_COMMIT_HASH'} & selected.keys()

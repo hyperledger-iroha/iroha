@@ -5,6 +5,7 @@ use iroha::data_model::sccp::{
     deployment::{SccpCommitteePinV1, SccpDeploymentV1, SccpEvmDeploymentV1},
     light_client::{SccpLcHeadV1, SccpLcPointV1, SccpLightClientParamsV1},
 };
+use iroha_crypto::Algorithm;
 
 fn light_client(network: SccpNetworkV1) -> SccpLightClientV1 {
     SccpLightClientV1 {
@@ -78,27 +79,21 @@ fn burn_horizons_round_the_quarter_up_and_refuse_the_exact_profile_margin() {
     assert!(require_horizon(&frozen, 100, 103, 9, supported).is_err());
 }
 
+fn policy(algorithms: Vec<Algorithm>) -> CryptoAdmissionPolicyV1 {
+    CryptoAdmissionPolicyV1::new(algorithms).unwrap()
+}
+
 #[test]
-fn burn_controller_requires_every_admitted_algorithm_and_curve() {
+fn burn_controller_requires_an_admitted_algorithm() {
     let key = iroha_crypto::KeyPair::from_seed(vec![19; 32], Algorithm::Ed25519);
     let account = AccountId::new(key.public_key().clone());
     let bytes = AccountAddress::from_account_id(&account)
         .unwrap()
         .canonical_bytes()
         .unwrap();
-    let curve = CurveId::try_from_algorithm(Algorithm::Ed25519)
-        .unwrap()
-        .as_u8();
-    let good = norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519"]}, "curves": {"allowed_curve_ids": [curve]}}});
+    let good = policy(vec![Algorithm::Ed25519]);
     assert_eq!(require_controller(&bytes, &good).unwrap(), account);
-    for bad in [
-        norito::json!({}),
-        norito::json!({"crypto": {"sm": {"allowed_signing": []}, "curves": {"allowed_curve_ids": [curve]}}}),
-        norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519"]}, "curves": {"allowed_curve_ids": []}}}),
-        norito::json!({"crypto": {"sm": {"allowed_signing": ["unknown"]}, "curves": {"allowed_curve_ids": [curve]}}}),
-    ] {
-        assert!(require_controller(&bytes, &bad).is_err());
-    }
+    assert!(require_controller(&bytes, &policy(vec![Algorithm::Secp256k1])).is_err());
     assert!(require_controller(&[0; 1025], &good).is_err());
     let mut malformed = bytes.clone();
     malformed.push(0);
@@ -125,30 +120,19 @@ fn burn_multisig_checks_every_member_even_below_the_signing_threshold() {
         .unwrap()
         .canonical_bytes()
         .unwrap();
-    let ed_curve = CurveId::try_from_algorithm(Algorithm::Ed25519)
-        .unwrap()
-        .as_u8();
-    let secp_curve = CurveId::try_from_algorithm(Algorithm::Secp256k1)
-        .unwrap()
-        .as_u8();
-    let permitted = norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519", "secp256k1"]}, "curves": {"allowed_curve_ids": [ed_curve, secp_curve]}}});
+    let permitted = policy(vec![Algorithm::Ed25519, Algorithm::Secp256k1]);
     assert_eq!(require_controller(&bytes, &permitted).unwrap(), account);
-    for denied in [
-        norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519"]}, "curves": {"allowed_curve_ids": [ed_curve, secp_curve]}}}),
-        norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519", "secp256k1"]}, "curves": {"allowed_curve_ids": [ed_curve]}}}),
-    ] {
-        assert!(
-            require_controller(&bytes, &denied).is_err(),
-            "one permitted signer cannot hide an inadmissible controller member"
-        );
-    }
+    assert!(
+        require_controller(&bytes, &policy(vec![Algorithm::Ed25519])).is_err(),
+        "one permitted signer cannot hide an inadmissible controller member"
+    );
 }
 
 #[test]
-fn burn_bls_exception_matches_core_without_exempting_other_members() {
+fn burn_bls_requires_committed_membership_without_exempting_other_members() {
     use iroha::data_model::account::controller::{MultisigMember, MultisigPolicy};
 
-    let empty = norito::json!({"crypto": {"sm": {"allowed_signing": []}, "curves": {"allowed_curve_ids": []}}});
+    let ed_permitted = policy(vec![Algorithm::Ed25519]);
     let ed = iroha_crypto::KeyPair::from_seed(vec![24; 32], Algorithm::Ed25519);
     for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
         let bls = iroha_crypto::KeyPair::from_seed(vec![23; 32], algorithm);
@@ -157,7 +141,9 @@ fn burn_bls_exception_matches_core_without_exempting_other_members() {
             .unwrap()
             .canonical_bytes()
             .unwrap();
-        assert_eq!(require_controller(&bytes, &empty).unwrap(), single);
+        assert!(require_controller(&bytes, &ed_permitted).is_err());
+        let bls_permitted = policy(vec![algorithm]);
+        assert_eq!(require_controller(&bytes, &bls_permitted).unwrap(), single);
         let mixed = AccountId::new_multisig(
             MultisigPolicy::new(
                 1,
@@ -172,13 +158,78 @@ fn burn_bls_exception_matches_core_without_exempting_other_members() {
             .unwrap()
             .canonical_bytes()
             .unwrap();
-        assert!(require_controller(&bytes, &empty).is_err());
-        let curve = CurveId::try_from_algorithm(Algorithm::Ed25519)
-            .unwrap()
-            .as_u8();
-        let ed_permitted = norito::json!({"crypto": {"sm": {"allowed_signing": ["ed25519"]}, "curves": {"allowed_curve_ids": [curve]}}});
-        assert_eq!(require_controller(&bytes, &ed_permitted).unwrap(), mixed);
+        assert!(require_controller(&bytes, &bls_permitted).is_err());
+        assert!(require_controller(&bytes, &ed_permitted).is_err());
+        let both = policy(vec![Algorithm::Ed25519, algorithm]);
+        assert_eq!(require_controller(&bytes, &both).unwrap(), mixed);
     }
+}
+
+/// A certified cut whose complete `world.parameters` cell is `parameters`.
+fn parameters_cut(parameters: &Parameters) -> origin::AuthenticatedOrigin {
+    use iroha::data_model::{
+        sumeragi_finality::{
+            WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
+            world_state_value_hash_v1,
+        },
+        testing::native_finality::NativeFinalityFixture,
+    };
+    let snapshot = WorldStateSnapshotV1 {
+        schema_hash: iroha_crypto::Hash::new(b"burn admission parameters"),
+        entries: vec![WorldStateSnapshotEntryV1 {
+            field_id: "world.parameters".into(),
+            kind: WorldStateElementKindV1::Cell,
+            key_hash: None,
+            value_hash: world_state_value_hash_v1(parameters).unwrap(),
+        }],
+    };
+    let mut native = NativeFinalityFixture::start("sccp-burn-admission");
+    let block = native.block_with_submitted_work(native.next_header());
+    let proof = native.certify_with_world_root(block, snapshot.root().unwrap());
+    origin::test_cut(&native, &snapshot, &proof)
+}
+
+fn parameters_with(policy: Option<&CryptoAdmissionPolicyV1>) -> Parameters {
+    use iroha::data_model::parameter::Parameter;
+    let mut parameters = Parameters::default();
+    if let Some(policy) = policy {
+        let Parameter::Custom(custom) = policy.clone().into_parameter().unwrap() else {
+            unreachable!("the policy is a custom parameter")
+        };
+        parameters.custom.insert(custom);
+    }
+    parameters
+}
+
+#[test]
+fn burn_admission_policy_is_the_cut_s_own_parameter_never_an_endpoint_report() {
+    let committed = policy(vec![Algorithm::Ed25519]);
+    let parameters = parameters_with(Some(&committed));
+    let cut = parameters_cut(&parameters);
+    assert_eq!(cut.crypto_admission_policy(&parameters).unwrap(), committed);
+    // An endpoint widening the policy cannot match the certified cell.
+    let wider = policy(vec![Algorithm::Ed25519, Algorithm::Secp256k1]);
+    assert!(
+        cut.crypto_admission_policy(&parameters_with(Some(&wider)))
+            .is_err()
+    );
+    // Nor can it omit the policy, or change any other parameter served beside it.
+    assert!(cut.crypto_admission_policy(&parameters_with(None)).is_err());
+    let mut changed = parameters.clone();
+    changed
+        .custom
+        .insert(iroha::data_model::parameter::CustomParameter::new(
+            "sccp_burn_fixture".parse().unwrap(),
+            iroha_primitives::json::Json::new(1_u8),
+        ));
+    assert!(cut.crypto_admission_policy(&changed).is_err());
+    // A cut whose own parameters lack the policy admits no recipient.
+    let bare = parameters_with(None);
+    assert!(
+        parameters_cut(&bare)
+            .crypto_admission_policy(&bare)
+            .is_err()
+    );
 }
 
 #[test]

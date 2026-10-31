@@ -133,11 +133,11 @@ fn verify_query_signature_for_signer(
 ) -> Result<(), SignedQueryValidationError> {
     match signer.try_algorithm() {
         Ok(iroha_crypto::Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())
+            iroha_crypto::ed25519_validate_signature_encoding(signature.payload())
                 .map_err(|_| SignedQueryValidationError::InvalidSignatureMaterial)?;
         }
         Ok(iroha_crypto::Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())
+            iroha_crypto::mldsa65_validate_signature_encoding(signature.payload())
                 .map_err(|_| SignedQueryValidationError::InvalidSignatureMaterial)?;
         }
         _ => {}
@@ -798,8 +798,14 @@ define_builtin_query_registry! {
         => "iroha.query.v1::iterable::asset::AssetUidPolicyViewV1",
     ErasedIterQuery<crate::asset::fi_link::AssetFiRelationshipViewV1>
         => "iroha.query.v1::iterable::asset::AssetFiRelationshipViewV1",
+    ErasedIterQuery<crate::asset::fi_link::AssetFiTransferReceiptV1>
+        => "iroha.query.v1::iterable::asset::AssetFiTransferReceiptV1",
+    ErasedIterQuery<crate::asset::fi_context::AssetFiContextSnapshotV1>
+        => "iroha.query.v1::iterable::asset::AssetFiContextSnapshotV1",
     ErasedIterQuery<crate::asset::uid_enrollment::AssetUidEnrollmentViewV1>
         => "iroha.query.v1::iterable::asset::AssetUidEnrollmentViewV1",
+    ErasedIterQuery<crate::escrow::scoped::AssetEscrowScopeOriginalV1>
+        => "iroha.query.v1::iterable::escrow::AssetEscrowScopeOriginalV1",
 }
 /// Set the global query registry used to decode queries by stable wire identifier.
 ///
@@ -1205,6 +1211,12 @@ mod model {
         AssetFiRelationshipViewV1(Vec<crate::asset::fi_link::AssetFiRelationshipViewV1>),
         /// Private exact native relationship observation.
         AssetUidEnrollmentViewV1(Vec<crate::asset::uid_enrollment::AssetUidEnrollmentViewV1>),
+        /// Complete owner-scoped escrow originals for one asset incarnation.
+        AssetEscrowScopeOriginalV1(Vec<crate::escrow::scoped::AssetEscrowScopeOriginalV1>),
+        /// Private exact native FI occurrence candidates.
+        AssetFiTransferReceiptV1(Vec<crate::asset::fi_link::AssetFiTransferReceiptV1>),
+        /// Complete current FI context candidates for the exact Global owner.
+        AssetFiContextSnapshotV1(Vec<crate::asset::fi_context::AssetFiContextSnapshotV1>),
     }
     #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema, crate :: DeriveJsonSerialize)]
     /// Helper tuple to materialise batches into Norito collections.
@@ -1807,9 +1819,30 @@ mod model {
             try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
             try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
             try_build!(crate::bond::BondRecord, BondRecord);
-            try_build!(crate::asset::uid::AssetUidPolicyViewV1, AssetUidPolicyViewV1);
-            try_build!(crate::asset::fi_link::AssetFiRelationshipViewV1, AssetFiRelationshipViewV1);
-            try_build!(crate::asset::uid_enrollment::AssetUidEnrollmentViewV1, AssetUidEnrollmentViewV1);
+            try_build!(
+                crate::asset::uid::AssetUidPolicyViewV1,
+                AssetUidPolicyViewV1
+            );
+            try_build!(
+                crate::asset::fi_link::AssetFiRelationshipViewV1,
+                AssetFiRelationshipViewV1
+            );
+            try_build!(
+                crate::asset::fi_link::AssetFiTransferReceiptV1,
+                AssetFiTransferReceiptV1
+            );
+            try_build!(
+                crate::asset::fi_context::AssetFiContextSnapshotV1,
+                AssetFiContextSnapshotV1
+            );
+            try_build!(
+                crate::asset::uid_enrollment::AssetUidEnrollmentViewV1,
+                AssetUidEnrollmentViewV1
+            );
+            try_build!(
+                crate::escrow::scoped::AssetEscrowScopeOriginalV1,
+                AssetEscrowScopeOriginalV1
+            );
             Err(QueryWithParamsError::unsupported(query.type_name_key()))
         }
         /// Access the canonical iterable-query payload components.
@@ -1914,6 +1947,12 @@ mod model {
         AssetFiRelationshipViewV1,
         /// Private exact native relationship view (wire tag 34).
         AssetUidEnrollmentViewV1,
+        /// Complete exact-asset escrow originals (wire tag 35).
+        AssetEscrowScopeOriginalV1,
+        /// Exact private FI occurrence candidate (wire tag 36).
+        AssetFiTransferReceiptV1,
+        /// Complete exact current FI context candidate (wire tag 37).
+        AssetFiContextSnapshotV1,
     }
     /// Trait mapping item types to a `QueryItemKind` marker.
     ///
@@ -2063,13 +2102,34 @@ mod model {
         }
     }
     impl ItemKindTag for crate::asset::uid::AssetUidPolicyViewV1 {
-        fn kind() -> QueryItemKind { QueryItemKind::AssetUidPolicyViewV1 }
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetUidPolicyViewV1
+        }
+    }
+    impl ItemKindTag for crate::asset::fi_context::AssetFiContextSnapshotV1 {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetFiContextSnapshotV1
+        }
+    }
+    impl ItemKindTag for crate::asset::fi_link::AssetFiTransferReceiptV1 {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetFiTransferReceiptV1
+        }
     }
     impl ItemKindTag for crate::asset::fi_link::AssetFiRelationshipViewV1 {
-        fn kind() -> QueryItemKind { QueryItemKind::AssetFiRelationshipViewV1 }
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetFiRelationshipViewV1
+        }
     }
     impl ItemKindTag for crate::asset::uid_enrollment::AssetUidEnrollmentViewV1 {
-        fn kind() -> QueryItemKind { QueryItemKind::AssetUidEnrollmentViewV1 }
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetUidEnrollmentViewV1
+        }
+    }
+    impl ItemKindTag for crate::escrow::scoped::AssetEscrowScopeOriginalV1 {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetEscrowScopeOriginalV1
+        }
     }
     impl ItemKindTag for crate::bond::BondRecord {
         fn kind() -> QueryItemKind {
@@ -2779,7 +2839,8 @@ impl CommittedTransaction {
             TransactionEntrypoint::External(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::AnonymousBallot(_) => {}
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::AnonymousBallot(_) => {}
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint
                     .signed_transaction
@@ -2797,6 +2858,15 @@ impl CommittedTransaction {
             crate::block::execution_output::ExecutionOutputV1::Network(row) => &mut row.result.0,
             crate::block::execution_output::ExecutionOutputV1::Pipeline(row) => &mut row.result.0,
             crate::block::execution_output::ExecutionOutputV1::Time(row) => &mut row.result.0,
+            crate::block::execution_output::ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
+            crate::block::execution_output::ExecutionOutputV1::PipelineWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
+            crate::block::execution_output::ExecutionOutputV1::TimeWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
         };
         *result = if result.is_ok() {
             Err(TransactionRejectionReason::Validation(
@@ -2873,8 +2943,21 @@ impl QueryOutputBatchBox {
             (Self::FeeSponsorProgramId(v1), Self::FeeSponsorProgramId(v2)) => v1.extend(v2),
             (Self::BondRecord(v1), Self::BondRecord(v2)) => v1.extend(v2),
             (Self::AssetUidPolicyViewV1(v1), Self::AssetUidPolicyViewV1(v2)) => v1.extend(v2),
-            (Self::AssetFiRelationshipViewV1(v1), Self::AssetFiRelationshipViewV1(v2)) => v1.extend(v2),
-            (Self::AssetUidEnrollmentViewV1(v1), Self::AssetUidEnrollmentViewV1(v2)) => v1.extend(v2),
+            (Self::AssetFiRelationshipViewV1(v1), Self::AssetFiRelationshipViewV1(v2)) => {
+                v1.extend(v2)
+            }
+            (Self::AssetFiTransferReceiptV1(v1), Self::AssetFiTransferReceiptV1(v2)) => {
+                v1.extend(v2)
+            }
+            (Self::AssetFiContextSnapshotV1(v1), Self::AssetFiContextSnapshotV1(v2)) => {
+                v1.extend(v2)
+            }
+            (Self::AssetUidEnrollmentViewV1(v1), Self::AssetUidEnrollmentViewV1(v2)) => {
+                v1.extend(v2)
+            }
+            (Self::AssetEscrowScopeOriginalV1(v1), Self::AssetEscrowScopeOriginalV1(v2)) => {
+                v1.extend(v2)
+            }
             _ => return Err(QueryOutputBatchBoxTypeMismatch),
         }
         Ok(())
@@ -2932,7 +3015,10 @@ impl QueryOutputBatchBox {
             Self::BondRecord(v) => v.len(),
             Self::AssetUidPolicyViewV1(v) => v.len(),
             Self::AssetFiRelationshipViewV1(v) => v.len(),
+            Self::AssetFiTransferReceiptV1(v) => v.len(),
+            Self::AssetFiContextSnapshotV1(v) => v.len(),
             Self::AssetUidEnrollmentViewV1(v) => v.len(),
+            Self::AssetEscrowScopeOriginalV1(v) => v.len(),
         }
     }
     /// Returns `true` if this batch column contains no rows.
@@ -3433,6 +3519,44 @@ mod candidate {
             let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
             AccountId::new_multisig(policy)
         }
+        #[test]
+        fn query_verification_borrows_preexisting_signature_under_zero_copy_budget() {
+            let signed = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            ))
+            .with_test_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+            let malformed = iroha_crypto::SignatureOf::from_signature(
+                iroha_crypto::Signature::from_bytes(&[1; 63]),
+            );
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            norito::with_decode_limits_scope(limits, || {
+                crate::query::verify_query_signature_for_signer(
+                    &signed.signature.0,
+                    ALICE_KEYPAIR.public_key(),
+                    &signed.payload,
+                )
+                .unwrap();
+                assert_eq!(
+                    crate::query::verify_query_signature_for_signer(
+                        &signed.signature.0,
+                        BOB_KEYPAIR.public_key(),
+                        &signed.payload
+                    ),
+                    Err(SignedQueryValidationError::InvalidSignature)
+                );
+                assert_eq!(
+                    crate::query::verify_query_signature_for_signer(
+                        &malformed,
+                        ALICE_KEYPAIR.public_key(),
+                        &signed.payload
+                    ),
+                    Err(SignedQueryValidationError::InvalidSignatureMaterial)
+                );
+            });
+        }
+
         #[test]
         fn valid() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -4093,6 +4217,9 @@ mod json_roundtrip_tests {
             QueryItemKind::AssetUidPolicyViewV1,
             QueryItemKind::AssetFiRelationshipViewV1,
             QueryItemKind::AssetUidEnrollmentViewV1,
+            QueryItemKind::AssetEscrowScopeOriginalV1,
+            QueryItemKind::AssetFiTransferReceiptV1,
+            QueryItemKind::AssetFiContextSnapshotV1,
         ];
         for (index, kind) in kinds.into_iter().enumerate() {
             let expected = u32::try_from(index)
@@ -4346,7 +4473,10 @@ impl_iter_queries! {
     bond::FindBonds => crate::bond::BondRecord,
     asset_uid::FindAssetUidPoliciesV1 => crate::asset::uid::AssetUidPolicyViewV1,
     asset_fi::FindAssetFiLinkV1 => crate::asset::fi_link::AssetFiRelationshipViewV1,
+    asset_fi::FindAssetFiTransferReceiptV1 => crate::asset::fi_link::AssetFiTransferReceiptV1,
+    asset_fi_context::FindAssetFiContextV1 => crate::asset::fi_context::AssetFiContextSnapshotV1,
     asset_uid_enrollment::FindAssetUidEnrollmentV1 => crate::asset::uid_enrollment::AssetUidEnrollmentViewV1,
+    asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1 => crate::escrow::scoped::AssetEscrowScopeOriginalV1,
     nexus::prelude::FindFeeSponsorProgramsBySponsor => crate::nexus::FeeSponsorProgram,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
@@ -4643,9 +4773,12 @@ macro_rules! queries {
     };
 }
 include!("domain_queries.rs");
+/// Queries for complete owner-scoped escrow originals.
+pub mod asset_escrow_scope;
+pub mod asset_fi;
+pub mod asset_fi_context;
 /// Owner-scoped native UID policy views.
 pub mod asset_uid;
-pub mod asset_fi;
 pub mod asset_uid_enrollment;
 pub mod sns {
     //! SNS-related query definitions.

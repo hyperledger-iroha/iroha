@@ -125,8 +125,7 @@ impl AttachmentStore {
         if self.record.pending.is_none() {
             self.require_active()?;
         }
-        let challenge = rand::random::<[u8; 32]>();
-        parent.observe(source, &challenge)?;
+        parent.refresh_certified(source)?;
         if self.record.pending.is_none() {
             self.require_active()?;
             let kind = if self.confirmed().is_none() {
@@ -201,6 +200,9 @@ impl AttachmentStore {
                                 "parent preparation differs from exact request",
                             )
                         })?;
+                    if preparation.unprepared_status() == Some(OperationStatus::Expired) {
+                        return Ok(self.progress(Some(OperationStatus::Expired)));
+                    }
                     let needs_prepare = match preparation.phase() {
                         iroha_wallet::operations::NativePreparationPhase::Missing
                         | iroha_wallet::operations::NativePreparationPhase::RequestOnly
@@ -245,6 +247,9 @@ impl AttachmentStore {
                                 "parent preparation differs from exact request",
                             )
                         })?;
+                    if preparation.unprepared_status() == Some(OperationStatus::Expired) {
+                        return Ok(self.progress(Some(OperationStatus::Expired)));
+                    }
                     let needs_prepare = match preparation.phase() {
                         iroha_wallet::operations::NativePreparationPhase::Missing
                         | iroha_wallet::operations::NativePreparationPhase::RequestOnly
@@ -334,16 +339,14 @@ impl AttachmentStore {
         parent: &ParentFinalityStore,
     ) -> Result<()> {
         let identity = &self.record.identity;
-        let release = bootstrap.release();
+        let release = bootstrap.metadata();
         if config.network_id != identity.parent_network_id
             || config.chain.to_string() != identity.parent_chain_id
             || config.account != identity.owner
             || parent.network_name() != identity.parent_name
-            || parent.generation() != identity.parent_generation
             || parent.verifier().checkpoint().network_id() != identity.parent_network_id
             || parent.verifier().checkpoint().chain_id() != identity.parent_chain_id
             || release.network_name != identity.parent_name
-            || release.generation != identity.parent_generation
             || release.network_id != identity.parent_network_id
             || release.chain_id != identity.parent_chain_id
             || !release

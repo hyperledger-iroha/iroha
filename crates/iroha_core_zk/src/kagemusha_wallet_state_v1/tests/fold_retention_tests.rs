@@ -40,7 +40,12 @@ fn holds(wallet: &Wallet) -> bool {
 }
 
 /// The durable records a fold left: every archive record and the selected manifest.
-fn durable(wallet: &Wallet) -> (BTreeMap<ArchiveKey, Vec<u8>>, Option<([u8; 32], Vec<u8>)>) {
+type DurableRecords = (
+    BTreeMap<ArchiveKey, Vec<u8>>,
+    Option<custody::ArchiveCheckpointV1>,
+);
+
+fn durable(wallet: &Wallet) -> DurableRecords {
     (
         wallet.archive.records.lock().unwrap().clone(),
         wallet.custody.checkpoint.clone(),
@@ -137,8 +142,9 @@ fn warm_and_all_cold_folds_leave_identical_durable_records() {
 }
 
 /// Deploy-pipeline §7.4 tests 6, 7 and 9, and reviews G6 and K10: a payment, inactivity,
-/// cancellation or close between or during sub-proofs leaves the next prepare cold; an
-/// ingest-class change of the selected manifest does not.
+/// cancellation or owner restart leaves the next prepare cold; an ingest-class change of the
+/// selected manifest does not. Close stays terminal despite delayed activity; a fresh owner
+/// resumes the exact durable checkpoints and completes the same fold.
 #[test]
 fn priority_inactivity_cancellation_and_close_leave_the_next_prepare_cold() {
     let mut w = bootstrapped(6);
@@ -174,11 +180,57 @@ fn priority_inactivity_cancellation_and_close_leave_the_next_prepare_cold() {
     assert!(!holds(&w));
     assert_eq!(w.fold_once().unwrap(), checkpoint(4));
     assert_eq!(w.proofs.last_handed(), None);
-    // Close.
+    // Close. Delayed activity from the shared handle cannot prepare a proof or
+    // mutate any archive record or the custody-selected checkpoint.
     assert!(holds(&w));
+    let before_close = durable(&w);
+    let checkpoints = fold_records(&w);
+    let folds = w.proofs.folds.load(Ordering::SeqCst);
+    let signatures = w.custody.signatures;
+    let publications = w.custody.publication_calls;
     scheduler.close();
     assert!(!holds(&w));
     assert_eq!(w.fold_once().unwrap(), FoldStatus::Idle);
+    for (foreground, charging) in [(true, false), (false, true), (true, true)] {
+        scheduler.set_activity(foreground, charging);
+        assert_eq!(w.fold_once().unwrap(), FoldStatus::Idle);
+        assert_eq!(durable(&w), before_close);
+        assert_eq!(w.proofs.folds.load(Ordering::SeqCst), folds);
+        assert_eq!(w.custody.publication_calls, publications);
+        assert_eq!(w.custody.signatures, signatures);
+    }
+    // Reopen only from retained custody, archive and proof owner. The fresh
+    // coordinator starts inactive and shares no volatile scheduler retention.
+    let (custody, archive, proofs, scheme, wallet_id) =
+        (w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id);
+    let mut w = Coordinator::new(custody, archive, proofs, scheme, wallet_id).unwrap();
+    scheduler.set_activity(true, true);
+    assert_eq!(w.fold_once().unwrap(), FoldStatus::Idle);
+    assert_eq!(
+        durable(&w),
+        before_close,
+        "restart preserves the selected originals"
+    );
+    assert!(!holds(&w));
+    w.scheduler().set_activity(true, false);
+    assert_eq!(w.fold_once().unwrap(), checkpoint(5));
+    assert_eq!(
+        w.proofs.last_handed(),
+        None,
+        "restart resumes cold at the next stage"
+    );
+    let resumed = w.proofs.last_left();
+    assert_eq!((resumed.sequence, resumed.checkpoints), (0, 5));
+    assert_eq!(w.fold_once().unwrap(), FoldStatus::Folded(0));
+    assert_eq!(w.proofs.last_handed(), Some(resumed));
+    assert_eq!(w.proofs.folds.load(Ordering::SeqCst), folds + 2);
+    assert_eq!(w.custody.signatures, signatures, "no repeated Advance");
+    assert!(!holds(&w), "the completed fold releases retention");
+    assert_eq!(w.fold_once().unwrap(), FoldStatus::CaughtUp);
+    for (key, original) in checkpoints {
+        assert_eq!(w.archive.records.lock().unwrap().get(&key), Some(&original));
+    }
+    assert_eq!(fold_records(&w), fold_records(&all_cold(6)));
 }
 
 /// Deploy-pipeline §7.4 tests 2, 3 and 5: a tampered durable checkpoint is refused by the

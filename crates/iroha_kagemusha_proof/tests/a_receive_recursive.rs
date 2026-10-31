@@ -2300,8 +2300,6 @@ fn assert_native_first_relation(source: &Source, first: &Stage) {
         incoming_statement: inputs.incoming_statement,
         objects: inputs.objects.clone(),
         signatures: signature_inputs,
-        predecessor_pallas: AccumulatorT::from_bytes(&inputs.predecessor.pallas).unwrap(),
-        predecessor_vesta: AccumulatorT::from_bytes(&inputs.predecessor.vesta).unwrap(),
         incoming_selector: inputs.q[0].instances[2][incoming_row].to_repr()[0],
     };
     let proposed = plan.propose_nonproof(predicate_inputs.clone()).unwrap();
@@ -2337,12 +2335,42 @@ fn assert_native_first_relation(source: &Source, first: &Stage) {
     soft.objects[2] = wrong.bytes;
     soft.objects[3] = payment;
     assert_eq!(
-        plan.propose_nonproof(soft).unwrap(),
+        plan.propose_nonproof(soft.clone()).unwrap(),
         [source.objects_valid, false, true],
         "malformed incoming Send receipt signature stays soft"
     );
+    // Receive admission (core_zk `receive_admission_fields`) evaluates these predicates
+    // before Advance has signed the own receipt or the receiver's predecessor is folded:
+    // a placeholder own receipt under another key, and lineage prefixes that carry only
+    // the receiver's stable identity. Neither may change any result, accepted or burned.
+    let admission =
+        |mut input: iroha_kagemusha_proof::a_relation::native::receive::PredicateInputs| {
+            let body = input.objects[6][..ObjectKind::Receipt.body_len()].to_vec();
+            let placeholder = bootstrap_objects::sign(ObjectKind::Receipt, body, 977, 983);
+            assert_ne!(placeholder.signature.key, input.signatures[0].key);
+            input.signatures[0] = placeholder.signature;
+            input.objects[6] = placeholder.bytes;
+            for lineage in [&mut input.before.lineage, &mut input.after.lineage] {
+                // Adjusted burned total, pending-outgoing root and credit-digest root.
+                lineage[14] = Fp::from(991);
+                lineage[15] = Fp::from(997);
+                lineage[16] = Fp::from(1009);
+            }
+            input
+        };
+    assert_eq!(
+        plan.propose_nonproof(admission(predicate_inputs.clone()))
+            .unwrap(),
+        proposed,
+        "admission projection changes no Receive result"
+    );
+    assert_eq!(
+        plan.propose_nonproof(admission(soft)).unwrap(),
+        [source.objects_valid, false, true],
+        "admission projection keeps a soft incoming failure"
+    );
     eprintln!(
-        "NATIVE_RECEIVE_PREDICATES same_object_signature_map_code=true native_three_results={proposed:?} merged_slot0_hard=true incoming_slots_soft=true no_synthetic_Q=true"
+        "NATIVE_RECEIVE_PREDICATES same_object_signature_map_code=true native_three_results={proposed:?} merged_slot0_hard=true incoming_slots_soft=true no_synthetic_Q=true admission_projection_equal=true"
     );
     let prepared = plan.prepare(inputs, MemoryBudget::DEFAULT).unwrap();
     let (native, public) = prepared

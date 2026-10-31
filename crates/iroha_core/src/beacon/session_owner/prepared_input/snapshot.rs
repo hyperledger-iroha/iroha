@@ -6,7 +6,7 @@ use common::*;
 use finish::Ledger;
 use inline::InlineValue;
 use iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1;
-use rows::{Acceptance, Dealer, Edge, Recipient};
+use rows::{Acceptance, Edge, PreparedDealer, PreparedRecipient};
 use sequence::Rows;
 
 #[derive(Clone, Copy)]
@@ -23,8 +23,8 @@ pub(super) struct Snapshot {
     session: GlobalThresholdBeaconDkgSessionV1,
     generator_h: [u8; 96],
     generator_v: [u8; 96],
-    recipients: Rows<Recipient>,
-    dealers: Rows<Dealer>,
+    recipients: Rows<PreparedRecipient>,
+    dealers: Rows<PreparedDealer>,
     edges: Rows<Edge>,
     acceptances: Rows<Acceptance>,
     height: u64,
@@ -68,8 +68,7 @@ impl Snapshot {
             SnapshotPhase::Commitments | SnapshotPhase::Deliveries => (n, 0),
         };
         let edges = match phase {
-            SnapshotPhase::Commitments => 0,
-            SnapshotPhase::SinglePublication { .. } => 0,
+            SnapshotPhase::Commitments | SnapshotPhase::SinglePublication { .. } => 0,
             SnapshotPhase::LocalDeliveries { .. } => n,
             SnapshotPhase::Deliveries | SnapshotPhase::LocalAcceptances { .. } => {
                 n.checked_mul(n).ok_or(AllocationRefusal::DemandOverflow)?
@@ -88,9 +87,11 @@ impl Snapshot {
             .and_then(|value| value.checked_add(acceptance_count))
             .ok_or(AllocationRefusal::DemandOverflow)?;
         let recipients = Rows::new(rows, budget, |index| {
-            Recipient::new(roster[first + index].public_key(), budget)
+            PreparedRecipient::new(roster[first + index].public_key(), budget)
         })?;
-        let dealers = Rows::new(rows, budget, |_| Dealer::new(session.threshold, budget))?;
+        let dealers = Rows::new(rows, budget, |_| {
+            PreparedDealer::new(session.threshold, budget)
+        })?;
         let edges = Rows::new(edges, budget, |_| Edge::new(budget))?;
         let acceptances = Rows::new(acceptance_count, budget, |_| Acceptance::new(budget))?;
         let ledger = Ledger::new(entries, budget)?;
@@ -143,6 +144,10 @@ impl Snapshot {
 
     /// Consumes only the complete frame-validated bank. Authentication of each
     /// signed relation remains the existing live local-seat/reducer obligation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Failed sealing returns the original paid secret or session owner without a new fallible allocation"
+    )]
     pub(super) fn finish(
         self,
     ) -> Result<RetainedPayload<GlobalThresholdBeaconDkgSnapshotV1>, Self> {
@@ -239,8 +244,8 @@ impl SerializePayload for Snapshot {
             session: PayloadRef<'a, GlobalThresholdBeaconDkgSessionV1>,
             generator_h: [u8; 96],
             generator_v: [u8; 96],
-            recipients: PayloadRef<'a, Rows<Recipient>>,
-            dealers: PayloadRef<'a, Rows<Dealer>>,
+            recipients: PayloadRef<'a, Rows<PreparedRecipient>>,
+            dealers: PayloadRef<'a, Rows<PreparedDealer>>,
             edges: PayloadRef<'a, Rows<Edge>>,
             acceptances: PayloadRef<'a, Rows<Acceptance>>,
             height: u64,

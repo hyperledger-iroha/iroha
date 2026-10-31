@@ -40,7 +40,7 @@ use iroha_data_model::{
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        runtime_upgrade::{AttestRuntimeSupportV1, ContainRuntimeV1},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -155,10 +155,10 @@ pub(crate) fn for_each_canonical_carrier_membership_hash(
     for entrypoint in entrypoints {
         let carrier_hash = entrypoint.hash();
         visit(carrier_hash);
-        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
-            if execution_hash != carrier_hash {
-                visit(execution_hash);
-            }
+        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint)
+            && execution_hash != carrier_hash
+        {
+            visit(execution_hash);
         }
     }
 }
@@ -207,13 +207,22 @@ pub(crate) fn anonymous_ballot_unavailable() -> ExecutionDeferred {
     ivm::error::ExecutionDeferral::VerifierInitializationUnavailable.into()
 }
 
-/// Project completed admission failures while retaining a local unfinished attempt.
-pub(crate) fn execution_rejection_from_admission_failure(
+/// Preserve unfinished admission attempts before projecting completed Network rejections.
+pub(crate) fn execution_attempt_from_admission_failure(
     fail: AcceptTransactionFail,
-) -> Result<TransactionRejectionReason, ExecutionDeferred> {
-    Ok(match fail {
+) -> ExecutionAttemptError<TransactionRejectionReason> {
+    let fail = match fail.into_execution_deferred() {
+        Ok(original) => return ExecutionAttemptError::Deferred(original),
+        Err(completed) => completed,
+    };
+    ExecutionAttemptError::Rejected(match fail {
         AcceptTransactionFail::AnonymousBallotUnavailable => {
-            return Err(anonymous_ballot_unavailable());
+            return ExecutionAttemptError::Deferred(anonymous_ballot_unavailable());
+        }
+        AcceptTransactionFail::CryptoImplementationUnavailable(original) => {
+            return ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original).into(),
+            );
         }
         AcceptTransactionFail::TransactionLimit(err) => TransactionRejectionReason::LimitCheck(err),
         // The committed rejection keeps the class attachment shape failures
@@ -578,6 +587,7 @@ pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
     expected_network_id: &NetworkId,
     _limits: TransactionParameters,
+    admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
 ) -> Result<(), AcceptTransactionFail> {
     let payload = commitment.payload();
     if &payload.network_id != expected_network_id {
@@ -593,10 +603,50 @@ pub(crate) fn validate_sealed_commitment_stateless(
             },
         ));
     }
-    commitment.verify_signature().map_err(|err| {
-        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-            reason: format!("sealed transaction commitment signature verification failed: {err}"),
-        })
+    let permitted =
+        |key: &iroha_crypto::PublicKey| -> Result<iroha_crypto::Algorithm, AcceptTransactionFail> {
+            let algorithm = key.try_algorithm().map_err(|error| {
+                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                    reason: format!("sealed commitment authority key is malformed: {error}"),
+                })
+            })?;
+            if !admission_policy.allows(algorithm) {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: format!(
+                            "sealed commitment signing algorithm {algorithm} is not permitted by the committed crypto admission policy"
+                        ),
+                    },
+                ));
+            }
+            Ok(algorithm)
+        };
+    match payload.authority.controller() {
+        iroha_data_model::account::AccountController::Single(key) => {
+            permitted(key)?
+                .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+                .map_err(AcceptTransactionFail::CryptoImplementationUnavailable)?;
+        }
+        iroha_data_model::account::AccountController::Multisig(controller) => {
+            // Check every original member before the completed unsupported-envelope verdict.
+            // This carrier contains a single signature and grants no multisig threshold authority.
+            for member in controller.members() {
+                permitted(member.public_key())?;
+            }
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "sealed commitment carrier does not support multisig signatures".into(),
+                },
+            ));
+        }
+    }
+    commitment.verify_signature().map_err(|err| match err {
+        TransactionSignatureError::UnsupportedImplementation(original) => {
+            AcceptTransactionFail::CryptoImplementationUnavailable(original)
+        }
+        error => AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+            reason: format!("sealed transaction commitment signature verification failed: {error}"),
+        }),
     })
 }
 pub(crate) fn sealed_reveal_execution_key(
@@ -676,7 +726,7 @@ pub const SIGNATURE_LIMIT_REASON_PREFIX: &str = "Too many signatures in payload"
 enum SignatureCheck {
     Verify,
     PrecheckedSingleEd25519,
-    Override(Result<(), SignatureVerificationFail>),
+    Override(Result<(), TransactionSignatureError>),
 }
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
@@ -930,7 +980,7 @@ impl std::error::Error for SignatureVerificationFail {}
 pub enum SignatureRejectionCode {
     /// Multisig controllers are not supported for transaction signatures yet.
     UnsupportedAuthority,
-    /// Signature algorithm is disabled by configuration.
+    /// Signature algorithm is excluded by the original committed policy.
     AlgorithmNotPermitted,
     /// Signature failed to verify against the payload.
     InvalidSignature,
@@ -960,7 +1010,9 @@ impl SignatureRejectionCode {
     pub const fn summary(self) -> &'static str {
         match self {
             Self::UnsupportedAuthority => "authority type is not supported for transaction signing",
-            Self::AlgorithmNotPermitted => "signing algorithm is not permitted by configuration",
+            Self::AlgorithmNotPermitted => {
+                "signing algorithm is not permitted by the committed crypto admission policy"
+            }
             Self::InvalidSignature => "signature verification failed",
             Self::MalformedSignature => "signature or key encoding is malformed",
             Self::MissingSignatures => "multisig signatures are missing",
@@ -998,6 +1050,8 @@ pub enum AcceptTransactionFail {
     SignedAttachments(#[source] SignedAttachmentErrorV1),
     /// Failure during signature verification
     SignatureVerification(#[source] SignatureVerificationFail),
+    /// Required local cryptographic implementation unavailable: {0}
+    CryptoImplementationUnavailable(#[source] iroha_crypto::UnsupportedImplementation),
     /// Transaction expired at `{expires_at_ms}` ms since Unix epoch (current time `{now_ms}` ms)
     TransactionExpired {
         /// Millisecond Unix timestamp at which the transaction's TTL elapsed.
@@ -1023,6 +1077,36 @@ pub enum AcceptTransactionFail {
         /// Configured maximum admitted future drift in milliseconds.
         max_clock_drift_ms: u128,
     },
+}
+impl AcceptTransactionFail {
+    /// Borrow an original local codec refusal without treating it as an admission verdict.
+    #[must_use]
+    pub fn local_refusal(&self) -> Option<&norito::core::DecodeLocalRefusal> {
+        match self {
+            Self::SignedAttachments(SignedAttachmentErrorV1::LocalResource(original)) => {
+                Some(original)
+            }
+            _ => None,
+        }
+    }
+
+    /// Move the original unfinished admission cause to its local retry owner.
+    ///
+    /// # Errors
+    /// Returns the entire unchanged admission failure when it is a completed verdict.
+    pub fn into_execution_deferred(self) -> Result<ExecutionDeferred, Self> {
+        match self {
+            Self::AnonymousBallotUnavailable => Ok(anonymous_ballot_unavailable()),
+            Self::SignedAttachments(error) => error
+                .into_local_refusal()
+                .map(ExecutionDeferred::from)
+                .map_err(Self::SignedAttachments),
+            Self::CryptoImplementationUnavailable(original) => {
+                Ok(ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original).into())
+            }
+            completed => Err(completed),
+        }
+    }
 }
 fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>) -> Duration {
     match result {
@@ -1073,7 +1157,10 @@ impl DecodedVersionedSignedTransaction {
     /// Returns the same versioning and Norito decode errors as the signed transaction
     /// versioned decoder.
     pub fn decode_versioned_owned(input: Vec<u8>) -> iroha_version::error::Result<Self> {
-        Self::decode_versioned(input.as_slice())
+        let result = Self::decode_versioned(input.as_slice());
+        // Owned transport bytes are released at this decode boundary.
+        drop(input);
+        result
     }
     /// Borrow the decoded signed transaction.
     #[must_use]
@@ -1122,7 +1209,7 @@ impl DecodedVersionedSignedTransaction {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         AcceptedTransaction::validate_with_now_and_prepared_metadata(
@@ -1130,7 +1217,7 @@ impl DecodedVersionedSignedTransaction {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             &self.prepared,
         )?;
@@ -1150,7 +1237,7 @@ impl DecodedVersionedSignedTransaction {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
@@ -1158,7 +1245,7 @@ impl DecodedVersionedSignedTransaction {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             &self.prepared,
         )?;
@@ -1217,9 +1304,8 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
         iroha_data_model::isi::ExecuteTrigger,
         iroha_data_model::isi::CustomInstruction,
-        ProposeRuntimeUpgrade,
-        ActivateRuntimeUpgrade,
-        CancelRuntimeUpgrade,
+        AttestRuntimeSupportV1,
+        ContainRuntimeV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
@@ -1242,14 +1328,13 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
-        Executable::ContractCall(_) => true,
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => true,
         Executable::Batch(items) => items.iter().any(|item| match item {
             ExecutableBatchItem::Instruction(instruction) => {
                 is_time_sensitive_instruction(instruction)
             }
             ExecutableBatchItem::ContractCall(_) => true,
         }),
-        Executable::Ivm(_) | Executable::IvmProved(_) => true,
     }
 }
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -1329,14 +1414,18 @@ fn enforce_nts_health_for_entrypoint(
 /// statement and consumes its declared occurrences.
 pub(crate) const fn attachment_operation_is_supported(operation: &ActionOperationV1) -> bool {
     match operation {
-        // The transaction-level carriers are preverified by the executor.
-        ActionOperationV1::TransactionProof | ActionOperationV1::IvmProvedExecution => true,
-        // TODO(I.2, I.3): no invocation-scoped attachment handle and no typed
-        // native bridge exist yet, so nothing would consume the declared
-        // occurrences of a native instruction action. Such a declaration is
-        // refused until those routes exist; deleting this refusal alone would
-        // admit declarations that are never consumed.
-        ActionOperationV1::NativeInstruction(_) => false,
+        // TODO(I.1): metadata preverification is advisory; no complete relation
+        // consumes a transaction proof as authority for the declared effects.
+        // TODO(M.2): the complete native STARK execution relation is absent;
+        // the overlay verifier independently refuses this executable as well.
+        // TODO(I.2, I.3): invocation custody and the direct PGC bootstrap bridge
+        // exist, but contract/ABI invocation dispatch and complete native-action
+        // consumption remain unfinished. Admit an exact native operation only
+        // after its verified consumer and atomic State route are complete;
+        // wire-ID registration or custody alone grants no execution authority.
+        ActionOperationV1::TransactionProof
+        | ActionOperationV1::IvmProvedExecution
+        | ActionOperationV1::NativeInstruction(_) => false,
     }
 }
 /// Refuse the first declared action whose operation has no consuming route.
@@ -1356,11 +1445,11 @@ pub(crate) fn first_unsupported_attachment_operation(
 /// Type, index, length and hash of every occurrence, the reference–occurrence
 /// bijection, the closed operation rules, the invocation bindings, the wrapped
 /// proof carriers and the statement bindings are checked by the shared
-/// data-model predicate; this node additionally refuses an operation that no
-/// executor route consumes.
+/// data-model predicate. Admission checks the aggregate occurrence byte budget
+/// next, then requires an authoritative consuming executor route.
 fn validate_signed_attachments(tx: &SignedTransaction) -> Result<(), AcceptTransactionFail> {
     tx.validate_signed_attachments_v1()?;
-    first_unsupported_attachment_operation(tx).map_or(Ok(()), |error| Err(error.into()))
+    Ok(())
 }
 impl<'tx> AcceptedTransaction<'tx> {
     fn from_entrypoint(entrypoint: Cow<'tx, TransactionEntrypoint>) -> Self {
@@ -1691,10 +1780,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             });
         }
         tx.payload().validate_fee_payment_intent().map_err(|err| {
-            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
+            Self::signature_admission_failure(
                 tx,
                 TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
-            ))
+            )
         })?;
         Ok(())
     }
@@ -1715,7 +1804,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         match signature_check {
             SignatureCheck::Override(result) => {
-                return result.map_err(AcceptTransactionFail::SignatureVerification);
+                return result.map_err(|error| Self::signature_admission_failure(tx, error));
             }
             SignatureCheck::PrecheckedSingleEd25519 if Self::has_single_ed25519_signature(tx) => {
                 return Ok(());
@@ -1737,35 +1826,42 @@ impl<'tx> AcceptedTransaction<'tx> {
                 &public_keys,
             )
             .map_err(|err| {
-                AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
+                Self::signature_admission_failure(
                     tx,
-                    TransactionSignatureError::CryptoError(err.to_string()),
-                ))
+                    match err {
+                        iroha_crypto::Error::UnsupportedImplementation(original) => {
+                            TransactionSignatureError::UnsupportedImplementation(original)
+                        }
+                        error => TransactionSignatureError::CryptoError(error.to_string()),
+                    },
+                )
             });
         }
-        tx.verify_signature().map_err(|err| {
-            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(tx, err))
-        })
+        tx.verify_signature()
+            .map_err(|err| Self::signature_admission_failure(tx, err))
     }
     fn ensure_signing_allowed(
         tx: &SignedTransaction,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<(), AcceptTransactionFail> {
         let signature = tx.signature().clone();
         match tx.authority().controller() {
             iroha_data_model::account::AccountController::Single(signatory) => {
                 let algo =
                     Self::signature_public_key_algorithm(&signature, signatory, "signatory")?;
-                if !crypto.allowed_signing.contains(&algo) {
+                if !admission_policy.allows(algo) {
                     return Err(AcceptTransactionFail::SignatureVerification(
                         SignatureVerificationFail::new(
                             signature,
                             SignatureRejectionCode::AlgorithmNotPermitted,
-                            format!("signing algorithm {algo} is not permitted by configuration"),
+                            format!(
+                                "signing algorithm {algo} is not permitted by the committed crypto admission policy"
+                            ),
                         ),
                     ));
                 }
-                Ok(())
+                algo.require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+                    .map_err(AcceptTransactionFail::CryptoImplementationUnavailable)
             }
             iroha_data_model::account::AccountController::Multisig(policy) => {
                 for member in policy.members() {
@@ -1774,13 +1870,13 @@ impl<'tx> AcceptedTransaction<'tx> {
                         member.public_key(),
                         "multisig member",
                     )?;
-                    if !crypto.allowed_signing.contains(&algo) {
+                    if !admission_policy.allows(algo) {
                         return Err(AcceptTransactionFail::SignatureVerification(
                             SignatureVerificationFail::new(
                                 signature.clone(),
                                 SignatureRejectionCode::AlgorithmNotPermitted,
                                 format!(
-                                    "multisig member algorithm {algo} is not permitted by configuration"
+                                    "multisig member algorithm {algo} is not permitted by the committed crypto admission policy"
                                 ),
                             ),
                         ));
@@ -1793,7 +1889,7 @@ impl<'tx> AcceptedTransaction<'tx> {
                             &entry.signer,
                             "multisig signer",
                         )?;
-                        if !crypto.allowed_signing.contains(&algo) {
+                        if !admission_policy.allows(algo) {
                             return Err(AcceptTransactionFail::SignatureVerification(
                                 SignatureVerificationFail::new(
                                     signature.clone(),
@@ -1805,6 +1901,27 @@ impl<'tx> AcceptedTransaction<'tx> {
                                 ),
                             ));
                         }
+                    }
+                }
+                // Membership is decided for the complete supplied controller before local capability.
+                for member in policy.members() {
+                    Self::signature_public_key_algorithm(
+                        &signature,
+                        member.public_key(),
+                        "multisig member",
+                    )?
+                    .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+                    .map_err(AcceptTransactionFail::CryptoImplementationUnavailable)?;
+                }
+                if let Some(bundle) = tx.multisig_signatures() {
+                    for entry in &bundle.signatures {
+                        Self::signature_public_key_algorithm(
+                            &signature,
+                            &entry.signer,
+                            "multisig signer",
+                        )?
+                        .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+                        .map_err(AcceptTransactionFail::CryptoImplementationUnavailable)?;
                     }
                 }
                 Ok(())
@@ -1824,8 +1941,13 @@ impl<'tx> AcceptedTransaction<'tx> {
             ))
         })
     }
-    fn signature_rejection_code(err: &TransactionSignatureError) -> SignatureRejectionCode {
-        match err {
+    fn signature_rejection_code(
+        err: &TransactionSignatureError,
+    ) -> Result<SignatureRejectionCode, iroha_crypto::UnsupportedImplementation> {
+        Ok(match err {
+            TransactionSignatureError::UnsupportedImplementation(original) => {
+                return Err(*original);
+            }
             TransactionSignatureError::UnsupportedMultisigAuthority => {
                 SignatureRejectionCode::UnsupportedAuthority
             }
@@ -1837,10 +1959,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::InvalidFeePaymentIntent(_)
             | TransactionSignatureError::MissingTimeToLive
             | TransactionSignatureError::GenesisDomainNotAllowed
-            | TransactionSignatureError::GenesisDomainRequired => {
-                SignatureRejectionCode::MalformedSignature
-            }
-            TransactionSignatureError::UnexpectedMultisigSignatures
+            | TransactionSignatureError::GenesisDomainRequired
+            | TransactionSignatureError::UnexpectedMultisigSignatures
             | TransactionSignatureError::NonCanonicalMultisigSignatures => {
                 SignatureRejectionCode::MalformedSignature
             }
@@ -1854,23 +1974,24 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::InsufficientMultisigWeight { .. } => {
                 SignatureRejectionCode::InsufficientWeight
             }
-        }
+        })
     }
-    fn signature_fail_from_error(
+    /// Preserve local implementation absence before constructing a completed signature verdict.
+    pub(crate) fn signature_admission_failure(
         tx: &SignedTransaction,
         err: TransactionSignatureError,
-    ) -> SignatureVerificationFail {
-        SignatureVerificationFail::new(
-            tx.signature().clone(),
-            Self::signature_rejection_code(&err),
-            err.to_string(),
-        )
+    ) -> AcceptTransactionFail {
+        match Self::signature_rejection_code(&err) {
+            Ok(code) => AcceptTransactionFail::SignatureVerification(
+                SignatureVerificationFail::new(tx.signature().clone(), code, err.to_string()),
+            ),
+            Err(original) => AcceptTransactionFail::CryptoImplementationUnavailable(original),
+        }
     }
     pub(crate) fn signature_verification_result(
         tx: &SignedTransaction,
-    ) -> Result<(), SignatureVerificationFail> {
+    ) -> Result<(), TransactionSignatureError> {
         tx.verify_signature()
-            .map_err(|err| Self::signature_fail_from_error(tx, err))
     }
     fn ensure_signature_limit(
         signature_count: usize,
@@ -1918,7 +2039,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: &SignedTransaction,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
-        crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
         if tx.domain() != &TransactionDomain::Genesis {
@@ -1931,7 +2051,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         if genesis_account != tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
-        Self::ensure_signing_allowed(tx, crypto)?;
+        // The exact configured genesis root authorizes this purpose independently
+        // of ordinary signing/controller policy; actual signature verification remains mandatory.
         Self::verify_signature_for_check(tx, SignatureCheck::Verify, None)?;
         Ok(())
     }
@@ -1946,7 +2067,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<(), AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         Self::validate_with_now(
@@ -1954,7 +2075,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
         )?;
         enforce_nts_health_for_time_sensitive(tx, nts_snapshot)?;
@@ -1966,7 +2087,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_with_now_and_signature_check(
@@ -1974,7 +2095,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             SignatureCheck::Verify,
             None,
@@ -1991,7 +2112,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
         prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
@@ -2000,7 +2121,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             SignatureCheck::Verify,
             Some(prepared),
@@ -2017,9 +2138,9 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
-        prechecked_signature_result: Option<Result<(), SignatureVerificationFail>>,
+        prechecked_signature_result: Option<Result<(), TransactionSignatureError>>,
         prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
         let signature_check =
@@ -2029,7 +2150,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             signature_check,
             Some(prepared),
@@ -2046,7 +2167,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
         prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
@@ -2055,7 +2176,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             SignatureCheck::PrecheckedSingleEd25519,
             Some(prepared),
@@ -2067,7 +2188,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
         signature_check: SignatureCheck,
         prepared: Option<&PreparedTransactionMetadata>,
@@ -2104,7 +2225,7 @@ impl<'tx> AcceptedTransaction<'tx> {
                 now_ms: now.as_millis(),
             });
         }
-        Self::ensure_signing_allowed(tx, crypto)?;
+        Self::ensure_signing_allowed(tx, admission_policy)?;
         Self::verify_signature_for_check(tx, signature_check, prepared)?;
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
@@ -2120,9 +2241,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             ));
         }
         validate_signed_attachments(tx)?;
-        let decompressed_len = tx
-            .attachments()
-            .map_or(0usize, |attachments| attachments.total_occurrence_bytes());
+        let decompressed_len = tx.attachments().map_or(
+            0usize,
+            iroha_data_model::transaction::SignedAttachmentsV1::total_occurrence_bytes,
+        );
         let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
         let max_decompressed_bytes = limits.max_decompressed_bytes().get();
         if decompressed_len > max_decompressed_bytes {
@@ -2133,6 +2255,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ),
                 },
             ));
+        }
+        if let Some(error) = first_unsupported_attachment_operation(tx) {
+            return Err(error.into());
         }
         let expires_at_height_meta = tx.expires_at_height().map_err(|err| {
             AcceptTransactionFail::TransactionLimit(TransactionLimitError {
@@ -2569,7 +2694,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         validation_time: Duration,
         signature_prechecked: bool,
     ) -> Result<Self, AcceptTransactionFail> {
@@ -2578,7 +2703,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             validation_time,
             signature_prechecked,
         )?;
@@ -2591,7 +2716,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_entrypoint_with_signature_check(
@@ -2599,7 +2724,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
             false,
         )
@@ -2609,7 +2734,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
         signature_prechecked: bool,
     ) -> Result<(), AcceptTransactionFail> {
@@ -2630,14 +2755,19 @@ impl AcceptedTransaction<'static> {
                     expected_network_id,
                     max_clock_drift,
                     limits,
-                    crypto,
+                    admission_policy,
                     now,
                     signature_check(),
                     None,
                 )?;
             }
             TransactionEntrypoint::SealedCommitment(commitment) => {
-                validate_sealed_commitment_stateless(commitment, expected_network_id, limits)?;
+                validate_sealed_commitment_stateless(
+                    commitment,
+                    expected_network_id,
+                    limits,
+                    admission_policy,
+                )?;
             }
             TransactionEntrypoint::SealedReveal(reveal) => {
                 Self::validate_with_now_and_signature_check(
@@ -2645,7 +2775,7 @@ impl AcceptedTransaction<'static> {
                     expected_network_id,
                     max_clock_drift,
                     limits,
-                    crypto,
+                    admission_policy,
                     now,
                     signature_check(),
                     None,
@@ -2663,10 +2793,9 @@ impl AcceptedTransaction<'static> {
         tx: SignedTransaction,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
-        crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         let now = current_unix_time();
-        Self::validate_genesis_with_now(&tx, max_clock_drift, genesis_account, crypto, now)?;
+        Self::validate_genesis_with_now(&tx, max_clock_drift, genesis_account, now)?;
         Ok(Self::from_external_with_hot_cache(tx).with_validation_time(now))
     }
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -2679,7 +2808,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<Self, AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         Self::validate_with_now(
@@ -2687,7 +2816,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
         )?;
         enforce_nts_health_for_time_sensitive(&tx, nts_snapshot)?;
@@ -2705,7 +2834,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<Self, AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         Self::validate_with_now(
@@ -2713,7 +2842,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
         )?;
         enforce_nts_health_for_time_sensitive(&tx, nts_snapshot)?;
@@ -2733,7 +2862,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         time_source: &TimeSource,
     ) -> Result<Self, AcceptTransactionFail> {
         let now = time_source.get_unix_time();
@@ -2742,7 +2871,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
         )?;
         enforce_nts_health_for_time_sensitive(&tx, crate::time::admission_snapshot())?;
@@ -2758,7 +2887,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
     ) -> Result<Self, AcceptTransactionFail> {
         let (now, nts_snapshot) = capture_network_admission();
         Self::validate_entrypoint_with_now(
@@ -2766,7 +2895,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             now,
         )?;
         enforce_nts_health_for_entrypoint(&tx, nts_snapshot)?;
@@ -2791,7 +2920,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         validation_time: Duration,
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate_entrypoint_with_now(
@@ -2799,7 +2928,7 @@ impl AcceptedTransaction<'static> {
             expected_network_id,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             validation_time,
         )?;
         Ok(match tx {
@@ -2824,7 +2953,7 @@ impl AcceptedTransaction<'static> {
         expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         prepared: Option<&PreparedTransactionMetadata>,
         single_ed25519_prechecked: bool,
     ) -> Result<Self, AcceptTransactionFail> {
@@ -2838,7 +2967,7 @@ impl AcceptedTransaction<'static> {
                             expected_network_id,
                             max_clock_drift,
                             limits,
-                            crypto,
+                            admission_policy,
                             now,
                             prepared,
                         )?;
@@ -2848,7 +2977,7 @@ impl AcceptedTransaction<'static> {
                             expected_network_id,
                             max_clock_drift,
                             limits,
-                            crypto,
+                            admission_policy,
                             now,
                             prepared,
                         )?;
@@ -2859,7 +2988,7 @@ impl AcceptedTransaction<'static> {
                         expected_network_id,
                         max_clock_drift,
                         limits,
-                        crypto,
+                        admission_policy,
                         now,
                     )?;
                 }
@@ -2870,7 +2999,7 @@ impl AcceptedTransaction<'static> {
                     expected_network_id,
                     max_clock_drift,
                     limits,
-                    crypto,
+                    admission_policy,
                     now,
                 )?;
             }
@@ -2940,7 +3069,7 @@ impl StateBlock<'_> {
         tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         if let Some(genesis) = genesis {
@@ -3119,7 +3248,15 @@ impl StateBlock<'_> {
             dataspace_id: physical.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
-        enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
+        match enforce_lane_policies(tx, state_transaction, &lane_assignment) {
+            Ok(()) => {}
+            Err(ExecutionAttemptError::Rejected(error)) => return Err(error),
+            Err(ExecutionAttemptError::Deferred(original)) => {
+                return Err(TransactionRejectionReason::Validation(
+                    state_transaction.defer_execution(original),
+                ));
+            }
+        }
         if genesis.is_none() {
             enforce_fraud_policy(
                 &state_transaction.fraud_monitoring,
@@ -3149,7 +3286,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         state_transaction
@@ -3168,8 +3305,7 @@ impl StateBlock<'_> {
         }
         let signed = match tx.entrypoint() {
             TransactionEntrypoint::SealedCommitment(commitment) => {
-                return Self::validate_sealed_transaction_commitment(commitment, state_transaction)
-                    .map_err(ExecutionAttemptError::Rejected);
+                return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
             }
             TransactionEntrypoint::SealedReveal(reveal) => {
                 return Self::validate_sealed_transaction_reveal(
@@ -3187,6 +3323,45 @@ impl StateBlock<'_> {
                 ));
             }
         };
+        Self::execute_signed_transaction_in_overlay(
+            signed,
+            state_transaction,
+            ivm_cache,
+            routing_decision,
+            policy_route,
+            genesis,
+        )
+    }
+    /// Execute the exact external or authenticated reveal-inner signed owner.
+    /// Outer route and rollback custody remain with the accepted entrypoint caller.
+    #[allow(clippy::too_many_lines)]
+    fn execute_signed_transaction_in_overlay(
+        signed: &SignedTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        ivm_cache: &mut IvmCache,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: &CapturedNetworkPolicyRoute,
+        genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
+    ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
+        state_transaction.genesis_execution_scope = None;
+        state_transaction
+            .ensure_execution_ready()
+            .map_err(ExecutionAttemptError::Deferred)?;
+        // The first instruction-dependent step of validation (`specs/live_runtime_upgrades.md`
+        // §5.2): stop at the first top-level envelope execution can never apply (its wire ID
+        // unbound, or the envelope kept opaque), before stateful admission, fee and policy checks
+        // that depend on what an instruction is. A release that knows the wire ID and one that
+        // kept the envelope opaque commit the same rejection.
+        // TODO(§5.2): the policy route the caller captured is still derived from instruction
+        // types; an addition's instruction must route like an unknown one until it activates.
+        crate::runtime::envelope::admit_envelopes(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            signed.instructions(),
+        )
+        .map_err(|error| {
+            ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
+        })?;
         let admission = Self::validate_stateful_admission(
             signed,
             state_transaction,
@@ -3235,7 +3410,7 @@ impl StateBlock<'_> {
                 Self::validate_ivm(
                     authority.clone(),
                     state_transaction,
-                    IvmBytecode::from_compiled(record.code_bytes),
+                    &IvmBytecode::from_compiled(record.code_bytes),
                     None,
                     contract_address,
                     ivm_cache,
@@ -3253,7 +3428,7 @@ impl StateBlock<'_> {
                 Self::validate_ivm(
                     authority.clone(),
                     state_transaction,
-                    bytes.clone(),
+                    bytes,
                     Some(signed.metadata()),
                     None,
                     ivm_cache,
@@ -3261,12 +3436,8 @@ impl StateBlock<'_> {
             }
             _ => {}
         }
-        debug!(tx=%tx.hash_as_entrypoint(), "Validating transaction");
-        Self::validate_transaction_with_runtime_executor(
-            signed.clone(),
-            state_transaction,
-            ivm_cache,
-        )?;
+        debug!(tx=%signed.hash_as_entrypoint(), "Validating transaction");
+        Self::validate_transaction_with_runtime_executor(signed, state_transaction, ivm_cache)?;
         let trigger_sequence = if allow_unregistered_authority {
             debug!(
                 authority = %authority,
@@ -3291,7 +3462,11 @@ impl StateBlock<'_> {
                 &state_transaction.world,
                 state_transaction.block_height(),
             )
-            .map_err(crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection)?;
+            .map_err(|error| {
+                error.map_rejection(
+                    crate::resource_coherence::PolicyCoherenceError::into_transaction_rejection,
+                )
+            })?;
         }
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
@@ -3305,26 +3480,18 @@ impl StateBlock<'_> {
     fn validate_sealed_transaction_commitment(
         commitment: &SignedSealedTransactionCommitment,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> TransactionResultInner {
+    ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         validate_sealed_commitment_stateless(
             commitment,
             &state_transaction.network_id,
             state_transaction.world.parameters().transaction(),
+            state_transaction.crypto_admission_policy().map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                )
+            })?,
         )
-        .map_err(|err| match err {
-            AcceptTransactionFail::TransactionDomainMismatch(mismatch) => {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                    "transaction domain mismatch: expected {:?} got {:?}",
-                    mismatch.expected, mismatch.actual
-                )))
-            }
-            AcceptTransactionFail::TransactionLimit(limit) => {
-                TransactionRejectionReason::LimitCheck(limit)
-            }
-            other => TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                other.to_string(),
-            )),
-        })?;
+        .map_err(execution_attempt_from_admission_failure)?;
         let payload = commitment.payload();
         let height = state_transaction._curr_block.height().get();
         if payload.reveal_after_height <= height {
@@ -3333,7 +3500,7 @@ impl StateBlock<'_> {
                     "sealed transaction reveal_after_height {} must be greater than commit height {height}",
                     payload.reveal_after_height
                 )),
-            ));
+            ).into());
         }
         let key = sealed_commitment_state_key(&payload.commitment);
         if state_transaction
@@ -3342,9 +3509,12 @@ impl StateBlock<'_> {
             .get(&key)
             .is_some()
         {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted("sealed transaction commitment already exists".into()),
-            ));
+            return Err(
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "sealed transaction commitment already exists".into(),
+                ))
+                .into(),
+            );
         }
         let record = PendingSealedTransactionCommitment {
             payload: payload.clone(),
@@ -3363,7 +3533,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: crate::queue::RoutingDecision,
-        policy_route: CapturedNetworkPolicyRoute,
+        policy_route: &CapturedNetworkPolicyRoute,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
@@ -3380,11 +3550,10 @@ impl StateBlock<'_> {
         validate_sealed_reveal_authentication(reveal, &record, height)?;
         let signed = reveal.signed_transaction();
         state_transaction.world.smart_contract_state.remove(key);
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
         // The outer entrypoint's route was authenticated before the reveal was opened. Preserve it
         // for the inner signed transaction so policy drift cannot replace the committed lane.
-        Self::execute_accepted_transaction_in_overlay(
-            accepted,
+        Self::execute_signed_transaction_in_overlay(
+            signed,
             state_transaction,
             ivm_cache,
             routing_decision,
@@ -3396,7 +3565,7 @@ impl StateBlock<'_> {
     fn validate_ivm(
         authority: AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-        contract: IvmBytecode,
+        contract: &IvmBytecode,
         transaction_metadata: Option<&Metadata>,
         deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
@@ -3422,11 +3591,9 @@ impl StateBlock<'_> {
             &summary,
             crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_)
         );
-        if !is_contract {
-            if let Some(metadata) = transaction_metadata {
-                crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)
-                    .map_err(TransactionRejectionReason::Validation)?;
-            }
+        if !is_contract && let Some(metadata) = transaction_metadata {
+            crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)
+                .map_err(TransactionRejectionReason::Validation)?;
         }
         let manifest_metadata = transaction_metadata
             .and_then(|metadata| metadata.get(&*CONTRACT_MANIFEST_METADATA_NAME))
@@ -3463,33 +3630,27 @@ impl StateBlock<'_> {
         crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
         })?;
-        // Runtime upgrade admission: if there is an activated runtime upgrade record for this ABI
-        // version, require that the computed ABI hash matches the active manifest.
-        //
-        // This is redundant under the v1-only policy (all valid manifests must match ABI v1),
-        // but guards against tampered WSV and keeps admission deterministic across nodes.
+        // A contract executes only under a host profile its root selected
+        // (`specs/live_runtime_upgrades.md` §3.1).
         {
-            let current_height = state_transaction._curr_block.height().get();
-            if let Some(expected) = crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &state_transaction.world,
-                current_height,
-            )
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
-            })? {
-                if expected != abi_hash {
-                    return Err(TransactionRejectionReason::Validation(
-                        ValidationFail::IvmAdmission(
-                            iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
-                                iroha_data_model::executor::ManifestAbiHashMismatchInfo {
-                                    expected,
-                                    actual: abi_hash,
-                                },
-                            ),
+            let active =
+                crate::smartcontracts::ivm::active_host_abi_hashes(&state_transaction.world)
+                    .map_err(|error| {
+                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+                    })?;
+            if !active.contains(&abi_hash) {
+                let expected = active.first().copied().unwrap_or(abi_hash);
+                return Err(
+                    TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                        iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
+                            iroha_data_model::executor::ManifestAbiHashMismatchInfo {
+                                expected,
+                                actual: abi_hash,
+                            },
                         ),
-                    )
-                    .into());
-                }
+                    ))
+                    .into(),
+                );
             }
         }
         // Fuel (`max_cycles`) must be explicitly provided and bounded by both
@@ -3678,7 +3839,7 @@ impl StateBlock<'_> {
     ///
     /// Note: transaction instructions will be executed on the given `state_transaction`.
     fn validate_transaction_with_runtime_executor(
-        tx: SignedTransaction,
+        tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
@@ -3867,15 +4028,15 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
     let contains_runtime_upgrade = |instruction: &InstructionBox| {
         instruction
             .as_any()
-            .downcast_ref::<ProposeRuntimeUpgrade>()
+            .downcast_ref::<AttestRuntimeSupportV1>()
             .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<ActivateRuntimeUpgrade>()
+                .downcast_ref::<ContainRuntimeV1>()
                 .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<CancelRuntimeUpgrade>()
+                .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                 .is_some()
     };
     match tx.instructions() {
@@ -4137,13 +4298,12 @@ fn enforce_manifest_protected_namespaces(
     if let (Some(hint), Some(meta)) = (
         metadata_contract_address_hint.as_ref(),
         metadata_governance_contract_address.as_ref(),
-    ) {
-        if hint != meta {
-            return Err(reject_lane_policy(
-                alias,
-                "`contract_address` metadata must match `gov_contract_address` for protected operations",
-            ));
-        }
+    ) && hint != meta
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`contract_address` metadata must match `gov_contract_address` for protected operations",
+        ));
     }
     if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
         && !contract_targets.is_empty()
@@ -4334,12 +4494,12 @@ fn enforce_lane_policies(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
     lane_assignment: &LaneAssignment<'_>,
-) -> Result<(), TransactionRejectionReason> {
+) -> Result<(), ExecutionAttemptError<TransactionRejectionReason>> {
     let lane_id = lane_assignment.lane_id;
     let dataspace_id = lane_assignment.dataspace_id;
     let manifest_registry: &LaneManifestRegistryHandle = &state_transaction.lane_manifests;
     if let Err(err) = manifest_registry.ensure_lane_ready(lane_id) {
-        return Err(reject_not_permitted(err.message()));
+        return Err(reject_not_permitted(err.message()).into());
     }
     let manifest_status = manifest_registry.status(lane_id).cloned();
     let lane_alias = manifest_status.as_ref().map_or_else(
@@ -4365,7 +4525,8 @@ fn enforce_lane_policies(
         return Err(reject_lane_policy(
             &lane_alias,
             "lane is not active in the routed dataspace at the current block height".to_string(),
-        ));
+        )
+        .into());
     }
     // Validators, account-to-peer bindings, and quorum are dataspace authority. Hooks and
     // protected namespaces remain sourced from the exact target-lane rules below.
@@ -4373,48 +4534,49 @@ fn enforce_lane_policies(
         .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, &eligible_lanes)
         .map_err(|err| reject_not_permitted(err.message()))?;
     let mut runtime_upgrade_present = false;
-    if let Some(status) = manifest_status.as_ref() {
-        if let Some(rules) = status.rules() {
-            let governance_manifest = status.governance.is_some();
-            let governance_sensitive =
-                governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
-            if governance_sensitive {
-                let manifest_validators = dataspace_authority_rules
-                    .map(|rules| canonical_manifest_validators(&lane_alias, rules))
-                    .transpose()?;
-                if let Some(validators) = manifest_validators.as_ref()
-                    && !allows_multisig_envelope_authority
-                {
-                    let authority = tx.authority();
-                    let authority_i105 = authority.canonical_i105().map_err(|err| {
-                        reject_lane_policy(
-                            &lane_alias,
-                            format!("failed to encode authority `{authority}` as i105: {err}"),
-                        )
-                    })?;
-                    if !validators.contains(&authority_i105) {
-                        return Err(reject_lane_policy(
-                            &lane_alias,
-                            "authority not part of lane validator set".to_string(),
-                        ));
-                    }
-                }
-                if !allows_multisig_envelope_authority
-                    && let Some(authority_rules) = dataspace_authority_rules
-                    && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                {
-                    enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
+    if let Some(status) = manifest_status.as_ref()
+        && let Some(rules) = status.rules()
+    {
+        let governance_manifest = status.governance.is_some();
+        let governance_sensitive =
+            governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
+        if governance_sensitive {
+            let manifest_validators = dataspace_authority_rules
+                .map(|rules| canonical_manifest_validators(&lane_alias, rules))
+                .transpose()?;
+            if let Some(validators) = manifest_validators.as_ref()
+                && !allows_multisig_envelope_authority
+            {
+                let authority = tx.authority();
+                let authority_i105 = authority.canonical_i105().map_err(|err| {
+                    reject_lane_policy(
+                        &lane_alias,
+                        format!("failed to encode authority `{authority}` as i105: {err}"),
+                    )
+                })?;
+                if !validators.contains(&authority_i105) {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "authority not part of lane validator set".to_string(),
+                    )
+                    .into());
                 }
             }
-            if governance_manifest {
-                enforce_manifest_protected_namespaces(
-                    &lane_alias,
-                    rules,
-                    tx,
-                    &state_transaction.world,
-                )?;
-                runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+            if !allows_multisig_envelope_authority
+                && let Some(authority_rules) = dataspace_authority_rules
+                && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+            {
+                enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
             }
+        }
+        if governance_manifest {
+            enforce_manifest_protected_namespaces(
+                &lane_alias,
+                rules,
+                tx,
+                &state_transaction.world,
+            )?;
+            runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
         }
     }
     if !runtime_upgrade_present {
@@ -4434,7 +4596,11 @@ fn enforce_lane_policies(
     // The manifest snapshot is the consensus input. Rebuild the privacy
     // projection here so an old or locally corrupted cache cannot choose a
     // different proof-verification or compliance result on another peer.
-    let lane_privacy_registry = LanePrivacyRegistry::from_manifest_registry(manifest_registry);
+    let lane_privacy_registry = LanePrivacyRegistry::try_from_manifest_registry(
+        manifest_registry,
+        &state_transaction.execution_budget(),
+    )
+    .map_err(ExecutionAttemptError::Deferred)?;
     let privacy_proofs = collect_lane_privacy_proofs(tx);
     let verified_privacy_commitments = if privacy_proofs.is_empty() {
         BTreeSet::new()
@@ -4446,7 +4612,7 @@ fn enforce_lane_policies(
     let lane_privacy_registry = if lane_privacy_registry.is_empty() {
         None
     } else {
-        Some(Arc::new(lane_privacy_registry))
+        Some(lane_privacy_registry)
     };
     let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
     let lane_identity = if publishes_space_directory_manifest {
@@ -4486,7 +4652,8 @@ fn enforce_lane_policies(
                     return Err(reject_lane_policy(
                         &lane_alias,
                         "no exact lane compliance policy is configured".to_string(),
-                    ));
+                    )
+                    .into());
                 }
             }
             LaneComplianceEvaluation::Allowed(record) => {
@@ -4499,7 +4666,7 @@ fn enforce_lane_policies(
                         .reason
                         .clone()
                         .unwrap_or_else(|| "lane compliance policy denied".to_string());
-                    return Err(reject_lane_policy(&lane_alias, reason));
+                    return Err(reject_lane_policy(&lane_alias, reason).into());
                 }
             }
         }
@@ -4777,10 +4944,10 @@ pub(crate) fn enforce_fraud_policy(
     let Some(value) = metadata.get(FRAUD_ASSESSMENT_BAND_NAME.as_ref()) else {
         #[cfg(feature = "telemetry")]
         if let Some(ctx) = fraud_ctx.as_ref() {
-            let cause = if !config.missing_assessment_permitted {
-                "missing"
-            } else {
+            let cause = if config.missing_assessment_permitted {
                 "permitted"
+            } else {
+                "missing"
             };
             ctx.record_missing(cause);
         }
@@ -5286,7 +5453,9 @@ pub fn execute_component_transaction_for_testing(
     let mut overlay = block.transaction_for_fastpq_testing(call_hash);
     overlay.current_entrypoint_index = Some(index);
     overlay.current_network_entrypoint_hash = Some(accepted.hash_as_entrypoint());
-    overlay.current_tx_hash = accepted.external().map(|signed| signed.hash());
+    overlay.current_tx_hash = accepted
+        .external()
+        .map(iroha_data_model::transaction::SignedTransaction::hash);
     overlay.current_lane_id = Some(route.lane_id);
     overlay.current_dataspace_id = Some(route.dataspace_id);
     overlay.world.current_dataspace_id = Some(route.dataspace_id);
@@ -5297,7 +5466,7 @@ pub fn execute_component_transaction_for_testing(
         &mut overlay,
         cache,
         route,
-        policy_route,
+        &policy_route,
         None,
     ) {
         Ok(sequence) => {
@@ -5357,7 +5526,6 @@ pub mod tests {
         permission::Permissions,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
-        runtime::RuntimeUpgradeManifest,
         smart_contract::ContractArtifactId,
         transaction::{TransactionBuilder, executable::ContractInvocation},
     };
@@ -5393,6 +5561,15 @@ pub mod tests {
         str::FromStr,
         sync::Arc,
     };
+
+    fn transaction_fixture_policy()
+    -> iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1 {
+        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            Algorithm::Ed25519,
+            Algorithm::Secp256k1,
+        ])
+        .expect("this stateless transaction fixture explicitly selects its two algorithms")
+    }
 
     fn checked_signature_of<T: norito::codec::Encode>(
         private_key: &PrivateKey,
@@ -5577,20 +5754,20 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([
-            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-                manifest_bytes: vec![0x01],
-            },
-        ])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key())
     }
 
-    fn assert_not_permitted_contains(
-        result: Result<(), TransactionRejectionReason>,
+    fn assert_not_permitted_contains<E: Into<ExecutionAttemptError<TransactionRejectionReason>>>(
+        result: Result<(), E>,
         expected: &str,
     ) {
+        let result: Result<(), ExecutionAttemptError<TransactionRejectionReason>> =
+            result.map_err(Into::into);
         match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
+            Err(ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message),
+            ))) => {
                 assert!(
                     message.contains(expected),
                     "expected rejection containing `{expected}`, got `{message}`"
@@ -5841,12 +6018,10 @@ pub mod tests {
             "genesis timestamp check".to_string(),
         )])
         .sign(&GENESIS_ACCOUNT.key);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::validate_genesis_with_now(
             &tx,
             Duration::from_secs(1),
             &GENESIS_ACCOUNT.id,
-            &crypto_cfg,
             far_future,
         )
         .expect("genesis validation should use provided timestamp");
@@ -5865,13 +6040,9 @@ pub mod tests {
             "genesis validation timestamp".to_string(),
         )])
         .sign(&GENESIS_ACCOUNT.key);
-        let accepted = AcceptedTransaction::accept_genesis(
-            tx,
-            Duration::from_secs(60),
-            &GENESIS_ACCOUNT.id,
-            &iroha_config::parameters::actual::Crypto::default(),
-        )
-        .expect("genesis transaction should be accepted");
+        let accepted =
+            AcceptedTransaction::accept_genesis(tx, Duration::from_secs(60), &GENESIS_ACCOUNT.id)
+                .expect("genesis transaction should be accepted");
         assert!(accepted.validation_time().is_some());
     }
     #[test]
@@ -5893,13 +6064,11 @@ pub mod tests {
             unrelated.private_key(),
             tx.payload(),
         )));
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         assert!(matches!(
             AcceptedTransaction::validate_genesis_with_now(
                 &tx,
                 Duration::from_secs(1),
                 &GENESIS_ACCOUNT.id,
-                &crypto_cfg,
                 now,
             ),
             Err(AcceptTransactionFail::SignatureVerification(_))
@@ -5929,13 +6098,12 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::DEBUG, "genesis domain".to_string())])
         .sign(&GENESIS_ACCOUNT.key);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         assert!(matches!(
             AcceptedTransaction::validate_genesis_with_now(
                 &runtime,
                 Duration::from_secs(1),
                 &GENESIS_ACCOUNT.id,
-                &crypto_cfg,
                 now,
             ),
             Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
@@ -6019,7 +6187,7 @@ pub mod tests {
         let multisig_authority = AccountId::new_multisig(policy);
         let tx = tx.with_authority(multisig_authority);
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6061,12 +6229,7 @@ pub mod tests {
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig ok".into())]);
         let tx = builder.sign_multisig([member_ed.private_key(), member_secp.private_key()]);
         let limits = TransactionParameters::default();
-        let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        if !crypto_cfg.allowed_signing.contains(&Algorithm::Secp256k1) {
-            crypto_cfg.allowed_signing.push(Algorithm::Secp256k1);
-        }
-        crypto_cfg.allowed_signing.sort();
-        crypto_cfg.allowed_signing.dedup();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6094,7 +6257,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "multisig".into())])
         .sign_multisig([rogue.private_key()]);
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6129,12 +6292,7 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, "insufficient multisig weight".into())]);
         let tx = builder.sign_multisig([signer.private_key()]);
         let limits = TransactionParameters::default();
-        let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        if !crypto_cfg.allowed_signing.contains(&Algorithm::Ed25519) {
-            crypto_cfg.allowed_signing.push(Algorithm::Ed25519);
-        }
-        crypto_cfg.allowed_signing.sort();
-        crypto_cfg.allowed_signing.dedup();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6196,7 +6354,7 @@ pub mod tests {
         )])
         .sign(multisig_key.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -6347,7 +6505,7 @@ pub mod tests {
         )])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -6434,7 +6592,7 @@ pub mod tests {
         ))])
         .sign(signer1.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -6549,7 +6707,7 @@ pub mod tests {
         ))])
         .sign(signer1.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6627,7 +6785,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
         .sign(authority_keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
@@ -6685,11 +6843,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_metadata(metadata)
-        .with_instructions([
-            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-                manifest_bytes: vec![0x01],
-            },
-        ])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         block.lane_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
@@ -6700,13 +6854,13 @@ pub mod tests {
         let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
             .expect("completed original physical policy capture");
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, &policy_route, None)
                 .map(|_| ()),
             "runtime upgrade hook prohibits runtime upgrade instructions",
         );
         assert_eq!(overlay.current_lane_id, Some(native.lane_id));
         assert_eq!(overlay.current_dataspace_id, Some(native.dataspace_id));
-        assert!(overlay.world.runtime_upgrades.iter().next().is_none());
+        assert!(overlay.world.runtime_change_sets.iter().next().is_none());
     }
 
     #[test]
@@ -6736,7 +6890,7 @@ pub mod tests {
         let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
             .expect("completed original physical policy capture");
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, &policy_route, None)
                 .map(|_| ()),
             "physical policy dataspace differs from authenticated native source",
         );
@@ -7134,7 +7288,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "regular".into())])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -7223,7 +7377,7 @@ pub mod tests {
         ])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -7277,7 +7431,7 @@ pub mod tests {
         ])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -7353,7 +7507,7 @@ pub mod tests {
         )])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -7395,10 +7549,11 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "single disallowed algorithm".into())])
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
-        let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        crypto_cfg
-            .allowed_signing
-            .retain(|algo| *algo == Algorithm::Ed25519);
+        let crypto_cfg =
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .expect("this refusal fixture explicitly permits only Ed25519");
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -7431,10 +7586,11 @@ pub mod tests {
         )]);
         let tx = builder.sign_multisig(vec![member.private_key()]);
         let limits = TransactionParameters::default();
-        let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        crypto_cfg
-            .allowed_signing
-            .retain(|algo| *algo == Algorithm::Ed25519);
+        let crypto_cfg =
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                Algorithm::Ed25519,
+            ])
+            .expect("this refusal fixture explicitly permits only Ed25519");
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -7469,7 +7625,7 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, "multisig insufficient weight".into())]);
         let tx = builder.sign_multisig(vec![member_a.private_key()]);
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -7511,7 +7667,7 @@ pub mod tests {
             defaults.max_decompressed_bytes(),
             defaults.max_metadata_depth(),
         );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         match AcceptedTransaction::accept_with_time_source(
             tx,
@@ -7821,25 +7977,16 @@ pub mod tests {
     #[test]
     fn prepared_governance_transaction_hash_matches_canonical_entrypoint_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let manifest = RuntimeUpgradeManifest {
-            name: "runtime.upgrade.hash.test".into(),
-            description: "runtime upgrade hash fixture".into(),
-            abi_version: 1,
-            abi_hash: [7; 32],
-            added_syscalls: Vec::new(),
-            added_pointer_types: Vec::new(),
-            start_height: 42,
-            end_height: 84,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        };
+        let action = crate::runtime::change_set::test_support::schedule(test_network_id(), 42);
         let signed = TransactionBuilder::new(
             test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal { manifest }])
+        .with_instructions([ProposeRuntimeUpgradeProposal {
+            action,
+            provenance: Vec::new(),
+        }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -7872,7 +8019,7 @@ pub mod tests {
                 .expect("external entrypoint encodes canonically"),
         );
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let accepted = AcceptedTransaction::accept_with_canonical_signed_bytes(
             signed,
             Arc::clone(&signed_bytes),
@@ -7937,7 +8084,7 @@ pub mod tests {
         assert_eq!(decoded.prepared.payload_hash, HashOf::new(signed.payload()));
         assert!(decoded.prepared.single_ed25519_key.is_some());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let accepted = decoded
             .into_accepted(&test_network_id(), Duration::ZERO, limits, &crypto_cfg)
             .expect("decoded transaction accepts");
@@ -8033,7 +8180,7 @@ pub mod tests {
         assert_eq!(signature, signed.signature().payload().payload());
         assert_eq!(decoded.encoded_len(), expected_len);
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let accepted = decoded
             .into_accepted_after_single_ed25519_precheck(
                 &test_network_id(),
@@ -8067,7 +8214,7 @@ pub mod tests {
             .expect("fixture signature");
         let signed = builder.build_with_signature(signature);
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
-        let crypto = iroha_config::parameters::actual::Crypto::default();
+        let crypto = transaction_fixture_policy();
         let now = signed.creation_time();
         let assert_rejected = |result: Result<(), AcceptTransactionFail>, path: &str| {
             let error = result.expect_err(path);
@@ -8194,7 +8341,11 @@ pub mod tests {
                 &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 Duration::from_millis(1_000),
             )
             .expect("each original carrier passes its actual signature and network checks");
@@ -8374,7 +8525,7 @@ pub mod tests {
                 &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &transaction_fixture_policy(),
                 signed.creation_time(),
             )
             .expect("the supported sealed source passes real stateless admission");
@@ -8641,7 +8792,7 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         handle.advance(Duration::from_secs(1));
         let accepted = AcceptedTransaction::accept_with_time_source(
             signed.clone(),
@@ -8721,7 +8872,7 @@ pub mod tests {
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             malformed.creation_time(),
         )
         .expect_err("missing TTL must never be stateless-valid");
@@ -8750,7 +8901,7 @@ pub mod tests {
             &test_network_id(),
             Duration::ZERO,
             limits,
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             signed.creation_time(),
         )
         .expect_err("TTL above the governed maximum must be rejected");
@@ -8767,27 +8918,29 @@ pub mod tests {
         let (authority, keypair) = gen_account_in("wonderland");
         let (impostor_id, impostor) = gen_account_in("wonderland");
         let build = |signer_id: &AccountId, signer: &KeyPair| {
-            TransactionBuilder::new(
+            let mut builder = TransactionBuilder::new(
                 test_network_id(),
                 signer_id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions([Log::new(Level::INFO, "precheck".to_owned())])
-            .sign(signer.private_key())
+            .with_instructions([Log::new(Level::INFO, "precheck".to_owned())]);
+            // Both signatures must reach admission at the same explicit fixture time.
+            builder.set_creation_time(Duration::from_millis(1_000));
+            builder.sign(signer.private_key())
         };
         let genuine = TransactionEntrypoint::External(build(&authority, &keypair));
         // Re-attributed without re-signing: the impostor's signature cannot verify.
         let forged = TransactionEntrypoint::External(
             build(&impostor_id, &impostor).with_authority(authority.clone()),
         );
-        let crypto = iroha_config::parameters::actual::Crypto::default();
+        let admission_policy = transaction_fixture_policy();
         let accept = |entrypoint: &TransactionEntrypoint, prechecked: bool, now: Duration| {
             AcceptedTransaction::accept_borrowed_entrypoint_at_time(
                 entrypoint,
                 &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
-                &crypto,
+                &admission_policy,
                 now,
                 prechecked,
             )
@@ -9081,9 +9234,8 @@ pub mod tests {
             TypeId::of::<
                 iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
             >(),
-            TypeId::of::<ProposeRuntimeUpgrade>(),
-            TypeId::of::<ActivateRuntimeUpgrade>(),
-            TypeId::of::<CancelRuntimeUpgrade>(),
+            TypeId::of::<AttestRuntimeSupportV1>(),
+            TypeId::of::<ContainRuntimeV1>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
             TypeId::of::<
@@ -9145,19 +9297,8 @@ pub mod tests {
             "proved bytecode remains time-sensitive even with an empty overlay"
         );
         let runtime_upgrade = ProposeRuntimeUpgradeProposal {
-            manifest: RuntimeUpgradeManifest {
-                name: "runtime.upgrade.nts.test".into(),
-                description: "NTS time-sensitive governance fixture".into(),
-                abi_version: 1,
-                abi_hash: [7; 32],
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: 42,
-                end_height: 84,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
-            },
+            action: crate::runtime::change_set::test_support::schedule(test_network_id(), 42),
+            provenance: Vec::new(),
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             runtime_upgrade
@@ -9229,16 +9370,14 @@ pub mod tests {
         );
     }
     #[test]
-    fn nts_enforcement_rejects_low_level_runtime_upgrade_when_unhealthy() {
+    fn nts_enforcement_rejects_runtime_support_attestation_when_unhealthy() {
         let (authority, keypair) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgrade {
-            manifest_bytes: vec![0xCA, 0xFE],
-        }])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key());
         let snapshot = crate::time::NetworkTimeAdmissionSnapshot {
             status: crate::time::NetworkTimeStatus {
@@ -9317,7 +9456,7 @@ pub mod tests {
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             validation_time,
         )
         .expect("durable replay must use the persisted admission instant without live NTS gating");
@@ -9934,12 +10073,17 @@ pub mod tests {
     impl IvmAdmissionFixture {
         fn new() -> Self {
             let (world, authority_id, keypair) = world_with_authority("wonderland");
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            let budget = world.sccp_committee_generations.allocation_budget();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("admitted parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::lanes::routing::test_support::metadata(
                     iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                ))
-                .expect("valid fixture parameters");
+                ),
+                budget,
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
             let state = State::new_with_chain(
                 world,
@@ -9969,7 +10113,7 @@ pub mod tests {
             let chain = crate::block::tests::component_chain_with_genesis_parameters(
                 self.state,
                 vec![iroha_data_model::parameter::Parameter::Custom(
-                    policy.clone().into_custom_parameter(),
+                    policy.into_custom_parameter(),
                 )],
             );
             let state = chain.state();
@@ -10094,9 +10238,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -10245,7 +10387,7 @@ pub mod tests {
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
-            IvmBytecode::from_compiled(prog),
+            &IvmBytecode::from_compiled(prog),
             Some(&md),
             None,
             &mut ivm_cache,
@@ -10366,9 +10508,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -10613,9 +10753,7 @@ pub mod tests {
         // Seed synthetic Global scope in this component World/height overlay;
         // the fixture does not authenticate committed genesis or Network finality.
         tx1.world
-            .parameters
-            .get_mut()
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
             ))
             .expect("valid fixture parameters");
@@ -10676,7 +10814,7 @@ pub mod tests {
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
-            IvmBytecode::from_compiled(prog),
+            &IvmBytecode::from_compiled(prog),
             None,
             None,
             &mut ivm_cache,
@@ -10763,7 +10901,7 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         match AcceptedTransaction::validate_with_now(
             &invalid_tx,
             &test_network_id(),
@@ -10804,7 +10942,7 @@ pub mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(oversize_blob)))
         .sign(kp.private_key());
         // Admission must reject with a TransactionLimit error
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         match AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
@@ -10853,7 +10991,7 @@ pub mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))
         .sign(kp.private_key());
         // Admission should accept this transaction
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         match AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
@@ -10879,7 +11017,7 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate_with_now(
             &tx,
@@ -10944,7 +11082,7 @@ pub mod tests {
             gas_policy_commitment: Hash::new(b"gas"),
         }))
         .sign(kp.private_key());
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate_with_now(
             &tx,
@@ -10989,7 +11127,7 @@ pub mod tests {
             arguments: None,
         }))
         .sign(kp.private_key());
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate_with_now(
             &tx,
@@ -11045,7 +11183,7 @@ pub mod tests {
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             tx.creation_time(),
         )
         .expect_err("mixed batch without a signed gas limit must be rejected");
@@ -11070,7 +11208,7 @@ pub mod tests {
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             tx.creation_time(),
         )
         .expect_err("empty executable batch must be rejected");
@@ -11105,7 +11243,7 @@ pub mod tests {
             NonZeroU64::new(4096).unwrap(),
             NonZeroU16::new(8).unwrap(),
         );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
@@ -11169,9 +11307,226 @@ pub mod tests {
             &test_network_id(),
             std::time::Duration::from_secs(0),
             limits,
-            &iroha_config::parameters::actual::Crypto::default(),
+            &transaction_fixture_policy(),
             tx.creation_time(),
         )
+    }
+    #[test]
+    fn signed_attachment_admission_preserves_original_local_cause_and_same_source_retry() {
+        let (authority, key) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "original admission source".into())])
+        .with_proof_attachments([carrier_attachment("original_admission", vec![1, 2, 3])])
+        .expect("structurally valid carrier")
+        .sign(key.private_key());
+        let wire = norito::encode_canonical(&tx).unwrap();
+        let signature = tx.signature().clone();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let mut prior = None;
+        for full_admission in [false, true] {
+            let failed = norito::with_decode_limits_scope(limits, || {
+                if full_admission {
+                    admit(&tx, TransactionParameters::default())
+                } else {
+                    validate_signed_attachments(&tx)
+                }
+            })
+            .expect_err("actual carrier reader is refused");
+            let original = failed
+                .local_refusal()
+                .expect("actual original owner")
+                .clone();
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeLocalRefusalKind::EnclosingLimit
+            );
+            assert!(
+                matches!(original.resource_error(), norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 } if attempted > 0)
+            );
+            if let Some(previous) = prior.replace(original.clone()) {
+                assert_ne!(
+                    previous, original,
+                    "independent operations have distinct observers"
+                );
+            }
+            let ExecutionAttemptError::Deferred(retained) =
+                execution_attempt_from_admission_failure(failed)
+            else {
+                panic!("local admission cannot become a committed rejection");
+            };
+            assert_eq!(retained.decode_refusal(), Some(&original));
+            assert!(retained.allocation_refusal().is_none());
+            let vm = retained.into_vm_error();
+            let retained = ExecutionDeferred::try_from_vm_error(vm).unwrap();
+            assert_eq!(retained.decode_refusal(), Some(&original));
+        }
+        validate_signed_attachments(&tx)
+            .expect("same original completes structural checking after scope retirement");
+        assert_eq!(
+            admit(&tx, TransactionParameters::default()),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            )),
+            "the same source reaches the actual missing-route refusal after local capacity returns"
+        );
+        assert_eq!(norito::encode_canonical(&tx).unwrap(), wire);
+        assert_eq!(tx.signature(), &signature);
+    }
+
+    #[test]
+    fn advisory_transaction_proof_cannot_authorize_admission_or_execution() {
+        let (authority, key) = gen_account_in("wonderland");
+        let source = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "advisory proof is not authority".into(),
+        )])
+        .with_proof_attachments([carrier_attachment("advisory_only", vec![1, 2, 3])])
+        .expect("canonical signed carrier")
+        .sign(key.private_key());
+        source
+            .validate_signed_attachments_v1()
+            .expect("valid shape and context");
+        source
+            .verify_signature()
+            .expect("genuine original signed carrier");
+        // This unconditional predicate does not inspect backend availability or
+        // proof validity: even a canonical carrier cannot establish the absent
+        // consuming relation. The executor checks the same predicate before
+        // optional metadata preverification or effects.
+        let original_wire = norito::encode_canonical(&source).unwrap();
+        let expected = SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 };
+        assert_eq!(
+            first_unsupported_attachment_operation(&source),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            admit(&source, TransactionParameters::default()),
+            Err(AcceptTransactionFail::SignedAttachments(expected))
+        );
+        assert!(!attachment_operation_is_supported(
+            &ActionOperationV1::IvmProvedExecution
+        ));
+        assert_eq!(norito::encode_canonical(&source).unwrap(), original_wire);
+    }
+
+    #[test]
+    fn missing_execution_relation_refuses_ivm_proved_carrier_and_keeps_binding_checks() {
+        use iroha_data_model::transaction::{
+            IvmProved, SignedAttachmentPlanV1, SignedAttachmentsV1,
+            signed_attachments::PlannedActionV1,
+        };
+        let (authority, key) = gen_account_in("wonderland");
+        let mut plan = SignedAttachmentPlanV1::new();
+        plan.push_action(
+            PlannedActionV1::ivm_proved_execution(&carrier_attachment(
+                "unimplemented_execution_relation",
+                vec![1, 2, 3],
+            ))
+            .expect("canonical carrier, not a valid execution proof"),
+        );
+        let source = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000)),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(minimal_ivm_program_with_max_cycles(1, 100)),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"unimplemented execution events"),
+            gas_policy_commitment: Hash::new(b"unimplemented execution gas"),
+        }))
+        .with_attachment_plan(plan)
+        .expect("canonical bound execution carrier")
+        .sign(key.private_key());
+        source
+            .validate_signed_attachments_v1()
+            .expect("shape and intent binding do not establish execution validity");
+        assert_eq!(
+            first_unsupported_attachment_operation(&source),
+            Some(SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 })
+        );
+        assert_eq!(
+            admit(&source, TransactionParameters::default()),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            ))
+        );
+
+        // Re-sign changed carrier bytes without repairing their declared hash.
+        // The existing canonical predicate still rejects the exact defect first.
+        let mut changed = source.payload().clone();
+        let (actions, mut occurrences) = changed.attachments.take().unwrap().into_parts();
+        occurrences[0].bytes[0] ^= 1;
+        changed.attachments = Some(SignedAttachmentsV1::from_parts_unvalidated(
+            actions,
+            occurrences,
+        ));
+        let changed = TransactionBuilder::from_payload(changed)
+            .unwrap()
+            .sign(key.private_key());
+        assert_eq!(
+            admit(&changed, TransactionParameters::default()),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::OccurrenceHashMismatch { index: 0 }
+            ))
+        );
+
+        // A different signed nonce cannot reuse this action statement. Proved
+        // outputs are intentionally normalized out; they need the absent verifier.
+        let mut rebound = source.payload().clone();
+        rebound.nonce = std::num::NonZeroU32::new(77);
+        let expected = rebound.action_statement_digests_v1().unwrap()[0];
+        let actual = source.attachments().unwrap().actions()[0].statement_digest;
+        assert_ne!(
+            expected, actual,
+            "the changed nonce is an independent bound input"
+        );
+        let rebound = TransactionBuilder::from_payload(rebound)
+            .unwrap()
+            .sign(key.private_key());
+        assert_eq!(
+            admit(&rebound, TransactionParameters::default()),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::StatementBindingMismatch {
+                    action_index: 0,
+                    expected,
+                    actual,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn completed_signed_attachment_admission_keeps_exact_rejection_diagnostics() {
+        use iroha_data_model::transaction::signed_attachments::ActionStatementDigestV1;
+        let original = SignedAttachmentErrorV1::StatementBindingMismatch {
+            action_index: 7,
+            expected: ActionStatementDigestV1::new([0x35; 32]),
+            actual: ActionStatementDigestV1::new([0x63; 32]),
+        };
+        let fail = AcceptTransactionFail::SignedAttachments(original.clone());
+        assert!(fail.local_refusal().is_none());
+        let fail = fail.into_execution_deferred().unwrap_err();
+        assert!(matches!(
+            &fail,
+            AcceptTransactionFail::SignedAttachments(retained) if retained == &original
+        ));
+        let expected = format!("Signed attachments rejected: {original}");
+        let ExecutionAttemptError::Rejected(TransactionRejectionReason::LimitCheck(actual)) =
+            execution_attempt_from_admission_failure(fail)
+        else {
+            panic!("completed schema failure retains its rejection class");
+        };
+        assert_eq!(actual.reason, expected);
     }
     #[test]
     fn signed_attachment_schema_violations_are_rejected_at_admission() {
@@ -11198,7 +11553,14 @@ pub mod tests {
             ])
             .expect("two carriers")
             .sign(kp.private_key());
-        admit(&valid, limits).expect("valid carriers are admitted");
+        validate_signed_attachments(&valid)
+            .expect("valid carrier structure and statement bindings");
+        assert_eq!(
+            admit(&valid, limits),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            ))
+        );
 
         // Sign a payload exactly as given: nothing is rebound or repaired.
         let sign = |payload: TransactionPayload| {
@@ -11385,16 +11747,22 @@ pub mod tests {
             rejection(&native),
             SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
         );
-        assert!(super::attachment_operation_is_supported(
+        assert!(!super::attachment_operation_is_supported(
             &ActionOperationV1::TransactionProof
         ));
-        assert!(super::attachment_operation_is_supported(
+        assert!(!super::attachment_operation_is_supported(
             &ActionOperationV1::IvmProvedExecution
         ));
-        assert_eq!(super::first_unsupported_attachment_operation(&valid), None);
+        assert!(!super::attachment_operation_is_supported(
+            &native.attachments().unwrap().actions()[0].operation
+        ));
+        assert_eq!(
+            super::first_unsupported_attachment_operation(&valid),
+            Some(SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 })
+        );
     }
     #[test]
-    fn ceiling_sized_attachment_is_admitted_and_one_byte_over_is_rejected() {
+    fn ceiling_sized_carrier_passes_size_checks_but_requires_an_authoritative_route() {
         use iroha_data_model::transaction::signed_attachments::SIGNED_ATTACHMENT_OCCURRENCE_MAX_BYTES_V1;
         let (authority_id, kp) = gen_account_in("wonderland");
         let signed_with = |attachment: &ProofAttachment| {
@@ -11425,7 +11793,15 @@ pub mod tests {
             u64::try_from(framed_len).unwrap() <= defaults.max_tx_bytes().get(),
             "a ceiling-sized occurrence must fit the transaction cap"
         );
-        admit(&at_ceiling, defaults).expect("a ceiling-sized occurrence is admitted");
+        validate_signed_attachments(&at_ceiling)
+            .expect("a ceiling-sized occurrence has valid structure and bindings");
+        assert_eq!(
+            admit(&at_ceiling, defaults),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            )),
+            "all size checks pass; only the authoritative consuming route is absent"
+        );
 
         let one_over = signed_with(&carrier_attachment_with_frame_len(
             SIGNED_ATTACHMENT_OCCURRENCE_MAX_BYTES_V1 + 1,
@@ -11452,8 +11828,13 @@ pub mod tests {
                 defaults.max_metadata_depth(),
             )
         };
-        admit(&at_ceiling, limits_with(framed_len, occurrence_bytes))
-            .expect("exactly the transaction cap and exactly the attachment byte budget");
+        assert_eq!(
+            admit(&at_ceiling, limits_with(framed_len, occurrence_bytes)),
+            Err(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::UnsupportedOperation { action_index: 0 }
+            )),
+            "exactly the transaction cap and attachment byte budget pass before route refusal"
+        );
         match admit(&at_ceiling, limits_with(framed_len - 1, occurrence_bytes)) {
             Err(AcceptTransactionFail::TransactionLimit(limit)) => {
                 assert!(limit.reason.contains("Transaction size"), "{limit:?}");
@@ -11558,7 +11939,7 @@ pub mod tests {
             NonZeroU64::new(128).unwrap(),
             NonZeroU16::new(8).unwrap(),
         );
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
@@ -11582,7 +11963,7 @@ pub mod tests {
     fn malformed_proof_attachments_rejected_at_transaction_admission() {
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let limits = TransactionParameters::default();
         let mut zero_vk_commitment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
@@ -11714,7 +12095,7 @@ pub mod tests {
             default_limits.max_metadata_depth(),
         )
         .with_ingress_enforcement(true, false);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
@@ -11758,7 +12139,7 @@ pub mod tests {
             default_limits.max_metadata_depth(),
         )
         .with_ingress_enforcement(false, true);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
@@ -11780,6 +12161,195 @@ pub mod tests {
         }
     }
     #[test]
+    fn sealed_commitment_requires_original_policy_before_real_signature_verification() {
+        use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
+        let key = checked_fixture_keypair(vec![0x53; 32], Algorithm::Secp256k1);
+        let authority = AccountId::new(key.public_key().clone());
+        let original = SealedTransactionCommitmentPayload::new(
+            test_network_id(),
+            authority.clone(),
+            Hash::new(b"sealed original policy"),
+            2,
+            9,
+            None,
+        );
+        let commitment =
+            SignedSealedTransactionCommitment::sign(original.clone(), key.private_key());
+        commitment
+            .verify_signature()
+            .expect("actual canonical verifier");
+        let denied = CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519]).unwrap();
+        let allowed = transaction_fixture_policy();
+        let limits = TransactionParameters::default();
+        assert!(
+            matches!(validate_sealed_commitment_stateless(&commitment, &test_network_id(), limits, &denied),
+            Err(AcceptTransactionFail::TransactionLimit(error)) if error.reason.contains("not permitted by the committed crypto admission policy"))
+        );
+        validate_sealed_commitment_stateless(&commitment, &test_network_id(), limits, &allowed)
+            .unwrap();
+        let other = checked_fixture_keypair(vec![0x54; 32], Algorithm::Secp256k1);
+        let forged = SignedSealedTransactionCommitment::sign(original, other.private_key());
+        assert!(
+            matches!(validate_sealed_commitment_stateless(&forged, &test_network_id(), limits, &allowed),
+            Err(AcceptTransactionFail::TransactionLimit(error)) if error.reason.contains("signature verification failed"))
+        );
+        let entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
+        assert!(
+            AcceptedTransaction::validate_entrypoint_with_now(
+                &entrypoint,
+                &test_network_id(),
+                Duration::ZERO,
+                limits,
+                &denied,
+                Duration::ZERO
+            )
+            .is_err()
+        );
+        AcceptedTransaction::validate_entrypoint_with_now(
+            &entrypoint,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &allowed,
+            Duration::ZERO,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn prechecked_signature_cannot_override_original_policy_and_preserves_backend_cause() {
+        use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
+        let key = checked_fixture_keypair(vec![0x55; 32], Algorithm::Secp256k1);
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            AccountId::new(key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "original policy precheck".into())])
+        .sign(key.private_key());
+        let denied = CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519]).unwrap();
+        let allowed = transaction_fixture_policy();
+        let validate = |policy, result| {
+            AcceptedTransaction::validate_with_now_and_signature_check(
+                &signed,
+                &test_network_id(),
+                Duration::ZERO,
+                TransactionParameters::default(),
+                policy,
+                signed.creation_time(),
+                SignatureCheck::Override(result),
+                None,
+            )
+        };
+        assert!(
+            matches!(validate(&denied, Ok(())), Err(AcceptTransactionFail::SignatureVerification(error))
+            if error.code == SignatureRejectionCode::AlgorithmNotPermitted)
+        );
+        validate(
+            &allowed,
+            AcceptedTransaction::signature_verification_result(&signed),
+        )
+        .unwrap();
+        // This verifies transport of the typed precomputed result, not absence of a backend
+        // in Core's feature-unified binary. Real absent-backend controls live in Crypto/model.
+        let original = iroha_crypto::UnsupportedImplementation {
+            algorithm: Algorithm::Secp256k1,
+            operation: iroha_crypto::CryptoOperation::VerifySignature,
+        };
+        let error = validate(
+            &allowed,
+            Err(TransactionSignatureError::UnsupportedImplementation(
+                original,
+            )),
+        )
+        .unwrap_err();
+        let expected = ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original);
+        let deferred = error.into_execution_deferred().unwrap();
+        assert_eq!(deferred.reason(), expected);
+        assert!(deferred.allocation_refusal().is_none());
+        assert!(
+            matches!(execution_attempt_from_admission_failure(AcceptTransactionFail::CryptoImplementationUnavailable(original)),
+            ExecutionAttemptError::Deferred(owner) if owner.reason() == expected && owner.allocation_refusal().is_none())
+        );
+    }
+
+    #[test]
+    fn borrowed_entrypoint_preserves_committed_policy_with_or_without_signature_precheck() {
+        use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
+        let key = checked_fixture_keypair(vec![0x57; 32], Algorithm::Secp256k1);
+        let mut builder = TransactionBuilder::new(
+            test_network_id(),
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "entrypoint original policy".into())]);
+        builder.set_creation_time(Duration::from_millis(1_000));
+        let signed = builder.sign(key.private_key());
+        signed.verify_signature().unwrap();
+        let now = signed.creation_time();
+        let wire = signed.encode_wire_v1().unwrap();
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let denied = CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519]).unwrap();
+        let allowed = transaction_fixture_policy();
+        for prechecked in [false, true] {
+            let accept = |policy: &CryptoAdmissionPolicyV1, network: &NetworkId| {
+                AcceptedTransaction::accept_borrowed_entrypoint_at_time(
+                    &entrypoint,
+                    network,
+                    Duration::ZERO,
+                    TransactionParameters::default(),
+                    policy,
+                    now,
+                    prechecked,
+                )
+                .map(|_| ())
+            };
+            assert!(matches!(
+                accept(&denied, &test_network_id()),
+                Err(AcceptTransactionFail::SignatureVerification(error))
+                    if error.code == SignatureRejectionCode::AlgorithmNotPermitted
+            ));
+            accept(&allowed, &test_network_id()).unwrap();
+            let wrong_network =
+                crate::unit_test_support::synthetic_network_id("wrong entrypoint network");
+            assert!(matches!(
+                accept(&allowed, &wrong_network),
+                Err(AcceptTransactionFail::TransactionDomainMismatch(_))
+            ));
+        }
+        let TransactionEntrypoint::External(retained) = entrypoint else {
+            unreachable!()
+        };
+        assert_eq!(retained.encode_wire_v1().unwrap(), wire);
+        retained.verify_signature().unwrap();
+    }
+    #[test]
+    fn anonymous_admission_union_preserves_unfinished_attempt() {
+        let expected = ivm::error::ExecutionDeferral::VerifierInitializationUnavailable;
+        let direct = AcceptTransactionFail::AnonymousBallotUnavailable
+            .into_execution_deferred()
+            .expect("anonymous admission remains unfinished");
+        assert_eq!(direct.reason(), expected);
+        assert!(direct.allocation_refusal().is_none());
+        assert!(matches!(
+            execution_attempt_from_admission_failure(
+                AcceptTransactionFail::AnonymousBallotUnavailable
+            ),
+            ExecutionAttemptError::Deferred(original)
+                if original.reason() == expected && original.allocation_refusal().is_none()
+        ));
+        assert!(matches!(
+            execution_attempt_from_admission_failure(
+                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                    reason: "completed limit verdict".into(),
+                })
+            ),
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::LimitCheck(error))
+                if error.reason == "completed limit verdict"
+        ));
+    }
+
+    #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -11794,10 +12364,10 @@ pub mod tests {
         let tampered = tx.with_authority(other_id);
         let err =
             AcceptedTransaction::signature_verification_result(&tampered).expect_err("must fail");
-        assert_eq!(err.code, SignatureRejectionCode::InvalidSignature);
+        assert!(matches!(err, TransactionSignatureError::CryptoError(_)));
         let now = tampered.creation_time();
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let result = AcceptedTransaction::validate_with_now(
             &tampered,
             &test_network_id(),
@@ -11829,7 +12399,7 @@ pub mod tests {
         .with_metadata(metadata)
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let error = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -11863,7 +12433,7 @@ pub mod tests {
         .with_metadata(metadata)
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -11900,7 +12470,7 @@ pub mod tests {
         .with_metadata(metadata)
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -11937,7 +12507,7 @@ pub mod tests {
         .with_metadata(metadata)
         .sign(kp.private_key());
         let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
@@ -12017,7 +12587,7 @@ pub mod tests {
             default_limits.max_metadata_depth(),
         )
         .with_ingress_enforcement(false, true);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -12113,7 +12683,7 @@ pub mod tests {
             default_limits.max_metadata_depth(),
         )
         .with_ingress_enforcement(false, true);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let crypto_cfg = transaction_fixture_policy();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let _accepted = AcceptedTransaction::accept_with_time_source(
             tx.clone(),
@@ -12169,9 +12739,7 @@ pub mod tests {
             |block| {
                 block
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Custom(custom))
+                    .set_parameter_for_testing(Parameter::Custom(custom))
                     .expect("valid fixture parameters");
             },
         );
@@ -12217,9 +12785,7 @@ pub mod tests {
         let custom = CustomParameter::new(id, Json::new(1_u64));
         block
             .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(custom))
+            .set_parameter_for_testing(Parameter::Custom(custom))
             .expect("valid fixture parameters");
         // Build program with max_cycles = 2000, below the bound
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
@@ -12639,6 +13205,7 @@ pub mod tests {
         }
     }
     include!("tx/empty_instruction_test.rs");
+    include!("tx/runtime_envelope_test.rs");
     #[test]
     fn lane_privacy_proofs_collected_from_attachments() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -12681,7 +13248,7 @@ pub mod tests {
         let collected_proofs = super::collect_lane_privacy_proofs(&tx);
         let ids: BTreeSet<_> = collected_proofs
             .iter()
-            .map(|proof| proof.commitment_id())
+            .map(iroha_data_model::nexus::LanePrivacyProof::commitment_id)
             .collect();
         assert_eq!(collected_proofs.len(), 2);
         assert!(ids.contains(&LaneCommitmentId::new(1)));
@@ -13296,9 +13863,7 @@ pub mod tests {
             metadata_key: Some(Name::from_str("upgrade_id").expect("key")),
             allowed_ids: Some(BTreeSet::from(["v1".to_string()])),
         });
-        let instruction = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-            manifest_bytes: vec![0x01, 0x02],
-        };
+        let instruction = crate::runtime::change_set::test_support::attest_instruction();
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -13381,7 +13946,9 @@ pub mod tests {
         let err = super::enforce_lane_policies(&tx, &stx, &assignment)
             .expect_err("compliance denial should reject");
         match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+            ExecutionAttemptError::Rejected(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(msg),
+            )) => {
                 assert!(
                     msg.contains("denied account") || msg.contains("lane compliance"),
                     "expected compliance rejection, got {msg}"
@@ -13812,6 +14379,122 @@ pub mod tests {
         )
     }
     #[test]
+    fn accepted_external_and_sealed_inner_execute_from_the_original_signed_owner() {
+        for sealed in [false, true] {
+            let (world, authority, keypair) = world_with_authority("borrowed-source");
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let chain = crate::block::tests::component_chain(state);
+            let state = chain.state();
+            let signed = TransactionBuilder::new(
+                *state.network_id_ref(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "original accepted source".to_owned())])
+            .sign(keypair.private_key());
+            signed
+                .verify_signature()
+                .expect("genuine fixture signature");
+            let salt = [0x56; 32];
+            let commitment =
+                compute_sealed_transaction_commitment(state.network_id_ref(), &signed, salt, 3);
+            let pending_key = sealed_commitment_state_key(&commitment);
+            if sealed {
+                // This component fixture supplies the exact prior commitment record; reveal
+                // authentication below still checks its actual signed owner, salt and heights.
+                let record = PendingSealedTransactionCommitment {
+                    payload: SealedTransactionCommitmentPayload {
+                        network_id: *state.network_id_ref(),
+                        authority: authority.clone(),
+                        commitment,
+                        reveal_after_height: 2,
+                        reveal_deadline_height: 3,
+                        nonce: None,
+                    },
+                    commit_height: 1,
+                    commit_index: 0,
+                };
+                let mut world = state.world.block();
+                world
+                    .smart_contract_state
+                    .insert(pending_key.clone(), norito::to_bytes(&record).unwrap());
+                world.commit();
+            }
+            let entrypoint = if sealed {
+                TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                    commitment, signed, salt,
+                ))
+            } else {
+                TransactionEntrypoint::External(signed)
+            };
+            let original = match &entrypoint {
+                TransactionEntrypoint::External(signed) => signed,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::AnonymousBallot(_) => {
+                    unreachable!("fixture constructs only External and SealedReveal")
+                }
+            };
+            let signed_bytes = original.encode_wire_v1().unwrap();
+            let signed_hash = original.hash();
+            let inner_call_hash = Hash::from(original.hash_as_entrypoint());
+            let outer_hash = entrypoint.hash();
+            let probe = crate::executor::signed_source_observation::Probe::new(original);
+            let accepted =
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&entrypoint));
+            let header = original_component_successor_header(state);
+            let mut block = state.block(header);
+            let mut overlay =
+                block.transaction_for_fastpq_testing(Hash::from(entrypoint.execution_call_hash()));
+            overlay.current_entrypoint_index = Some(1);
+            overlay.current_network_entrypoint_hash = Some(outer_hash);
+            let route =
+                crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
+            let policy_route =
+                CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route)
+                    .expect("capture the actual outer route");
+            StateBlock::execute_accepted_transaction_in_overlay(
+                accepted,
+                &mut overlay,
+                &mut IvmCache::new(),
+                route,
+                &policy_route,
+                None,
+            )
+            .expect("accepted body completes authored work from its original signed owner");
+            probe.assert_observed_once();
+            assert!(overlay.last_tx_gas_used > 0);
+            assert!(!overlay.is_execution_deferred());
+            assert_eq!(overlay.current_tx_hash, Some(signed_hash));
+            assert_eq!(overlay.tx_call_hash, Some(inner_call_hash));
+            assert_eq!(overlay.current_network_entrypoint_hash, Some(outer_hash));
+            assert_eq!(overlay.current_lane_id, Some(route.lane_id));
+            assert_eq!(overlay.current_dataspace_id, Some(route.dataspace_id));
+            assert!(
+                overlay
+                    .world
+                    .smart_contract_state
+                    .get(&pending_key)
+                    .is_none()
+            );
+            assert_eq!(original.encode_wire_v1().unwrap(), signed_bytes);
+            original
+                .verify_signature()
+                .expect("source survives actual execution");
+            drop(overlay);
+            assert_eq!(
+                block.world.smart_contract_state.get(&pending_key).is_some(),
+                sealed,
+                "discarding the caller-owned overlay rolls pending commitment removal back"
+            );
+        }
+    }
+
+    #[test]
     fn sealed_reveal_preserves_authenticated_routing_context() {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::IvmBytecode,
@@ -13916,7 +14599,7 @@ pub mod tests {
                 &mut overlay,
                 cache,
                 explicit_route,
-                captured,
+                &(captured),
                 None,
             )
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -14203,7 +14886,7 @@ pub mod tests {
             &mut overlay,
             &mut cache,
             route,
-            policy_route,
+            &policy_route,
             None,
         );
         result.expect("zero block gas limit must mean unlimited");
@@ -14369,7 +15052,7 @@ pub mod tests {
                 telemetry: crate::telemetry::StateTelemetry::default(),
             }
             .into_state_from_json(snapshot),
-            Err(crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(crate::state::deserialize::StateRestoreError::SuccessorRequired { .. })
         ));
         let mut replay = original_chain();
         assert_eq!(replay.network_id(), chain.network_id());

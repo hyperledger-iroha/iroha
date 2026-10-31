@@ -47,6 +47,11 @@ REPORT_KAIGI_RELAY_HEALTH_WIRE_ID_V1: Final[str] = (
 KAIGI_MAX_PARTICIPANTS_V1: Final[int] = 4_096
 KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: Final[int] = 8
 KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: Final[int] = 4_096
+# Suite identifier and exact public-key length of each HPKE suite a relay key may use.
+KAIGI_RELAY_HPKE_SUITES_V1: Final[dict[str, tuple[int, int]]] = {
+    "ml-kem-768-auth-psk": (0x0001, 1_184),
+    "ml-kem-1024-auth-psk": (0x0002, 1_568),
+}
 
 KAIGI_INSTRUCTION_WIRE_IDS_V1: Final[tuple[str, ...]] = (
     CREATE_KAIGI_WIRE_ID_V1,
@@ -278,6 +283,22 @@ def _required_bytes(value: Any, context: str) -> bytes:
     if len(payload) > _MAX_ARCHIVE_BYTES:
         raise ValueError(f"{context} exceeds the {_MAX_ARCHIVE_BYTES}-byte limit")
     return payload
+
+
+def encode_kaigi_relay_hpke_key_v1(suite: str, public_key: bytes) -> bytes:
+    """Frame a raw public key as the descriptor a relay registers and a hop carries.
+
+    The descriptor is a little-endian suite identifier followed by the exact key. The
+    ledger rejects anything else, and the relay fingerprint commits to the suite this way.
+    """
+
+    if suite not in KAIGI_RELAY_HPKE_SUITES_V1:
+        raise ValueError(f"suite must be one of {sorted(KAIGI_RELAY_HPKE_SUITES_V1)}")
+    suite_id, key_length = KAIGI_RELAY_HPKE_SUITES_V1[suite]
+    key = bytes(public_key)
+    if len(key) != key_length:
+        raise ValueError(f"public_key must contain exactly {key_length} bytes for {suite}")
+    return struct.pack("<H", suite_id) + key
 
 
 def _hpke_public_key(value: Any, context: str) -> bytes:

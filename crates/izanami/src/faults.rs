@@ -10,7 +10,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;
-use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use std::{
     io::{self, Write},
     ops::RangeInclusive,
@@ -130,7 +130,7 @@ impl AsRef<Table> for TableRef<'_> {
 }
 impl FaultConfig {
     /// Sample a deterministic delay between fault actions from the configured interval.
-    pub fn sample_interval<R: Rng>(&self, rng: &mut R) -> Duration {
+    pub fn sample_interval<R: RngExt>(&self, rng: &mut R) -> Duration {
         let start = *self.interval.start();
         let end = *self.interval.end();
         if start == end {
@@ -236,7 +236,7 @@ impl FaultScenario {
             Self::DiskSaturation => FaultScenarioKind::DiskSaturation,
         }
     }
-    fn random<R: Rng>(rng: &mut R, config: &FaultConfig) -> Self {
+    fn random<R: RngExt>(rng: &mut R, config: &FaultConfig) -> Self {
         let mut scenarios = Vec::with_capacity(7);
         if config.crash_restart {
             scenarios.push(Self::CrashRestart);
@@ -643,7 +643,7 @@ async fn remove_fill_file(path: PathBuf) -> Result<()> {
     .map_err(|err| eyre!("failed to join cleanup task: {err}"))??;
     Ok(())
 }
-fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Duration {
+fn sample_duration<R: RngExt>(rng: &mut R, range: &RangeInclusive<Duration>) -> Duration {
     let start = *range.start();
     let end = *range.end();
     if start == end {
@@ -653,7 +653,7 @@ fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Dur
     let upper = u64::try_from(delta.as_millis()).unwrap_or(u64::MAX);
     start + Duration::from_millis(rng.random_range(0..=upper))
 }
-fn sample_usize<R: Rng>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
+fn sample_usize<R: RngExt>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
     let start = *range.start();
     let end = *range.end();
     if start >= end {
@@ -661,7 +661,7 @@ fn sample_usize<R: Rng>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
     }
     rng.random_range(start..=end)
 }
-fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
+fn sample_u64<R: RngExt>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     let start = *range.start();
     let end = *range.end();
     if start >= end {

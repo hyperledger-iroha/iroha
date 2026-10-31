@@ -166,6 +166,9 @@ fn checked_sha256_v1(domain: &[u8], value: &[u8]) -> Result<[u8; 32], PqMaspWire
     Ok(hash.finalize().into())
 }
 /// Derive the committed digest for a canonical ML-DSA-65 authorization key.
+///
+/// # Errors
+/// Rejects a malformed or noncanonical ML-DSA-65 public key.
 pub fn derive_pq_masp_authorization_key_digest_v1(
     public_key: &[u8],
 ) -> Result<PrivacyAuthorizationKeyDigestV1, PqMaspWireErrorV1> {
@@ -186,6 +189,9 @@ pub fn derive_pq_masp_authorization_key_digest_v1(
 /// an inconsistent `(secret key, public key digest)` pair unrepresentable and
 /// keeps public-key derivation inside the same pinned ML-DSA implementation
 /// that authorizes the final PQ-MASP proof.
+///
+/// # Errors
+/// Rejects a malformed secret key or a noncanonical derived ML-DSA-65 public key.
 pub fn derive_pq_masp_authorization_key_digest_from_secret_v1(
     secret_key: &[u8],
 ) -> Result<PrivacyAuthorizationKeyDigestV1, PqMaspWireErrorV1> {
@@ -206,6 +212,9 @@ pub(super) fn validate_pq_masp_authorization_secret_key_v1(
     Ok(())
 }
 /// Derive the public identifier for a canonical ML-KEM-768 recipient key.
+///
+/// # Errors
+/// Rejects a malformed or noncanonical ML-KEM-768 public key.
 pub fn derive_pq_masp_recipient_id_v1(
     public_key: &[u8],
 ) -> Result<PrivacyRecipientIdV1, PqMaspWireErrorV1> {
@@ -357,12 +366,12 @@ pub fn authorize_pq_masp_stark_proof_v1(
     encode_authorization_proof_v1(&public_key, signature.as_bytes(), stark_proof)
 }
 /// Verify the ML-DSA-65 wrapper and return the exact inner STARK proof.
-pub fn verify_pq_masp_authorization_v1<'a>(
+pub fn verify_pq_masp_authorization_v1(
     statement_digest: PrivacyStatementDigestV1,
     consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
     expected_key_digest: PrivacyAuthorizationKeyDigestV1,
-    bytes: &'a [u8],
-) -> Result<PqMaspAuthorizationProofRefV1<'a>, PqMaspWireErrorV1> {
+    bytes: &[u8],
+) -> Result<PqMaspAuthorizationProofRefV1<'_>, PqMaspWireErrorV1> {
     let decoded = decode_pq_masp_authorization_proof_v1(bytes)?;
     if derive_pq_masp_authorization_key_digest_v1(decoded.public_key)? != expected_key_digest {
         return Err(PqMaspWireErrorV1::AuthorizationKeyMismatch);
@@ -498,9 +507,10 @@ fn derive_nonce_v1(
     }
     Ok(nonce)
 }
+type EncryptedOutputFieldsV1<'a> = (&'a [u8], &'a [u8], &'a [u8]);
 fn parse_encrypted_output_v1(
     output: &PrivacyEncryptedOutputV1,
-) -> Result<(&[u8], &[u8], &[u8]), PqMaspWireErrorV1> {
+) -> Result<EncryptedOutputFieldsV1<'_>, PqMaspWireErrorV1> {
     if output.recipient.is_zero()
         || output.ephemeral_public_key.is_zero()
         || output.commitment.is_zero()
@@ -527,12 +537,19 @@ fn parse_encrypted_output_v1(
     Ok((ml_kem_ciphertext, nonce, aead_ciphertext))
 }
 /// Validate the exact public ML-KEM/XChaCha encrypted-output shape.
+///
+/// # Errors
+/// Rejects invalid recipient/key bindings or malformed ciphertext fields.
 pub fn validate_pq_masp_encrypted_output_v1(
     output: &PrivacyEncryptedOutputV1,
 ) -> Result<(), PqMaspWireErrorV1> {
     parse_encrypted_output_v1(output).map(|_| ())
 }
 /// Encrypt one fixed-width PQ-MASP note for an ML-KEM-768 recipient.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The encryption operation owns and clears its single-use hedged randomness seed on every exit."
+)]
 pub fn encrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
     note: &PqMaspNotePlaintextV1,
@@ -600,6 +617,9 @@ pub fn encrypt_pq_masp_note_v1(
 }
 #[cfg(test)]
 /// Decrypt and authenticate one PQ-MASP note with an ML-KEM-768 secret key.
+///
+/// # Errors
+/// Rejects malformed keys or ciphertext, failed authentication, or invalid decoded note bindings.
 pub fn decrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
     output: &PrivacyEncryptedOutputV1,
@@ -653,6 +673,9 @@ pub fn decrypt_pq_masp_note_v1(
     Ok(note)
 }
 /// Recompute and check the ordered output-key digest after wallet encryption.
+///
+/// # Errors
+/// Rejects malformed output keys or a digest inconsistent with their canonical order.
 pub fn validate_pq_masp_note_encryption_key_digest_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<(), PqMaspWireErrorV1> {
@@ -683,7 +706,8 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
+    use rand::{SeedableRng as _, TryCryptoRng, TryRng};
+    use rand_chacha::ChaCha12Rng;
     use soranet_pq::{generate_mldsa_keypair_from_seed, generate_mlkem_keypair_from_seed};
     use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
@@ -691,6 +715,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedWalletEntropyError;
+    impl std::error::Error for InjectedWalletEntropyError {}
     impl core::fmt::Display for InjectedWalletEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected PQ-MASP wallet entropy failure")
@@ -699,7 +724,7 @@ mod tests {
     struct AdversarialWalletRng {
         fail: bool,
     }
-    impl TryRngCore for AdversarialWalletRng {
+    impl TryRng for AdversarialWalletRng {
         type Error = InjectedWalletEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedWalletEntropyError)
@@ -897,7 +922,7 @@ mod tests {
             &statement,
             &note,
             recipient_keys.public_key(),
-            &mut StdRng::from_seed([0x27; 32]),
+            &mut ChaCha12Rng::from_seed([0x27; 32]),
         )
         .expect("public wallet facade encrypts");
         assert_eq!(

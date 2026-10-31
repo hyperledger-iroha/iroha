@@ -170,7 +170,7 @@ fn kagami_build_command(
         .arg("iroha_kagami")
         .arg("--bin")
         .arg("kagami")
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .env("CARGO_TARGET_DIR", target_dir);
     if profile != "debug" {
         command.arg("--profile").arg(profile);
     }

@@ -379,6 +379,15 @@ async fn lifecycle_ordinary_ingress_rejects_invalid_certificate_authority() {
 async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route() {
     for has_parent in [false, true] {
         let (mut app, key, _, certificate) = lifecycle_ordinary_fixture(has_parent);
+        if !has_parent {
+            // Supply ordinary signature admission only, so the distinct parent
+            // authority check remains the refusal exercised by this component case.
+            let app = Arc::get_mut(&mut app).unwrap();
+            let state = Arc::get_mut(&mut app.state).expect("unshared unapplied fixture State");
+            crate::test_utils::author_ready_fixture_crypto_policy(&mut state.world);
+            assert_eq!(state.committed_height(), 0);
+            assert_eq!(state.exact_durable_block_count().unwrap(), 0);
+        }
         let original_authority = app
             .state
             .verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate);
@@ -406,7 +415,16 @@ async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_rou
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        if has_parent {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        } else {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                torii_response_header(&response, "x-iroha-reject-code"),
+                Some("native_root_scope_unavailable"),
+                "unapplied genesis must fail before ordinary lifecycle admission"
+            );
+        }
         assert_eq!(app.queue.active_len(), 0);
         assert_eq!(lifecycle_pending_wire(&app), before);
     }

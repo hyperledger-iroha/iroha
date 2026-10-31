@@ -10,7 +10,7 @@
 #![allow(clippy::many_single_char_names, clippy::similar_names)]
 
 use ff::Field;
-use group::prime::PrimeCurveAffine as _;
+use group::CurveAffine as _;
 use rayon::prelude::*;
 use subtle::ConditionallySelectable;
 
@@ -346,7 +346,7 @@ mod tests {
     use crate::field::{Fp, Fq};
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     #[test]
     fn normalize_handles_identity_and_matches_to_affine() {

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { blake2b } from "@noble/hashes/blake2b";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { _createSignedAttachmentContextApi } from "../src/signedAttachmentContext.js";
 

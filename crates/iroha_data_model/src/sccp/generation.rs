@@ -163,7 +163,7 @@ impl SccpCommitteeGenerationV1 {
                 || (self.start_height == 1 && self.start_lc == self.start_timestamp_ms))
             && (self.generation == 1 || self.start_height > 1)
             && self.start_lc <= self.start_timestamp_ms
-            && crate::block::consensus::is_valid_committee_size(self.keys.len())
+            && iroha_model_base::topology::is_valid_committee_size(self.keys.len())
             && self.keys.is_sorted_by(|left, right| left < right)
             && self.keys.len() == self.members.len()
             && self.members.iter().enumerate().all(|(index, member)| {

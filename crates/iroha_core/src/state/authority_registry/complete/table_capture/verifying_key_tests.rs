@@ -18,6 +18,10 @@ fn state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(
     state: &State,
     limits: LeafLimits,
@@ -103,6 +107,9 @@ fn actual_catalog_rejects_corruption_after_state_construction_in_both_images() {
 
 #[test]
 fn original_state_pool_refusal_retries_and_refunds_only_the_last_snapshot_owner() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let pool = state.ivm_execution_budget();
     let baseline = pool.reserved_bytes();

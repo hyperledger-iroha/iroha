@@ -1,4 +1,4 @@
-//! Private quartic SHA/RFC endpoint joins with an exact public source plan.
+//! Private quartic SHA/RFC and Projection endpoint joins with an exact public source plan.
 //!
 //! Four physical SHA segments each contribute four byte streams per lane.
 //! Sixteen constant-native RFC columns connect those segment products to the
@@ -10,9 +10,9 @@ use super::super::super::sha_call_bus_stark::{
 };
 use super::*;
 
-pub(super) const UNION_QUOTIENTS_V1: usize = 20;
+pub(super) const UNION_QUOTIENTS_V1: usize = 24;
 const DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:main-private-sha-union:v1";
-const DESCRIPTOR_V1: &[u8] = b"four-segments-four-byte-streams-four-compression-lanes:16-constant-native-rfc-bridges:16-sha-quartic-endpoint-links+4-rfc-quartic-union-links:original-independent-masks:private-centers:no-extra-openings:no-private-product-inversion";
+const DESCRIPTOR_V1: &[u8] = b"four-segments-four-byte-streams-four-compression-lanes:16-constant-native-rfc-bridges:16-sha-quartic-endpoint-links+4-rfc-quartic-union-links+4-projection-sha-point1-quartic-links:exact-private521-events-per-active-projection-call:shared-sha-call-family:original-independent-masks:private-centers:no-extra-openings:no-private-product-inversion";
 const NATIVE_LOG_V1: u8 = 19;
 const NATIVE_ROWS_V1: usize = 1 << NATIVE_LOG_V1;
 
@@ -28,12 +28,13 @@ pub(super) struct MainShaUnionPlanV1 {
     bridges: [[ColumnV1; 4]; 4],
     consumers: [[ColumnV1; 4]; 4],
     streams: [[[ColumnV1; 4]; 4]; 4],
-    points: [F; 5],
+    points: [F; 6],
+    projection: [ColumnV1; 4],
+    sha_projection: [[ColumnV1; 4]; 4],
 }
 
 impl MainShaUnionPlanV1 {
     /// Conservative simultaneous public plan, alpha and temporary-copy charge.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + core::mem::size_of::<Vec<E>>()
@@ -63,15 +64,37 @@ impl MainShaUnionPlanV1 {
         let mut bridges = [[placeholder; 4]; 4];
         let mut consumers = bridges;
         let mut streams = [bridges; 4];
+        let mut sha_projection = bridges;
+        let projection_registration =
+            layout.registered_segment(SegmentAdapterIdV1::Projection, 0)?;
+        let projection_start = super::super::super::projection_air::hash_bus::AUX_START_V1;
+        if projection_registration.segment.trace_log2 != 15
+            || projection_start + 4 != projection_registration.segment.aux_width
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let projection = core::array::from_fn(|lane| ColumnV1 {
+            group: projection_registration.trace_group,
+            column: projection_registration.aux_start + projection_start + lane,
+        });
         for index in 0..4 {
             for lane in 0..4 {
                 bridges[index][lane] = column(rfc, bridge_columns[index][lane])?;
                 consumers[index][lane] = column(rfc, consumer_columns[index][lane])?;
             }
-            let sha = layout.registered_segment(SegmentAdapterIdV1::Sha256CallBus, index as u16)?;
-            for stream in 0..4 {
-                for lane in 0..4 {
-                    streams[index][stream][lane] = column(
+            let sha = layout.registered_segment(
+                SegmentAdapterIdV1::Sha256CallBus,
+                u16::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            )?;
+            for lane in 0..4 {
+                sha_projection[index][lane] = column(
+                    sha,
+                    super::super::super::sha_call_bus_stark::projection_bus::AUX_START_V1 + lane,
+                )?;
+            }
+            for (stream, lanes) in streams[index].iter_mut().enumerate() {
+                for (lane, target) in lanes.iter_mut().enumerate() {
+                    *target = column(
                         sha,
                         ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 + stream * 4 + lane,
                     )?;
@@ -79,7 +102,7 @@ impl MainShaUnionPlanV1 {
             }
         }
         let root = goldilocks_primitive_root_v1(NATIVE_LOG_V1).map_err(map_transparent_error_v1)?;
-        let mut points = [F::ONE; 5];
+        let mut points = [F::ONE; 6];
         for segment in 0..4 {
             let row = ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[segment]
                 .checked_sub(1)
@@ -93,6 +116,8 @@ impl MainShaUnionPlanV1 {
             consumers,
             streams,
             points,
+            projection,
+            sha_projection,
         })
     }
 
@@ -106,7 +131,7 @@ impl MainShaUnionPlanV1 {
             .map_err(map_transparent_error_v1)?;
         for (index, point) in self.points.iter().enumerate() {
             let mut record = [0_u8; 10];
-            record[0] = index as u8;
+            record[0] = u8::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
             record[1] = NATIVE_LOG_V1;
             record[2..].copy_from_slice(&point.0.to_be_bytes());
             transcript
@@ -120,6 +145,8 @@ impl MainShaUnionPlanV1 {
             .flatten()
             .chain(self.consumers.iter().flatten())
             .chain(self.streams.iter().flatten().flatten())
+            .chain(self.projection.iter())
+            .chain(self.sha_projection.iter().flatten())
         {
             let mut record = [0_u8; 16];
             record[..8].copy_from_slice(&(source.group as u64).to_be_bytes());
@@ -152,6 +179,8 @@ impl MainShaUnionPlanV1 {
             .flatten()
             .chain(self.consumers.iter().flatten())
             .chain(self.streams.iter().flatten().flatten())
+            .chain(self.projection.iter())
+            .chain(self.sha_projection.iter().flatten())
             .map(|column| (column.group, column.column))
             .collect()
     }
@@ -222,11 +251,38 @@ impl MainShaUnionPlanV1 {
             }
             sum = sum.add(alphas[16 + lane].mul(consumer.sub(bridge)).mul(inverse));
         }
+        let inverse = point
+            .sub(E::ONE)
+            .inv()
+            .ok_or(ZkX509StarkErrorV1::ConstraintOpening)?;
+        for lane in 0..4 {
+            let mut sha = E::ONE;
+            for segment in 0..4 {
+                sha = sha.mul(checked(self.sha_projection[segment][lane])?);
+            }
+            sum = sum.add(
+                alphas[20 + lane]
+                    .mul(checked(self.projection[lane])?.sub(sha))
+                    .mul(inverse),
+            );
+        }
         Ok(sum)
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+/// Erase the complete clearing owner before returning only active FFT columns.
+/// Inactive private allocations remain owned until the outer table erases/drops.
+fn prepare_union_batch_v1(
+    batch: &mut [Vec<F>],
+    active_columns: usize,
+) -> Result<&mut [Vec<F>], ZkX509StarkErrorV1> {
+    if batch.len() != 8 || !matches!(active_columns, 5 | 8) {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    super::super::super::private_table::zeroize_field_rows_v1(batch);
+    Ok(&mut batch[..active_columns])
+}
+
 impl MainShaUnionPlanV1 {
     const QUOTIENT_LOG_V1: u8 = 22;
     const QUOTIENT_ROWS_V1: usize = 1 << Self::QUOTIENT_LOG_V1;
@@ -235,8 +291,9 @@ impl MainShaUnionPlanV1 {
 
     /// The maximum of disjoint explicitly scoped phases, including an eight-
     /// column native replay scratch reserve. Common accumulators, source owners
-    /// and runtime are already retained in the parent ledger. Device staging
-    /// consumes only the policy allowance left after this reservation.
+    /// and runtime are already retained in the parent ledger. This peak is
+    /// included in the complete SHA-union arithmetic phase; device staging
+    /// cannot spend that arithmetic reservation a second time.
     pub(super) const fn private_owner_charge_v1() -> usize {
         let extension = Self::QUOTIENT_ROWS_V1 * core::mem::size_of::<E>();
         let replay = extension
@@ -316,9 +373,9 @@ impl MainShaUnionPlanV1 {
         Ok(result)
     }
 
-    /// Four quartic unions use one log22 accumulator. Each lane caches its eight
-    /// original masked RFC columns once. All 32 original generations and native
-    /// IFFTs are charged; eight stripes give 256 native-size forward FFTs.
+    /// Eight quartic unions share one log22 accumulator. The RFC joins replay32
+    /// originals; the projection joins replay16 SHA and four log15 originals.
+    /// Eight stripes transform only the eight or five columns each join uses.
     /// Stripe folding retains every coefficient above native degree.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn accumulate_v1(
@@ -329,6 +386,33 @@ impl MainShaUnionPlanV1 {
         alphas: &[E],
         policy: main_bounded_transform::MainBoundedTransformPolicyV1,
         accumulator: &mut [Vec<Vec<E>>],
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        self.accumulate_with_v1(layout, alphas, policy, accumulator, |column, policy| {
+            polynomials.replay_columns_coefficients_v1(
+                layout,
+                MainTraceColumnKindV1::Aux,
+                column.group,
+                column.column..column.column + 1,
+                sources,
+                policy,
+            )
+        })
+    }
+
+    /// The replay closure is production's unchanged original-mask source; tests
+    /// can exercise this complete allocation/transform phase without rebuilding
+    /// every preceding registration or creating an alternate proving path.
+    #[allow(clippy::too_many_lines)]
+    fn accumulate_with_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        alphas: &[E],
+        policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+        accumulator: &mut [Vec<Vec<E>>],
+        mut replay: impl FnMut(
+            ColumnV1,
+            main_bounded_transform::MainBoundedTransformPolicyV1,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     ) -> Result<(), ZkX509StarkErrorV1> {
         use super::super::super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
         use fastpq_prover::goldilocks_transform::{
@@ -342,12 +426,24 @@ impl MainShaUnionPlanV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         main_bounded_transform::check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
-        let policy = policy.reserve_additional_v1(Self::private_owner_charge_v1())?;
+        // Registration-local matrices/caches are gone. The complete joint
+        // phase includes both retained cuts, CA originals/metadata, outer
+        // composition chunks, replay and these private union owners inside the
+        // original arithmetic maximum. The caller checks actual CA capacities.
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::ShaUnion)?;
         let shared = layout.as_shared()?;
         let cap = shared
             .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
             .map_err(map_aggregate_error_v1)?;
-        if cap != 589_824 {
+        if cap != 589_824
+            || accumulator.len() != SECURITY_LANES
+            || accumulator.iter().any(|lane| {
+                lane.len() != COMPOSITION_DEGREE_CHUNKS
+                    || lane.capacity() > COMPOSITION_DEGREE_CHUNKS
+                    || lane.iter().any(|chunk| chunk.capacity() > cap)
+            })
+        {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let matrix = |count: usize| {
@@ -378,7 +474,9 @@ impl MainShaUnionPlanV1 {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
         quotient.0.resize(Self::QUOTIENT_ROWS_V1, E::ZERO);
-        for lane in 0..4 {
+        for relation in 0..8 {
+            let lane = relation % 4;
+            let projection_relation = relation >= 4;
             let mut coefficients = Vec::new();
             coefficients
                 .try_reserve_exact(8)
@@ -386,25 +484,37 @@ impl MainShaUnionPlanV1 {
             if coefficients.capacity() != 8 {
                 return Err(ZkX509StarkErrorV1::ProofTooLarge);
             }
-            for column in self
-                .bridges
-                .iter()
-                .chain(&self.consumers)
-                .map(|columns| columns[lane])
+            // Keep the eight-column clearing owner intact. Only the five
+            // populated columns of a projection join are transformed below;
+            // unused rows are zeroed before reuse and erased before deallocation.
+            let selected: [ColumnV1; 8] = core::array::from_fn(|index| {
+                if projection_relation {
+                    if index < 4 {
+                        self.sha_projection[index][lane]
+                    } else {
+                        self.projection[lane]
+                    }
+                } else if index < 4 {
+                    self.bridges[index][lane]
+                } else {
+                    self.consumers[index - 4][lane]
+                }
+            });
+            for column in selected
+                .into_iter()
+                .take(if projection_relation { 5 } else { 8 })
             {
-                let generated = polynomials.replay_columns_coefficients_v1(
-                    layout,
-                    MainTraceColumnKindV1::Aux,
-                    column.group,
-                    column.column..column.column + 1,
-                    sources,
-                    policy,
-                )?;
+                let native_log = layout
+                    .trace_groups
+                    .get(column.group)
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                    .native_trace_log2;
+                let expected_coefficients = (1_usize << native_log) + MASK_DEGREE + 1;
+                let generated = replay(column, policy)?;
                 if generated.len() != 1
                     || generated.capacity() != 1
                     || generated.iter().any(|column| {
-                        column.len() != Self::COEFFICIENT_COUNT_V1
-                            || column.0.capacity() != column.len()
+                        column.len() != expected_coefficients || column.0.capacity() != column.len()
                     })
                 {
                     return Err(ZkX509StarkErrorV1::ProofTooLarge);
@@ -424,12 +534,13 @@ impl MainShaUnionPlanV1 {
                 main_bounded_transform::check_completion_v1(
                     goldilocks_transform_completion_uncertain_v1(),
                 )?;
-                batch
+                let active_batch = prepare_union_batch_v1(&mut batch, coefficients.len())?;
+                active_batch
                     .par_iter_mut()
                     .zip(coefficients.par_iter())
                     .try_for_each(|(output, source)| stripe.fold_into_v1(source, output))?;
                 policy.forward_with_v1(
-                    &mut batch,
+                    active_batch,
                     stripe.root,
                     &mut |words: &mut [Vec<u64>], root, direction| {
                         transform_goldilocks_columns_v1(
@@ -441,7 +552,7 @@ impl MainShaUnionPlanV1 {
                     },
                     &mut goldilocks_transform_completion_uncertain_v1,
                 )?;
-                for (index, source) in batch.iter().enumerate() {
+                for (index, source) in active_batch.iter().enumerate() {
                     products[index / 4]
                         .par_iter_mut()
                         .zip(source.par_iter())
@@ -452,10 +563,15 @@ impl MainShaUnionPlanV1 {
                     .par_chunks_mut(stripe.count)
                     .enumerate()
                     .try_for_each(|(row, entries)| {
-                        let inverse = denominators.at_v1(4, row)?;
+                        let inverse =
+                            denominators.at_v1(if projection_relation { 5 } else { 4 }, row)?;
                         entries[ordinal] = entries[ordinal].add(
-                            alphas[16 + lane]
-                                .mul_base(products[1][row].sub(products[0][row]).mul(inverse)),
+                            alphas[if projection_relation {
+                                20 + lane
+                            } else {
+                                16 + lane
+                            }]
+                            .mul_base(products[1][row].sub(products[0][row]).mul(inverse)),
                         );
                         Ok::<_, ZkX509StarkErrorV1>(())
                     })?;
@@ -487,16 +603,14 @@ impl MainShaUnionPlanV1 {
     }
 }
 
-/// One public N-row table serves all five endpoint denominators on a stripe.
+/// One public N-row table serves all six endpoint denominators on a stripe.
 /// Prefix multiplication and reverse reconstruction require no second vector.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct ShaUnionEndpointDenominatorsV1 {
     inverses: Vec<F>,
-    endpoint_rows: [usize; 5],
-    endpoint_inverses: [F; 5],
+    endpoint_rows: [usize; 6],
+    endpoint_inverses: [F; 6],
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ShaUnionEndpointDenominatorsV1 {
     pub(super) const fn payload_charge_v1() -> usize {
         core::mem::size_of::<Self>() + NATIVE_ROWS_V1 * core::mem::size_of::<F>()
@@ -512,7 +626,7 @@ impl ShaUnionEndpointDenominatorsV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let expected = main_quotient_stripes::MainQuotientStripeV1::new_v1(
             NATIVE_LOG_V1,
-            full_rows.ilog2() as u8,
+            u8::try_from(full_rows.ilog2()).expect("usize logarithm fits u8"),
             stripe.ordinal,
         )?;
         if stripe.rows != NATIVE_ROWS_V1
@@ -534,6 +648,7 @@ impl ShaUnionEndpointDenominatorsV1 {
                 ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[2] - 1,
                 ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[3] - 1,
                 NATIVE_ROWS_V1 - 1,
+                0,
             ],
         )
     }
@@ -542,14 +657,16 @@ impl ShaUnionEndpointDenominatorsV1 {
         rows: usize,
         root: F,
         shift: F,
-        endpoint_rows: [usize; 5],
+        endpoint_rows: [usize; 6],
     ) -> Result<Self, ZkX509StarkErrorV1> {
         if rows < 2
             || !rows.is_power_of_two()
             || rows > NATIVE_ROWS_V1
             || root
-                != goldilocks_primitive_root_v1(rows.ilog2() as u8)
-                    .map_err(map_transparent_error_v1)?
+                != goldilocks_primitive_root_v1(
+                    u8::try_from(rows.ilog2()).expect("usize logarithm fits u8"),
+                )
+                .map_err(map_transparent_error_v1)?
             || !shift.is_canonical()
             || shift == F::ZERO
             || shift.pow(rows as u128) == F::ONE

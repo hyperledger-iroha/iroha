@@ -774,8 +774,12 @@ impl SortableQueryOutput for AssetEscrowRecord {
 }
 impl SortableQueryOutput for iroha_data_model::asset::uid::AssetUidPolicyViewV1 {
     type TiebreakKey = [u8; 32];
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { self.policy.uid }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.policy.uid
+    }
     fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
         bounded_bare_encoded_len(&self.policy.uid, limit)
     }
@@ -1199,10 +1203,12 @@ fn scan_unsorted_transaction_page(
     filter: &CompoundPredicate<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
-    returned_offset: u64,
-    anchor: TransactionHistoryAnchor,
-    history_cursor: Option<TransactionHistoryCursor>,
-    known_remaining_items: Option<u64>,
+    (returned_offset, anchor, history_cursor, known_remaining_items): (
+        u64,
+        TransactionHistoryAnchor,
+        Option<TransactionHistoryCursor>,
+        Option<u64>,
+    ),
     budget_items: Option<u64>,
     execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
@@ -1481,8 +1487,7 @@ fn scan_sorted_transaction_page(
     filter: &CompoundPredicate<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
-    returned_offset: u64,
-    anchor: TransactionHistoryAnchor,
+    (returned_offset, anchor): (u64, TransactionHistoryAnchor),
     budget_items: Option<u64>,
     execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
@@ -1646,10 +1651,12 @@ fn scan_transaction_page(
     filter: &CompoundPredicate<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
-    returned_offset: u64,
-    anchor: TransactionHistoryAnchor,
-    history_cursor: Option<TransactionHistoryCursor>,
-    known_remaining_items: Option<u64>,
+    (returned_offset, anchor, history_cursor, known_remaining_items): (
+        u64,
+        TransactionHistoryAnchor,
+        Option<TransactionHistoryCursor>,
+        Option<u64>,
+    ),
     budget_items: Option<u64>,
     execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
@@ -1669,8 +1676,7 @@ fn scan_transaction_page(
             filter,
             params,
             limits,
-            returned_offset,
-            anchor,
+            (returned_offset, anchor),
             budget_items,
             execution_budget,
         )
@@ -1680,10 +1686,12 @@ fn scan_transaction_page(
             filter,
             params,
             limits,
-            returned_offset,
-            anchor,
-            history_cursor,
-            known_remaining_items,
+            (
+                returned_offset,
+                anchor,
+                history_cursor,
+                known_remaining_items,
+            ),
             budget_items,
             execution_budget,
         )
@@ -1692,7 +1700,7 @@ fn scan_transaction_page(
 #[allow(clippy::too_many_arguments)]
 fn try_handle_find_transactions_stored(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
@@ -1707,7 +1715,7 @@ fn try_handle_find_transactions_stored(
     if params.sorting.sort_by_metadata_key.is_some() {
         let values = materialize_sorted_transaction_window(
             state,
-            &filter,
+            filter,
             params,
             fixed_anchor,
             Some(
@@ -1737,13 +1745,10 @@ fn try_handle_find_transactions_stored(
     }
     let page = scan_transaction_page(
         state,
-        &filter,
+        filter,
         params,
         limits,
-        0,
-        fixed_anchor,
-        None,
-        None,
+        (0, fixed_anchor, None, None),
         gas_budget,
         limits
             .ordinary_execution_limits
@@ -1793,10 +1798,12 @@ fn try_handle_find_transactions_stored(
             &filter_for_replay,
             &params_for_replay,
             limits,
-            cursor,
-            fixed_anchor,
-            Some(checkpoint.history_cursor),
-            checkpoint.remaining_items,
+            (
+                cursor,
+                fixed_anchor,
+                Some(checkpoint.history_cursor),
+                checkpoint.remaining_items,
+            ),
             gas_budget,
             limits
                 .ordinary_execution_limits
@@ -1831,28 +1838,31 @@ fn try_handle_find_transactions_stored(
         checkpoint.remaining_items = page.remaining_items;
         Ok((batch, page.remaining_items, next_cursor))
     });
-    let paged_continuation = if let Some(remaining_items) = page.remaining_items {
-        let make_next_page = Arc::clone(&make_next_page);
-        PagedQueryContinuation::new_counted_budgeted(
-            first_cursor,
-            remaining_items,
-            move |cursor, gas_budget| {
-                let (batch, remaining_items, next_cursor) = make_next_page(cursor, gas_budget)?;
-                let remaining_items = remaining_items.ok_or_else(|| {
-                    Error::Conversion(
-                        "exact transaction page omitted its remaining count".to_owned(),
-                    )
-                })?;
-                Ok((batch, remaining_items, next_cursor))
-            },
-        )
-    } else {
-        let make_next_page = Arc::clone(&make_next_page);
-        PagedQueryContinuation::new_budgeted(first_cursor, move |cursor, gas_budget| {
-            let (batch, _, next_cursor) = make_next_page(cursor, gas_budget)?;
-            Ok((batch, next_cursor))
-        })
-    };
+    let paged_continuation = page.remaining_items.map_or_else(
+        || {
+            let make_next_page = Arc::clone(&make_next_page);
+            PagedQueryContinuation::new_budgeted(first_cursor, move |cursor, gas_budget| {
+                let (batch, _, next_cursor) = make_next_page(cursor, gas_budget)?;
+                Ok((batch, next_cursor))
+            })
+        },
+        |remaining_items| {
+            let make_next_page = Arc::clone(&make_next_page);
+            PagedQueryContinuation::new_counted_budgeted(
+                first_cursor,
+                remaining_items,
+                move |cursor, gas_budget| {
+                    let (batch, remaining_items, next_cursor) = make_next_page(cursor, gas_budget)?;
+                    let remaining_items = remaining_items.ok_or_else(|| {
+                        Error::Conversion(
+                            "exact transaction page omitted its remaining count".to_owned(),
+                        )
+                    })?;
+                    Ok((batch, remaining_items, next_cursor))
+                },
+            )
+        },
+    );
     live_query_store.handle_iter_start_paged_prepared(
         PreparedPagedQueryStart {
             first_batch,
@@ -1876,10 +1886,7 @@ fn try_handle_find_transactions_ephemeral(
         filter,
         params,
         limits,
-        0,
-        TransactionHistoryAnchor::capture(state),
-        None,
-        None,
+        (0, TransactionHistoryAnchor::capture(state), None, None),
         budget.map(QueryExecutionBudget::max_items),
         budget,
     )?;
@@ -1897,7 +1904,7 @@ fn try_handle_find_transactions_ephemeral(
 #[allow(clippy::too_many_arguments)]
 fn handle_find_transactions_stored(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
@@ -1920,13 +1927,13 @@ fn handle_find_transactions_stored(
 }
 fn handle_find_transactions_ephemeral(
     state: &impl StateReadOnly,
-    filter: CompoundPredicate<CommittedTransaction>,
+    filter: &CompoundPredicate<CommittedTransaction>,
     selector: SelectorTuple<CommittedTransaction>,
     params: &QueryParams,
     limits: QueryLimits,
     budget: Option<QueryExecutionBudget>,
 ) -> Result<(QueryOutput, QueryExecutionStats), Error> {
-    try_handle_find_transactions_ephemeral(state, &filter, selector, params, limits, budget)
+    try_handle_find_transactions_ephemeral(state, filter, selector, params, limits, budget)
 }
 fn collect_ephemeral_sorted_prefix<I>(
     iter: I,
@@ -2224,7 +2231,7 @@ where
         return Err(Error::FetchSizeTooBig);
     }
     let offset = params.pagination.offset_value();
-    let limit = params.pagination.limit_value().map(|limit| limit.get());
+    let limit = params.pagination.limit_value().map(std::num::NonZero::get);
     let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
     let first_take = limit.map_or_else(|| fetch_size.get(), |limit| limit.min(fetch_size.get()));
     let first_take = usize::try_from(first_take).map_err(|_| Error::CapacityLimit)?;
@@ -2271,7 +2278,7 @@ where
     let requested_tail = remaining_limit.unwrap_or(u64::MAX);
     let configured_retained_items = limits.ordinary_execution_limits.map_or_else(
         || u64::try_from(MAX_STORED_QUERY_RETAINED_ITEMS).unwrap_or(u64::MAX),
-        |ordinary| ordinary.max_cursor_retained_items(),
+        ordinary_memory::OrdinaryQueryExecutionLimits::max_cursor_retained_items,
     );
     let retained_item_limit = requested_tail.min(configured_retained_items);
     let retained_item_limit =
@@ -2665,7 +2672,7 @@ where
     {
         let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
         let offset = params.pagination.offset_value();
-        let limit = params.pagination.limit_value().map(|limit| limit.get());
+        let limit = params.pagination.limit_value().map(std::num::NonZero::get);
         if let Some(ordinary) = limits.ordinary_execution_limits {
             if offset != 0 {
                 // Admission refuses non-zero offsets before execution; this is
@@ -2860,7 +2867,7 @@ where
     }
     let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
     let offset = params.pagination.offset_value();
-    let limit = params.pagination.limit_value().map(|limit| limit.get());
+    let limit = params.pagination.limit_value().map(std::num::NonZero::get);
     let mut skipped = 0_u64;
     let mut count = 0_u64;
     let mut first_batch_values = Vec::with_capacity(fetch_size.min(1024));
@@ -2960,7 +2967,7 @@ where
         let mut count = 0_u64;
         let mut skipped = 0_u64;
         let offset = params.pagination.offset_value();
-        let limit = params.pagination.limit_value().map(|limit| limit.get());
+        let limit = params.pagination.limit_value().map(std::num::NonZero::get);
         let output = {
             let mut output = Vec::new();
             if let Some(materialized_item_limit) = materialized_item_limit {
@@ -3095,9 +3102,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         {
             let mut block = world.block();
             block
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
                 .expect("valid fixture parameters");
             block.commit();
         }
@@ -3360,7 +3365,7 @@ mod tests {
     }
     fn find_transactions_request_with_filter(
         params: QueryParams,
-        filter: CompoundPredicate<CommittedTransaction>,
+        filter: &CompoundPredicate<CommittedTransaction>,
     ) -> QueryRequest {
         QueryRequest::Start(iroha_data_model::query::QueryWithParams {
             query: (),
@@ -3368,7 +3373,7 @@ mod tests {
                 &iroha_data_model::query::transaction::prelude::FindTransactions,
             ),
             item: iroha_data_model::query::QueryItemKind::CommittedTransaction,
-            predicate_bytes: norito::codec::Encode::encode(&filter),
+            predicate_bytes: norito::codec::Encode::encode(filter),
             selector_bytes: norito::codec::Encode::encode(
                 &SelectorTuple::<CommittedTransaction>::default(),
             ),
@@ -3376,7 +3381,7 @@ mod tests {
         })
     }
     fn find_transactions_request(params: QueryParams) -> QueryRequest {
-        find_transactions_request_with_filter(params, CompoundPredicate::PASS)
+        find_transactions_request_with_filter(params, &(CompoundPredicate::PASS))
     }
     fn transactions_from_batch(batch: QueryOutputBatchBoxTuple) -> Vec<CommittedTransaction> {
         match batch.into_iter().next().expect("transaction batch") {
@@ -5152,7 +5157,7 @@ mod tests {
         blocks: u64,
         valid_tx_per_block: usize,
         invalid_tx_per_block: usize,
-    ) -> Result<Arc<State>> {
+    ) -> Arc<State> {
         use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         let mut config = TestChainConfig::new(world_with_test_domains(), 1000);
         config.genesis_key = ALICE_KEYPAIR.clone();
@@ -5176,7 +5181,7 @@ mod tests {
                 .collect();
             chain.commit(sources);
         }
-        Ok(Arc::clone(chain.state()))
+        Arc::clone(chain.state())
     }
     #[tokio::test]
     async fn iter_dispatch_sorts_and_paginates_end_to_end() {
@@ -5690,7 +5695,7 @@ mod tests {
             parameters::QueryParams,
         };
         // Build a small chain with a few blocks.
-        let state = state_with_test_blocks_and_transactions(3, 1, 0)?;
+        let state = state_with_test_blocks_and_transactions(3, 1, 0);
         let handle = LiveQueryStore::start_test();
         let state_view = state.view();
         let params = QueryParams::default();
@@ -6703,7 +6708,7 @@ mod tests {
     #[tokio::test]
     async fn find_all_blocks() -> Result<()> {
         let num_blocks = 100;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let blocks = ValidQuery::execute(FindBlocks, CompoundPredicate::PASS, &state.view())?
             .collect::<Vec<_>>();
         assert_eq!(blocks.len() as u64, num_blocks);
@@ -6717,7 +6722,7 @@ mod tests {
     #[tokio::test]
     async fn find_all_block_headers() -> Result<()> {
         let num_blocks = 100;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let block_headers =
             ValidQuery::execute(FindBlockHeaders, CompoundPredicate::PASS, &state.view())?
                 .collect::<Vec<_>>();
@@ -6728,7 +6733,7 @@ mod tests {
     include!("query/canonical_history_tests.rs");
     #[tokio::test]
     async fn find_blocks_and_headers_by_height() -> Result<()> {
-        let state = state_with_test_blocks_and_transactions(10, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(10, 1, 1);
         let state_view = state.view();
         let blocks = ValidQuery::execute(
             FindBlocks,
@@ -6779,7 +6784,7 @@ mod tests {
             parameters::QueryParams,
         };
         // Build a small state with a domain and account
-        let state = state_with_test_blocks_and_transactions(1, 1, 0)?;
+        let state = state_with_test_blocks_and_transactions(1, 1, 0);
         let state_view = state.view();
         let query_handle = LiveQueryStore::start_test();
         // Build an erased iterable query over domains with a pass predicate and empty selector
@@ -6913,6 +6918,18 @@ mod tests {
             );
         let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
         let world = World::default();
+        // Component account registration requires an explicit original policy.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
         // Build state and register domain/account/asset def; then mint
         let kura = Kura::blank_kura_for_testing();
         let store = std::sync::Arc::new(LiveQueryStore::from_config(
@@ -7020,7 +7037,20 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(World::default(), kura, handle.clone());
+        let world = World::default();
+        // Component account registration requires an explicit original policy.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original fixture crypto policy");
+        parameters.commit();
+        let state = State::new(world, kura, handle.clone());
         let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())
             .as_ref()
             .header();
@@ -7123,7 +7153,20 @@ mod tests {
                 ShutdownSignal::new(),
             ));
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-            let state = State::new(World::default(), kura, handle.clone());
+            let world = World::default();
+            // Component account registration requires an explicit original policy.
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded component parameter fixture");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("canonical fixture crypto policy"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("install original fixture crypto policy");
+            parameters.commit();
+            let state = State::new(world, kura, handle.clone());
             let header = ValidBlock::new_dummy(ALICE_KEYPAIR.private_key())
                 .as_ref()
                 .header();
@@ -7259,9 +7302,9 @@ mod tests {
     #[tokio::test]
     async fn find_all_transactions() -> Result<()> {
         let num_blocks = 100;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state.view(),
         )?
         .collect::<Vec<_>>();
@@ -7346,7 +7389,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start bounded replay query")
         else {
@@ -7505,7 +7548,7 @@ mod tests {
                 fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
             };
             let validated = ValidQueryRequest::validate_for_client_parts(
-                find_transactions_request_with_filter(params, false_filter.clone()),
+                find_transactions_request_with_filter(params, &(false_filter.clone())),
                 &ALICE_ID,
                 &state_view,
                 QueryLimits::default().with_count_mode(count_mode),
@@ -7559,7 +7602,7 @@ mod tests {
                 fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
             };
             let validated = ValidQueryRequest::validate_for_client_parts(
-                find_transactions_request_with_filter(params, false_filter.clone()),
+                find_transactions_request_with_filter(params, &(false_filter.clone())),
                 &ALICE_ID,
                 &state_view,
                 QueryLimits::default().with_count_mode(count_mode),
@@ -7572,7 +7615,7 @@ mod tests {
                     &query_handle,
                     &state_view,
                     &ALICE_ID,
-                    Arc::downgrade(&state),
+                    &(Arc::downgrade(&state)),
                     Some(1),
                 )
                 .expect_err("stored start must enforce its projection budget");
@@ -7605,7 +7648,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
                 Some(2),
             )
             .expect("client budget above the server minimum covers one carrier")
@@ -7648,7 +7691,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start budgeted stored transaction query")
         else {
@@ -7721,7 +7764,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start exact stored transaction query")
         else {
@@ -7777,7 +7820,7 @@ mod tests {
         let mut expected =
             crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
                 .expect("sorted transaction baseline");
-        expected.sort_unstable_by(|left, right| left.tiebreak_cmp(right));
+        expected.sort_unstable_by(super::SortableQueryOutput::tiebreak_cmp);
         let expected = expected.into_iter().skip(2).take(7).collect::<Vec<_>>();
         let params = QueryParams {
             pagination: Pagination::new(Some(nonzero!(7_u64)), 2),
@@ -7818,7 +7861,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start sorted stored transaction query")
         else {
@@ -7860,7 +7903,7 @@ mod tests {
                 &query_handle,
                 &state_view,
                 &ALICE_ID,
-                Arc::downgrade(&state),
+                &(Arc::downgrade(&state)),
             )
             .expect("start exact replay corruption query")
         else {
@@ -8036,7 +8079,7 @@ mod tests {
     }
     #[tokio::test]
     async fn find_transactions_by_block_hash_uses_block_index() -> Result<()> {
-        let state = state_with_test_blocks_and_transactions(8, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(8, 1, 1);
         let state_view = state.view();
         let block = state_view
             .kura()
@@ -8045,9 +8088,9 @@ mod tests {
             .expect("block available");
         let block_hash = block.hash();
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", block_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8062,9 +8105,9 @@ mod tests {
                 Hash::new("missing block"),
             );
         let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", unknown_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8074,7 +8117,7 @@ mod tests {
     #[tokio::test]
     async fn find_transactions_by_entrypoint_hash_uses_kura_index() -> Result<()> {
         let num_blocks = 8;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let state_view = state.view();
         let block = state_view
             .kura()
@@ -8094,9 +8137,9 @@ mod tests {
             std::collections::BTreeSet::from([nonzero!(4_usize)])
         );
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", entrypoint_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8109,9 +8152,9 @@ mod tests {
             "missing transaction entrypoint",
         ));
         let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", unknown_hash.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8121,10 +8164,10 @@ mod tests {
     #[tokio::test]
     async fn find_transactions_by_authority_timestamp_and_result_use_kura_indexes() -> Result<()> {
         let num_blocks = 8;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let state_view = state.view();
         let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8163,9 +8206,9 @@ mod tests {
             num_blocks - 1
         );
         let by_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8180,9 +8223,9 @@ mod tests {
                 .all(|tx| tx.entrypoint.authority_opt() == Some(&authority))
         );
         let by_timestamp = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("timestamp_ms", timestamp_ms)
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8197,27 +8240,27 @@ mod tests {
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
         let failed = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("result_ok", false)
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
         assert_eq!(failed.len() as u64, num_blocks - 1);
         assert!(failed.iter().all(|tx| tx.result().as_ref().is_err()));
         let missing_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", BOB_ID.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
         assert!(missing_authority.is_empty());
         let contradictory_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
                     .equals("authority", BOB_ID.to_string())
-            }),
+            })),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8227,10 +8270,10 @@ mod tests {
     #[tokio::test]
     async fn find_transactions_by_filter_timestamp_range_uses_kura_index() -> Result<()> {
         let num_blocks = 8;
-        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1);
         let state_view = state.view();
         let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::PASS,
+            &(CompoundPredicate::PASS),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8256,13 +8299,13 @@ mod tests {
             expected_heights
         );
         let by_timestamp_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
                     ts_le: Some(timestamp_ms),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8277,14 +8320,14 @@ mod tests {
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
         let by_timestamp_and_result = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
                     ts_le: Some(timestamp_ms),
                     result_ok: Some(result_ok),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8315,13 +8358,13 @@ mod tests {
                 .is_empty()
         );
         let impossible_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
-            CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
+            &(CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(impossible_lower_bound),
                     ts_le: Some(timestamp_ms),
                     ..Default::default()
                 },
-            ),
+            )),
             &state_view,
         )?
         .collect::<Vec<_>>();
@@ -8530,14 +8573,55 @@ mod tests {
 
 impl SortableQueryOutput for iroha_data_model::asset::fi_link::AssetFiRelationshipViewV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {}
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }
 
 impl SortableQueryOutput for iroha_data_model::asset::uid_enrollment::AssetUidEnrollmentViewV1 {
     type TiebreakKey = ();
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> { None }
-    fn tiebreak_key(&self) -> Self::TiebreakKey { () }
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> { bounded_bare_encoded_len(&(), limit) }
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {}
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::escrow::scoped::AssetEscrowScopeOriginalV1 {
+    type TiebreakKey = ();
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {}
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::asset::fi_link::AssetFiTransferReceiptV1 {
+    type TiebreakKey = ();
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {}
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::asset::fi_context::AssetFiContextSnapshotV1 {
+    type TiebreakKey = ();
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+    fn tiebreak_key(&self) -> Self::TiebreakKey {}
+    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
+        bounded_bare_encoded_len(&(), limit)
+    }
 }

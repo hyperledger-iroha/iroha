@@ -38,7 +38,10 @@ const RETRYABLE_CODES = new Set([
   "rate_limited",
 ]);
 const MAX_RETRIES = 3;
-const MAX_RETRY_WAIT_MS = 10_000;
+/** One 30-second server admission deadline plus transport and response margin. */
+export const CANONICAL_READ_ATTEMPT_TIMEOUT_MS = 45_000;
+/** One caller-visible budget across fresh signed attempts and their backoff. */
+export const CANONICAL_READ_TOTAL_TIMEOUT_MS = 100_000;
 const INITIAL_RETRY_WAIT_MS = 250;
 
 function isReadRoute(method, path) {
@@ -107,39 +110,58 @@ function waitForRetry(milliseconds, signal) {
 
 /**
  * Retry an allowlisted Torii read after an explicit HTTP 429 capacity refusal.
- * The operation must build and sign a fresh request on every invocation and
- * pass the signal to its transport. Attempts are zero-based, with at most three
- * retries and a ten-second retry window. Unknown routes and errors run once;
- * exhausted refusals retain the original error object. Successful responses,
- * writes, authentication failures and ambiguous transport failures are never
- * retried. Retry-After values beyond the remaining window return immediately.
+ * Each operation must sign afresh and pass its attempt signal and timeout to
+ * the transport. The complete read has one 100-second deadline; each attempt
+ * gets 45 seconds, covering Torii's 30-second admission deadline and transport.
+ * At most three retries are allowed, and another attempt starts only when its
+ * complete allowance fits. Unknown routes and writes run once, with only the
+ * caller's signal and no read-specific timeout. Authentication and ambiguous
+ * transport failures are never retried. Retry-After is never shortened.
  * @template T
- * @param {{method: string, path: string, signal?: AbortSignal, operation: (attempt: number) => T | Promise<T>}} options
+ * @param {{method: string, path: string, signal?: AbortSignal, operation: (attempt: number, context: {signal?: AbortSignal, timeoutMs?: number}) => T | Promise<T>}} options
  * @returns {Promise<T>}
  */
 export async function withCanonicalReadRetry({ method, path, signal, operation }) {
   if (typeof operation !== "function") throw new TypeError("operation must be a function");
-  const retryAllowed = isReadRoute(method, path);
-  const startedAt = Date.now();
-  let waitedMs = 0;
-  for (let attempt = 0; ; attempt += 1) {
+  checkAbort(signal);
+  if (!isReadRoute(method, path)) {
+    const result = await operation(0, { signal });
     checkAbort(signal);
-    try {
-      const result = await operation(attempt);
-      checkAbort(signal);
-      return result;
-    } catch (error) {
-      checkAbort(signal);
-      if (!retryAllowed || attempt >= MAX_RETRIES || error?.status !== 429 ||
-          typeof error.code !== "string" || !RETRYABLE_CODES.has(error.code.toLowerCase())) {
-        throw error;
+    return result;
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const deadline = Date.now() + CANONICAL_READ_TOTAL_TIMEOUT_MS;
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException("The canonical read deadline expired", "AbortError"));
+  }, CANONICAL_READ_TOTAL_TIMEOUT_MS);
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      checkAbort(controller.signal);
+      try {
+        const result = await operation(attempt, {
+          signal: controller.signal,
+          timeoutMs: Math.min(CANONICAL_READ_ATTEMPT_TIMEOUT_MS, Math.max(0, deadline - Date.now())),
+        });
+        checkAbort(controller.signal);
+        return result;
+      } catch (error) {
+        checkAbort(controller.signal);
+        if (attempt >= MAX_RETRIES || error?.status !== 429 ||
+            typeof error.code !== "string" || !RETRYABLE_CODES.has(error.code.toLowerCase())) {
+          throw error;
+        }
+        const delayMs = Math.max(INITIAL_RETRY_WAIT_MS * 2 ** attempt, retryAfterMs(error) ?? 0);
+        if (!Number.isFinite(delayMs) ||
+            delayMs + CANONICAL_READ_ATTEMPT_TIMEOUT_MS > deadline - Date.now()) throw error;
+        await waitForRetry(delayMs, controller.signal);
+        if (CANONICAL_READ_ATTEMPT_TIMEOUT_MS > deadline - Date.now()) throw error;
       }
-      const elapsedMs = Math.max(waitedMs, Date.now() - startedAt);
-      const delayMs = Math.max(INITIAL_RETRY_WAIT_MS * 2 ** attempt, retryAfterMs(error) ?? 0);
-      if (!Number.isFinite(delayMs) || delayMs > MAX_RETRY_WAIT_MS - elapsedMs) throw error;
-      await waitForRetry(delayMs, signal);
-      waitedMs += delayMs;
-      if (Math.max(waitedMs, Date.now() - startedAt) > MAX_RETRY_WAIT_MS) throw error;
     }
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }

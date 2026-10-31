@@ -166,7 +166,7 @@ pub(crate) fn observe(handle: u64, selector: u32, identity: &[u8]) -> Result<Res
 /// Read bounded DATA from the same admitted owner, without a monetary action.
 /// Metadata0 and foldMetrics4 have no identity; Request1, Operation2 and preparedLoad3
 /// use nonzero32. FoldMetrics4 is UTF-8 JSON <=131072 bytes with schema
-/// `iroha.kagemusha.fold-metrics.v2`; it neither acquires custody nor cancels proving.
+/// `iroha.kagemusha.fold-metrics.v3`; it neither acquires custody nor cancels proving.
 /// All observations return generic original DATA kind12 with zero sequence/detail.
 /// The selected API domain fixes the exact frame: KWMDV1 metadata, KWROV1 output,
 /// KWLPV1 prepared Load, or exactly KWLNV1\0\0 for absent prepared Load only.

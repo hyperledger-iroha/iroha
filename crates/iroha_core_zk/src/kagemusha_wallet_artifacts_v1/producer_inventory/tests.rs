@@ -20,14 +20,14 @@ fn original_io_failure_remains_distinct_from_wrong_length_or_hash() {
             Ok(Box::new(Broken))
         }
     }
-    let blob = BlobV1::of(&[1, 2, 3]);
-    assert_eq!(read(&mut Broken, blob, 3), Err(Error::Unavailable));
     struct Bytes(Vec<u8>);
     impl OriginalSourceV1 for Bytes {
         fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
             Ok(Box::new(Cursor::new(&self.0)))
         }
     }
+    let blob = BlobV1::of(&[1, 2, 3]);
+    assert_eq!(read(&mut Broken, blob, 3), Err(Error::Unavailable));
     assert_eq!(read(&mut Bytes(vec![1, 2]), blob, 3), Err(Error::Inventory));
     assert_eq!(
         read(&mut Bytes(vec![1, 2, 4]), blob, 3),
@@ -231,7 +231,7 @@ fn builtin_profile_binds_network_source_policy_and_complete_ordered_inventory() 
     let inventory = structural_inventory();
     let expected = super::builtin::profile_bytes(&inventory, &scheme).unwrap();
     for change in 0..3 {
-        let mut changed = scheme.clone();
+        let mut changed = scheme;
         match change {
             0 => changed.network_id[0] ^= 1,
             1 => changed.provider_contract[0] ^= 1,
@@ -262,9 +262,16 @@ fn builtin_profile_binds_network_source_policy_and_complete_ordered_inventory() 
             10 => changed.terminals.push(0),
             _ => changed.native_profile[0] ^= 1,
         }
-        match super::builtin::profile_bytes(&changed, &scheme) {
-            Ok(bytes) => assert_ne!(bytes, expected, "mutation {change}"),
-            Err(_) => {} // Structurally invalid graphs fail before registry lookup.
+        let actual = super::builtin::profile_bytes(&changed, &scheme);
+        if change == 11 {
+            // A same-shape inventory under a different native semantic contract
+            // must fail before it can select any compiled member.
+            assert_eq!(actual, Err(Error::Inventory));
+            continue;
+        }
+        // Structurally invalid graphs fail before registry lookup.
+        if let Ok(bytes) = actual {
+            assert_ne!(bytes, expected, "mutation {change}");
         }
     }
     // A byte transcript can only select a compiled entry; unknown input cannot

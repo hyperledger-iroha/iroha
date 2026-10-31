@@ -266,9 +266,9 @@ pub struct BlockStore {
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
     /// Canonical inline-body bytes read through either block-store read path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     body_bytes_read: AtomicU64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     body_read_calls: AtomicUsize,
     /// Durable prefix validated read-only before emergency Fast recovery.
     fast_prevalidated_count: Option<u64>,
@@ -358,6 +358,14 @@ impl BlockStore {
             )
         })
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "The test build reads the instance's injected crash flag and returns its I/O failure through this same boundary."
+        )
+    )]
     fn maybe_fail_commit_marker_after_temp_sync(&self, temporary_path: &Path) -> Result<()> {
         #[cfg(test)]
         if self

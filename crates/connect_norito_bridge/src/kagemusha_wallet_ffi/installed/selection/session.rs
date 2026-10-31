@@ -1,7 +1,7 @@
 //! FI session originals authenticated by the existing signed application-release owner.
 use super::*;
 use p256::{
-    EncodedPoint, FieldBytes,
+    Sec1Point,
     ecdsa::{Signature as P256Signature, VerifyingKey, signature::Verifier as _},
 };
 use zeroize::Zeroizing;
@@ -467,12 +467,8 @@ impl Selection {
         let yt = text(jwk, "y")?;
         let x: [u8; 32] = segment(xt)?.try_into().map_err(|_| invalid())?;
         let y: [u8; 32] = segment(yt)?.try_into().map_err(|_| invalid())?;
-        let point = EncodedPoint::from_affine_coordinates(
-            FieldBytes::from_slice(&x),
-            FieldBytes::from_slice(&y),
-            false,
-        );
-        let key = VerifyingKey::from_encoded_point(&point).map_err(|_| invalid())?;
+        let point = Sec1Point::from_affine_coordinates((&x).into(), (&y).into(), false);
+        let key = VerifyingKey::from_sec1_point(&point).map_err(|_| invalid())?;
         let jwk = format!("{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{xt}\",\"y\":\"{yt}\"}}");
         if URL_SAFE_NO_PAD.encode(hash(jwk.as_bytes())) != jkt {
             return Err(invalid());

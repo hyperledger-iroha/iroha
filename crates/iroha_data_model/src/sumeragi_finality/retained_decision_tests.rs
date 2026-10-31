@@ -7,6 +7,54 @@ use crate::consensus::{
 };
 
 #[test]
+fn genesis_restart_keeps_original_authority_and_requires_complete_proof_walk() {
+    let mut fixture = test_fixtures::NativeFinalityFixture::start("pending-proof-restart");
+    let mut proofs = vec![fixture.genesis_proof().clone()];
+    while fixture.latest().height() < 6 {
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        proofs.push(fixture.certify(block));
+    }
+    let imported = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &fixture.checkpoint(),
+        &fixture.network_id(),
+        fixture.chain_id(),
+    )
+    .unwrap();
+    // A different local chain label alone reuses the same deterministic signed genesis.
+    // Change its signed parameters to exercise an actually foreign root.
+    let foreign =
+        test_fixtures::NativeFinalityFixture::start_with_explicit_parameters(fixture.chain_id());
+    assert_ne!(foreign.genesis().hash(), fixture.genesis().hash());
+    for original in [fixture.verifier(), imported] {
+        let mut restarted = original.clone().into_genesis_verifier();
+        assert_eq!(original.authenticated_height(), Some(6));
+        assert_eq!(restarted.authenticated_height(), None);
+        assert_eq!(restarted.oldest_authenticated_height(), None);
+        assert_eq!(restarted.genesis.hash(), original.genesis.hash());
+        assert_eq!(restarted.genesis_committee, original.genesis_committee);
+        assert_eq!(restarted.chain_id(), original.chain_id());
+        assert_eq!(restarted.initial_epoch(), original.initial_epoch());
+        assert_eq!(restarted.root_scope(), original.root_scope());
+        assert_eq!(restarted.instance(), original.instance());
+        assert!(restarted.verify_retained_decision(&proofs[5]).is_err());
+        assert!(restarted.export_checkpoint(&proofs[5]).is_err());
+        assert!(restarted.verify(&proofs[1]).is_err());
+        assert!(restarted.verify(foreign.genesis_proof()).is_err());
+        assert_eq!(restarted.authenticated_height(), None);
+        for proof in &proofs {
+            restarted.verify(proof).unwrap();
+            restarted.retain_recent_decisions(3);
+        }
+        assert_eq!(restarted.authenticated_height(), Some(6));
+        assert_eq!(restarted.decisions.len(), 3);
+        assert_eq!(
+            restarted.export_checkpoint(&proofs[5]).unwrap(),
+            fixture.checkpoint()
+        );
+    }
+}
+
+#[test]
 fn decision_window_preserves_lagging_witness_across_pruning() {
     let mut fixture = test_fixtures::NativeFinalityFixture::start("retained-window");
     let mut verifier = fixture.verifier();

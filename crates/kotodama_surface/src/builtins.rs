@@ -384,6 +384,8 @@ pub enum Builtin {
     ExecuteQuery,
     /// Submit the encoded governance ballot instruction.
     ScExecuteSubmitBallot,
+    /// Queue a canonical X509 presentation request against signed attachment custody.
+    PresentX509,
     /// Resolve an account alias to its canonical account identity.
     ResolveAccountAlias,
     /// Bill the active host-managed subscription.
@@ -886,6 +888,7 @@ impl Builtin {
             "query_get_contract_instance" => Self::QueryGetContractInstance,
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
+            "present_x509" => Self::PresentX509,
             "resolve_account_alias" => Self::ResolveAccountAlias,
             "subscription_bill" => Self::SubscriptionBill,
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
@@ -1144,6 +1147,7 @@ impl Builtin {
             Self::QueryGetContractInstance => "query_get_contract_instance",
             Self::ExecuteQuery => "execute_query",
             Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
+            Self::PresentX509 => "present_x509",
             Self::ResolveAccountAlias => "resolve_account_alias",
             Self::SubscriptionBill => "subscription_bill",
             Self::SubscriptionRecordUsage => "subscription_record_usage",
@@ -1572,6 +1576,7 @@ impl Builtin {
             Self::RegisterSmartContractBytes => "seiyaku::register_bytes",
             Self::ActivateContractInstance => "seiyaku::activate_instance",
             Self::ScExecuteSubmitBallot => "ledger::governance::submit_ballot",
+            Self::PresentX509 => "ledger::credentials::present_x509",
             Self::ZkRootsGet => "crypto::zk::roots",
             Self::ZkVoteGetTally => "ledger::governance::tally",
             Self::ZkVerifyBatch => "crypto::zk::verify_batch",
@@ -1688,7 +1693,7 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
+            Self::ScExecuteSubmitBallot | Self::PresentX509 => BuiltinEffects::INSTRUCTION,
             Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -2063,7 +2068,9 @@ impl Builtin {
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
-            Self::ScExecuteSubmitBallot => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],
+            Self::ScExecuteSubmitBallot | Self::PresentX509 => {
+                &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+            }
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
@@ -2398,6 +2405,7 @@ impl Builtin {
             | Self::Keccak256Hash
             | Self::IrohaHash => S::new(&["bytes"], "bytes"),
             Self::StateSet => S::new(&["bytes", "bytes"], "()"),
+            Self::PresentX509 => S::new(&["bytes"], "PendingAction"),
             Self::StateDel
             | Self::ScExecuteSubmitBallot
             | Self::DeactivateContractInstance
@@ -2407,7 +2415,8 @@ impl Builtin {
             | Self::ActivateContractInstance
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
-            | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
+            | Self::ZkVoteVerifyTally
+            | Self::AssetLockExpire => S::new(&["bytes"], "()"),
             Self::StateHas | Self::VerifyProof => S::new(&["bytes"], "bool"),
             Self::StateLen | Self::StateCount | Self::BytesLen => S::new(&["bytes"], "int"),
             Self::VrfEpochSeed => S::new(&["int"], "Option<bytes>"),
@@ -2511,7 +2520,13 @@ impl Builtin {
             Self::TransferDomain => S::new(&["AccountId", "DomainId|Name", "AccountId"], "()"),
             Self::RegisterAccount | Self::UnregisterAccount => S::new(&["AccountId"], "()"),
             Self::RegisterAsset => S::new(
-                &["AssetDefinitionId", "string", "NumericSpec", "Mintable"],
+                &[
+                    "AssetDefinitionId",
+                    "string",
+                    "NumericSpec",
+                    "Mintable",
+                    "DomainId",
+                ],
                 "()",
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
@@ -2537,15 +2552,31 @@ impl Builtin {
                 S::new(&["AccountId", "Permission"], "()")
             }
             Self::AssetLockOpen => S::new(
-                &["bytes", "AccountId", "AccountId", "AssetDefinitionId", "quantity", "int", "int", "int"],
+                &[
+                    "bytes",
+                    "AccountId",
+                    "AccountId",
+                    "AssetDefinitionId",
+                    "quantity",
+                    "int",
+                    "int",
+                    "int",
+                ],
                 "AccountId",
             ),
             Self::AssetLockDrawdown => S::new(&["bytes", "quantity", "quantity"], "()"),
             Self::AssetLockCancel => S::new(&["bytes", "quantity"], "()"),
-            Self::AssetLockExpire => S::new(&["bytes"], "()"),
-            Self::AssetUidHoldingQuote => S::new(&["AssetDefinitionId", "AccountId", "quantity"], "AssetUidHoldingQuote"),
-            Self::TransferToLinkedFi => S::new(&["AssetDefinitionId", "AccountId", "quantity", "int", "int"], "()"),
-            Self::AssetLockDrawdownWaterfall => S::new(&["bytes", "quantity", "quantity", "int", "int"], "()"),
+            Self::AssetUidHoldingQuote => S::new(
+                &["AssetDefinitionId", "AccountId", "quantity"],
+                "AssetUidHoldingQuote",
+            ),
+            Self::TransferToLinkedFi => S::new(
+                &["AssetDefinitionId", "AccountId", "quantity", "int", "int"],
+                "()",
+            ),
+            Self::AssetLockDrawdownWaterfall => {
+                S::new(&["bytes", "quantity", "quantity", "int", "int"], "()")
+            }
             Self::AssetLockCancelWaterfall => S::new(&["bytes", "quantity", "int", "int"], "()"),
             Self::AssetLockExpireWaterfall => S::new(&["bytes", "int", "int"], "()"),
             Self::FiLinkRevision => S::new(&["AssetDefinitionId", "AccountId", "AccountId"], "int"),
@@ -2778,9 +2809,13 @@ impl Builtin {
             Self::RegisterDomain | Self::UnregisterDomain => signature.with_names(&["domain"]),
             Self::TransferDomain => signature.with_names(&["source", "domain", "destination"]),
             Self::RegisterAccount | Self::UnregisterAccount => signature.with_names(&["account"]),
-            Self::RegisterAsset => {
-                signature.with_names(&["asset_definition", "name", "spec", "mintable"])
-            }
+            Self::RegisterAsset => signature.with_names(&[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain",
+            ]),
             Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
             Self::RegisterPeer | Self::UnregisterPeer => signature.with_names(&["peer"]),
             // The Json trigger specification and the Name of a registered
@@ -2800,19 +2835,52 @@ impl Builtin {
             | Self::GrantContractPermission
             | Self::RevokeContractPermission => signature.with_names(&["account", "permission"]),
             Self::AssetLockOpen => signature.with_names(&[
-                "key", "source", "destination", "asset_definition", "amount",
-                "release_until_ms", "cancel_not_before_ms", "expires_at_ms",
+                "key",
+                "source",
+                "destination",
+                "asset_definition",
+                "amount",
+                "release_until_ms",
+                "cancel_not_before_ms",
+                "expires_at_ms",
             ]),
-            Self::AssetLockDrawdown => signature.with_names(&["key", "amount", "expected_remaining"]),
+            Self::AssetLockDrawdown => {
+                signature.with_names(&["key", "amount", "expected_remaining"])
+            }
             Self::AssetLockCancel => signature.with_names(&["key", "expected_remaining"]),
             Self::AssetLockExpire => signature.with_names(&["key"]),
-            Self::AssetUidHoldingQuote => signature.with_names(&["asset_definition", "account", "incoming"]),
-            Self::TransferToLinkedFi => signature.with_names(&["asset_definition", "account", "amount", "policy_revision", "link_revision"]),
-            Self::AssetLockDrawdownWaterfall => signature.with_names(&["key", "amount", "expected_remaining", "policy_revision", "link_revision"]),
-            Self::AssetLockCancelWaterfall => signature.with_names(&["key", "expected_remaining", "policy_revision", "link_revision"]),
-            Self::AssetLockExpireWaterfall => signature.with_names(&["key", "policy_revision", "link_revision"]),
-            Self::FiLinkRevision => signature.with_names(&["asset_definition", "account", "expected_fi"]),
-            Self::AssetSameUid => signature.with_names(&["asset_definition", "source", "destination"]),
+            Self::AssetUidHoldingQuote => {
+                signature.with_names(&["asset_definition", "account", "incoming"])
+            }
+            Self::TransferToLinkedFi => signature.with_names(&[
+                "asset_definition",
+                "account",
+                "amount",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockDrawdownWaterfall => signature.with_names(&[
+                "key",
+                "amount",
+                "expected_remaining",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockCancelWaterfall => signature.with_names(&[
+                "key",
+                "expected_remaining",
+                "policy_revision",
+                "link_revision",
+            ]),
+            Self::AssetLockExpireWaterfall => {
+                signature.with_names(&["key", "policy_revision", "link_revision"])
+            }
+            Self::FiLinkRevision => {
+                signature.with_names(&["asset_definition", "account", "expected_fi"])
+            }
+            Self::AssetSameUid => {
+                signature.with_names(&["asset_definition", "source", "destination"])
+            }
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
@@ -2848,6 +2916,7 @@ impl Builtin {
             | Self::SoracloudPublishCheckpoint
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope => signature.with_names(&["request"]),
+            Self::PresentX509 => signature.with_names(&["request"]),
             Self::GetPrivateInput => signature.with_names(&["index"]),
             Self::Path => signature.with_names(&["path", "key"]),
             Self::Sm2Verify => {
@@ -3091,6 +3160,21 @@ mod tests {
         BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
     use std::collections::HashSet;
+    #[test]
+    fn x509_presentation_is_a_typed_queued_instruction_with_an_opaque_result() {
+        let builtin = Builtin::from_source_name("ledger::credentials::present_x509").unwrap();
+        assert_eq!(builtin, Builtin::PresentX509);
+        assert_eq!(builtin.signature().parameters, &["bytes"]);
+        assert_eq!(builtin.signature().return_type, "PendingAction");
+        assert_eq!(builtin.effects(), BuiltinEffects::INSTRUCTION);
+        assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
+        assert_eq!(
+            builtin.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+        );
+        assert!(Builtin::from_source_name("present_x509").is_none());
+        assert!(Builtin::from_source_name("execute_instruction").is_none());
+    }
     #[test]
     fn release_mutators_are_effectful_in_canonical_registry() {
         for name in [
@@ -3544,33 +3628,81 @@ mod tests {
     #[test]
     fn controlled_lock_registry_is_typed_namespaced_and_effectful() {
         for (builtin, syscall, count) in [
-            (Builtin::AssetLockOpen, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_OPEN, 8),
-            (Builtin::AssetLockDrawdown, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN, 3),
-            (Builtin::AssetLockCancel, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL, 2),
-            (Builtin::AssetLockExpire, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE, 1),
-            (Builtin::TransferToLinkedFi, ivm_abi::syscalls::SYSCALL_TRANSFER_TO_LINKED_FI, 5),
-            (Builtin::AssetLockDrawdownWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL, 5),
-            (Builtin::AssetLockCancelWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL, 4),
-            (Builtin::AssetLockExpireWaterfall, ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL, 3),
+            (
+                Builtin::AssetLockOpen,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_OPEN,
+                8,
+            ),
+            (
+                Builtin::AssetLockDrawdown,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN,
+                3,
+            ),
+            (
+                Builtin::AssetLockCancel,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL,
+                2,
+            ),
+            (
+                Builtin::AssetLockExpire,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE,
+                1,
+            ),
+            (
+                Builtin::TransferToLinkedFi,
+                ivm_abi::syscalls::SYSCALL_TRANSFER_TO_LINKED_FI,
+                5,
+            ),
+            (
+                Builtin::AssetLockDrawdownWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL,
+                5,
+            ),
+            (
+                Builtin::AssetLockCancelWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL,
+                4,
+            ),
+            (
+                Builtin::AssetLockExpireWaterfall,
+                ivm_abi::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL,
+                3,
+            ),
         ] {
             let spec = builtin.spec();
             assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
             assert_eq!(Builtin::from_source_name(builtin.name()), None);
             assert_eq!(spec.signature.parameters.len(), count);
             assert_eq!(spec.signature.parameter_names.len(), count);
-            assert_eq!(spec.signature.return_type,
-                if builtin == Builtin::AssetLockOpen { "AccountId" } else { "()" });
+            assert_eq!(
+                spec.signature.return_type,
+                if builtin == Builtin::AssetLockOpen {
+                    "AccountId"
+                } else {
+                    "()"
+                }
+            );
             assert_eq!(spec.syscall, Some(syscall));
             assert_eq!(spec.effects, BuiltinEffects::HOST);
             assert_eq!(spec.access, BuiltinAccess::LedgerWrite);
             assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
-                ivm_abi::SyscallPolicy::AbiV1, syscall
+                ivm_abi::SyscallPolicy::AbiV1,
+                syscall
             ));
         }
-        assert_eq!(Builtin::AssetLockOpen.signature().parameters, &[
-            "bytes", "AccountId", "AccountId", "AssetDefinitionId",
-            "quantity", "int", "int", "int",
-        ]);
+        assert_eq!(
+            Builtin::AssetLockOpen.signature().parameters,
+            &[
+                "bytes",
+                "AccountId",
+                "AccountId",
+                "AssetDefinitionId",
+                "quantity",
+                "int",
+                "int",
+                "int",
+            ]
+        );
     }
 
     #[test]
@@ -4056,11 +4188,23 @@ mod tests {
         let spec = Builtin::RegisterAsset.spec();
         assert_eq!(
             spec.signature.parameters,
-            &["AssetDefinitionId", "string", "NumericSpec", "Mintable"]
+            &[
+                "AssetDefinitionId",
+                "string",
+                "NumericSpec",
+                "Mintable",
+                "DomainId"
+            ]
         );
         assert_eq!(
             spec.signature.parameter_names,
-            &["asset_definition", "name", "spec", "mintable"]
+            &[
+                "asset_definition",
+                "name",
+                "spec",
+                "mintable",
+                "owning_domain"
+            ]
         );
         assert_eq!(
             spec.operation_syscalls,
@@ -4275,27 +4419,52 @@ mod tests {
         assert_eq!(spec.name, "ledger::fi::link_revision");
         assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
         assert_eq!(Builtin::from_source_name(builtin.name()), None);
-        assert_eq!(spec.signature.parameters, &["AssetDefinitionId", "AccountId", "AccountId"]);
-        assert_eq!(spec.signature.parameter_names, &["asset_definition", "account", "expected_fi"]);
+        assert_eq!(
+            spec.signature.parameters,
+            &["AssetDefinitionId", "AccountId", "AccountId"]
+        );
+        assert_eq!(
+            spec.signature.parameter_names,
+            &["asset_definition", "account", "expected_fi"]
+        );
         assert_eq!(spec.signature.return_type, "int");
         assert_eq!(spec.effects, BuiltinEffects::NONE);
         assert_eq!(spec.access, BuiltinAccess::LedgerRead);
-        assert_eq!(spec.syscall, Some(ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION));
-        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(ivm_abi::SyscallPolicy::AbiV1, ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION));
+        assert_eq!(
+            spec.syscall,
+            Some(ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION)
+        );
+        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
+            ivm_abi::SyscallPolicy::AbiV1,
+            ivm_abi::syscalls::SYSCALL_ASSET_FI_LINK_REVISION
+        ));
     }
 
     #[test]
     fn same_uid_is_exact_reader_granted_boolean_ledger_read() {
-        let builtin=Builtin::AssetSameUid;let spec=builtin.spec();
-        assert_eq!(spec.name,"ledger::asset::same_uid");
-        assert_eq!(Builtin::from_source_name(spec.name),Some(builtin));
-        assert_eq!(Builtin::from_source_name(builtin.name()),None);
-        assert_eq!(spec.signature.parameters,&["AssetDefinitionId","AccountId","AccountId"]);
-        assert_eq!(spec.signature.parameter_names,&["asset_definition","source","destination"]);
-        assert_eq!(spec.signature.return_type,"bool");
-        assert_eq!(spec.effects,BuiltinEffects::NONE);assert_eq!(spec.access,BuiltinAccess::LedgerRead);
-        assert_eq!(spec.syscall,Some(ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID));
-        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(ivm_abi::SyscallPolicy::AbiV1,ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID));
+        let builtin = Builtin::AssetSameUid;
+        let spec = builtin.spec();
+        assert_eq!(spec.name, "ledger::asset::same_uid");
+        assert_eq!(Builtin::from_source_name(spec.name), Some(builtin));
+        assert_eq!(Builtin::from_source_name(builtin.name()), None);
+        assert_eq!(
+            spec.signature.parameters,
+            &["AssetDefinitionId", "AccountId", "AccountId"]
+        );
+        assert_eq!(
+            spec.signature.parameter_names,
+            &["asset_definition", "source", "destination"]
+        );
+        assert_eq!(spec.signature.return_type, "bool");
+        assert_eq!(spec.effects, BuiltinEffects::NONE);
+        assert_eq!(spec.access, BuiltinAccess::LedgerRead);
+        assert_eq!(
+            spec.syscall,
+            Some(ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID)
+        );
+        assert!(!ivm_abi::syscalls::is_generic_program_syscall_allowed(
+            ivm_abi::SyscallPolicy::AbiV1,
+            ivm_abi::syscalls::SYSCALL_ASSET_SAME_UID
+        ));
     }
-
 }

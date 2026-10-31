@@ -351,10 +351,10 @@ pub(crate) fn folded_generator_of<C: PastaCurve>(
 
 #[cfg(test)]
 mod tests {
-    use group::prime::PrimeCurveAffine;
+    use group::CurveAffine;
     use iroha_pasta::{Ep, EpAffine, Eq, Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::{

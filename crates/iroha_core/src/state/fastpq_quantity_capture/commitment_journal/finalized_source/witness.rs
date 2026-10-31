@@ -18,7 +18,7 @@ use std::mem::ManuallyDrop;
 /// allocations. Existing moved read/transcript/nested ordinary-write allocations
 /// retain their original ownership; this does not claim they were newly admitted.
 /// No raw extraction, Clone or mutable original-wire projection exists.
-pub(crate) struct CapturedExecWitness {
+pub struct CapturedExecWitness {
     wire: RetainedPayload<ExecWitness>,
     source: ChargedShared<FinalizedQuantitySource>,
     /// Fixed identity calculated from this exact original during native R preparation.
@@ -53,7 +53,7 @@ impl std::ops::Deref for CapturedExecWitness {
 }
 
 /// Borrowed exact original entry; no caller-supplied leaf, digest or pool is admitted.
-pub(crate) struct CapturedQuantityEntry<'a> {
+pub struct CapturedQuantityEntry<'a> {
     effects: &'a FastpqExecutionEffectsV1,
     leaf: &'a FastpqOrdinarySourceStatementLeafV1,
     pool: &'a AllocationBudget,
@@ -442,7 +442,7 @@ impl StateBlock<'_> {
 /// Opaque complete-archive admission over original immutable charged owners.
 /// Its private constructor validates every exact tape/leaf once. No Clone or mutable
 /// projection exists; sharing the two original backing handles retains their charges.
-pub(crate) struct AdmittedQuantityArchive {
+pub struct AdmittedQuantityArchive {
     source: ChargedShared<FinalizedQuantitySource>,
     archive: Option<ChargedShared<FrozenQuantityArchive<QuantityArchivedEntry>>>,
 }

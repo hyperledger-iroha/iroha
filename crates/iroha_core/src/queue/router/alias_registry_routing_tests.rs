@@ -495,14 +495,17 @@ fn accepted_executable(fixture: &Fixture, executable: Executable) -> AcceptedTra
     let view = fixture.state.view();
     let drift = view.world().parameters().sumeragi().max_clock_drift();
     let parameters = view.world().parameters().transaction();
-    let crypto = fixture.state.crypto.read().clone();
     let (_, clock) = TimeSource::new_mock(Duration::from_millis(2));
     AcceptedTransaction::accept_with_time_source(
         signed,
         fixture.state.network_id_ref(),
         drift,
         parameters,
-        crypto.as_ref(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         &clock,
     )
     .expect("signed transaction passes stateless admission")
@@ -603,7 +606,7 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
         &mut overlay,
         &mut IvmCache::new(),
         leg.route,
-        policy_route,
+        &(policy_route),
         None,
     )
     .map_err(|error| format!("{error:?}"))?;
@@ -677,7 +680,7 @@ fn ensure(fixture: &Fixture, intent: AliasIntentV1) -> EnsureAlias {
     let selector = selector_for_resolved_alias_target(&intent.target()).expect("selector");
     let quote = sns::quote_resolved_name_registration(
         view.world(),
-        selector.clone(),
+        &(selector.clone()),
         alias_intent_owner(&intent),
         1,
         None,
@@ -714,8 +717,10 @@ fn balance(fixture: &Fixture, account: &AccountId) -> Quantity {
         .view()
         .world()
         .asset(&AssetId::of(fixture.payment_asset.clone(), account.clone()))
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
+        .map_or_else(
+            |_| Quantity::zero(),
+            |asset| asset.value().clone().into_inner(),
+        )
 }
 
 #[test]
@@ -814,7 +819,7 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
         sns::get_name_record_by_selector(view.world(), &selector, 0).expect("domain lease");
     let quote = sns::quote_resolved_name_renewal(
         view.world(),
-        selector.clone(),
+        &(selector.clone()),
         record.expires_at_ms,
         record.expires_at_ms + 31_536_000_000,
         0,

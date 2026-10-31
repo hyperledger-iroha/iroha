@@ -45,7 +45,7 @@ fn rebuild_restores_consumed_and_changed_transitions_for_replacement() {
         Some(7),
         b"policy-index-prior",
     );
-    let (first, first_definition) = definition_with_policy("first", policy.clone());
+    let (first, first_definition) = definition_with_policy("first", policy);
     let (second, second_definition) = definition_with_policy("second", policy);
     let mut world = World::default();
     world

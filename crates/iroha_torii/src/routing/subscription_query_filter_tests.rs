@@ -58,8 +58,8 @@ async fn assert_action_draft(
     json
 }
 fn state_with_plans_and_subscriptions(
-    provider: AccountId,
-    subscriber: AccountId,
+    provider: &AccountId,
+    subscriber: &AccountId,
     plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
     subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
 ) -> Arc<CoreState> {
@@ -73,7 +73,7 @@ fn state_with_plans_and_subscriptions(
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
-            .build(&provider);
+            .build(provider);
             def.metadata
                 .insert((*SUBSCRIPTION_PLAN_KEY).clone(), IrohaJson::new(plan));
             def
@@ -87,24 +87,24 @@ fn state_with_plans_and_subscriptions(
             if let Some(invoice) = invoice {
                 metadata.insert((*SUBSCRIPTION_INVOICE_KEY).clone(), IrohaJson::new(invoice));
             }
-            Nft::new(nft_id, metadata).build(&subscriber)
+            Nft::new(nft_id, metadata).build(subscriber)
         })
         .collect();
     state_with_asset_definitions_and_nfts(provider, subscriber, asset_definitions, nfts)
 }
 fn state_with_asset_definitions_and_nfts(
-    provider: AccountId,
-    subscriber: AccountId,
+    provider: &AccountId,
+    subscriber: &AccountId,
     asset_definitions: Vec<AssetDefinition>,
     nfts: Vec<Nft>,
 ) -> Arc<CoreState> {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain = Domain::new(domain_id).build(&provider);
+    let domain = Domain::new(domain_id).build(provider);
     let provider_account = provider.clone();
     let subscriber_account = subscriber.clone();
     let accounts = vec![
-        Account::new(provider_account.account().clone()).build(&provider),
-        Account::new(subscriber_account.account().clone()).build(&subscriber),
+        Account::new(provider_account.account().clone()).build(provider),
+        Account::new(subscriber_account.account().clone()).build(subscriber),
     ];
     let mut world = World::with_assets([domain], accounts, asset_definitions, [], nfts);
     crate::test_utils::bind_fixture_root(
@@ -146,8 +146,8 @@ async fn handle_v1_subscription_plans_filters_provider() {
         ..plan_a.clone()
     };
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        other.clone(),
+        &(provider),
+        &(other),
         vec![
             (plan_primary_id.clone(), plan_a),
             (plan_secondary_id, plan_b),
@@ -203,8 +203,8 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
         ..plan_a.clone()
     };
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        other.clone(),
+        &(provider),
+        &(other),
         vec![
             (plan_primary_id.clone(), plan_a),
             (plan_secondary_id, plan_b),
@@ -297,8 +297,8 @@ async fn handle_v1_subscriptions_filters_status() {
         ..active_state.clone()
     };
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id, plan)],
         vec![
             (active_id.clone(), active_state, None),
@@ -375,8 +375,8 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
         ..active_state.clone()
     };
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id, plan)],
         vec![
             (active_id, active_state, None),
@@ -530,8 +530,8 @@ async fn handle_v1_subscription_get_includes_invoice() {
         tx_hash: None,
     };
     let state = state_with_plans_and_subscriptions(
-        provider,
-        subscriber,
+        &(provider),
+        &(subscriber),
         vec![(plan_id, plan)],
         vec![(
             subscription_id.clone(),
@@ -556,7 +556,7 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
     let provider = ALICE_ID.clone();
     let subscriber = BOB_ID.clone();
     let state =
-        state_with_plans_and_subscriptions(provider.clone(), subscriber, Vec::new(), Vec::new());
+        state_with_plans_and_subscriptions(&(provider), &(subscriber), Vec::new(), Vec::new());
     let queue = test_queue();
     let plan_id: AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
@@ -589,8 +589,8 @@ async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f9");
     let plan = sample_plan(provider.clone());
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id.clone(), plan)],
         Vec::new(),
     );
@@ -667,8 +667,8 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
     keep_state.cancel_at_period_end = true;
     keep_state.cancel_at_ms = Some(keep_state.current_period_end_ms);
     let state = state_with_plans_and_subscriptions(
-        provider,
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id, plan)],
         vec![
             (active_id.clone(), active_state, None),
@@ -804,8 +804,8 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
     );
     let expected_cancel_at_ms = subscription_state.current_period_end_ms;
     let state = state_with_plans_and_subscriptions(
-        provider,
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id, plan)],
         vec![(subscription_id.clone(), subscription_state, None)],
     );
@@ -938,14 +938,14 @@ async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
     let plan_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405fa");
     let subscription_id: NftId = "sub-strict-action$wonderland.universal".parse().unwrap();
     let state = state_with_plans_and_subscriptions(
-        provider.clone(),
-        subscriber.clone(),
+        &(provider),
+        &(subscriber),
         vec![(plan_id.clone(), sample_plan(provider.clone()))],
         vec![(
             subscription_id.clone(),
             sample_subscription_state(
                 plan_id,
-                provider,
+                provider.clone(),
                 subscriber.clone(),
                 SubscriptionStatus::Active,
                 "bill_strict_action".parse().unwrap(),

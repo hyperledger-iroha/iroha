@@ -19,7 +19,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::domain::DomainId;
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use std::str::FromStr as _;
 /// Complete fixture material kept behind `test` or release-evidence cfg.
 #[doc(hidden)]
@@ -98,7 +98,7 @@ fn release_asset_definition_id_v1() -> Result<AssetDefinitionId, IvmPrivateNoteR
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
     ))
 }
-fn build_fixture<R: RngCore + CryptoRng>(
+fn build_fixture<R: TryRng + TryCryptoRng>(
     maximum: bool,
     invalid_path: bool,
     canonical_bootstrap: bool,
@@ -278,7 +278,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
         .zip(positions)
         .zip(paths)
         .map(|(((note, secret), position), path)| {
-            IvmPrivateNoteInputWitnessV1::new(note, secret, position, path)
+            IvmPrivateNoteInputWitnessV1::new(note, secret, position, &path)
                 .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -295,7 +295,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
 }
 /// Construct a complete normal or exact two-by-two production fixture.
 #[doc(hidden)]
-pub fn ivm_private_note_release_fixture_v1<R: RngCore + CryptoRng>(
+pub fn ivm_private_note_release_fixture_v1<R: TryRng + TryCryptoRng>(
     maximum: bool,
     randomness: &mut R,
 ) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
@@ -310,7 +310,7 @@ pub fn ivm_private_note_release_fixture_v1<R: RngCore + CryptoRng>(
 }
 /// Construct a normal fixture whose nonzero authentication path misses the root.
 #[doc(hidden)]
-pub fn ivm_private_note_release_invalid_path_fixture_v1<R: RngCore + CryptoRng>(
+pub fn ivm_private_note_release_invalid_path_fixture_v1<R: TryRng + TryCryptoRng>(
     randomness: &mut R,
 ) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
     build_fixture(
@@ -325,7 +325,7 @@ pub fn ivm_private_note_release_invalid_path_fixture_v1<R: RngCore + CryptoRng>(
 /// Construct the complete one-input/one-output fixture whose membership path
 /// exactly matches a one-leaf authoritative proof-managed pool bootstrap.
 #[doc(hidden)]
-pub fn ivm_private_note_network_fixture_v1<R: RngCore + CryptoRng>(
+pub fn ivm_private_note_network_fixture_v1<R: TryRng + TryCryptoRng>(
     pool_id: PrivacyPoolIdV1,
     asset_definition_id: AssetDefinitionId,
     randomness: &mut R,
@@ -336,7 +336,8 @@ pub fn ivm_private_note_network_fixture_v1<R: RngCore + CryptoRng>(
 mod tests {
     use super::*;
     use crate::privacy_engines::ivm_private_note::relation::validate_private_note_relation_v1;
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
@@ -362,7 +363,7 @@ mod tests {
     }
     #[test]
     fn shared_normal_maximum_and_invalid_path_fixtures_are_exact() {
-        let mut normal_rng = StdRng::seed_from_u64(0x49_50_4e_45);
+        let mut normal_rng = ChaCha12Rng::seed_from_u64(0x49_50_4e_45);
         let normal =
             ivm_private_note_release_fixture_v1(false, &mut normal_rng).expect("normal fixture");
         assert_eq!(
@@ -374,7 +375,7 @@ mod tests {
         assert_eq!(normal.preflight_relation(), Ok(()));
         assert_eq!(normal.witness.inputs().len(), 1);
         assert_eq!(normal.witness.outputs().len(), 1);
-        let mut maximum_rng = StdRng::seed_from_u64(0x49_50_4e_45_02);
+        let mut maximum_rng = ChaCha12Rng::seed_from_u64(0x49_50_4e_45_02);
         let maximum =
             ivm_private_note_release_fixture_v1(true, &mut maximum_rng).expect("maximum fixture");
         validate_private_note_relation_v1(&maximum.statement, &maximum.witness)
@@ -382,7 +383,7 @@ mod tests {
         assert_eq!(maximum.preflight_relation(), Ok(()));
         assert_eq!(maximum.witness.inputs().len(), 2);
         assert_eq!(maximum.witness.outputs().len(), 2);
-        let mut invalid_rng = StdRng::seed_from_u64(0x49_50_4e_45_03);
+        let mut invalid_rng = ChaCha12Rng::seed_from_u64(0x49_50_4e_45_03);
         let invalid = ivm_private_note_release_invalid_path_fixture_v1(&mut invalid_rng)
             .expect("invalid-path fixture");
         assert!(validate_private_note_relation_v1(&invalid.statement, &invalid.witness).is_err());
@@ -392,7 +393,7 @@ mod tests {
         );
         let pool_id = PrivacyPoolIdV1::new(bytes(0xb1));
         let asset_definition_id = release_asset_definition_id_v1().expect("asset definition");
-        let mut network_rng = StdRng::seed_from_u64(0x49_50_4e_45_04);
+        let mut network_rng = ChaCha12Rng::seed_from_u64(0x49_50_4e_45_04);
         let network = ivm_private_note_network_fixture_v1(
             pool_id,
             asset_definition_id.clone(),

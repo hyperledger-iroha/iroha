@@ -10,10 +10,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     NetworkId,
     account::address::ChainDiscriminantGuard,
-    block::{
-        SignedBlock,
-        consensus::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
-    },
+    block::SignedBlock,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -27,6 +24,7 @@ use iroha_genesis::{
     ValidatedGenesisBundle,
 };
 use iroha_model_base::chain::ChainId;
+use iroha_model_base::topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size};
 use iroha_swarm::{
     PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
     PreparedValidator,
@@ -1007,7 +1005,6 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
     actual::execution_policy_digest_v1(
         &config.pipeline,
         &config.oracle,
-        &config.crypto,
         &config.fraud_monitoring,
         &config.gov,
         &config.content,
@@ -1020,6 +1017,7 @@ fn validate_runtime_projection_policy(
     source: &actual::Root,
     projected: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
+    original_fees: &iroha_data_model::block::consensus::RootFeePolicy,
 ) -> color_eyre::Result<()> {
     ensure!(
         matches!(source.sumeragi.role, actual::NodeRole::Validator)
@@ -1075,10 +1073,20 @@ fn validate_runtime_projection_policy(
         execution_policy_projection(source) == execution_policy_projection(projected),
         "container runtime projection changed deterministic execution policy"
     );
-    let source_nexus =
-        actual::sumeragi_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
-    let projected_nexus =
-        actual::sumeragi_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
+    let source_nexus = actual::sumeragi_nexus_amx_context_hash(
+        &source.nexus,
+        Some(original_fees),
+        &source.pipeline,
+        &[],
+        &[],
+    );
+    let projected_nexus = actual::sumeragi_nexus_amx_context_hash(
+        &projected.nexus,
+        Some(original_fees),
+        &projected.pipeline,
+        &[],
+        &[],
+    );
     ensure!(
         source_nexus == projected_nexus,
         "container runtime projection changed Nexus/AMX consensus policy"
@@ -1748,6 +1756,7 @@ fn project_prepared_runtime_config(
     mut table: crate::secret_toml::Table,
     source: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
+    original_fees: &iroha_data_model::block::consensus::RootFeePolicy,
     peers: &[PreparedRuntimePeer],
 ) -> color_eyre::Result<PreparedRuntimeProjection> {
     const RANS_TABLE_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -1770,21 +1779,25 @@ fn project_prepared_runtime_config(
         "revocation_store_path",
         "/storage/network/soranet-ticket-revocations.norito",
     )?;
-    let rans_content = read_runtime_file_bounded(
-        &source.streaming.codec.rans_tables_path,
-        "rANS table",
-        RANS_TABLE_MAX_BYTES,
-    )?;
-    let captured_rans_source = materialize_container_readable_file(
-        projection_root,
-        "rans",
-        "rans_seed0.toml",
-        &rans_content,
-    )?;
-    let mut runtime_files = vec![PreparedRuntimeFile {
-        target: RANS_TARGET.to_owned(),
-        content: rans_content,
-    }];
+    let mut runtime_files = Vec::new();
+    // Without a configured table the node uses the canonical tables compiled into `iroha3d`.
+    let captured_rans_source = match &source.streaming.codec.rans_tables_path {
+        Some(path) => {
+            let rans_content = read_runtime_file_bounded(path, "rANS table", RANS_TABLE_MAX_BYTES)?;
+            let captured = materialize_container_readable_file(
+                projection_root,
+                "rans",
+                "rans_seed0.toml",
+                &rans_content,
+            )?;
+            runtime_files.push(PreparedRuntimeFile {
+                target: RANS_TARGET.to_owned(),
+                content: rans_content,
+            });
+            Some(captured)
+        }
+        None => None,
+    };
     let mut secret_files = Vec::new();
     let mut captured_validation_paths = Vec::new();
     set_toml_string(
@@ -1995,12 +2008,14 @@ fn project_prepared_runtime_config(
         "session_store_dir",
         "/storage/streaming",
     )?;
-    set_toml_string(
-        &mut table,
-        &["streaming", "codec"],
-        "rans_tables_path",
-        RANS_TARGET,
-    )?;
+    if captured_rans_source.is_some() {
+        set_toml_string(
+            &mut table,
+            &["streaming", "codec"],
+            "rans_tables_path",
+            RANS_TARGET,
+        )?;
+    }
     let captured_onboarding_private_key = source
         .torii
         .account_onboarding
@@ -2322,12 +2337,14 @@ fn project_prepared_runtime_config(
             captured.source.to_string_lossy(),
         )?;
     }
-    set_toml_string(
-        &mut validation_table,
-        &["streaming", "codec"],
-        "rans_tables_path",
-        captured_rans_source.to_string_lossy(),
-    )?;
+    if let Some(captured_rans_source) = &captured_rans_source {
+        set_toml_string(
+            &mut validation_table,
+            &["streaming", "codec"],
+            "rans_tables_path",
+            captured_rans_source.to_string_lossy(),
+        )?;
+    }
     if let Some(manifest_directory) = captured_manifest_directory.as_deref() {
         set_toml_string(
             &mut validation_table,
@@ -2392,7 +2409,7 @@ fn project_prepared_runtime_config(
         source_requires_sora == requires_sora_profile,
         "container runtime projection changed Sora profile requirements"
     );
-    validate_runtime_projection_policy(source, &projected_effective, metadata)?;
+    validate_runtime_projection_policy(source, &projected_effective, metadata, original_fees)?;
     let mut content = Zeroizing::new(
         toml::to_string_pretty(&*table)
             .wrap_err("serialize container-safe prepared runtime projection")?,
@@ -2443,6 +2460,7 @@ fn load_prepared_bundle(
         expected_hash_record.as_bytes(),
     )?;
     let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
+    let signed_fees = iroha_genesis::signed_genesis_root_fee_policy(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
     let mut chain = None;
     let mut admitted = Vec::with_capacity(config_paths.len());
@@ -2645,6 +2663,7 @@ fn load_prepared_bundle(
             admitted.table,
             &admitted.config,
             &signed_metadata,
+            &signed_fees,
             &runtime_peers,
         )?;
         let execution_projection = execution_policy_projection(&effective_config);
@@ -2658,6 +2677,7 @@ fn load_prepared_bundle(
         }
         let nexus_projection = actual::sumeragi_nexus_amx_context_hash(
             &effective_config.nexus,
+            Some(&signed_fees),
             &effective_config.pipeline,
             &[],
             &[],
@@ -3134,11 +3154,79 @@ mod tests {
             "stale capture bytes must fail, not overwrite"
         );
     }
+    #[test]
+    fn sora_prepared_bundle_mounts_onboarding_and_faucet_signers_as_secrets() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = temp_dir.path().join("sora-bundle");
+        let options = iroha_deploy::sora_network::NetworkOptions {
+            sora_profile: iroha_deploy::sora_network::SoraProfile::Nexus,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("kagami-compose-sora-bundle".to_owned()),
+            bind_host: "127.0.0.1".to_owned(),
+            public_host: "127.0.0.1".to_owned(),
+            base_api_port: 19_180,
+            base_p2p_port: 23_437,
+            out_dir: config_dir.clone(),
+            block_cadence_ms: None,
+        };
+        iroha_deploy::sora_network::generate_network(&options, &mut BufWriter::new(Vec::new()))
+            .expect("generate Sora network bundle");
+        let deployment_dir = temp_dir.path().join("deployment");
+        fs::create_dir_all(&deployment_dir).expect("create deployment directory");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: deployment_dir.join("docker-compose.yml"),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let mut output = Vec::new();
+        let mut writer = BufWriter::new(&mut output);
+        args.run(&mut writer).expect("render Sora prepared bundle");
+        writer.flush().expect("flush prepared Compose output");
+        drop(writer);
+        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+        let peer0 = fs::read_dir(deployment_dir.join(".kagami-compose"))
+            .expect("read projection root")
+            .map(|entry| {
+                entry
+                    .expect("read projection entry")
+                    .path()
+                    .join("peer0.toml")
+            })
+            .find(|path| path.is_file())
+            .expect("peer0 projection");
+        let projected = fs::read_to_string(peer0)
+            .expect("read peer0 projection")
+            .parse::<toml::Table>()
+            .expect("parse peer0 projection");
+        for (section, target) in [
+            (
+                "account_onboarding",
+                "/run/secrets/iroha_peer0_onboarding_private_key",
+            ),
+            ("faucet", "/run/secrets/iroha_peer0_faucet_private_key"),
+        ] {
+            assert_eq!(
+                projected["torii"][section]["private_key_file"].as_str(),
+                Some(target)
+            );
+            assert!(
+                output.contains(&format!("target: {target}")),
+                "prepared torii.{section} signer must be mounted as a Compose secret"
+            );
+        }
+    }
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
-            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("kagami-compose-prepared-bundle".to_owned()),
@@ -3612,30 +3700,15 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("/config/runtime/rans_seed0.toml")
         );
-        assert_eq!(
-            table_at("torii")
-                .get("account_onboarding")
-                .and_then(toml::Value::as_table)
-                .and_then(|onboarding| onboarding.get("private_key_file"))
-                .and_then(toml::Value::as_str),
-            Some("/run/secrets/iroha_peer0_onboarding_private_key")
-        );
-        assert!(
-            output.contains("target: /run/secrets/iroha_peer0_onboarding_private_key"),
-            "prepared onboarding signer must be mounted as a Compose secret"
-        );
-        assert_eq!(
-            table_at("torii")
-                .get("faucet")
-                .and_then(toml::Value::as_table)
-                .and_then(|faucet| faucet.get("private_key_file"))
-                .and_then(toml::Value::as_str),
-            Some("/run/secrets/iroha_peer0_faucet_private_key")
-        );
-        assert!(
-            output.contains("target: /run/secrets/iroha_peer0_faucet_private_key"),
-            "prepared faucet signer must be mounted as a Compose secret"
-        );
+        // Developer bundles carry no faucet or onboarding signer, so none is mounted.
+        for absent in ["account_onboarding", "faucet"] {
+            assert!(
+                !table_at("torii").contains_key(absent),
+                "developer bundle projects no torii.{absent}"
+            );
+        }
+        assert!(!output.contains("/run/secrets/iroha_peer0_onboarding_private_key"));
+        assert!(!output.contains("/run/secrets/iroha_peer0_faucet_private_key"));
         let original_peer0 =
             fs::read_to_string(config_dir.join("peer0.toml")).expect("read source peer0 config");
         let original_peer0 = original_peer0
@@ -3791,12 +3864,28 @@ mod tests {
             .expect("prepared fixture has consensus metadata");
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
             .expect("parse prepared peer0 fixture");
-        validate_runtime_projection_policy(&parsed.actual, &parsed.actual, &metadata)
-            .expect("unchanged validator configuration preserves projection policy");
+        let original_fees =
+            iroha_genesis::signed_genesis_root_fee_policy(validated.block()).unwrap();
+        validate_runtime_projection_policy(
+            &parsed.actual,
+            &parsed.actual,
+            &metadata,
+            &original_fees,
+        )
+        .expect("unchanged validator configuration preserves projection policy");
+        let mut local_fee_recipe = parsed.actual.clone();
+        local_fee_recipe.nexus.fees.per_byte_fee = 1001_u32.into();
+        validate_runtime_projection_policy(
+            &parsed.actual,
+            &local_fee_recipe,
+            &metadata,
+            &original_fees,
+        )
+        .expect("signed original fee policy is authoritative across local recipe drift");
         let mut drifted = parsed.actual.clone();
         drifted.sumeragi.local.t_base = Some(std::time::Duration::from_millis(987));
         let projection_error =
-            validate_runtime_projection_policy(&parsed.actual, &drifted, &metadata)
+            validate_runtime_projection_policy(&parsed.actual, &drifted, &metadata, &original_fees)
                 .expect_err("Sumeragi policy drift must reject a runtime projection");
         assert!(
             projection_error
@@ -4009,7 +4098,15 @@ mod tests {
         let manifest = GenesisBuilder::new_without_executor(
             ChainId::from("resultless-prepared-bundle"),
             PathBuf::from("."),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(crate::genesis::test_staking_policy())
+        .expect("explicit fixture staking policy")
         .set_topology_for_test(topology)
         .build_raw()
         .expect("complete resultless prepared-bundle fixture")
@@ -4246,14 +4343,24 @@ api_port = 9000
         }
     }
     fn write_minimal_genesis(path: &Path) {
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .complete_for_test()
-                .build_raw()
-                .expect("complete minimal swarm fixture")
-                .with_consensus_mode(
-                    iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-                );
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("test-chain"),
+            PathBuf::from("."),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .with_staking_policy(crate::genesis::test_staking_policy())
+        .expect("explicit fixture staking policy")
+        .complete_for_test()
+        .build_raw()
+        .expect("complete minimal swarm fixture")
+        .with_consensus_mode(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+        );
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
@@ -4261,7 +4368,15 @@ api_port = 9000
         let manifest = GenesisBuilder::new_without_executor(
             ChainId::from("npos-without-parameters"),
             PathBuf::from("."),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
         )
+        .with_staking_policy(crate::genesis::test_staking_policy())
+        .expect("explicit fixture staking policy")
         .complete_for_test()
         .build_raw()
         .expect("complete NPoS-without-parameters fixture")
@@ -4271,14 +4386,25 @@ api_port = 9000
     }
     fn write_npos_genesis(path: &Path) {
         let chain = ChainId::from("npos-swarm");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .complete_for_test()
-            .build_raw()
-            .expect("complete NPoS swarm fixture")
-            .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
+        let manifest = GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .with_staking_policy(crate::genesis::test_staking_policy())
+        .expect("explicit fixture staking policy")
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .complete_for_test()
+        .build_raw()
+        .expect("complete NPoS swarm fixture")
+        .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");
     }

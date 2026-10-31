@@ -1,6 +1,10 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
 mod asynchronous;
+mod escrow_scope;
+mod fi_context;
+mod fi_transfer_receipt;
+mod transaction_details_candidate;
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::{HashOf, KeyPair},
@@ -17,7 +21,9 @@ use crate::{
             parameters::{DEFAULT_FETCH_SIZE, ForwardCursor, MAX_FETCH_SIZE, QueryParams},
             transaction::prelude::FindTransactions,
         },
-        transaction::TransactionEntrypoint,
+        transaction::{
+            SignedTransaction, TransactionEntrypoint, error::TransactionRejectionReason,
+        },
     },
     http::{Method as HttpMethod, RequestBuilder},
     http_default::{DefaultHttpTransport, DefaultRequestBuilder},
@@ -37,6 +43,7 @@ use std::{
     num::NonZeroU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+pub use transaction_details_candidate::transaction_details_candidate_response_v1;
 use url::Url;
 
 const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -188,7 +195,7 @@ impl ClientQueryRequestHead {
     fn assemble_canonical_norito_body_at(
         &self,
         body: Vec<u8>,
-        path: &'static str,
+        path: &str,
     ) -> DefaultRequestBuilder {
         let mut headers = self.headers.clone();
         headers.retain(|name, _| {
@@ -218,7 +225,7 @@ impl ClientQueryRequestHead {
         .ok_or_else(|| QueryError::Other(eyre!("query TTL must be nonzero")))?;
         let mut nonce = [0_u8; 32];
         for _ in 0..16 {
-            rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+            rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
                 .map_err(|error| QueryError::Other(eyre!("query nonce OS RNG failed: {error}")))?;
             if nonce != [0_u8; 32] {
                 break;
@@ -774,6 +781,29 @@ impl Client {
         Ok(details)
     }
 
+    /// Fetch the authenticated reason the exact committed transaction was rejected.
+    ///
+    /// The public status route intentionally carries no rejection payload, so a signer holding a
+    /// `Rejected` status learns why through this signed, authority-checked read.
+    ///
+    /// # Errors
+    ///
+    /// Returns any authenticated transaction-details lookup error, or an error when the exact
+    /// committed result is a success.
+    pub fn get_transaction_rejection_reason(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> Result<TransactionRejectionReason, QueryError> {
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let details = self.get_transaction_details(entrypoint_hash)?;
+        crate::client::rejection_reason_from_transaction_details(
+            &details,
+            transaction.hash(),
+            entrypoint_hash,
+        )
+        .map_err(QueryError::Other)
+    }
+
     /// Bind, sign, encode, and execute an arbitrary raw query request.
     ///
     /// The client supplies the configured network identity and authority plus a fresh creation
@@ -881,7 +911,7 @@ impl Client {
     }
 }
 #[cfg(test)]
-mod query_errors_handling {
+pub(crate) mod query_errors_handling {
     use super::*;
     use crate::{
         client::{
@@ -1771,7 +1801,6 @@ mod query_errors_handling {
         HashOf<TransactionEntrypoint>,
         PipelineTransactionDetailsResponse,
     ) {
-        use crate::crypto::MerkleProof;
         use iroha_data_model::transaction::TransactionBuilder;
         let (authority, key_pair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
@@ -1781,6 +1810,17 @@ mod query_errors_handling {
         )
         .try_sign(key_pair.private_key())
         .expect("sign transaction-details fixture");
+        transaction_details_fixture_for(signed, result)
+    }
+    /// A committed-row response for one exact signed transaction and result.
+    pub(crate) fn transaction_details_fixture_for(
+        signed: SignedTransaction,
+        result: iroha_data_model::transaction::TransactionResult,
+    ) -> (
+        HashOf<TransactionEntrypoint>,
+        PipelineTransactionDetailsResponse,
+    ) {
+        use crate::crypto::MerkleProof;
         let entrypoint = TransactionEntrypoint::External(signed);
         let entrypoint_hash = entrypoint.hash();
         let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
@@ -1923,6 +1963,47 @@ mod query_errors_handling {
         )
         .expect("exact transaction-details lookup");
         assert_eq!(actual, details);
+    }
+    #[test]
+    fn rejection_reason_reader_returns_the_exact_reason_and_refuses_a_success() {
+        use iroha_data_model::transaction::{DataTriggerSequence, TransactionResult};
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (_, rejected, reason) = rejected_transaction_details_fixture();
+        let TransactionEntrypoint::External(signed) = rejected.transaction.entrypoint().clone()
+        else {
+            panic!("fixture is an external transaction");
+        };
+        let read = |details: PipelineTransactionDetailsResponse| {
+            let encoded = norito::to_bytes(&details).expect("encode transaction details");
+            let client = client.clone();
+            let signed = signed.clone();
+            with_mock_http(
+                move |_| {
+                    Ok(Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header("content-type", APPLICATION_NORITO)
+                        .body(encoded.clone())
+                        .expect("transaction-details response"))
+                },
+                move |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    *client
+                        .data_model_compatibility
+                        .lock()
+                        .expect("fixture compatibility cache") =
+                        DataModelCompatibility::SubmitCompatible;
+                    client.get_transaction_rejection_reason(&signed)
+                },
+            )
+        };
+        assert_eq!(read(rejected.clone()).expect("rejected result"), reason);
+        let (_, succeeded) = transaction_details_fixture_for(
+            signed.clone(),
+            TransactionResult::new(Ok(DataTriggerSequence::default())),
+        );
+        assert!(read(succeeded).is_err());
     }
     #[test]
     fn transaction_details_reader_returns_exact_rejected_result() {

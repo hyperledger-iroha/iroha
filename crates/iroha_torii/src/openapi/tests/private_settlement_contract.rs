@@ -5,6 +5,97 @@ enum PrivateSettlementAuthContract {
     Public,
 }
 
+#[test]
+fn private_settlement_policy_extension_keeps_original_privacy_and_context_shapes() {
+    use iroha_data_model::privacy::{
+        PrivacyConsensusLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyProtocolLimitsV1, PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
+        PrivateSettlementProtocolClosureDrainV1,
+    };
+    let private = PrivateSettlementPolicyV1::protocol_default();
+    let update = PrivateSettlementPolicyUpdateV1 {
+        scheduled_at_height: 1,
+        effective_at_height: 2,
+        next_limits: private.current_limits,
+    };
+    let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol_update = PrivacyProtocolLimitsUpdateV1 {
+        scheduled_at_height: 1,
+        effective_at_height: 2,
+        next_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+    };
+    let drain = PrivateSettlementProtocolClosureDrainV1::capture(
+        protocol_id,
+        &protocol_update,
+        private.current_limits.max_expiry_blocks,
+    )
+    .unwrap();
+    let samples = [
+        (
+            "PrivacyConsensusLimitsV1",
+            norito::json::to_value(&PrivacyConsensusLimitsV1::taira_default()).unwrap(),
+        ),
+        (
+            "PrivacyProtocolLimitsUpdateV1",
+            norito::json::to_value(&protocol_update).unwrap(),
+        ),
+        (
+            "PrivateSettlementPolicyV1",
+            norito::json::to_value(&private).unwrap(),
+        ),
+        (
+            "PrivateSettlementPolicyUpdateV1",
+            norito::json::to_value(&update).unwrap(),
+        ),
+        (
+            "PrivateSettlementProtocolClosureDrainV1",
+            norito::json::to_value(&drain).unwrap(),
+        ),
+        (
+            "PrivateSettlementValidityLimitsV1",
+            norito::json::to_value(&private.current_limits).unwrap(),
+        ),
+    ];
+    for document in [canonical_document(), generate_spec()] {
+        let schemas = component_schemas(&document);
+        for (name, value) in &samples {
+            let fields = value
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            assert_strict_object_schema(schemas, name, &fields, &[]);
+        }
+        assert_strict_object_schema(
+            schemas,
+            "PrivateSettlementContextProofV1",
+            &[
+                "pool",
+                "parameters",
+                "protocol_policy",
+                "lanes",
+                "committee_keys",
+            ],
+            &[],
+        );
+        assert_eq!(schemas["PrivateSettlementContextProofV1"]["properties"]["parameters"]["x-iroha-norito-schema"].as_str(),
+            Some("iroha_data_model::parameter::system::model::Parameters"));
+        assert_eq!(
+            schemas["PrivateSettlementPolicyV1"]["x-iroha-custom-parameter-id"].as_str(),
+            Some(
+                PrivateSettlementPolicyV1::parameter_id()
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            schemas["PrivateSettlementPolicyV1"]["x-iroha-max-json-bytes"].as_u64(),
+            Some(PrivateSettlementPolicyV1::MAX_PAYLOAD_BYTES as u64)
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PrivateSettlementOperationContract {
     path: &'static str,

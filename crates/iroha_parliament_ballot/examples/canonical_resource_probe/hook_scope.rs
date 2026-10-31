@@ -3,7 +3,7 @@
 //! Norito installs a process-wide hook which owns its captured predecessor. This
 //! isolated diagnostic restores that exact predecessor after the operation and
 //! drops both installed forwarding closures before allocation routing ends. The
-//! decoder's initialized OnceLock is not reset: no later decode or concurrent
+//! decoder's initialized `OnceLock` is not reset: no later decode or concurrent
 //! application work is permitted in this one-shot process.
 
 use std::{
@@ -17,7 +17,7 @@ type Hook = Box<dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static>;
 ///
 /// The caller enters ACTIVE before this function and leaves it only after all
 /// copied inputs and this result have been dropped. No decoder is prewarmed.
-/// Catching the operation first is necessary because take_hook/set_hook cannot
+/// Catching the operation first is necessary because `take_hook`/`set_hook` cannot
 /// run from a panicking thread; an ordinary unwind-time Drop guard is unsuitable.
 /// A caught panic's payload is destroyed here, never returned outside ACTIVE.
 pub fn run<T>(operation: impl FnOnce() -> T) -> Result<T, ()> {
@@ -30,14 +30,11 @@ pub fn run<T>(operation: impl FnOnce() -> T) -> Result<T, ()> {
     // This drops Norito's newly installed hook, if reached, and the forwarding
     // closure it captured. The original remains owned by our sole Arc below.
     drop(panic::take_hook());
-    let original = match Arc::try_unwrap(original) {
-        Ok(original) => original,
-        Err(_) => {
-            // An escaped hook owner violates this isolated one-shot contract.
-            // Do not claim cleanup or continue with a retained arena owner.
-            unsafe { libc::_exit(74) };
-        }
-    };
+    let original = Arc::try_unwrap(original).unwrap_or_else(|_| {
+        // An escaped hook owner violates this isolated one-shot contract.
+        // Do not claim cleanup or continue with a retained arena owner.
+        unsafe { libc::_exit(74) };
+    });
     panic::set_hook(original);
     match result {
         Ok(value) => Ok(value),

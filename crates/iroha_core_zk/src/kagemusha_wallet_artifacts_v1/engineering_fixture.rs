@@ -117,10 +117,8 @@ fn original<C: PastaCurve, const LINEAGE: bool>(
 }
 
 fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .expect("actual P256 fixture point")
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .expect("actual P256 fixture point")
 }
 
 fn sign(key: &SigningKey, message: &[u8]) -> KagemushaWalletSignerOutputV1<'static> {
@@ -265,11 +263,12 @@ fn build_inventory(
     if let Some(bytes) = &producer {
         pack.producer_catalog_digest = artifact_digest(b"producer-catalog", bytes);
     }
-    let runtime = match native_profile {
-        None => pack.runtime_bindings(),
-        Some(profile) => pack.verifier_bindings(profile),
-    }
-    .expect("actual complete native inventory");
+    let runtime = native_profile
+        .map_or_else(
+            || pack.runtime_bindings(),
+            |profile| pack.verifier_bindings(profile),
+        )
+        .expect("actual complete native inventory");
     let key_set = allowlist
         .verifying_key_set_digest()
         .expect("actual key set");

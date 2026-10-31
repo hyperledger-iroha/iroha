@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod source_refusal_tests;
 
-pub(crate) mod sccp;
+pub mod sccp;
 
 use crate::execution_attempt::{
     ExecutionAttemptError as Attempt, canonical_decode_attempt_error, norito_decode_attempt_error,
@@ -42,6 +42,10 @@ enum TipPayloadRead {
     Ready(LanePayload),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum AuthorityRead {
     Payload(LanePayloadRead),
     Config(LaneAuthorityRead),
@@ -829,9 +833,9 @@ mod tests {
 
     #[test]
     fn missing_archive_and_malformed_source_are_not_absence_or_capacity_refusal() {
-        let io = archive_error(NativeContextArchiveError::Io(
-            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
-        ));
+        let io = archive_error(NativeContextArchiveError::Io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
         assert_eq!(io.io_kind(), io::ErrorKind::NotFound);
         for error in [
             NativeContextArchiveError::Source("substituted archive"),

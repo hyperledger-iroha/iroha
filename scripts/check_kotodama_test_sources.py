@@ -38,6 +38,11 @@ EXPECTED_TEST_MODULES = {
         ("numeric_operands", "crates/kotodama_lang/src/compiler/tests/numeric_operands.rs"),
         ("rematerialized", "crates/kotodama_lang/src/compiler/tests/rematerialized.rs"),
         ("state_operands", "crates/kotodama_lang/src/compiler/tests/state_operands.rs"),
+        ("controlled_asset_lock_tests", "crates/kotodama_lang/src/compiler/controlled_asset_lock_tests.rs"),
+        ("uid_holding_quote_tests", "crates/kotodama_lang/src/compiler/uid_holding_quote_tests.rs"),
+        ("fi_link_revision_tests", "crates/kotodama_lang/src/compiler/fi_link_revision_tests.rs"),
+        ("same_uid_tests", "crates/kotodama_lang/src/compiler/same_uid_tests.rs"),
+        ("fi_waterfall", "crates/kotodama_lang/src/compiler/tests/fi_waterfall.rs"),
     ),
 }
 # The canonical pool fixture has independent folding, liveness, rematerialization,

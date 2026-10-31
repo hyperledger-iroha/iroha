@@ -1,11 +1,7 @@
 //! Pure canonical epoch schedule types and validation shared by node and proof readers.
-use crate::{
-    block::{SignedBlock, consensus::is_valid_committee_size},
-    isi::RegisterBox,
-    transaction::Executable,
-};
+use crate::{block::SignedBlock, isi::RegisterBox, transaction::Executable};
 use iroha_crypto::Algorithm;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::{peer::PeerId, topology::is_valid_committee_size};
 use iroha_sumeragi::{
     api::ConfigError,
     types::{Committee, CommitteeError, PublicKey},

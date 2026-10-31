@@ -56,6 +56,10 @@ pub(in crate::state) struct TypedPairedTableBuilder<'budget, K, V> {
     types: PhantomData<fn(&K, &V)>,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl<'budget, K: Encode + NoritoSchema, V: Encode + NoritoSchema>
     TypedPairedTableBuilder<'budget, K, V>
 {

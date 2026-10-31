@@ -19,7 +19,7 @@ pub const ANDROID_CERTIFICATE_MAX_BYTES: usize = 16_384;
 pub const ANDROID_CHAIN_MAX_BYTES: usize = 65_536;
 
 /// Whether `certificates` has the exact Android admission step 1 shape.
-pub(crate) fn android_chain_shape<T: AsRef<[u8]>>(certificates: &[T]) -> bool {
+pub fn android_chain_shape<T: AsRef<[u8]>>(certificates: &[T]) -> bool {
     (ANDROID_CHAIN_MIN..=ANDROID_CHAIN_MAX).contains(&certificates.len())
         && certificates.iter().all(|der| {
             !der.as_ref().is_empty() && der.as_ref().len() <= ANDROID_CERTIFICATE_MAX_BYTES

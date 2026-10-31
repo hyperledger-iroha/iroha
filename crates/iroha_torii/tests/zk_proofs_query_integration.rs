@@ -147,7 +147,7 @@ async fn proofs_query_find_by_id_returns_norito() {
         .expect("sign proof query locally");
     let dto = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "signed_query_b64",
-        base64::engine::general_purpose::STANDARD.encode(signed_query.encode_versioned()),
+        &base64::engine::general_purpose::STANDARD.encode(signed_query.encode_versioned()),
     )]);
     let body = json::to_vec(&dto).unwrap();
     let request = http::Request::builder()

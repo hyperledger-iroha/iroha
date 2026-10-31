@@ -1,0 +1,158 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef CORE_INTERNAL_INTERNAL_PAYLOAD_H_
+#define CORE_INTERNAL_INTERNAL_PAYLOAD_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+#include "absl/strings/string_view.h"
+#include "absl/time/time.h"
+#include "connections/implementation/proto/offline_wire_formats.pb.h"
+#include "connections/payload.h"
+#include "internal/platform/byte_array.h"
+#include "internal/platform/exception.h"
+
+namespace nearby {
+namespace connections {
+
+constexpr int kPayloadIndeterminateSize = -1;
+
+// Defines the operations layered atop an incoming Payload, for use inside the
+// OfflineServiceController.
+//
+// Implementations are thread-compatible (go/thread-compatible), except that
+// Close() may be called from another thread.
+class IncomingInternalPayload {
+ public:
+  explicit IncomingInternalPayload(Payload payload);
+  virtual ~IncomingInternalPayload() = default;
+
+  Payload::Id GetId() const { return payload_id_; }
+
+  // Returns the PayloadType of the Payload to which this object is bound.
+  //
+  // Note that this is supposed to return the type from the OfflineFrame
+  // proto rather than what is already available via
+  // Payload::getType().
+  //
+  // @return The PayloadType.
+  virtual location::nearby::connections::PayloadTransferFrame::PayloadHeader::
+      PayloadType
+      GetType() const = 0;
+
+  // Deduces the total size of the Payload to which this object is bound.
+  //
+  // @return The total size, or -1 if it cannot be deduced (for example, when
+  // dealing with streaming data).
+  virtual std::int64_t GetTotalSize() const = 0;
+
+  // Cleans up any resources used by this Payload. Called when we're stopping
+  // early, e.g. after being cancelled or having no more recipients left.
+  // Implementations must be idempotent (safe to call multiple times) and safe
+  // to call from another thread.
+  virtual void Close() {}
+
+  Payload ReleasePayload();
+
+  // Adds the next chunk that comprises the Payload to which this object is
+  // bound.
+  //
+  // Used when we are trying to reconstruct a Payload that lives on the
+  // other side of a hard boundary (like another device), one chunk at a time.
+  //
+  // `chunk` is the next chunk. An empty chunk signals the end of the payload.
+  virtual Exception AttachNextChunk(absl::string_view chunk) = 0;
+
+ protected:
+  Payload payload_;
+  // We're caching the payload ID here because the backing payload will be
+  // released to another owner during the lifetime of an incoming
+  // IncomingInternalPayload.
+  const Payload::Id payload_id_;
+};
+
+// Defines the operations layered atop an outgoing Payload, for use inside the
+// OfflineServiceController.
+//
+// Implementations are thread-compatible (go/thread-compatible), except that
+// Close() may be called from another thread.
+class OutgoingInternalPayload {
+ public:
+  explicit OutgoingInternalPayload(Payload payload);
+  virtual ~OutgoingInternalPayload() = default;
+
+  Payload::Id GetId() const { return payload_.GetId(); }
+
+  // Returns the PayloadType of the Payload to which this object is bound.
+  //
+  // Note that this is supposed to return the type from the OfflineFrame
+  // proto rather than what is already available via
+  // Payload::getType().
+  //
+  // @return The PayloadType.
+  virtual location::nearby::connections::PayloadTransferFrame::PayloadHeader::
+      PayloadType
+      GetType() const = 0;
+
+  // Deduces the total size of the Payload to which this object is bound.
+  //
+  // @return The total size, or -1 if it cannot be deduced (for example, when
+  // dealing with streaming data).
+  virtual std::int64_t GetTotalSize() const = 0;
+
+  // Cleans up any resources used by this Payload. Called when we're stopping
+  // early, e.g. after being cancelled or having no more recipients left.
+  // Implementations must be idempotent (safe to call multiple times) and safe
+  // to call from another thread.
+  virtual void Close() {}
+
+  const std::string& GetParentFolder() const {
+    return payload_.GetParentFolder();
+  }
+  const std::string& GetFileName() const { return payload_.GetFileName(); }
+  absl::Time GetLastModifiedTime() const {
+    return payload_.GetLastModifiedTime();
+  }
+
+  // Breaks off the next chunk from the Payload to which this object is bound.
+  //
+  // Used when we have a complete Payload that we want to break into smaller
+  // byte blobs for sending across a hard boundary (like the other side of
+  // a Binder, or another device altogether).
+  //
+  // @param chunk_size The preferred size of the next chunk. Depending on
+  // payload type, the provided size may be ignored.
+  // @return The next chunk from the Payload, or an empty ByteArray if we've
+  // reached the end.
+  virtual ByteArray DetachNextChunk(int chunk_size) = 0;
+
+  // Skips current stream pointer to the offset.
+  //
+  // Used when this is a resume outgoing transfer, so we want to skip
+  // some data until the offset position.
+  //
+  // @return the offset really skipped
+  virtual ExceptionOr<size_t> SkipToOffset(size_t offset) = 0;
+
+ protected:
+  Payload payload_;
+};
+
+}  // namespace connections
+}  // namespace nearby
+
+#endif  // CORE_INTERNAL_INTERNAL_PAYLOAD_H_

@@ -414,16 +414,20 @@ impl KagemushaWalletIndexedLeafV1 {
         next_key: [0; 32],
     };
 
-    /// Validate the leaf: canonical fields and `next_key` zero or above `key`.
+    /// Validate canonical fields, sentinel key/value shape and successor order.
     ///
     /// # Errors
     ///
-    /// Rejects a noncanonical field and a `next_key` that is nonzero and not above `key`.
+    /// Rejects a noncanonical field, a zero key with a nonzero value or the reverse,
+    /// and a `next_key` that is nonzero and not above `key`.
     pub fn validate(&self) -> WalletResult<()> {
         for value in [&self.key, &self.value, &self.next_key] {
             if !kagemusha_wallet_is_canonical_field_v1(value) {
                 return Err(invalid_v1("indexed_leaf.field"));
             }
+        }
+        if is_zero_field_v1(&self.key) != is_zero_field_v1(&self.value) {
+            return Err(invalid_v1("indexed_leaf.value"));
         }
         if !is_zero_field_v1(&self.next_key)
             && kagemusha_wallet_integer_cmp_v1(&self.next_key, &self.key) != Ordering::Greater
@@ -497,7 +501,8 @@ impl KagemushaWalletIndexedOpeningV1 {
     ///
     /// # Errors
     ///
-    /// Rejects another length, an invalid leaf and a noncanonical sibling.
+    /// Rejects another length, an invalid leaf, a sentinel/slot mismatch and a
+    /// noncanonical sibling.
     pub fn from_transcript(
         bytes: &[u8],
     ) -> WalletResult<(Option<KagemushaWalletIndexedLeafV1>, Self)> {
@@ -520,10 +525,14 @@ impl KagemushaWalletIndexedOpeningV1 {
         let (slot, siblings) = opening.split_at(4);
         let mut slot_bytes = [0_u8; 4];
         slot_bytes.copy_from_slice(slot);
-        Ok((
-            leaf,
-            Self::from_sibling_bytes(u32::from_le_bytes(slot_bytes), siblings)?,
-        ))
+        let slot = u32::from_le_bytes(slot_bytes);
+        if leaf
+            .as_ref()
+            .is_some_and(|leaf| (slot == 0) != is_zero_field_v1(&leaf.key))
+        {
+            return Err(invalid_v1("indexed_opening.slot"));
+        }
+        Ok((leaf, Self::from_sibling_bytes(slot, siblings)?))
     }
 
     /// The 1,024 concatenated sibling bytes, height 0 first.
@@ -559,9 +568,14 @@ impl KagemushaWalletIndexedOpeningV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an invalid leaf and what [`Self::root_over`] rejects.
+    /// Rejects an invalid leaf, a sentinel outside slot zero or a non-sentinel in
+    /// slot zero, and what [`Self::root_over`] rejects.
     pub fn leaf_root(&self, leaf: &KagemushaWalletIndexedLeafV1) -> WalletResult<[u8; 32]> {
-        self.root_over(&leaf.hash()?)
+        leaf.validate()?;
+        if (self.slot == 0) != is_zero_field_v1(&leaf.key) {
+            return Err(invalid_v1("indexed_opening.slot"));
+        }
+        self.root_over(&leaf.hash_unchecked())
     }
 
     /// Root recomputed with the opened slot empty.

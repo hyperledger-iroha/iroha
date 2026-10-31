@@ -33,6 +33,10 @@ impl core::fmt::Debug for NativePrepareAdmission {
     }
 }
 impl NativePrepareAdmission {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn capture(
         original: &Finishing<'_>,
         result: Hash32,
@@ -84,6 +88,10 @@ impl NativePrepareAdmission {
 
     /// This uses a fresh actual clock observation at each attempt, including after waits.
     /// A genuine matching certificate exempts clock admission before the clock is read.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn check_freshness(&self, certified: bool) -> Result<(), PublicationError> {
         self.freshness(certified).map_err(|error| match error {
             SigningError::StaleExecution {

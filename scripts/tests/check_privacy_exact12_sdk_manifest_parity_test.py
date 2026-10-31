@@ -21,6 +21,46 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+@pytest.mark.parametrize("sdk", tuple(MODULE._CATALOG_CONSUMER_FILES))
+def test_native_catalog_identity_requires_full_kat_and_current_width(
+    monkeypatch: pytest.MonkeyPatch, sdk: str
+) -> None:
+    original_read = MODULE._read
+    assert MODULE._native_catalog_identity(ROOT, sdk)
+    rust = "crates/iroha_crypto/src/privacy.rs"
+    model = "crates/iroha_data_model/src/privacy.rs"
+    mutations = [
+        (rust, "0x5b, 0xcf, 0x36, 0x6f", "0x5a, 0xcf, 0x36, 0x6f"),
+        (rust, "PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1: [u8; 32]", "PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1: [u8; 48]"),
+        (model, "PrivacyExact12CatalogCommitmentV1([u8; 32]);", "PrivacyExact12CatalogCommitmentV1([u8; 48]);"),
+    ]
+    paths = MODULE._CATALOG_CONSUMER_FILES[sdk]
+    if sdk in ("javascript-napi", "python-pyo3"):
+        mutations.append((paths[0], MODULE._NATIVE_CATALOG_HEX, "00" + MODULE._NATIVE_CATALOG_HEX[2:]))
+    elif sdk == "jvm-android":
+        mutations.extend([
+            (paths[0], "0x5b, 0xcf.toByte(), 0x36", "0x5a, 0xcf.toByte(), 0x36"),
+            (paths[0], "require(value.contentEquals(CANONICAL_BYTES))", "require(true)"),
+        ])
+    elif sdk == "swift":
+        mutations.extend((path, "0x5b, 0xcf, 0x36", "0x5a, 0xcf, 0x36") for path in paths)
+        mutations.append((paths[0], "fields[1] == exact12CatalogCommitment", "true"))
+    else:
+        mutations.append((paths[1], MODULE._NATIVE_CATALOG_HEX, "00" + MODULE._NATIVE_CATALOG_HEX[2:]))
+    for relative, needle, replacement in mutations:
+        original = original_read(ROOT, relative)
+        assert needle in original
+        with monkeypatch.context() as context:
+            context.setattr(MODULE, "_read", lambda root, path: original.replace(needle, replacement)
+                            if path == relative else original_read(root, path))
+            assert MODULE._native_catalog_identity(ROOT, sdk) is False
+
+
+@pytest.mark.parametrize("sdk", tuple(MODULE._CATALOG_CONSUMER_FILES))
+def test_native_catalog_identity_refuses_missing_owner(tmp_path: Path, sdk: str) -> None:
+    assert MODULE._native_catalog_identity(tmp_path, sdk) is False
+
+
 def _minimal_safe_tree(tmp_path: Path) -> Path:
     exports = "\n".join(
         f'#[unsafe(no_mangle)] pub extern "C" fn {name}() {{}}'
@@ -28,7 +68,7 @@ def _minimal_safe_tree(tmp_path: Path) -> Path:
     )
     _write(
         tmp_path / MODULE.RUST_BRIDGE,
-        "mod platform_jni;\n"
+        "mod platform_jni;\nmod privacy_construction;\n"
         "compiled_privacy_profile_catalog_v1\n"
         "The catalog contains no committed height.\n"
         + exports,
@@ -42,6 +82,7 @@ def _minimal_safe_tree(tmp_path: Path) -> Path:
     )
     for path in MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS:
         _write(tmp_path / path, "// authenticated test bridge part\n")
+    _write(tmp_path / MODULE._RUST_CONSTRUCTION, "// shared construction owner\n")
     declarations = "\n".join(
         f"void {name}(void);" for name in sorted(MODULE.APPROVED_PRIVACY_EXPORTS)
     )
@@ -60,9 +101,9 @@ def _minimal_safe_tree(tmp_path: Path) -> Path:
                 "privacy_feature_mask",
                 "readiness",
                 "PrivacyCapabilityUnavailableReasonV1",
-                "qualification",
-                "PrivacyExact12QualificationRecordV1",
-                "InvalidProductionQualification",
+                "policy",
+                "PrivacyProtocolPolicyV1",
+                "PrivacyCapabilityReadinessV1::Available",
             )
         ),
     )
@@ -95,7 +136,7 @@ def test_unreviewed_privacy_export_is_rejected(tmp_path: Path) -> None:
         + '\n#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_capabilities_v1() {}\n',
         encoding="utf-8",
     )
-    with pytest.raises(MODULE.AuditError, match="exact approved six"):
+    with pytest.raises(MODULE.AuditError, match="exact approved inventory"):
         MODULE.audit(root)
 
 
@@ -110,7 +151,7 @@ def test_missing_native_capability_validator_is_rejected(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
-    with pytest.raises(MODULE.AuditError, match="exact approved six"):
+    with pytest.raises(MODULE.AuditError, match="exact approved inventory"):
         MODULE.audit(root)
 
 
@@ -142,6 +183,73 @@ def test_csharp_native_evidence_validation_cannot_be_removed(
     assert MODULE._sdk_result(ROOT, contract)["gates"]["native_canonical_manifest_validation"] is False
 
 
+@pytest.mark.parametrize("mutation", ("missing-owner", "missing-module", "duplicate-module", "extra-export"))
+def test_shared_construction_owner_is_in_the_exact_bridge_closure(tmp_path: Path, mutation: str) -> None:
+    root = _minimal_safe_tree(tmp_path)
+    bridge = root / MODULE.RUST_BRIDGE
+    owner = root / MODULE._RUST_CONSTRUCTION
+    if mutation == "missing-owner":
+        owner.unlink()
+    elif mutation == "missing-module":
+        bridge.write_text(bridge.read_text().replace("mod privacy_construction;", ""))
+    elif mutation == "duplicate-module":
+        bridge.write_text(bridge.read_text() + "\nmod privacy_construction;\n")
+    else:
+        owner.write_text('#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_unchecked_v1() {}\n')
+    with pytest.raises(MODULE.AuditError):
+        MODULE._require_exact_abi33(root)
+
+
+@pytest.mark.parametrize("relative, needle, replacement", (
+    (MODULE._RUST_CONSTRUCTION,
+     "!validate_privacy_capability_archive_v1(archive).is_valid()", "false"),
+    (MODULE._RUST_CONSTRUCTION,
+     "if manifest.network_id.as_bytes() != network {", "if false {"),
+    (MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
+     "if !status.is_valid() {", "if false {"),
+))
+def test_relocated_native_rejection_guards_are_mandatory(
+    monkeypatch: pytest.MonkeyPatch, relative: str, needle: str, replacement: str
+) -> None:
+    original_read = MODULE._read
+    assert MODULE.audit(ROOT)["ready"]
+    source = original_read(ROOT, relative)
+    assert needle in source
+
+    def mutated_read(root: Path, path: str) -> str:
+        value = original_read(root, path)
+        return value.replace(needle, replacement) if path == relative else value
+
+    monkeypatch.setattr(MODULE, "_read", mutated_read)
+    report = MODULE.audit(ROOT)
+    assert not report["ready"]
+    assert not report["sdk"]["jvm-android"]["gates"]["native_canonical_manifest_validation"]
+
+
+def test_relocated_guards_cannot_be_satisfied_by_other_functions_or_comments() -> None:
+    construction = MODULE._read(ROOT, MODULE._RUST_CONSTRUCTION)
+    jni = MODULE._read(ROOT, MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1])
+    assert MODULE._relocated_native_validation_guards(construction, jni)
+    needle = "!validate_privacy_capability_archive_v1(archive).is_valid()"
+    bypassed = construction.replace(needle, "false")
+    assert not MODULE._relocated_native_validation_guards(bypassed + construction.replace(
+        "fn tuple_admitted(", "fn unrelated_tuple_check("
+    ), jni)
+    comment_guard = """/* if network[31] & 1 != 1 ||
+        !validate_privacy_capability_archive_v1(archive).is_valid() {
+            return false;
+        } */"""
+    bypassed = bypassed.replace("    if network[31]", comment_guard + "\n    if network[31]", 1)
+    assert not MODULE._relocated_native_validation_guards(bypassed, jni)
+
+
+def test_human_report_uses_the_exact_approved_export_count() -> None:
+    report = MODULE.audit(ROOT)
+    assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 7
+    assert "ABI33 privacy exports: exact 7" in MODULE._format_human(report)
+    assert "exact six" not in MODULE._format_human(report)
+
+
 def test_incomplete_rust_bridge_platform_closure_is_rejected(tmp_path: Path) -> None:
     root = _minimal_safe_tree(tmp_path)
     platform_jni = root / MODULE._RUST_BRIDGE_PLATFORM_JNI
@@ -160,7 +268,7 @@ def test_bridge_part_cannot_hide_an_unreviewed_privacy_export(tmp_path: Path, pa
         root / part,
         '#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_unchecked_v1() {}\n',
     )
-    with pytest.raises(MODULE.AuditError, match="exact approved six"):
+    with pytest.raises(MODULE.AuditError, match="exact approved inventory"):
         MODULE.audit(root)
 
 
@@ -261,7 +369,7 @@ def test_live_sdk_binds_transport_authority_to_expected_network(sdk: str) -> Non
          "(auth, context) => ToriiClient.#normalizeCanonicalAuth(auth, context)",
          "(auth, context) => ToriiClient._normalizeCanonicalAuth(auth, context)"),
         ("javascript-napi", "crates/iroha_js_host/src/lib.rs",
-         "if actual != expected || genesis_hash != expected.as_bytes()", "if false"),
+         "if actual != expected", "if false"),
         ("python-pyo3", MODULE._PYTHON_RUST_MANIFEST,
          "authenticated_network_id: None,", "authenticated_network_id: Some(network),"),
         ("python-pyo3", MODULE._PYTHON_RUST_MANIFEST,
@@ -285,13 +393,13 @@ def test_live_sdk_binds_transport_authority_to_expected_network(sdk: str) -> Non
         ("jvm-android", MODULE._JVM_KOTLIN_TRANSPORT,
          "requireExactResponseProvenance = true,", "requireExactResponseProvenance = false,"),
         ("jvm-android", MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
-         "genesis_hash == expected_network", "true"),
+         "manifest.network_id.as_bytes() == expected_network", "true"),
         ("jvm-android", MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[2],
          "nativeRequireExact12CapabilityTupleForNetworkV1(", "nativeRequireExact12CapabilityTuple("),
         ("swift", MODULE._SWIFT_MODEL,
-         "deployment.networkId == expectedNetworkId,", "true,"),
+         "guard manifest.networkId == expectedNetworkId else", "true,"),
         ("swift", MODULE._SWIFT_MODEL,
-         "deployment.genesisHash == expectedNetworkId.bytes else", "true else"),
+         "PrivacyExact12CapabilityManifestCodecV1.requireNetworkV1(", "true else"),
         ("swift", MODULE._SWIFT_MODEL,
          "for index in 0..<13", "for index in 0..<11"),
         ("swift", MODULE._SWIFT_MODEL,
@@ -411,7 +519,7 @@ def test_javascript_native_authority_regressions_fail_source_parity(
     (
         (
             MODULE._PYTHON_RUST_MANIFEST,
-            "if !row.is_network_available()",
+            "if let PrivacyCapabilityReadinessV1::Unavailable(reason) = row.readiness",
             "if false",
             "exact_native_local_tuple_match",
         ),
@@ -471,8 +579,8 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_MODEL,
-            "public let qualification: PrivacyExact12QualificationRecordV1?",
-            "public let droppedQualification: PrivacyExact12QualificationRecordV1?",
+            "public let policy: PrivacyProtocolPolicyV1?",
+            "public let droppedPolicy: PrivacyProtocolPolicyV1?",
             "canonical_manifest_model",
         ),
         (
@@ -495,7 +603,7 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_MODEL,
-            "guard compiledBytes == localCompiledProfile",
+            "let localCompiledTupleMatches = compiledBytes == localCompiledProfile",
             "guard !compiledBytes.isEmpty",
             "exact_native_local_tuple_match",
         ),
@@ -543,7 +651,7 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_TRANSACTION,
-            "wireName != PrivacyExact12FixtureCodecV1.submitProofWireId",
+            "guard !PrivacyExact12FixtureCodecV1.isPrivacyInstructionWire(wireName) else",
             "!wireName.isEmpty",
             "transaction_admission_guard",
         ),
@@ -612,7 +720,7 @@ def test_swift_cutover_hostile_source_regressions_fail_closed(
     ("relative", "needle", "replacement", "failed_gate"),
     (
         (
-            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
+            MODULE._RUST_CONSTRUCTION,
             "committed.compiled_profile == local.compiled_profile",
             "committed.compiled_profile != local.compiled_profile",
             "exact_native_local_tuple_match",
@@ -680,11 +788,11 @@ def test_jvm_cutover_hostile_source_regressions_fail_closed(
     ("file_kind", "needle", "replacement"),
     (
         ("model", "client.Options.NetworkId ?? throw", "guessedNetworkId ?? throw"),
-        ("model", "decoded.Qualification, expectedNetworkId", "decoded.Qualification, guessedNetworkId"),
+        ("model", "decoded.NetworkId, expectedNetworkId", "decoded.NetworkId, guessedNetworkId"),
         ("model", "|| !NetworkId.Equals(expectedNetworkId)", "|| false"),
         ("model", "PrivacyNative.RequireValidCapabilityArchive(manifestArchive);", "SkipEvidence(manifestArchive);"),
-        ("model", "if (!genesisHash.SequenceEqual(networkId.AsSpan()))", "if (false)"),
-        ("model", "if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))", "if (false)"),
+        ("model", "if (!manifestNetworkId.Equals(expectedNetworkId))", "if (false)"),
+        ("model", "PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(row);", "if (false)"),
         ("transaction", "RequireForConstruction(admission, protocol, NetworkId)", "RequireForConstruction(admission, protocol, guessedNetworkId)"),
     ),
 )
@@ -705,8 +813,8 @@ def test_csharp_authenticated_network_boundary_cannot_be_removed(
 
 
 def test_live_c_privacy_inventory_matches_its_single_approved_owner() -> None:
-    MODULE._require_exact_abi31(ROOT)
-    assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 6
+    MODULE._require_exact_abi33(ROOT)
+    assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 7
 
 
 def test_missing_c_capability_validator_is_rejected(tmp_path: Path) -> None:
@@ -715,16 +823,16 @@ def test_missing_c_capability_validator_is_rejected(tmp_path: Path) -> None:
     declaration = "void iroha_privacy_validate_exact12_capability_manifest_v1(void);"
     assert declaration in header.read_text()
     header.write_text(header.read_text().replace(declaration, ""), encoding="utf-8")
-    with pytest.raises(MODULE.AuditError, match="C ABI31.*exact approved six"):
-        MODULE._require_exact_abi31(root)
+    with pytest.raises(MODULE.AuditError, match="C ABI33.*exact approved inventory"):
+        MODULE._require_exact_abi33(root)
 
 
 def test_unapproved_c_privacy_export_is_rejected(tmp_path: Path) -> None:
     root = _minimal_safe_tree(tmp_path)
     header = root / MODULE.C_HEADER
     header.write_text(header.read_text() + "\nvoid iroha_privacy_unapproved_v1(void);\n", encoding="utf-8")
-    with pytest.raises(MODULE.AuditError, match="C ABI31.*exact approved six"):
-        MODULE._require_exact_abi31(root)
+    with pytest.raises(MODULE.AuditError, match="C ABI33.*exact approved inventory"):
+        MODULE._require_exact_abi33(root)
 
 
 @pytest.mark.parametrize("mutation", ("java-owner", "android-export", "kotlin-validator", "java-transport-owner", "java-id-owner"))
@@ -736,7 +844,7 @@ def test_jvm_canonical_owner_regressions_fail_source_parity(tmp_path, monkeypatc
             MODULE._JVM_KOTLIN_TRANSPORT, MODULE._JVM_JAVA_TRANSPORT,
             MODULE._JVM_KOTLIN_INSTRUCTION, MODULE._JVM_KOTLIN_TRANSACTION_ADAPTER,
             MODULE._JVM_JAVA_INSTRUCTION, MODULE._JVM_JAVA_TRANSACTION_ADAPTER,
-            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1],
+            MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS[1], MODULE._RUST_CONSTRUCTION,
         )
     }
     bridge = MODULE._rust_bridge_source(ROOT)

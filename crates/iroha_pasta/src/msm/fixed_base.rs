@@ -27,7 +27,7 @@
 //! the variable-base MSM bit for bit.
 
 use crate::CancellationToken;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rayon::prelude::*;
 use zeroize::Zeroizing;
 
@@ -628,7 +628,7 @@ mod tests {
     use ff::Field;
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     #[test]
     fn shared_budget_fallback_preserves_table_and_msm() {

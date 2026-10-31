@@ -1,16 +1,17 @@
 //! Genesis-only `InitializeSccpV1` (`specs/sccp.md` §4.1, §4.15, §4.18). Owner: ws31.
 //!
-//! Validates that it executes inside the genesis block under NPoS with `max_validators` in
+//! Validates that it executes inside the genesis block under `NPoS` with `max_validators` in
 //! 4..=31, checks the §4.1 parameter table with the staking floor L1 ([`check_parameters`]),
 //! stores the parameters and the nonzero reset nonce, creates the three route escrow accounts
 //! and an empty registry, and no route. SCCP exists on a network iff `sccp_parameters` is
 //! present, so a second initialization is refused.
 //!
-//! Generation 1 uses the original Global NPoS genesis context; staged World writes cannot
+//! Generation 1 uses the original Global `NPoS` genesis context; staged World writes cannot
 //! manufacture it. The epoch guard and pinned slash policy are checked before publication.
 
+use super::params::SccpPolicyError;
 use super::{Error, escrow, generations, parliament_iface, store};
-use crate::state::{StateTransaction, WorldReadOnly};
+use crate::state::{StateReadOnly as _, StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
     isi::sccp::InitializeSccpV1,
@@ -29,9 +30,9 @@ fn refuse(reason: impl core::fmt::Display) -> Error {
 /// outside the table:
 ///
 /// * the staking floor L1 (§4.8), `committee_validity_ms + forgery_evidence_grace_ms ≤
-///   unbonding_delay_ms`, reads `nexus.staking.unbonding_delay` of the node's genesis-pinned
-///   staking policy. The global default delay is 0, so SCCP initializes only under a staking
-///   profile that sets it (21 d for the Taira defaults);
+///   unbonding_delay_ms`, reads the original committed `PublicLaneStakingPolicy`.
+///   Missing original monetary authority cannot be replaced by local configuration
+///   or a pending transaction write; the Taira parameters require at least 21 d;
 /// * the lower bound of `fast_pause_hold_ms` reads the Parliament attempt latency through
 ///   [`parliament_iface::parliament_sccp_attempt_latency_ms`]; while the Parliament pipeline
 ///   provides none, that bound is deferred, never treated as met by a zero latency.
@@ -47,28 +48,53 @@ fn refuse(reason: impl core::fmt::Display) -> Error {
 pub fn check_parameters(
     state_transaction: &StateTransaction<'_, '_>,
     parameters: &SccpParametersV1,
-) -> Result<(), SccpParametersError> {
-    let unbonding_delay = state_transaction.nexus.staking.unbonding_delay;
-    let delay_ms = u64::try_from(unbonding_delay.as_millis()).unwrap_or(u64::MAX);
-    if store::committee_generations::iter(&*state_transaction.world).any(|(_, generation)| {
-        generation
-            .validity_ms
-            .checked_add(generation.grace_ms)
-            .is_none_or(|required| required > delay_ms)
-    }) {
-        return Err(SccpParametersError::UnbondingDelayTooShort);
+) -> Result<(), SccpPolicyError> {
+    let policy = state_transaction
+        .staking_monetary_policy()
+        .map_err(|error| match error {
+            iroha_data_model::block::consensus::PublicLaneStakingPolicyError::MissingParameter => {
+                SccpPolicyError::MissingStakingPolicy
+            }
+            _ => SccpPolicyError::OriginalStakingSourceMismatch,
+        })?;
+    // This covers every retained generation and the nonzero slash rule, even
+    // when SCCP value movement is disabled. The actual Parliament lower bound
+    // is then checked with its own current owner below.
+    super::params::validate_staking_policy(&*state_transaction.world, parameters, policy)?;
+    // The block-original authority remains mandatory, and an earlier accepted
+    // monetary successor must also remain safe after this SCCP update. Check
+    // both cuts so instruction ordering cannot publish an underfunded pair.
+    let current_policy = state_transaction
+        .world
+        .parameters()
+        .staking_policy()
+        .ok_or(SccpPolicyError::MissingStakingPolicy)?;
+    if current_policy != policy {
+        super::params::validate_staking_policy(
+            &*state_transaction.world,
+            parameters,
+            current_policy,
+        )?;
     }
-    parameters.validate_against(&SccpParameterContextV1 {
-        parliament_sccp_attempt_latency_ms: parliament_iface::parliament_sccp_attempt_latency_ms(),
-        unbonding_delay_ms: delay_ms,
-    })
+    // Policy installation already refuses escrow ids; recheck both cuts before the escrows
+    // these ids name come into being (§4.15).
+    for staking in [policy, current_policy] {
+        super::params::validate_staking_custody(state_transaction.network_id(), staking)?;
+    }
+    parameters
+        .validate_against(&SccpParameterContextV1 {
+            parliament_sccp_attempt_latency_ms:
+                parliament_iface::parliament_sccp_attempt_latency_ms(),
+            unbonding_delay_ms: policy.unbonding_delay_ms,
+        })
+        .map_err(Into::into)
 }
 
 /// Execute `InitializeSccpV1`.
 ///
 /// # Errors
 ///
-/// Refuses outside the genesis block, when SCCP already exists, without NPoS parameters or
+/// Refuses outside the genesis block, when SCCP already exists, without `NPoS` parameters or
 /// with `max_validators` outside 4..=31, with a parameter set that breaks a §4.1 rule or the
 /// staking floor L1, or with a zero `reset_nonce`; propagates an escrow creation failure.
 pub fn execute_initialize(
@@ -118,9 +144,6 @@ pub fn execute_initialize(
             "epoch duration is below SCCP_MIN_EPOCH_MS or exceeds the u64 clock",
         ));
     }
-    if state_transaction.nexus.staking.max_slash_bps == 0 {
-        return Err(refuse("max_slash_bps must be at least one"));
-    }
     let generation = generations::prepare_genesis(state_transaction, &instruction.parameters)
         .map_err(|error| match error {
             generations::GenerationError::Degraded(reason) => refuse(format_args!(
@@ -145,8 +168,7 @@ pub fn execute_initialize(
 mod tests {
     use super::*;
     use crate::smartcontracts::isi::sccp::test_support::{
-        SCCP_UNBONDING_DELAY_MS, SampleInstructions, authority, blank_state, header,
-        set_sccp_staking_profile,
+        SCCP_UNBONDING_DELAY_MS, SampleInstructions, authority, blank_state_with_staking, header,
     };
     use iroha_data_model::{
         bridge::SccpNetworkV1,
@@ -154,6 +176,22 @@ mod tests {
         sccp::registry::SCCP_ROUTE_NETWORKS_V1,
     };
     use mv::storage::StorageReadOnly as _;
+
+    fn staking_policy(
+        delay: u64,
+        slash: u16,
+    ) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let asset = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .unwrap();
+        let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset);
+        policy.unbonding_delay_ms = delay;
+        policy.max_slash_bps = slash;
+        policy
+    }
+    fn blank_state() -> crate::state::State {
+        blank_state_with_staking(Some(staking_policy(SCCP_UNBONDING_DELAY_MS, 1)))
+    }
 
     fn set_max_validators(stx: &mut StateTransaction<'_, '_>, max_validators: Option<u32>) {
         let Some(max_validators) = max_validators else {
@@ -164,9 +202,7 @@ mod tests {
             ..SumeragiNposParameters::default()
         };
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(npos.into_custom_parameter()))
             .expect("fixture NPoS parameters");
     }
 
@@ -221,7 +257,6 @@ mod tests {
         let mut stx = block.transaction();
         stx.native_genesis_context = Some(&original);
         set_max_validators(&mut stx, Some(4));
-        set_sccp_staking_profile(&mut stx);
         seed_genesis_members(&mut stx, &original);
         let key = (
             LaneId::SINGLE,
@@ -260,7 +295,6 @@ mod tests {
         stx.native_genesis_context = Some(&original);
         seed_genesis_members(&mut stx, &original);
         set_max_validators(&mut stx, max_validators);
-        set_sccp_staking_profile(&mut stx);
         execute_initialize(instruction, &authority(1), &mut stx)
     }
 
@@ -275,11 +309,10 @@ mod tests {
         let mut block = state.block(header(1));
         let mut stx = block.transaction();
         set_max_validators(&mut stx, Some(31));
-        set_sccp_staking_profile(&mut stx);
         stx.native_genesis_context = Some(&original);
         seed_genesis_members(&mut stx, &original);
         let instruction = SampleInstructions::initialize();
-        execute_initialize(instruction.clone(), &authority(1), &mut stx).expect("initialize");
+        execute_initialize(instruction, &authority(1), &mut stx).expect("initialize");
         assert_eq!(
             store::parameters::get(&*stx.world).as_ref(),
             Some(&instruction.parameters)
@@ -361,17 +394,15 @@ mod tests {
     }
 
     #[test]
-    fn initialization_checks_the_staking_floor_against_the_node_policy() {
-        use core::time::Duration;
+    fn initialization_checks_the_staking_floor_against_original_committed_policy() {
         let original = original_genesis_context();
         let with_delay = |delay_ms: u64| {
-            let state = blank_state();
+            let state = blank_state_with_staking(Some(staking_policy(delay_ms, 1)));
             let mut block = state.block(header(1));
             let mut stx = block.transaction();
             set_max_validators(&mut stx, Some(31));
             stx.native_genesis_context = Some(&original);
             seed_genesis_members(&mut stx, &original);
-            stx.nexus.staking.unbonding_delay = Duration::from_millis(delay_ms);
             execute_initialize(SampleInstructions::initialize(), &authority(1), &mut stx)
         };
         // L1: the Taira defaults need 14 d + 7 d of unbonding delay.
@@ -388,7 +419,6 @@ mod tests {
         let state = blank_state();
         let mut block = state.block(header(1));
         let mut stx = block.transaction();
-        set_sccp_staking_profile(&mut stx);
         let defaults = SccpParametersV1::taira_default();
         assert_eq!(check_parameters(&stx, &defaults), Ok(()));
         // The hold's own ceiling and the joint validity floor are checked here.
@@ -396,20 +426,26 @@ mod tests {
         long_hold.fast_pause_hold_ms = u64::MAX;
         assert_eq!(
             check_parameters(&stx, &long_hold),
-            Err(SccpParametersError::FastPauseHoldTooLong)
+            Err(SccpPolicyError::Parameters(
+                SccpParametersError::FastPauseHoldTooLong
+            ))
         );
         let mut short_validity = defaults;
         short_validity.committee_validity_ms = short_validity.fast_pause_hold_ms;
         assert_eq!(
             check_parameters(&stx, &short_validity),
-            Err(SccpParametersError::CommitteeValidityTooShort)
+            Err(SccpPolicyError::Parameters(
+                SccpParametersError::CommitteeValidityTooShort
+            ))
         );
-        // L1 reads the staking policy of the node.
+        // L1 reads the original committed staking policy.
         let mut long_grace = defaults;
         long_grace.forgery_evidence_grace_ms += 1;
         assert_eq!(
             check_parameters(&stx, &long_grace),
-            Err(SccpParametersError::UnbondingDelayTooShort)
+            Err(SccpPolicyError::Parameters(
+                SccpParametersError::UnbondingDelayTooShort
+            ))
         );
         // The Parliament latency is unavailable: the lower bound of the hold is deferred, so
         // the smallest hold the other rules admit passes.
@@ -421,7 +457,9 @@ mod tests {
     #[test]
     fn signed_genesis_refuses_partially_registered_initial_committee() {
         use crate::{
-            smartcontracts::isi::sccp::forgery::tests::{keys, register_genesis_members},
+            smartcontracts::isi::sccp::forgery::tests::{
+                keys, register_genesis_members, replace_original_staking_parameter,
+            },
             sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
         };
         use iroha_data_model::parameter::system::{
@@ -444,11 +482,9 @@ mod tests {
                 )),
                 Parameter::Custom(npos.into_custom_parameter()),
             ]);
-            let mut nexus = iroha_config::parameters::actual::Nexus::default();
-            nexus.staking.unbonding_delay = std::time::Duration::from_secs(21 * 86_400);
-            nexus.staking.max_slash_bps = 1;
-            register_genesis_members(&mut config, &keys[..registered], &nexus.staking);
-            config.nexus = Some(nexus);
+            let staking = staking_policy(SCCP_UNBONDING_DELAY_MS, 1);
+            replace_original_staking_parameter(&mut config, &staking);
+            register_genesis_members(&mut config, &keys[..registered], &staking);
             config
                 .genesis_instructions
                 .push(SampleInstructions::initialize().into());
@@ -467,24 +503,21 @@ mod tests {
         use iroha_data_model::parameter::system::SumeragiParameter;
         let original = original_genesis_context();
         for case in 0..3 {
-            let state = blank_state();
+            let state = blank_state_with_staking(Some(staking_policy(
+                SCCP_UNBONDING_DELAY_MS,
+                if case == 1 { 0 } else { 1 },
+            )));
             let mut block = state.block(header(1));
             let mut stx = block.transaction();
             set_max_validators(&mut stx, Some(4));
-            set_sccp_staking_profile(&mut stx);
             if case != 0 {
                 stx.native_genesis_context = Some(&original);
             }
-            if case == 1 {
-                stx.nexus.staking.max_slash_bps = 0;
-            }
             if case == 2 {
                 stx.world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
-                        std::num::NonZeroU64::new(1).unwrap(),
-                    )))
+                    .set_parameter_for_testing(Parameter::Sumeragi(
+                        SumeragiParameter::EpochLengthBlocks(std::num::NonZeroU64::new(1).unwrap()),
+                    ))
                     .expect("fixture short epoch");
             }
             let error = refusal(execute_initialize(
@@ -507,30 +540,69 @@ mod tests {
         }
     }
     #[test]
-    fn parameter_update_keeps_every_retained_generation_inside_pinned_unbonding_delay() {
+    fn parameter_update_keeps_every_retained_generation_inside_original_unbonding_delay() {
         use crate::{
             smartcontracts::isi::sccp::{
                 generation_record::RetainedSccpGeneration, test_support::sample_generation,
             },
             state::StateReadOnly,
         };
-        let state = blank_state();
+        for additional_ms in [0, 1] {
+            let original_policy = staking_policy(SCCP_UNBONDING_DELAY_MS + additional_ms, 1);
+            let state = blank_state_with_staking(Some(original_policy.clone()));
+            let mut block = state.block(header(2));
+            let mut stx = block.transaction();
+            let defaults = SccpParametersV1::taira_default();
+            assert_eq!(check_parameters(&stx, &defaults), Ok(()));
+            let mut source = sample_generation(1);
+            source.validity_ms += 1;
+            source.deadline_ms += 1;
+            source.liable_until_lc += 1;
+            let validity_ms = source.validity_ms;
+            let grace_ms = source.grace_ms;
+            let original = RetainedSccpGeneration::admit(&source, &stx.execution_budget()).unwrap();
+            store::committee_generations::insert(&mut stx, 1, original).unwrap();
+            let expected = if additional_ms == 0 {
+                Err(SccpPolicyError::RetainedLiability {
+                    generation: 1,
+                    validity_ms,
+                    grace_ms,
+                    unbonding_delay_ms: SCCP_UNBONDING_DELAY_MS,
+                })
+            } else {
+                Ok(())
+            };
+            assert_eq!(check_parameters(&stx, &defaults), expected);
+            let pending = staking_policy(SCCP_UNBONDING_DELAY_MS + 1, 1);
+            stx.world
+                .set_parameter_for_testing(Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(
+                check_parameters(&stx, &defaults),
+                expected,
+                "pending policy cannot replace the block original monetary cut"
+            );
+            assert_eq!(stx.staking_monetary_policy().unwrap(), &original_policy);
+        }
+    }
+
+    #[test]
+    fn initialization_refuses_staking_custody_at_a_route_escrow_id() {
+        use crate::state::StateReadOnly;
+        let network_id = *blank_state().view().network_id();
+        let escrow = escrow::escrow_account(&network_id, SccpNetworkV1::EthereumMainnet).unwrap();
+        let mut policy = staking_policy(SCCP_UNBONDING_DELAY_MS, 1);
+        policy.slash_sink_account_id = escrow;
+        // Installed without the parameter instruction, which would already refuse it.
+        let state = blank_state_with_staking(Some(policy));
+        assert_eq!(*state.view().network_id(), network_id);
         let mut block = state.block(header(2));
-        let mut stx = block.transaction();
-        set_sccp_staking_profile(&mut stx);
-        let defaults = SccpParametersV1::taira_default();
-        assert_eq!(check_parameters(&stx, &defaults), Ok(()));
-        let mut source = sample_generation(1);
-        source.validity_ms += 1;
-        source.deadline_ms += 1;
-        source.liable_until_lc += 1;
-        let original = RetainedSccpGeneration::admit(&source, &stx.execution_budget()).unwrap();
-        store::committee_generations::insert(&mut stx, 1, original).unwrap();
+        let stx = block.transaction();
         assert_eq!(
-            check_parameters(&stx, &defaults),
-            Err(SccpParametersError::UnbondingDelayTooShort)
+            check_parameters(&stx, &SccpParametersV1::taira_default()),
+            Err(SccpPolicyError::EscrowStakingAccount("slash sink"))
         );
-        stx.nexus.staking.unbonding_delay += std::time::Duration::from_millis(1);
-        assert_eq!(check_parameters(&stx, &defaults), Ok(()));
     }
 }

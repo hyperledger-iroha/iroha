@@ -22,6 +22,12 @@ impl Pause {
         checkpoints: &[PrivateArchiveBytes],
         cancellation: &Cancellation,
     ) -> Result<(), Error> {
+        struct Workspace(Arc<AtomicUsize>, Vec<u8>);
+        impl Drop for Workspace {
+            fn drop(&mut self) {
+                self.0.store(self.1.len(), Ordering::SeqCst);
+            }
+        }
         if !self.armed.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
@@ -30,12 +36,6 @@ impl Pause {
             checkpoints[0].as_slice(),
             self.expected_checkpoint.as_slice()
         );
-        struct Workspace(Arc<AtomicUsize>, Vec<u8>);
-        impl Drop for Workspace {
-            fn drop(&mut self) {
-                self.0.store(self.1.len(), Ordering::SeqCst);
-            }
-        }
         let _workspace = Workspace(self.released.clone(), vec![0; 1024]);
         self.entered.send(()).expect("announce active fold");
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -163,7 +163,7 @@ fn inactive_wallet_cancels_active_fold_and_charging_restart_resumes_checkpoint()
 #[derive(Default)]
 struct Observed(Mutex<FoldMetricsV1>);
 impl FoldObserverV1 for Observed {
-    fn sub_proof(&self, record: FoldSubProofV1) {
+    fn sub_proof(&self, record: &FoldSubProofV1) {
         self.0.lock().expect("fold telemetry").record(record);
     }
 }
@@ -228,10 +228,12 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         }
     );
     let first = observed.metrics().records()[0];
+    // Three checkpoints and Ω: every turn that read the schedule names the head's four.
     assert_eq!(
         (
             first.sequence,
             first.ordinal,
+            first.stages,
             first.operation,
             first.stage,
             first.outcome,
@@ -240,6 +242,7 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         (
             0,
             0,
+            Some(4),
             Some(KagemushaWalletOperationKindV1::Bootstrap),
             None,
             FoldOutcomeV1::Checkpoint,
@@ -275,14 +278,15 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         drop(priority);
     }
     // The plain payment entry point is the payment class.
-    (wallet, _) = interrupt(wallet, |scheduler| drop(scheduler.payment()));
-    (wallet, _) = interrupt(wallet, |scheduler| scheduler.set_activity(false, false));
+    (wallet, ()) = interrupt(wallet, |scheduler| drop(scheduler.payment()));
+    (wallet, ()) = interrupt(wallet, |scheduler| scheduler.set_activity(false, false));
     scheduler.set_activity(true, false);
-    (wallet, _) = interrupt(wallet, Scheduler::close);
+    (wallet, ()) = interrupt(wallet, Scheduler::close);
     scheduler.set_activity(true, false);
-    wallet.proofs.fold_pause = None;
 
     let cancelled = observed.metrics();
+    assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Idle);
+    assert_eq!(observed.metrics(), cancelled, "closed wakes report nothing");
     let outcomes: Vec<_> = cancelled
         .records()
         .iter()
@@ -302,7 +306,10 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
         .map(FoldOutcomeV1::Cancelled)
     );
     for record in cancelled.records().iter().skip(1) {
-        assert_eq!((record.sequence, record.ordinal), (0, 1));
+        assert_eq!(
+            (record.sequence, record.ordinal, record.stages),
+            (0, 1, Some(4))
+        );
         assert_eq!(
             record.operation,
             Some(KagemushaWalletOperationKindV1::Bootstrap)
@@ -318,6 +325,29 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
             .sum::<Duration>()
     );
 
+    // Close is terminal. Reopen the retained owners and attach the same observer
+    // so the earlier cancellation records and the resumed sub-proofs stay in one ledger.
+    let selected = wallet.custody.checkpoint.clone();
+    let (custody, archive, mut proofs, scheme, wallet_id) = (
+        wallet.custody,
+        wallet.archive,
+        wallet.proofs,
+        wallet.scheme_id,
+        wallet.wallet_id,
+    );
+    proofs.fold_pause = None;
+    let mut wallet = Coordinator::new(custody, archive, proofs, scheme, wallet_id).unwrap();
+    let reopened = wallet.scheduler();
+    reopened.observe(observed.clone());
+    assert_eq!(wallet.custody.checkpoint, selected);
+    assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Idle);
+    assert_eq!(
+        observed.metrics(),
+        cancelled,
+        "inactive restart reports nothing"
+    );
+    reopened.set_activity(true, false);
+
     // The cancelled work resumes from the durable checkpoint; Ω is the final stage.
     for ordinal in 1..3 {
         assert_eq!(
@@ -332,8 +362,8 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
     assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Folded(0));
     let folded = *observed.metrics().records().back().unwrap();
     assert_eq!(
-        (folded.ordinal, folded.stage, folded.outcome),
-        (3, Some(FoldStageV1::Omega), FoldOutcomeV1::Folded)
+        (folded.ordinal, folded.stages, folded.stage, folded.outcome),
+        (3, Some(4), Some(FoldStageV1::Omega), FoldOutcomeV1::Folded)
     );
     // An idle wake records nothing.
     let before = observed.metrics();
@@ -345,8 +375,13 @@ fn fold_telemetry_reports_each_sub_proof_and_cancellation_cause_without_idle_wak
     assert_eq!(wallet.fold_once().unwrap(), FoldStatus::Folded(0));
     let adopted = *observed.metrics().records().back().unwrap();
     assert_eq!(
-        (adopted.ordinal, adopted.stage, adopted.outcome),
-        (3, Some(FoldStageV1::Omega), FoldOutcomeV1::Adopted)
+        (
+            adopted.ordinal,
+            adopted.stages,
+            adopted.stage,
+            adopted.outcome
+        ),
+        (3, Some(4), Some(FoldStageV1::Omega), FoldOutcomeV1::Adopted)
     );
     assert_eq!(adopted.phase(FoldPhaseV1::Prove), Duration::ZERO);
     assert_eq!(
@@ -746,7 +781,7 @@ fn host_turn(wallet: &mut Wallet) -> FoldTurnStatusV1 {
     }
 }
 
-/// The fixture Receive, whose CreditStatus builds once it is folded.
+/// The fixture Receive, whose `CreditStatus` builds once it is folded.
 fn credited(previous: &FrozenTransition) -> FrozenTransition {
     frozen(
         Some(previous),
@@ -774,7 +809,7 @@ fn fold_through(wallet: &mut Wallet, sequence: u128) {
     panic!("head {sequence} was not folded");
 }
 
-/// Bootstrap and the fixture Receive, both folded, with a CreditStatus that builds.
+/// Bootstrap and the fixture Receive, both folded, with a `CreditStatus` that builds.
 fn credited_and_folded() -> (Wallet, FrozenTransition) {
     let mut wallet = wallet();
     let boot = bootstrap();
@@ -920,7 +955,7 @@ fn corrupt_credit_root(wallet: &mut Wallet) {
     wallet.publish_manifest(selected, &manifest).unwrap();
 }
 
-/// The predecessor credit-root check is skipped only by the caught-up wake. CreditStatus
+/// The predecessor credit-root check is skipped only by the caught-up wake. `CreditStatus`
 /// refuses a corrupted root, and so does the first turn that selects a sub-proof, before any
 /// proof work or publication.
 #[test]

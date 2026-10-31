@@ -2,10 +2,17 @@
 //!
 //! A signed long EMPTY retry interval is a fixture precondition; test deadlines remain the
 //! existing 30/60 second bounds. Admission alone must wake the actual existing node owners.
+//! Each real-node scenario uses the maintained isolated harness because unrelated tests can
+//! hold the process-global witness recorder throughout block execution. The parent retains
+//! the scenario guard so these networks still run one at a time.
 
 use super::*;
 
-fn accepted_log(chain: &Chain, state: &State, message: &str) -> AcceptedTransaction<'static> {
+fn accepted_log(
+    chain: &NodeTestChain,
+    state: &State,
+    message: &str,
+) -> AcceptedTransaction<'static> {
     let network = NetworkId::from_genesis_hash(chain.genesis.hash());
     let instruction = InstructionBox::from(Log::new(Level::INFO, message.to_owned()));
     let fees = state
@@ -43,13 +50,17 @@ fn accepted_log(chain: &Chain, state: &State, message: &str) -> AcceptedTransact
         &network,
         Duration::from_secs(10),
         TransactionParameters::default(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
     )
     .expect("original accepted native input")
 }
 
 fn enqueue_only(
-    chain: &Chain,
+    chain: &NodeTestChain,
     validators: &[Validator],
     message: &str,
 ) -> HashOf<TransactionEntrypoint> {
@@ -67,6 +78,11 @@ fn enqueue_only(
 #[test]
 fn native_queue_admission_wakes_original_global_driver_after_empty() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_global_driver_after_empty",
+    ) {
+        return;
+    }
     let chain = chain(4, 600_000);
     let disks = disks(&chain);
     let validators = start_all(&chain, &disks, true);
@@ -100,6 +116,11 @@ fn native_queue_admission_wakes_original_global_driver_after_empty() {
 #[test]
 fn native_queue_admission_wakes_original_live_lane_after_empty() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::queue_wake_tests::native_queue_admission_wakes_original_live_lane_after_empty",
+    ) {
+        return;
+    }
     let chain = chain_with(4, 600_000, |keys| {
         fixed_lane_policy_with_retry(keys, 600_000)
     });
@@ -149,7 +170,10 @@ fn native_queue_admission_wakes_original_live_lane_after_empty() {
 
 /// A separately prepared real State reaches the original startup seam without launching
 /// another signer. Its attempted files must remain absent on exclusive Queue refusal.
-fn duplicate_prepared_start(chain: &Chain, queue: &Arc<Queue>) -> (NodeError, tempfile::TempDir) {
+fn duplicate_prepared_start(
+    chain: &NodeTestChain,
+    queue: &Arc<Queue>,
+) -> (NodeError, tempfile::TempDir) {
     let disk = Disk {
         kura: Kura::blank_kura_for_testing(),
         dir: tempfile::tempdir().unwrap(),
@@ -210,6 +234,11 @@ fn duplicate_prepared_start(chain: &Chain, queue: &Arc<Queue>) -> (NodeError, te
 #[test]
 fn native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::queue_wake_tests::native_queue_owner_refuses_duplicate_prepared_start_and_requires_fresh_queue_restart",
+    ) {
+        return;
+    }
     // Keep fixture State generations in the exact pool baseline; unrelated epoch
     // reclamation must not appear to refund this operation's original custody.
     let retirement_pin = crossbeam_epoch::pin();
@@ -390,6 +419,11 @@ fn native_queue_reservation_refuses_foreign_funded_pool_without_changing_origina
 #[test]
 fn native_queue_admission_before_start_retains_original_prepared_state_and_commits() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::queue_wake_tests::native_queue_admission_before_start_retains_original_prepared_state_and_commits",
+    ) {
+        return;
+    }
     let chain = chain(4, 600_000);
     let disks = disks(&chain);
     let registry = Arc::new(Registry::default());
@@ -472,6 +506,11 @@ fn native_queue_admission_before_start_retains_original_prepared_state_and_commi
 #[test]
 fn native_queue_admission_never_waits_for_original_live_lane_map() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::queue_wake_tests::native_queue_admission_never_waits_for_original_live_lane_map",
+    ) {
+        return;
+    }
     let chain = chain_with(4, 600_000, |keys| {
         fixed_lane_policy_with_retry(keys, 600_000)
     });

@@ -16,7 +16,7 @@ use crate::{
 /// A directly signed single payment may recover its consumed identity without paying again.
 /// Composite executions and delegated carriers retain their ordinary execution/fee policy.
 /// No new successful execution or successful receipt is fabricated for a duplicate carrier.
-pub(crate) fn reject_committed_direct_payment(
+pub fn reject_committed_direct_payment(
     state: &StateTransaction<'_, '_>,
     transaction: &SignedTransaction,
 ) -> Result<(), ExecutionAttemptError<ValidationFail>> {

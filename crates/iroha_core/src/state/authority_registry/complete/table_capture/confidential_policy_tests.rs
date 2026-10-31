@@ -53,6 +53,10 @@ fn state() -> State {
     )
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn capture(state: &State) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
     let TableMaterializer::Single { capture, .. } = TABLE_MATERIALIZERS
         .iter()
@@ -145,6 +149,9 @@ fn actual_catalog_rejects_corrupt_policy_projections_after_state_construction() 
 
 #[test]
 fn actual_catalog_preserves_original_allocation_refusal_and_retry() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let original = state.ivm_execution_budget();
     // State keeps its original native-tip and publication-release owners alive.

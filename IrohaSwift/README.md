@@ -2,6 +2,12 @@
 
 Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
+Keep `IrohaSwift` in the repository layout with `vendor/nearby` and
+`vendor/boringssl-swiftpm` as sibling source packages. Nearby's reviewed manifest
+binds the current BoringSSL provider directly, including when an application
+consumes `IrohaSwiftMobileTransports` through the SDK. The vendored packages retain
+their exact upstream source inventories and verification scripts.
+
 `TairaTestnetProfile` exposes the public Torii origin, address discriminant,
 Digital Shekel, and XOR metadata. Its client factory still requires the current
 deployment's genesis-derived `NetworkId`; the stable chain UUID is not used for
@@ -16,7 +22,7 @@ Features:
 - Collection queries for every Torii collection: typed filter builder with canonical text and JSON forms, cursor pages and on-demand iteration, typed `{code, message, details}` errors
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA wallet V1 wire helpers (`KagemushaWalletWireV1`) and the iPhone platform adapter of the Rust wallet Advance provider (`KagemushaWalletApplePlatformV1`)
-- Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
+- Petal Stream animated optical transport (format 5): stream encoder/assembler, camera-frame decoder, turn and katakana band readers, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -174,13 +180,29 @@ retains the runtime for a fresh begin. `cancelPendingOpen` recovers interrupted
 begin delivery; `retryOpenCompletion` recovers an interrupted finish response for
 the same live handle without repeating authorization.
 
-`KagemushaWalletV1` exposes typed setup, Load/Send/Receive/refresh/Unload/Retiring,
-retry/status, folding and activity. Request publication durably selects its exact
-original. Once `executeReviewed` dispatches to Native, its review remains consumed
-when execution fails, and the original execution error is preserved. Cleanup of
-that consumed token does not close the wallet; use the same request identity's
-status to recover a selected operation or retained Payment. An unresolved cleanup
-failure still retires the owner. A signed blacklist is local-only:
+`KagemushaWalletV1` exposes observations, exact recovery, folding and activity.
+Fresh mutations belong to an admitted `KagemushaWalletExchangeCallV1`.
+`reviewSend(requestId:request:destinationAccountOriginal:expectation:)` and
+`reviewUnload(requestId:expectation:amount:quote:certificates:chargeBeneficiary:)`
+bind the original request ID before Native issues a review. Their closed result is
+`ready`, `existing` (Preparing or a retained outcome), or tokenless `waiting`.
+Only `ready` is displayed for fresh owner confirmation; `executeReviewed(review)`
+uses the ID already bound to that actual capability.
+
+The expectation is mandatory: `.fresh` or `.originalUnstarted(exactProjection)`.
+A continuation retains the original request ID, full original projection and every
+exact action/companion original, and needs a newly issued Native review plus fresh
+confirmation. Native authenticates current source and definite absence; a generic
+Unknown status or a hash-only old marker grants no continuation. ABI33 has no
+old review overload or request-ID-at-execute fallback.
+
+Execution returns `executed`, `existing`, or `retainedReview`. Only typed Native65
+restores the exact same live capability after maintenance preflight; an explicit
+retry uses that same review and acknowledged approval fence without new confirmation.
+A generic execution failure leaves the review consumed. Cleanup preserves the
+original error and retires the exact owner if cleanup remains uncertain. Existing
+outcomes, conditional attempts and retained-review retries provide no fresh latency
+sample. Use exact request status/recovery for selected work. A signed blacklist is local-only:
 `installBlacklist(list:certificates:)` stores
 it on the phone (a replacement's version must increase), and Native then refuses to pay a
 listed receiver or accept a Payment from a listed payer with
@@ -230,6 +252,14 @@ After Bootstrap, `activation()` returns the exact retained signed Activate frame
 ledger submission. It does not confirm ledger activation. Bootstrap originals cannot
 be collected before the activation plan retains its complete source copies. Full
 issuer/ledger integration and real-device qualification remain separate gates.
+Retain each exact signed Activate envelope with the admitted exchange's
+`retainActivationAttempt(signedWire:)` before dispatch. Its
+`confirmLedgerAttempt` authenticates one direct finality original and synchronizes
+missing epoch boundaries under the same exchange. Activate and Unload observations
+return `awaiting`, `rejected`, or `confirmed`; only confirmed success establishes
+activation or payout, and rejection applies only to that signed envelope. The
+confirmed identity is the native consensus commit hash. There is no manual
+block-walking confirmation API.
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -280,8 +310,8 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
 export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 scripts/build_norito_xcframework.sh \
@@ -289,7 +319,7 @@ scripts/build_norito_xcframework.sh \
   --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 ```
 
-The build requires Python 3.12, stock Rust 1.93.1, and an explicit
+The build requires Python 3.12, stock Rust 1.99.1, and an explicit
 `--lockfile-path`; `RUSTC_BOOTSTRAP` must be unset. Normal builds and release
 qualification require a separately materialized, read-only external snapshot of
 the same canonical reviewed graph. The root source lock and selected build lock
@@ -378,7 +408,7 @@ of an exchange use the same one. Pass it as
 their own registration use the protocol identifier `F0504B45504B524E464301`
 (`IrohaPeerNfcApplicationIdentifierV1.protocolDefault`), as shown.
 
-The receiver creates its open Request with `KagemushaWalletV1.request(setupId:amount:)`
+The receiver creates its open Request with `KagemushaWalletExchangeCallV1.request(setupId:amount:)`
 and hosts its carrier with `IrohaPeerNfcCardSessionControllerV1.start(sessionID:receiveRequest:)`.
 The payer uses `IrohaPeerNfcReaderServiceV1.readRequest()` to read the open Request.
 The result returns after CoreNFC invalidates that exact reader session; a missing
@@ -401,6 +431,14 @@ bounded by twelve attempts and the operation deadline. The card retains one
 context-bound durability worker across APDU timeouts; replays await that same work.
 Cancellation or session retirement prevents late results from entering another
 session and retains the shared worker lease until the callback actually returns.
+
+The reader restarts polling immediately after recoverable contact loss and keeps
+the contact open for redetection for up to thirty seconds, within its whole-operation
+deadline. Returning contact resumes the saved checkpoint immediately; cancellation
+ends the wait. `durableResponseTimeoutMilliseconds` can extend only `BEGIN_PAYMENT`
+and `COMMIT` responses (up to 35 seconds) for receiver persistence and proof work.
+Discovery, connection, reads, writes and final acknowledgement retain the shorter
+`platformCallTimeoutMilliseconds` deadline.
 
 An established card session that reaches Apple's duration limit reports
 `.failed(.sessionDurationReached)` before `.ended`; other failures and explicit
@@ -458,8 +496,22 @@ Request uses the `KWRQAC1` carrier with its destination-account original; Paymen
 `KWPYPC1` with its exact payer companion. Their respective payload bounds are 14,146
 and 12,098 bytes; each envelope remains bounded at 10,034 bytes. Native authenticates
 both originals when `receiveWithCompanion(requestId:payment:companion:)` receives the Payment.
-`paymentCompanion(payment:)` uses setup selector 55; `verifiedDelivery(sendRequestId:credited:)`
-uses selector 54 to verify receipt evidence separately from the later ArchiveSent operation.
+`paymentCompanion(payment:)` uses setup selector 55. Call `wallet.beginExchange()` and
+`exchange.admit()` synchronously before UI, actor or worker enqueue. Fresh mutations belong
+to the admitted `KagemushaWalletExchangeCallV1`; keep the exchange through Request, review,
+time and carrier waits. Finish accepted tasks after teardown, then end the exchange off the
+main thread. `requestEnd()` fences admission before enqueueing that join. Exact-origin
+review/time cleanup remains available after the fence.
+
+`call.observeCredited(sendRequestId:credited:)` uses selector 56 to retain the exact receipt
+in Native before verification; it returns payer evidence without dispatching ArchiveSent.
+`wallet.resumeDeferredReceipt()` (57) processes at most one retained intake, and
+`wallet.drainDeferredArchive()` (58) performs a bounded Native-selected maintenance turn.
+Its wait/reconciled/executed outcomes remain distinct from Payment delivery and from the
+nested completion status. Native alone checks recovery, exchange occupancy, fold coverage,
+charging, count and age. No host queue handle or force flag exists. The read-only
+`deliveryProjection` accepts only the exact completed Archive anchor; newer receipts use
+`observeCredited`. Direct Archive producers and selectors 3, 41 and 54 are retired.
 
 #### NoritoBridge policy (SwiftPM)
 
@@ -471,7 +523,7 @@ The canonical XCFramework contains `ios-arm64`, the universal
 `x86_64`; the artifact checker rejects single-architecture substitutions.
 
 Every bridge build includes mandatory privacy support using stock
-Rust 1.93.1. Building an artifact does not establish provider, proving, hardware,
+Rust 1.99.1. Building an artifact does not establish provider, proving, hardware,
 or release qualification. To build with the reviewed external graph:
 
 ```bash
@@ -486,8 +538,8 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
   --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock
 ```
@@ -523,8 +575,8 @@ export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT \
   IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
   --lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source
 export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
@@ -532,9 +584,9 @@ export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
 
 A separate `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input may select a producer-validated
 single-host macOS archive for debug unit tests. It requires genuine current-source
-static capture, normalization, complete-archive native consumer checks, and the
+static capture, strict archive auditing, complete-archive native consumer checks, and the
 explicit `local-unit` artifact schema. It retains every package test and exact
-ABI-31 admission. It cannot be selected together with the external/release input;
+ABI-33 admission. It cannot be selected together with the external/release input;
 iOS and Release compilation reject it. It is never accepted by the canonical
 three-slice validator, pin owner, archive owner, or release publication.
 
@@ -874,20 +926,28 @@ decoding and signature verification.
 
 ### Petal Stream optical transport
 
-Petal Stream is the animated "streaming QR" in the Sakura-storm look: four
-sakura-blossom finders, a `天`-shaped field of 256 katakana tiles and three
-dotted rings. Each frame carries three independent lanes (tile polarity `P`,
-katakana `K`, ring dots `D`), each one whitened Reed–Solomon codeword of
-fountain-coded 16-byte atoms; every fourth frame repeats the stream beacon in
-lane `D`, so a receiver can join at any frame and any single readable lane is
-useful. `Sources/IrohaSwift/Petal/` is a function-by-function port of the
-normative Rust crate `crates/iroha_petal` (decoder included) and passes the
-shared fixtures `fixtures/petal/petal_stream_v1.json` and
-`fixtures/petal/petal_captures_v1.json`.
+Petal Stream is the animated "streaming QR" in the Sakura-storm look (format
+5). A frame is a portrait card: a square of four sakura-blossom finders, a
+storm of 3,376 petals on 34 concentric bands (light inside a faint `天`, pink
+outside) and three dotted rings, with a band of 306 katakana tiles above and
+below it. The square carries five independent lanes (ring dots `D` and the
+four quarter-turn sectors `0`–`3` of the petal field), each one whitened
+Reed–Solomon codeword of fountain-coded 16-byte atoms, and a turn lane on top
+of every field lane: once a field lane is read, the first 360 of its lit petals
+each show two more bits by being turned 0°, 45°, 90° or 135° about their
+centres. Each band carries two kana lanes: its 298 data tiles show one bit in
+their polarity (a light tile with its katakana in ink, or a dark one with it in
+pink: lanes `P0`, `P1`) and four in their katakana (one of イロハニヘトワカレムノケアヒスン:
+lanes `K0`, `K1`). Every fourth frame repeats the stream beacon in lane `D`, so
+a receiver can join at any frame and any single readable lane is useful.
+`Sources/IrohaSwift/Petal/` is a function-by-function port of the normative
+Rust crate `crates/iroha_petal` (decoder, turn and band readers included) and
+passes the shared fixtures `fixtures/petal/petal_stream_v5.json` and
+`fixtures/petal/petal_captures_v5.json`.
 
 ```swift
-// Sender: play an IPM1 message at 8 fps. Payloads may be up to 16 MiB - 1;
-// receivers accept 64 KiB by default. `kind` is application-defined.
+// Sender: play an IPM1 message at the default 12 fps. Payloads may be up to
+// 16 MiB - 1; receivers accept 64 KiB by default. `kind` is application-defined.
 let encoder = try PetalStreamEncoder(payload: message.encoded, kind: 1)
 PetalStreamView(encoder: encoder)                    // IrohaSwiftTransferUI
 
@@ -901,18 +961,59 @@ analyzer.attach(to: videoDataOutput)
 - `PetalStreamEncoder` / `PetalStreamAssembler` are the sender and receiver
   stream codecs; `PetalDecoder.decode(_:)` reads one `PetalLuma` frame (any
   rotation, optionally mirrored) and `PetalScanSession` combines decoding,
-  reassembly and idle/absolute timeouts. The tile lanes `P` and `K` are first
-  read against the light and dark levels of the finders; a lane that stays
-  unreadable is read again with every patch normalised by its own contrast, so
-  over-exposure, veiling light, glare and shadows cancel out.
+  reassembly and idle/absolute timeouts. The field lanes are first read against
+  the light and dark levels of the finders; a lane that stays unreadable is read
+  again with every petal rescaled by its neighbourhood, so over-exposure,
+  veiling light, glare and shadows cancel out, and the pose (`PetalPose`) is
+  searched for lens distortion when the plain pose misses the outer petals.
 - `PetalScanSession` averages up to four captures of each of the last six
-  shown frames to recover tile lanes lost to noise or display banding.
+  shown frames to recover field lanes lost to noise or display banding.
   Independently decoded lane headers identify each group; unkeyed or torn
   captures are excluded, and recovered lanes must name the same shown frame.
   `PetalScanOutcome.merged` reports recovered lanes separately from the lanes
-  read in one capture; `PetalScanStats.merges`, `.mergedP` and `.mergedK` count
-  the attempts and recoveries. `PetalDecoder.tileEvidence(_:frame:)` and
-  `.mergeTiles(_:)` expose the same averaging for custom camera pipelines.
+  read in one capture; `PetalScanStats.merges` and `.mergedLanes` count the
+  attempts and recoveries (`.laneD` and `.fieldLanes` the single-capture reads).
+  `PetalDecoder.fieldEvidence(_:frame:)` and `.mergeFields(_:skip:)` expose the
+  same averaging for custom camera pipelines.
+- `PetalTurns` holds the turn lanes: the carrier order, the codec (each turn
+  lane is one RS(90, 68) codeword of four repair atoms and a CRC-32C check
+  bound to the header of the field lane it rides on) and the reader.
+  `PetalTurns.readTurns(_:frame:skip:)` samples every carrier petal of a
+  decoded capture in its own frame along a smooth correction of the pose, fits
+  the camera's blur, and gives each carrier the turn whose template matches
+  best once its lit neighbours are subtracted; a sharp 720p camera reads the
+  turn lanes (in the reference simulator a 12 KB Payment arrives in 1.65 s at
+  12 fps, against 2.98 s with format 2), a blurrier one the rest of the
+  frame. `PetalScanSession` tries each turn lane once per shown frame, backs
+  off after tries that read nothing (a camera too soft or too shaky for the
+  turns), and reports what it read in `PetalScanOutcome.turned` and
+  `PetalScanStats.turnTries`/`turnLanes`;
+  `PetalTurns.observedTurns(_:frame:)` exposes every carrier's decision for
+  diagnostics. The reader builds its tables once and reuses its working memory
+  across captures.
+- `PetalKana` holds the kana lanes: the codec (`P0`/`P1` one RS(37, 20)
+  codeword of one repair atom, `K0`/`K1` one RS(149, 116) codeword of seven,
+  each closed by a CRC-32C over the stream tag, the frame and the lane) and the
+  band reader. `PetalKana.readKana(_:frame:header:skip:)` places every tile of
+  a decoded capture by the square's pose, finds each band's eight pilot tiles,
+  fits an affine correction, the camera's blur and the light and dark levels to
+  them, and gives each data tile the polarity its level shows and the katakana
+  whose template correlates best; the check also accepts the frames before and
+  after the square's, which a rolling shutter can show. `PetalScanSession`
+  reads each band once per shown frame, with its own back-off, and the bands go
+  first: a capture whose bands read a lane tries the turn lanes too only when
+  its work and the session's last turn try fit a 30 fps camera's frame time
+  (`PetalScanSession.captureBudgetMilliseconds`), and otherwise leaves them to
+  the shown frame's next capture, because both on one capture overran a 12 fps
+  frame on a slow phone core. The session times its work on the monotonic
+  clock; `init(limits:workCost:)` takes a model's costs in their place, and
+  `PetalScanStats.spareTurns` counts the captures that had the time.
+  `PetalScanOutcome.kana` and
+  `PetalScanStats.kanaTries`/`kanaLanes` report the reads, and
+  `PetalKana.observeBand(_:frame:band:)` exposes every tile's decision. In the
+  reference simulator a 12 KB Payment shown upright at 12 fps arrives in about
+  1.2 s with a sharp 720p camera (1.65 s with format 3) and 1.75 s with a soft
+  one (2.98 s).
 - When a thumb, a glare or the edge of the frame hides one corner blossom,
   three blossoms that form a corner still locate the code: the fourth corner is
   inferred, refined against the dotted rings and reported as
@@ -921,10 +1022,15 @@ analyzer.attach(to: videoDataOutput)
   the next frames with `PetalDecoder.track(_:previous:)`, which follows the
   blossoms from the last pose (at most 500 ms old) instead of searching the
   whole image; `PetalScanStats.tracked` and `.inferred` count both.
-- `PetalRenderer` is the pixel-exact reference software renderer;
-  `PetalDrawList` describes a frame for vector backends and
+- `PetalRenderer` is the pixel-exact reference software renderer of the card
+  (`PetalRenderer.cardHeightPixels(_:)` tall for a given width);
+  `PetalDrawList` describes a frame for vector backends (finders, the faint
+  `天`, lit petals as notched ellipses along their turned axes, lit dots, and
+  the katakana tiles with their glyph strokes, `kanaGlyphStrokes(_:)`) and
   `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
-  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI.
+  (`IrohaSwiftTransferUI`) draw the portrait card with CoreGraphics and
+  SwiftUI, antialiased and with every petal's notch, which tells the turn
+  reader a petal from one turned by half a turn.
 - `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
   `AVCaptureVideoDataOutput` delegate that reads the Y plane of bi-planar YUV
   frames (or converts BGRA), reports `PetalScanOutcome` values through a
@@ -932,14 +1038,16 @@ analyzer.attach(to: videoDataOutput)
   Scanner setup: use the 1280×720 session preset
   (`AVCaptureSession.Preset.hd1280x720`) where the device sustains about five
   decoded frames per second and fall back to 640×480 only when it cannot.
-  Lane `K` is harder to read at 480p; averaging repeated captures of a shown
-  frame can recover it. Automatic exposure over-exposes a mostly black screen, so set
+  The field lanes are harder to read at 480p; averaging repeated captures of a
+  shown frame can recover them. The turn lanes need a camera that resolves the
+  petals' shapes. Keep the whole card in view, so the bands are read too.
+  Automatic exposure over-exposes a mostly black screen, so set
   the exposure target bias to about −1 EV
   (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
-  has been seen (`specs/petal_stream.md` section 8, "Scanner guidance").
+  has been seen (`specs/petal_stream.md` section 8).
 
-Run the Petal suites (codec, fixture conformance, golden captures, renderer,
-SwiftUI and camera glue) with:
+Run the Petal suites (codec, fixture conformance, golden captures, turn and
+kana lanes, renderer, SwiftUI and camera glue) with:
 
 ```bash
 swift test --package-path IrohaSwift --disable-automatic-resolution --filter Petal
@@ -1136,7 +1244,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-31 native inspection proves the versioned
+Preparation fails closed unless ABI-33 native inspection proves the versioned
 scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -1175,7 +1283,7 @@ guard assessment.intentHash == intentHash.map { String(format: "%02X", $0) }.joi
 let canonicalMarker = try assessment.marker()
 ```
 
-The three ABI-31 retail fee operations use native typed Norito and reject
+The three ABI-33 retail fee operations use native typed Norito and reject
 noncanonical markers. Local decoding does not verify that an assessment is
 current or authorized. Signed read and verified finality remain required before
 payment approval; admission checks the assessment against ledger state.
@@ -1645,33 +1753,43 @@ representations, missing canonical request authentication, and a missing or
 stale native bridge fail closed. The signed fetch bypasses local cached responses
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
-an opaque per-protocol token only when the committed row is active, ready, and
-byte-identical to the ABI31 native-validated compiled catalog. The generic
-transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
+an opaque per-protocol token only when the committed row is available and
+byte-identical to the ABI33 native-validated compiled catalog. The generic
+transaction-frame initializer rejects both privacy submission wires, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete final V1 envelope profile tuple both at construction and final encoding.
-The client must supply `localSigningContext.networkId`: the authenticated origin
-and its token retain that exact network, the deployment's raw32 network and genesis
-fields must match it, and every retained statement's context must bind it.
+protocol-specific request or envelope profile tuple at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin,
+the capability manifest's top-level raw32 `network_id`, the opaque token and every
+retained statement must match that exact network. The manifest digest binds this
+network field together with committed height, policy and protocol rows.
 Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI31 requires exactly six privacy C exports, including
-`iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
+ABI33 requires exactly seven privacy C exports, including
+`iroha_privacy_validate_exact12_capability_manifest_v1` and
+`iroha_privacy_validate_exact12_submit_proof_construction_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
-Rust checks the complete release and deployment records, artifact counts,
-digests, audit signatures, and validator signatures. Every authority-bearing
-path also compares the selected tuple against the native local catalog.
-The managed decoder alone cannot establish production qualification; a bridge
-without the manifest validator is unavailable.
+Rust checks the canonical manifest, compiled profiles, and committed resource policies.
+Swift compares each row against the actual native catalog; a mismatch is retained
+on that row and blocks only admission for that selected protocol. Each protocol is
+`available` only when its canonical implementation is supported; ordinary
+committed policy selects effective limits. Unrelated protocols and documentary release or
+deployment evidence do not gate it. X509 currently reports
+`joint-security-reduction-incomplete` and remains unavailable. Every authority-bearing
+path compares the selected tuple against the native local catalog and the exact
+expected network. Managed decoding grants no network or proof authority; a bridge
+without the manifest validator is unavailable. This first-release wire has no
+qualification field or fallback decoder for the retired layout. Runtime availability
+does not claim engineering release, platform or network qualification.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 31
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 33
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
+the capability-manifest and construction validators, the zeroizing-free symbol,
+and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 
@@ -1701,6 +1819,30 @@ four-byte `noritoDiscriminant`, `canonicalTypedVariantLabel`,
 `expectedProofSystem`, and `expectedEngine`; the proof-system and native-engine
 tags remain distinct Swift types even where their current numeric ordinals
 coincide. Unknown tags and legacy variant labels fail closed.
+`ZkX509SigningPreparationV1.prepareOwnershipSigningV1(statementNorito:)` accepts
+one canonical Norito `PrivacyStatementV1` archive carrying the X.509 variant.
+The current native holder implementation returns its canonical `message` and
+32-byte SHA-256 `digest` together. A P-256 message-signing API hashes `message`
+exactly once; a prehash API signs `digest` directly. Keep the subject key in the
+external signer and normalize its signature to low-s, fixed 64-byte `r || s`
+before building a witness. This preparation neither authenticates current
+State nor proves a credential, pairs a device, or establishes network readiness.
+Missing native support and noncanonical or wrong-protocol input fail explicitly.
+
+`PrivacyX509DirectTransactionV1.prepare` retains one direct, proof-free X509
+request and its exact transaction fields. It derives the ordered intent and
+ActionStatement from the canonical signed-attachment plan and exposes the
+materialized statement for proving. `sign(rawProof:signingKey:)` revalidates the
+original network admission, binds the exact raw Proof/ActionProof occurrence,
+and signs with the matching single Ed25519 authority. The X509 execution wire
+is `iroha.privacy.submit_zk_x509_certificate.v1`; the generic submit-proof wire
+is refused for X509. This builder does not create contract or mixed-action
+bindings. It does not establish proof validity, State freshness, or production
+qualification; unavailable native or network admission still refuses construction.
+The Exact12 X509 row carries its original ActionStatement frame in the intent
+projection field; the other eleven protocols retain their existing projections.
+
+
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
 `ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,
@@ -1948,41 +2090,56 @@ Query runtime adverts to surface ABI metadata:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let capabilities = try await torii.getNodeCapabilities()
-    let metrics = try await torii.getRuntimeMetrics()
-    let abiActive = try await torii.getRuntimeAbiActive()
+    let capabilities = try await torii.getNodeCapabilities(canonicalAuth: canonicalAuth)
+    let metrics = try await torii.getRuntimeMetrics(canonicalAuth: canonicalAuth)
+    let abiActive = try await torii.getRuntimeAbiActive(canonicalAuth: canonicalAuth)
     print("abi:", capabilities.abiVersion,
           "signed_tx_schema:", capabilities.signedTransactionSchemaHashHex ?? "missing",
           "active:", abiActive.abiVersion,
-          "upgrades:", metrics.upgradeEventsTotal)
+          "scheduled:", metrics.upgradeEventsTotal.scheduled,
+          "activated:", metrics.upgradeEventsTotal.activated)
 }
 ```
 
 Completion-based APIs (`getNodeCapabilities(completion:)`, etc.) are also available when
 Swift concurrency is not an option.
 
-Generate upgrade instructions via the runtime helpers:
+The runtime changes only through governed change sets (`ChangeSetV1`): SORA Parliament
+schedules a change set that moves the committed selection from its predecessor to its
+successor at an effective height. `listRuntimeUpgrades()` returns the committed selection and
+its identity, the attesting committee and digest, and every recorded change set with its
+status (`scheduled`, `activated`, `lapsed` or `cancelled`) and frozen notice; each record also
+keeps its complete JSON. `proposeRuntimeUpgrade(changeSet:provenance:)` and
+`cancelRuntimeUpgrade(idHex:)` draft the Parliament proposal for local signing. While the
+universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules a change set
+needs `ToriiRuntimeChangeSetEndorsement`s from its threshold of distinct trusted release
+signers (`iroha runtime upgrade endorse` prints one); a root without that policy takes none. All three are operator routes and require the
+client's `ToriiOperatorSigningContext` (see the operator context below); without it they fail
+before any request is sent. Nothing activates a change set by request: at the start of its
+effective height it activates when every committee member attested it, its notice elapsed and
+it still applies to the committed selection, and lapses otherwise.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let manifest = ToriiRuntimeUpgradeManifest(
-        name: "Upgrade Foo",
-        description: "Refresh runtime provenance",
-        abiVersion: 1,
-        abiHashHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        addedSyscalls: [],
-        startHeight: 1_000,
-        endHeight: 1_200
+    let snapshot = try await torii.listRuntimeUpgrades()
+    for item in snapshot.items {
+        print(item.idHex, item.record.status, item.record.changeSet.effectiveHeight)
+    }
+
+    // A ChangeSetV1 object whose predecessor is `snapshot.selectionIdHex`; its effective
+    // height must be an exact JSON integer no larger than 2^53 - 1.
+    let changeSet = try ToriiRuntimeChangeSet(
+        json: ToriiJSONValue.decodeExact(from: Data(contentsOf: changeSetURL))
     )
-
-    let proposal = try await torii.proposeRuntimeUpgrade(manifest: manifest)
-    let proposalInstructions = proposal.txInstructions
-
-    let activation = try await torii.activateRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let activationInstructions = activation.txInstructions
-    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let cancellationInstructions = cancellation.txInstructions
-    // Feed the returned `txInstructions` into your transaction builder / submit pipeline.
+    let endorsements = try endorsementURLs.map {
+        try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(contentsOf: $0)))
+    }
+    let proposal = try await torii.proposeRuntimeUpgrade(
+        changeSet: changeSet,
+        provenance: endorsements
+    )
+    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: snapshot.items[0].idHex)
+    // Sign and submit `proposal.txInstructions` / `cancellation.txInstructions` locally.
 }
 ```
 
@@ -2480,6 +2637,12 @@ closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
 durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
 objects are intentionally not accepted.
 
+SCCP governance reads and `ToriiParliamentProposalV1` draft inputs validate all
+18 action bodies, their exact ordered base subjects, deployment destinations,
+amounts, light-client settings and parameter bounds. The public draft parser also
+rejects duplicate JSON keys and noncanonical integer tokens. Live network identity,
+authorization, bootstrap authentication and committed state remain node checks.
+
 The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 `sdk.submitGovernancePlainBallot(...)`, `sdk.getGovernanceProposal(idHex:)`). Unlock statistics (`/v1/gov/locks/stats`) accept optional `height` and `referendum_id` filters.
 
@@ -2715,7 +2878,7 @@ one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
 Account-controller policies retain the full u16 member count (1–65,535). The
-public address constructors and parsers require the ABI-31 Rust address codec
+public address constructors and parsers require the ABI-33 Rust address codec
 for complete key and policy admission. Canonical I105 parsers reject surrounding
 Unicode whitespace; unavailable native validation is an
 explicit error. The
@@ -2739,7 +2902,7 @@ account ordering, establish rekey authority or verify an authorization proof.
 all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
-canonical Swift package always requires the real ABI31 NoritoBridge artifact.
+canonical Swift package always requires the real ABI33 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,

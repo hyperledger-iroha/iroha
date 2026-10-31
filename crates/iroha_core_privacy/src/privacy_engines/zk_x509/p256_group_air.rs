@@ -114,24 +114,26 @@ pub fn p256_complete_add_v1<C: P256BaseFieldCircuitV1>(
     let yz_product = circuit.multiply_v1(left_yz, right_yz)?;
     let yy_plus_zz = circuit.add_v1(yy, zz)?;
     let yz_pairs = circuit.subtract_v1(yz_product, yy_plus_zz)?;
-    let left_xz = circuit.add_v1(left.x, left.z)?;
-    let right_xz = circuit.add_v1(right.x, right.z)?;
-    let xz_product = circuit.multiply_v1(left_xz, right_xz)?;
+    let left_horizontal_depth = circuit.add_v1(left.x, left.z)?;
+    let right_horizontal_depth = circuit.add_v1(right.x, right.z)?;
+    let horizontal_depth_product =
+        circuit.multiply_v1(left_horizontal_depth, right_horizontal_depth)?;
     let xx_plus_zz = circuit.add_v1(xx, zz)?;
-    let xz_pairs = circuit.subtract_v1(xz_product, xx_plus_zz)?;
+    let horizontal_depth_pairs = circuit.subtract_v1(horizontal_depth_product, xx_plus_zz)?;
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
-    let bzz_part = circuit.subtract_v1(xz_pairs, b_times_zz)?;
+    let bzz_part = circuit.subtract_v1(horizontal_depth_pairs, b_times_zz)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
-    let bzz3_part = circuit.add_v1(bzz_twice, bzz_part)?;
-    let yy_minus_bzz3 = circuit.subtract_v1(yy, bzz3_part)?;
-    let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
+    let triple_curve_depth = circuit.add_v1(bzz_twice, bzz_part)?;
+    let yy_minus_bzz3 = circuit.subtract_v1(yy, triple_curve_depth)?;
+    let yy_plus_bzz3 = circuit.add_v1(yy, triple_curve_depth)?;
     let zz_twice = circuit.add_v1(zz, zz)?;
     let zz3 = circuit.add_v1(zz_twice, zz)?;
-    let b_times_xz = circuit.multiply_v1(curve_b, xz_pairs)?;
+    let curve_cross_product = circuit.multiply_v1(curve_b, horizontal_depth_pairs)?;
     let zz3_plus_xx = circuit.add_v1(zz3, xx)?;
-    let bxz_part = circuit.subtract_v1(b_times_xz, zz3_plus_xx)?;
-    let bxz_twice = circuit.add_v1(bxz_part, bxz_part)?;
-    let bxz3_part = circuit.add_v1(bxz_twice, bxz_part)?;
+    let curve_cross_difference = circuit.subtract_v1(curve_cross_product, zz3_plus_xx)?;
+    let doubled_cross_difference =
+        circuit.add_v1(curve_cross_difference, curve_cross_difference)?;
+    let bxz3_part = circuit.add_v1(doubled_cross_difference, curve_cross_difference)?;
     let xx_twice = circuit.add_v1(xx, xx)?;
     let xx3 = circuit.add_v1(xx_twice, xx)?;
     let xx3_minus_zz3 = circuit.subtract_v1(xx3, zz3)?;
@@ -165,9 +167,9 @@ pub fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let b_times_zz = circuit.multiply_v1(curve_b, zz)?;
     let bzz_part = circuit.subtract_v1(b_times_zz, xz2)?;
     let bzz_twice = circuit.add_v1(bzz_part, bzz_part)?;
-    let bzz3_part = circuit.add_v1(bzz_twice, bzz_part)?;
-    let yy_minus_bzz3 = circuit.subtract_v1(yy, bzz3_part)?;
-    let yy_plus_bzz3 = circuit.add_v1(yy, bzz3_part)?;
+    let triple_curve_depth = circuit.add_v1(bzz_twice, bzz_part)?;
+    let yy_minus_bzz3 = circuit.subtract_v1(yy, triple_curve_depth)?;
+    let yy_plus_bzz3 = circuit.add_v1(yy, triple_curve_depth)?;
     let y_fragment = circuit.multiply_v1(yy_plus_bzz3, yy_minus_bzz3)?;
     let x_fragment = circuit.multiply_v1(yy_minus_bzz3, xy2)?;
     let zz_twice = circuit.add_v1(zz, zz)?;
@@ -187,8 +189,8 @@ pub fn p256_complete_double_v1<C: P256BaseFieldCircuitV1>(
     let x_right = circuit.multiply_v1(bxz6_part, yz2)?;
     let x = circuit.subtract_v1(x_fragment, x_right)?;
     let z_product = circuit.multiply_v1(yz2, yy)?;
-    let z_twice = circuit.add_v1(z_product, z_product)?;
-    let z = circuit.add_v1(z_twice, z_twice)?;
+    let doubled_output_depth = circuit.add_v1(z_product, z_product)?;
+    let z = circuit.add_v1(doubled_output_depth, doubled_output_depth)?;
     Ok(P256ProjectiveValueV1 { x, y, z })
 }
 /// Build the variable-base table `[0]P, [1]P, ..., [15]P`.
@@ -304,8 +306,8 @@ mod tests {
         ZkX509P256ModulusV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
     use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
-        elliptic_curve::{group::Group as _, sec1::ToEncodedPoint as _},
+        FieldBytes, NistP256, ProjectivePoint, Scalar, Sec1Point,
+        elliptic_curve::{group::Group as _, hazmat::FieldArithmetic, sec1::ToSec1Point as _},
     };
     use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -336,10 +338,15 @@ mod tests {
         fn bytes(&self, value: TestValue) -> [u8; 32] {
             self.values[value.0]
         }
-        fn field(&self, value: TestValue) -> Result<FieldElement, TestCircuitError> {
-            Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
-                self.bytes(value),
-            )))
+        fn field(
+            &self,
+            value: TestValue,
+        ) -> Result<<NistP256 as FieldArithmetic>::FieldElement, TestCircuitError> {
+            Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                <NistP256 as FieldArithmetic>::FieldElement::from_bytes(&FieldBytes::from(
+                    self.bytes(value),
+                )),
+            )
             .ok_or(TestCircuitError::NonCanonical)
         }
         fn push_operation(
@@ -402,8 +409,10 @@ mod tests {
             Ok(())
         }
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
-            let inverse = Option::<FieldElement>::from(self.field(value)?.invert())
-                .ok_or(TestCircuitError::ZeroInverse)?;
+            let inverse = Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                self.field(value)?.invert(),
+            )
+            .ok_or(TestCircuitError::ZeroInverse)?;
             let inverse = self.input(inverse.to_bytes().into())?;
             let product = self.multiply_v1(value, inverse)?;
             let one = self.constant_v1(ONE_BE_V1)?;
@@ -431,7 +440,7 @@ mod tests {
         if bool::from(point.is_identity()) {
             return p256_projective_identity_v1(circuit).expect("identity constants");
         }
-        let encoded = point.to_affine().to_encoded_point(false);
+        let encoded = point.to_affine().to_sec1_point(false);
         let mut x = [0_u8; 32];
         let mut y = [0_u8; 32];
         x.copy_from_slice(encoded.x().expect("nonidentity x"));
@@ -445,10 +454,10 @@ mod tests {
     fn normalized_encoding(
         circuit: &mut RecordingCircuit,
         point: P256ProjectiveValueV1<TestValue>,
-    ) -> EncodedPoint {
+    ) -> Sec1Point {
         let (x, y) =
             normalize_p256_nonidentity_v1(circuit, point).expect("nonidentity normalization");
-        EncodedPoint::from_affine_coordinates(
+        Sec1Point::from_affine_coordinates(
             &FieldBytes::from(circuit.bytes(x)),
             &FieldBytes::from(circuit.bytes(y)),
             false,
@@ -478,9 +487,7 @@ mod tests {
         assert_eq!(add_circuit.operations.len(), 43);
         assert_eq!(
             normalized_encoding(&mut add_circuit, sum),
-            ProjectivePoint::GENERATOR
-                .to_affine()
-                .to_encoded_point(false)
+            ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false)
         );
         let mut double_circuit = RecordingCircuit::default();
         let generator = assigned_point(&mut double_circuit, ProjectivePoint::GENERATOR);
@@ -491,7 +498,7 @@ mod tests {
             normalized_encoding(&mut double_circuit, doubled),
             (ProjectivePoint::GENERATOR + ProjectivePoint::GENERATOR)
                 .to_affine()
-                .to_encoded_point(false)
+                .to_sec1_point(false)
         );
     }
     #[test]
@@ -527,7 +534,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             build_zk_x509_p256_arithmetic_trace_v1(&circuit.operations)
@@ -552,7 +559,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             build_zk_x509_p256_arithmetic_trace_v1(&circuit.operations)
@@ -599,7 +606,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             for operation in circuit.operations.iter().step_by(137) {
@@ -612,9 +619,7 @@ mod tests {
     }
     #[test]
     fn affine_curve_constraint_rejects_every_single_bit_coordinate_mutation() {
-        let encoded = ProjectivePoint::GENERATOR
-            .to_affine()
-            .to_encoded_point(false);
+        let encoded = ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false);
         let mut x = [0_u8; 32];
         let mut y = [0_u8; 32];
         x.copy_from_slice(encoded.x().expect("x"));

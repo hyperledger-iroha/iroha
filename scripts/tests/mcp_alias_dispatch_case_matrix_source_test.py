@@ -18,7 +18,7 @@ EXTENDED_PATH = (
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
-HELPER_HASH = "2da47bf399c897b6db50ed8bdaf1d027792464ee427af94b884cb345c7a8e3b8"
+HELPER_HASH = "c14965735716c50fb3937a9719291ca1248432c70afdf246f84483349cf852ce"
 
 # file, name, expectation, request id, tool name, argument row, assertion messages
 CASES = (
@@ -154,7 +154,7 @@ CASES = (
         "success",
         106151,
         "iroha.assets.list",
-        "PageOne",
+        "LimitOne",
         "assets list alias with flat query fields should dispatch successfully",
     ),
     (
@@ -163,7 +163,7 @@ CASES = (
         "success",
         106153,
         "iroha.nfts.list",
-        "PageOne",
+        "LimitOne",
         "nfts list alias with flat query fields should dispatch successfully",
     ),
     (
@@ -181,7 +181,7 @@ CASES = (
         "success",
         106157,
         "iroha.rwas.list",
-        "PageOne",
+        "LimitOne",
         "rwas list alias with flat query fields should dispatch successfully",
     ),
     (
@@ -231,7 +231,7 @@ HELPER_TOKENS = (
     'norito::json!({"path": {"subscription_id": "not-a-subscription-id"}})',
     'norito::json!({"path": {"definition_id": "not-a-definition-id"}})',
     'norito::json!({"limit": 2})',
-    'norito::json!({"page": 1})',
+    'norito::json!({"limit": 1})',
     "enable_writer_mcp(&mut cfg)",
     '"method": "tools/call"',
     '"arguments": { case.arguments.into_json() }',

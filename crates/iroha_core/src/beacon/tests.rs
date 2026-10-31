@@ -340,7 +340,7 @@ fn wrong_g1_signature() -> [u8; 48] {
     )
 }
 
-pub(crate) fn finalized_key_session_fixture_for_context_v1(
+pub fn finalized_key_session_fixture_for_context_v1(
     network_id: NetworkId,
     session_id: [u8; 32],
     signing_keys: &[KeyPair],
@@ -370,7 +370,7 @@ pub(crate) fn finalized_key_session_fixture_for_context_v1(
 /// This supplies cryptographic evidence only; it does not execute a native boundary in State.
 /// Private-share encryption is randomized, so rebuilding an identically named session would
 /// create a different transcript from the one authorized by the historical boundary.
-pub(crate) struct HistoricalBeaconFixture(AdaptiveBeaconFixture);
+pub struct HistoricalBeaconFixture(AdaptiveBeaconFixture);
 
 impl HistoricalBeaconFixture {
     /// Complete the DKG once, retaining its exact transcript and private contributions.
@@ -451,7 +451,7 @@ impl HistoricalBeaconFixture {
 }
 
 /// Independent cryptographic mutation fixture; historical positive cases retain their DKG.
-pub(crate) fn finalized_pulses_fixture_for_context_v1(
+pub fn finalized_pulses_fixture_for_context_v1(
     network_id: NetworkId,
     session_id: [u8; 32],
     signing_keys: &[KeyPair],
@@ -747,7 +747,7 @@ fn live_producer_keys() -> Vec<KeyPair> {
     keys
 }
 
-pub(crate) fn pending_batched_sortition_attempt(
+pub fn pending_batched_sortition_attempt(
     network_id: &NetworkId,
     roster: &[PeerId],
     pulse_height: u64,
@@ -782,7 +782,7 @@ pub(crate) fn pending_batched_sortition_attempt(
 /// `request_height` with `pulse_delay` blocks of delay on a chain whose consensus-native
 /// epoch is `pulse_epoch_length` blocks long. Also returns the frozen slot, the first native
 /// pulse height at or after `request_height + pulse_delay`.
-pub(crate) fn pending_batched_sortition_attempt_with_schedule(
+pub fn pending_batched_sortition_attempt_with_schedule(
     network_id: &NetworkId,
     roster: &[PeerId],
     request_height: u64,
@@ -1011,16 +1011,16 @@ fn threshold_beacon_pulse_payload_binds_every_consensus_field() {
     let baseline = global_threshold_beacon_pulse_payload_v1(&pulse);
 
     let mut mutations = Vec::new();
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.network_id = beacon_fixture_network_id(0x82);
     mutations.push(changed);
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.session_id[0] ^= 1;
     mutations.push(changed);
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.roster_hash[0] ^= 1;
     mutations.push(changed);
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.transcript_hash[0] ^= 1;
     mutations.push(changed);
     let mut changed = pulse;
@@ -1038,10 +1038,10 @@ fn threshold_beacon_pulse_payload_binds_every_consensus_field() {
     let mut changed = pulse;
     changed.context.parent_result[0] ^= 1;
     mutations.push(changed);
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.height += 1;
     mutations.push(changed);
-    let mut changed = pulse.clone();
+    let mut changed = pulse;
     changed.round += 1;
     mutations.push(changed);
     let mut changed = pulse;
@@ -1550,7 +1550,7 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
         .expect("open exact pulse reducer")
     };
     let mut insufficient = open_reducer();
-    for partial in partials.iter().take(threshold - 1).cloned() {
+    for partial in partials.iter().take(threshold - 1).copied() {
         assert_eq!(insufficient.accept_partial(partial), Ok(true));
     }
     assert_eq!(
@@ -1559,7 +1559,7 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
     );
 
     let mut low_indices = open_reducer();
-    for partial in partials.iter().take(threshold).cloned() {
+    for partial in partials.iter().take(threshold).copied() {
         assert_eq!(low_indices.accept_partial(partial), Ok(true));
     }
     assert_eq!(
@@ -1570,7 +1570,7 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
     let low_pulse = low_indices.finalize().expect("low-index threshold");
 
     let mut high_indices = open_reducer();
-    for partial in partials.iter().rev().take(threshold).cloned() {
+    for partial in partials.iter().rev().take(threshold).copied() {
         assert_eq!(high_indices.accept_partial(partial), Ok(true));
     }
     assert_eq!(
@@ -1763,7 +1763,7 @@ fn threshold_beacon_inline_reducer_maximum_committee_is_order_and_subset_invaria
         high.partials
             .iter()
             .flatten()
-            .map(|partial| partial.index())
+            .map(iroha_crypto::threshold_bls::DasRenPartialSignature::index)
             .collect::<Vec<_>>(),
         (1..=THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1).collect::<Vec<_>>()
     );
@@ -1840,7 +1840,7 @@ fn threshold_beacon_pulse_rejects_zero_noncanonical_round_and_wrong_anchor() {
     let (session, _) = validated_threshold_session();
     let (pulse, _cursor, anchor) = pulse_fixture(&session);
 
-    let mut zero = pulse.clone();
+    let mut zero = pulse;
     zero.seed = [0; 32];
     assert_eq!(
         verify_finalized_global_threshold_beacon_pulse_v1(&session, &zero, anchor, &pulse.context,),
@@ -1879,7 +1879,7 @@ fn threshold_beacon_pulse_rejects_malformed_and_wrong_final_signatures() {
     let (session, _) = validated_threshold_session();
     let (pulse, _cursor, anchor) = pulse_fixture(&session);
 
-    let mut malformed = pulse.clone();
+    let mut malformed = pulse;
     malformed.signature = [0; 48];
     assert_eq!(
         verify_finalized_global_threshold_beacon_pulse_v1(

@@ -63,6 +63,7 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
         value: kagemusha_wallet_field_from_u128_v1(1),
     };
     ReviewedOperationV1 {
+        request_id: [7; 32],
         unload_beneficiary: None,
         speculation: None,
         projection: NativeOperationReviewV1 {
@@ -110,6 +111,68 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
             request: archive::encode(&open_request).unwrap(),
         },
     }
+}
+
+#[test]
+fn maintenance_failure_returns_the_exact_unconsumed_review_and_original_error() {
+    let review = unadmitted_review_fixture();
+    let projection = review.projection.clone();
+    let source = review.source.clone();
+    let action = archive::encode(&review.action).unwrap();
+    let failure =
+        ReviewedExecutionFailureV1::preflight(ReviewMaintenanceWaitV1::ArchiveFold, review);
+    let (error, held) = failure.into_parts();
+    assert!(matches!(error, Error::FoldRequired));
+    let held = held.expect("preflight did not consume the review");
+    assert_eq!(held.projection, projection);
+    assert_eq!(held.source, source);
+    assert_eq!(archive::encode(&held.action).unwrap(), action);
+}
+
+#[test]
+fn preflight_restores_only_closed_maintenance_refusals() {
+    for wait in [
+        ReviewMaintenanceWaitV1::SelectedPending,
+        ReviewMaintenanceWaitV1::ArchiveFold,
+        ReviewMaintenanceWaitV1::Busy,
+    ] {
+        let failure = ReviewedExecutionFailureV1::preflight(wait, unadmitted_review_fixture());
+        assert_eq!(failure.maintenance_wait(), Some(wait));
+        let (original, review) = failure.into_parts();
+        assert!(matches!(
+            original,
+            Error::Pending
+                | Error::FoldRequired
+                | Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy)
+        ));
+        assert!(review.is_some());
+    }
+    for error in [
+        Error::Pending,
+        Error::FoldRequired,
+        Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy),
+        Error::WitnessLost("preflight source"),
+        Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Closed),
+        Error::ArchiveAdmission(ArchiveAdmissionErrorV1::InvalidResolution),
+    ] {
+        let expected = error.to_string();
+        let failure = ReviewedExecutionFailureV1::from(error);
+        assert_eq!(failure.maintenance_wait(), None);
+        let (original, review) = failure.into_parts();
+        assert_eq!(original.to_string(), expected);
+        assert!(review.is_none());
+    }
+}
+
+#[test]
+fn execution_failure_never_restores_a_consumed_review() {
+    let failure = ReviewedExecutionFailureV1::from(Error::WitnessLost("actual execution source"));
+    let (error, held) = failure.into_parts();
+    assert!(matches!(
+        error,
+        Error::WitnessLost("actual execution source")
+    ));
+    assert!(held.is_none());
 }
 
 #[test]
@@ -209,7 +272,7 @@ fn hardware_ui_data_and_copied_originals_cannot_replace_retained_action() {
     copied[0] ^= 1;
     assert_ne!(data, *review.projection());
     assert_ne!(copied, review.send_original().unwrap());
-    let request = review.into_request([7; 32]).unwrap();
+    let request = review.into_request();
     assert_eq!(request.request_id, [7; 32]);
     assert_eq!(
         request.action,
@@ -449,7 +512,7 @@ fn finished_speculation(bytes: Vec<u8>) -> SpeculativeSendV1 {
         source: [2; 32],
         request: [8; 32],
         nonce: [9; 32],
-        sigma: SpeculativeSigmaV1::for_test(statement, bytes),
+        sigma: SpeculativeSigmaV1::for_test(&statement, bytes),
     }
 }
 
@@ -479,7 +542,7 @@ fn execution_takes_only_a_finished_speculation_once() {
         .speculate(&job.job)
         .unwrap()
         .finish(finished_speculation(vec![7, 7]));
-    let (request, speculative) = review.into_execution([7; 32]).unwrap();
+    let (request, speculative) = review.into_execution();
     assert_eq!(request.request_id, [7; 32]);
     let speculative = speculative.unwrap();
     assert_eq!(speculative.nonce(), [9; 32]);
@@ -488,12 +551,12 @@ fn execution_takes_only_a_finished_speculation_once() {
     // A speculation execution finds unadmitted ends there, and its job never proves.
     let review = speculating_review();
     let job = review.speculation().unwrap();
-    let (_, speculative) = review.into_execution([7; 32]).unwrap();
+    let (_, speculative) = review.into_execution();
     assert!(speculative.is_none());
     assert!(scheduler.speculate(&job.job).is_none());
 
     // Without a speculation the review executes exactly as before.
-    let (_, speculative) = unadmitted_review_fixture().into_execution([7; 32]).unwrap();
+    let (_, speculative) = unadmitted_review_fixture().into_execution();
     assert!(speculative.is_none());
 }
 
@@ -526,5 +589,91 @@ fn exact_review_action_rejects_retarget_and_false_fee_data_at_consumption() {
     };
     request[0] ^= 1;
     assert!(review.require_recheck(&changed).is_err());
-    assert!(unadmitted_review_fixture().into_request([0; 32]).is_err());
+    assert!(require_review_identity([0; 32]).is_err());
+}
+
+#[test]
+fn request_identity_is_fixed_at_review_creation_and_rechecked_with_the_source() {
+    require_review_identity([7; 32]).unwrap();
+    assert!(matches!(
+        require_review_identity([0; 32]),
+        Err(Error::Invalid(_))
+    ));
+    let review = unadmitted_review_fixture();
+    let mut other = unadmitted_review_fixture();
+    other.request_id = [8; 32];
+    assert!(matches!(
+        review.require_recheck(&other),
+        Err(Error::OperationConflict)
+    ));
+    assert_eq!(review.into_request().request_id, [7; 32]);
+    assert_eq!(other.into_request().request_id, [8; 32]);
+}
+
+#[test]
+fn original_expectation_compares_every_public_projection_field() {
+    let original = unadmitted_review_fixture().projection;
+    let expectation = ReviewExpectationV1::OriginalUnstarted(original.clone());
+    expectation.require_projection(&original).unwrap();
+    for field in 0..18 {
+        let mut actual = original.clone();
+        match field {
+            0 => actual.kind = KagemushaWalletOperationKindV1::Unload,
+            1 => actual.amount += 1,
+            2 => actual.fee += 1,
+            3 => actual.gross_debit += 1,
+            4 => actual.net_destination_amount += 1,
+            5 => actual.receiver_wallet_id = None,
+            6 => actual.destination_account_digest[0] ^= 1,
+            7 => actual
+                .destination_account_original
+                .as_mut()
+                .unwrap()
+                .push(0),
+            8 => actual.request_digest[0] ^= 1,
+            9 => actual.charge_quote_digest[0] ^= 1,
+            10 => actual.scheme_id[0] ^= 1,
+            11 => actual.wallet_id[0] ^= 1,
+            12 => actual.current_head[0] ^= 1,
+            13 => actual.source_state_commitment[0] ^= 1,
+            14 => actual.source_capsule_digest[0] ^= 1,
+            15 => actual.credential_digest[0] ^= 1,
+            16 => actual.payment_key = request().receiver_credential.body.payment_key,
+            _ => actual.artifact_manifest_digest[0] ^= 1,
+        }
+        assert_ne!(actual, original, "field {field}");
+        assert!(
+            matches!(
+                expectation.require_projection(&actual),
+                Err(Error::OperationConflict)
+            ),
+            "field {field}"
+        );
+        ReviewExpectationV1::Fresh
+            .require_projection(&actual)
+            .unwrap();
+    }
+}
+
+#[test]
+fn renewed_projection_match_does_not_relax_the_live_private_source_fence() {
+    let original = unadmitted_review_fixture();
+    let expectation = ReviewExpectationV1::OriginalUnstarted(original.projection.clone());
+    let mut renewed = unadmitted_review_fixture();
+    renewed.source.archive_checkpoint[0] ^= 1;
+    renewed.source.marker.generation += 1;
+    expectation.require_projection(&renewed.projection).unwrap();
+    assert!(matches!(
+        original.require_recheck(&renewed),
+        Err(Error::OperationConflict)
+    ));
+    let current = renewed.source.clone();
+    let mut fresh = unadmitted_review_fixture();
+    fresh.source = current;
+    renewed.require_recheck(&fresh).unwrap();
+    fresh.source.selected_generation += 1;
+    assert!(matches!(
+        renewed.require_recheck(&fresh),
+        Err(Error::OperationConflict)
+    ));
 }

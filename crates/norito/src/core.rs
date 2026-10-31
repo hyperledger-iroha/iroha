@@ -35,7 +35,12 @@ mod encoder;
 mod encoder_tests;
 pub use encoder::Encoder;
 mod encode_frames;
+mod encode_work;
 mod encode_writers;
+pub use encode_work::{
+    BoundedEncodeWorkError, EncodeWorkLimits, EncodeWorkRefusal, charge_encode_prewrite,
+    refuse_encode_source,
+};
 mod fixed_frame;
 mod heap_payload;
 mod nominal_text;
@@ -60,8 +65,8 @@ pub use field_destination::{
     with_context_fields,
 };
 pub use prepared_scope::{
-    PreparedDecodeError, PreparedDecodeScopeError, PreparedDecodeWorkspace,
-    PreparedDecodeWorkspaceConstruction,
+    OwnedPreparedDecodeError, PreparedDecodeError, PreparedDecodeScopeError,
+    PreparedDecodeWorkspace, PreparedDecodeWorkspaceConstruction,
 };
 pub use prepared_sequence::{
     ChargedElementSequence, PreparedElementSequence, RetainedElementSequence,
@@ -734,6 +739,7 @@ impl Drop for DecodeDepthGuard {
 #[doc(hidden)]
 pub struct EncodeValueDepthGuard {
     previous_depth: usize,
+    _work: encode_work::ValueGuard,
 }
 impl EncodeValueDepthGuard {
     /// Enter one value level in the current encode operation.
@@ -742,6 +748,7 @@ impl EncodeValueDepthGuard {
     ///
     /// Returns [`Error::NestingDepthExceeded`] when the canonical nesting ceiling is exceeded.
     pub fn enter() -> Result<Self, Error> {
+        let work = encode_work::ValueGuard::enter()?;
         let previous_depth = ENCODE_VALUE_NESTING_DEPTH.with(Cell::get);
         let depth = previous_depth.saturating_add(1);
         if depth > MAX_VALUE_NESTING_DEPTH {
@@ -752,7 +759,10 @@ impl EncodeValueDepthGuard {
             });
         }
         ENCODE_VALUE_NESTING_DEPTH.with(|slot| slot.set(depth));
-        Ok(Self { previous_depth })
+        Ok(Self {
+            previous_depth,
+            _work: work,
+        })
     }
 }
 impl Drop for EncodeValueDepthGuard {
@@ -1582,7 +1592,12 @@ fn validate_current_sequence_reservation(bytes: &[u8], count: usize) -> Result<(
         count,
     )
 }
-fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
+/// Check the complete minimum map framing before a caller allocates entry backing.
+///
+/// # Errors
+/// Rejects a mismatched count, arithmetic overflow or truncated entry prefixes.
+#[doc(hidden)]
+pub fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
     let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
     if declared_count != count {
         return Err(Error::LengthMismatch);
@@ -1745,7 +1760,7 @@ where
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
     let flags = effective_layout_flags();
-    let mut framer = ByteElementFramer::new(flags);
+    let mut framer = ByteElementFramer::new(flags)?;
     let mut count = 0usize;
     for item in iter {
         if count == len {
@@ -1784,17 +1799,19 @@ impl ByteElementFramer {
     const FIXED_PREFIX: [u8; 8] = 1_u64.to_le_bytes();
     const FIXED_STRIDE: usize = Self::FIXED_PREFIX.len() + 1;
 
-    fn new(flags: u8) -> Self {
-        Self {
+    fn new(flags: u8) -> Result<Self, Error> {
+        encode_work::charge(BYTE_ELEMENT_RUN)?;
+        Ok(Self {
             pending: [0; BYTE_ELEMENT_RUN],
             len: 0,
             flags,
             validated: false,
-        }
+        })
     }
 
     #[inline]
     fn push(&mut self, writer: &mut Encoder<'_>, byte: u8) -> Result<(), Error> {
+        encode_work::charge(1)?;
         if self.len == BYTE_ELEMENT_RUN {
             self.flush(writer)?;
         }
@@ -1814,8 +1831,10 @@ impl ByteElementFramer {
             self.validated = true;
         }
         let compact = compact_len_enabled_for_flags(self.flags);
-        let mut block = [0_u8; BYTE_ELEMENT_RUN * Self::FIXED_STRIDE];
         let pending = &self.pending[..self.len];
+        // Prepay the complete fixed-block initialization and framing copies.
+        encode_work::charge((BYTE_ELEMENT_RUN + pending.len()) * Self::FIXED_STRIDE)?;
+        let mut block = [0_u8; BYTE_ELEMENT_RUN * Self::FIXED_STRIDE];
         let framed = if compact {
             // The compact length one is the single varint byte `0x01`.
             for (element, &byte) in block.chunks_exact_mut(2).zip(pending) {
@@ -1851,7 +1870,7 @@ fn write_byte_element_array(
     bytes: &[u8],
     flags: u8,
 ) -> Result<(), Error> {
-    let mut framer = ByteElementFramer::new(flags);
+    let mut framer = ByteElementFramer::new(flags)?;
     for &byte in bytes {
         framer.push(writer, byte)?;
     }
@@ -1952,7 +1971,9 @@ where
     }
     Some(total)
 }
-fn map_encoded_len_hint<'a, K, V, I>(entries: I) -> Option<usize>
+/// Canonical map sizing shared by exact immutable collection owners.
+#[doc(hidden)]
+pub fn map_encoded_len_hint<'a, K, V, I>(entries: I) -> Option<usize>
 where
     K: SerializePayload + 'a,
     V: SerializePayload + 'a,
@@ -1972,7 +1993,9 @@ where
     }
     Some(total)
 }
-fn map_encoded_len_exact<'a, K, V, I>(entries: I) -> Option<usize>
+/// Exact canonical map sizing without an owned staging collection.
+#[doc(hidden)]
+pub fn map_encoded_len_exact<'a, K, V, I>(entries: I) -> Option<usize>
 where
     K: SerializePayload + 'a,
     V: SerializePayload + 'a,
@@ -2741,7 +2764,16 @@ where
         Ok((out, used))
     }
 }
-fn decode_map_entries<'a, K, V, F>(
+/// Decode canonical map fields into the caller's originally admitted destination.
+///
+/// The caller validates the declared count before reserving its backing and
+/// enforces its own key order, identity and uniqueness invariants. No staging
+/// collection is constructed; each field uses the canonical field decoder.
+///
+/// # Errors
+/// Preserves original framing, field decoder and destination refusals.
+#[doc(hidden)]
+pub fn decode_map_entries<'a, K, V, F>(
     bytes: &'a [u8],
     mut on_entry: F,
 ) -> Result<(usize, usize), Error>
@@ -3816,7 +3848,10 @@ fn write_counted_payload(
     if writer.count_measured_bytes(measured_len)? {
         Ok(())
     } else {
-        writer.with_exact_length(measured_len, |writer| value.serialize(writer))
+        writer.with_exact_length(measured_len, |writer| {
+            let _work = encode_work::ValueGuard::enter()?;
+            value.serialize(writer)
+        })
     }
 }
 /// Serialize a value by appending directly to a byte vector.
@@ -5988,6 +6023,7 @@ pub(crate) fn encode_bare_with_flags<T: SerializePayload>(
 ///
 /// Returns the underlying serialization error.
 pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error> {
+    let _work = encode_work::ValueGuard::enter()?;
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(flags)?;
@@ -6008,9 +6044,12 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
 /// refusal remains sticky even if a serializer ignores a failed write.
 ///
 /// # Errors
-/// Returns a serialization error or [`Error::LengthMismatch`] when the finite
-/// count allowance is exceeded. Arbitrary work performed before a serializer
-/// writes bytes still belongs to the source owner's separate work boundary.
+/// A propagated finite-count writer refusal is an allocation-free [`Error::Io`]
+/// with [`std::io::ErrorKind::Other`]. If the serializer suppresses that refusal,
+/// the sticky count check returns [`Error::LengthMismatch`] instead. Other codec
+/// and scoped resource errors propagate unchanged; an I/O kind is not authority
+/// to rewrite them. Arbitrary work performed before a serializer writes bytes
+/// still belongs to the source owner's separate work boundary.
 pub fn encoded_payload_len_bounded(
     value: &dyn SerializePayload,
     maximum: usize,
@@ -6339,6 +6378,7 @@ impl<'a, W: ?Sized> FramedPayloadWriter<'a, W> {
 }
 impl<W: Write + ?Sized> Write for FramedPayloadWriter<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        encode_work::charge(bytes.len())?;
         self.inner.write_all(bytes)?;
         self.len = self.len.saturating_add(bytes.len());
         self.digest.update(bytes);
@@ -7482,3 +7522,48 @@ mod budget_context_tests;
 #[cfg(test)]
 #[path = "core/history_owned_serialization_tests.rs"]
 mod history_owned_serialization_tests;
+
+/// Stream a canonical original-T frame from a borrowed payload through one finite
+/// work scope. `prepare` receives the codec's checked full frame length after
+/// its checksum pass and before any output; it must acquire original storage
+/// charge before allocation. The same allowance remains active through nested
+/// measurement, preparation and final output. Nested bounded entries refuse.
+///
+/// T selects real schema and alignment. Bounded entry requires T's literal
+/// static frame identity and prepays hashing; dynamic identities refuse even if
+/// previously memoized. The caller must prove P is T's original payload and
+/// separately bound/fund source work and all
+/// serializer-internal scratch before entry. This codec boundary grants no
+/// semantic validation, source authentication or journal/custody authority.
+/// On error, discard incomplete output. No default allowance is supplied.
+pub fn write_canonical_payload_bounded<T, P, W, F>(
+    payload: &P,
+    writer: &mut W,
+    limits: EncodeWorkLimits,
+    prepare: F,
+) -> Result<(), BoundedEncodeWorkError>
+where
+    T: NoritoSerialize,
+    P: SerializePayload + ?Sized,
+    W: Write + ?Sized,
+    F: FnOnce(&mut W, usize) -> Result<(), Error>,
+{
+    let guard = encode_work::Guard::enter(limits)?;
+    let mut output = encode_work::Output { inner: writer };
+    let result = encode_frames::write_typed_payload_frame_with_prefix::<T, P, _, _>(
+        payload,
+        &mut output,
+        default_encode_flags(),
+        |output, frame_len| {
+            guard.check()?;
+            encode_work::admit_frame(frame_len, limits.max_frame_bytes)?;
+            prepare(&mut *output.inner, frame_len)?;
+            guard.check()
+        },
+    );
+    guard.finish(result)
+}
+
+#[cfg(test)]
+#[path = "core/encode_work_tests.rs"]
+mod bounded_encode_work_tests;

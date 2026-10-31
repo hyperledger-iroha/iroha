@@ -1,4 +1,4 @@
-//! Four-validator activation, adversarial intent/governance, replay, and
+//! Four-validator default-policy, adversarial intent/governance, replay, and
 //! restart coverage for the canonical native ZK-AMS and Vega action APIs.
 //!
 //! This release gate intentionally leaves the network's DA/RBC configuration untouched. A validator
@@ -29,34 +29,32 @@ use iroha_core_privacy::{
             zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
         },
     },
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::compiled_privacy_profile_v1,
 };
 use iroha_data_model::{
     isi::{
         Grant, InstructionBox,
         privacy::{
-            BootstrapPrivacyZkAmsRegistryV1, RegisterPrivacyProtocolActivationV1,
-            RegisterPrivacyVegaIssuerV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            BootstrapPrivacyZkAmsRegistryV1, RegisterPrivacyVegaIssuerV1,
+            SchedulePrivacyProtocolLimitsUpdateV1, SubmitPrivacyProofV1,
         },
     },
     permission::Permission,
     prelude::{AccountId, QueryBuilderExt},
     privacy::{
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyChallengeV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyCapabilityReadinessV1, PrivacyChallengeV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCredentialDocumentTypeV1, PrivacyExact12CapabilityManifestV1,
         PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
         PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordDigestV1,
-        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
-        PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
-        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+        PrivacyProtocolPolicyV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
+        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
+        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
+        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryRecordDigestV1,
         PrivacyZkAmsSeedPublicKeyV1, PrivacyZkAmsSubjectCommitmentV1,
         VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -77,7 +75,6 @@ use iroha_test_samples::gen_account_in;
 use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
 use std::{
     num::{NonZeroU32, NonZeroU64},
@@ -128,18 +125,19 @@ impl DeterministicCryptoRng {
         self.offset = 0;
     }
 }
-impl RngCore for DeterministicCryptoRng {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for DeterministicCryptoRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         let mut written = 0;
         while written < destination.len() {
             if self.offset == self.buffered.len() {
@@ -152,13 +150,10 @@ impl RngCore for DeterministicCryptoRng {
             self.offset += take;
             written += take;
         }
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-        self.fill_bytes(destination);
         Ok(())
     }
 }
-impl CryptoRng for DeterministicCryptoRng {}
+impl rand::TryCryptoRng for DeterministicCryptoRng {}
 #[derive(Clone)]
 struct ZkAmsCredentialFixture {
     credential: PrivacyZkAmsPersonhoodCredentialV1,
@@ -248,7 +243,7 @@ fn assert_exact_protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
+    policy: Option<PrivacyProtocolPolicyV1>,
     context: &str,
 ) -> Result<()> {
     snapshot
@@ -261,9 +256,16 @@ fn assert_exact_protocol_row(
         row.compiled_profile
     );
     ensure!(
-        row.activation == activation,
-        "{context}: {protocol:?} activation mismatch: expected {activation:?}, got {:?}",
-        row.activation
+        row.policy == policy,
+        "{context}: {protocol:?} policy mismatch: expected {policy:?}, got {:?}",
+        row.policy
+    );
+    ensure!(
+        row.readiness == PrivacyCapabilityReadinessV1::Available
+            && row.is_network_available()
+            && row.effective_protocol_limits_v1()
+                == Some(policy.map_or(compiled.protocol_limits, |record| record.current_limits)),
+        "{context}: {protocol:?} native readiness or effective limits drifted"
     );
     Ok(())
 }
@@ -302,14 +304,6 @@ async fn next_execution_height(client: &Client) -> Result<u64> {
         .checked_add(EXECUTION_CARRIER_BLOCKS)
         .ok_or_else(|| eyre!("native transaction privacy-governance execution height overflowed"))
 }
-fn proposed_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 { proposed_at_height },
-    ))
-}
 async fn submit_instruction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
@@ -320,20 +314,6 @@ async fn submit_instruction(
     timeout(
         SUBMISSION_TIMEOUT,
         read_on_dedicated_thread(move || client.submit(instruction, no_fee())),
-    )
-    .await
-    .map_err(|_| eyre!("{context}: instruction submission exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .wrap_err_with(|| context.to_owned())
-}
-async fn submit_instructions(
-    client: &Client,
-    instructions: Vec<InstructionBox>,
-    context: &str,
-) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
-    let client = client.clone();
-    timeout(
-        SUBMISSION_TIMEOUT,
-        read_on_dedicated_thread(move || client.submit_all(instructions, no_fee())),
     )
     .await
     .map_err(|_| eyre!("{context}: instruction submission exceeded {SUBMISSION_TIMEOUT:?}"))?
@@ -356,13 +336,13 @@ async fn submit_signed_transaction(
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
     .wrap_err_with(|| context.to_owned())
 }
-async fn wait_for_all_peer_activations(
+async fn wait_for_all_peer_policies(
     network: &sandbox::SerializedNetwork,
     minimum_height: u64,
     rows: &[(
         PrivacyProtocolIdV1,
         PrivacyCompiledProfileSnapshotV1,
-        Option<PrivacyProtocolActivationRecordV1>,
+        Option<PrivacyProtocolPolicyV1>,
     )],
     context: &str,
 ) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
@@ -382,17 +362,9 @@ async fn wait_for_all_peer_activations(
                         ));
                         continue;
                     }
-                    let exact = rows
-                        .iter()
-                        .try_for_each(|(protocol, compiled, activation)| {
-                            assert_exact_protocol_row(
-                                &snapshot,
-                                *protocol,
-                                *compiled,
-                                *activation,
-                                context,
-                            )
-                        });
+                    let exact = rows.iter().try_for_each(|(protocol, compiled, policy)| {
+                        assert_exact_protocol_row(&snapshot, *protocol, *compiled, *policy, context)
+                    });
                     match exact {
                         Ok(()) => {
                             last_observed.push(format!(
@@ -587,7 +559,7 @@ async fn wait_for_zk_ams_account_state_on_peers(
     }
 }
 fn p256_public_key(signing_key: &P256SigningKey) -> Result<PrivacyP256PointV1> {
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -658,7 +630,7 @@ fn zk_ams_fixture() -> Result<ZkAmsFixture> {
             let signature: P256Signature = issuer_signing_key
                 .sign_prehash(credential.digest().as_bytes())
                 .map_err(|_| eyre!("sign fixed ZK-AMS credential"))?;
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             Ok(ZkAmsCredentialFixture {
                 credential,
                 issuer_signature: signature.to_bytes().into(),
@@ -1137,7 +1109,7 @@ fn vega_fixture(trusted_timestamp_ms: u64, challenge_byte: u8) -> Result<VegaFix
         PrivacyVegaIssuerRecordLifecycleV1::Active,
     )
     .map_err(|error| eyre!("construct canonical Vega issuer record: {error}"))?;
-    let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
+    let device_uncompressed = device_signing_key.verifying_key().to_sec1_point(false);
     let device_x = device_uncompressed
         .x()
         .ok_or_else(|| eyre!("uncompressed Vega device key omitted x"))?;
@@ -1216,7 +1188,7 @@ fn vega_fixture(trusted_timestamp_ms: u64, challenge_byte: u8) -> Result<VegaFix
     let issuer_signature: P256Signature = issuer_signing_key
         .sign_prehash(&issuer_digest)
         .map_err(|_| eyre!("sign fixed Vega MSO"))?;
-    let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+    let issuer_signature = issuer_signature.normalize_s();
     let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
         signature_structure,
         mso_payload,
@@ -1259,7 +1231,7 @@ fn build_vega_action(
     };
     let mut rng = DeterministicCryptoRng::new(proof_seed);
     let signed = build_signed_vega_privacy_action_with_rng_v1(
-        context,
+        &context,
         fixture.public_input,
         fixture.witness_material,
         &fixture.device_signing_key,
@@ -1308,6 +1280,7 @@ fn independently_resigned_stale_intent(
 }
 #[derive(Clone, Copy)]
 enum GovernanceTamper {
+    ParameterDigest,
     ZkAmsRegistryRecord,
     VegaIssuerRecord,
 }
@@ -1325,7 +1298,15 @@ fn independently_resigned_governance_tamper(
         .ok_or_else(|| eyre!("canonical privacy transaction omitted its direct submission"))?;
     let original_proof = submission.envelope.proof.clone();
     let mut envelope = submission.envelope.clone();
+    if matches!(tamper, GovernanceTamper::ParameterDigest) {
+        let mut digest = *envelope.parameter_digest.as_bytes();
+        digest[0] ^= 0x80;
+        envelope.parameter_digest = PrivacyParameterDigestV1::new(digest);
+        envelope.statement.context_mut().parameter_digest = envelope.parameter_digest;
+    }
     match (tamper, &mut envelope.statement) {
+        (GovernanceTamper::ParameterDigest, _) => {}
+
         (GovernanceTamper::ZkAmsRegistryRecord, PrivacyStatementV1::IrohaZkAmsV1(statement)) => {
             let mut digest = *statement.registry_record_digest.as_bytes();
             digest[0] ^= 0x80;
@@ -1475,13 +1456,13 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                     1_i64,
                 );
         });
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| eyre!("{context}: four-validator delivery requires a running network"))?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
-            "ZK-AMS/Vega lifecycle test requires exactly four trusted validators"
+            "ZK-AMS/Vega policy test requires exactly four trusted validators"
         );
         let client = bounded_client(network.client());
         let genesis_hash = canonical_genesis_hash(&client).await?;
@@ -1500,84 +1481,48 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "grant CanEnactGovernance",
         )
         .await?;
-        for (protocol, compiled, snapshot) in [
-            (ZK_AMS_PROTOCOL, zk_compiled, zk_snapshot),
-            (VEGA_PROTOCOL, vega_compiled, vega_snapshot),
+        for (protocol, snapshot) in [
+            (ZK_AMS_PROTOCOL, zk_snapshot),
+            (VEGA_PROTOCOL, vega_snapshot),
         ] {
             let incoming = next_execution_height(&client).await?;
-            let mut mismatched = proposed_activation(compiled, incoming);
-            mismatched.parameter_digest = PrivacyParameterDigestV1::new([0xA5; 32]);
-            ensure!(
-                mismatched.parameter_digest != compiled.parameter_digest,
-                "{protocol:?} mismatched digest fixture accidentally equals compiled state"
-            );
             let error = submit_instruction(
                 &client,
-                RegisterPrivacyProtocolActivationV1::new(mismatched),
-                "mismatched compiled privacy activation must reject",
+                SchedulePrivacyProtocolLimitsUpdateV1::new(
+                    protocol,
+                    incoming
+                        .checked_add(1)
+                        .ok_or_else(|| eyre!("policy height overflowed"))?,
+                    PrivacyProtocolLimitsV1::canonical_default_v1(protocol),
+                ),
+                "unchanged protocol-limit update must reject",
             )
             .await
-            .expect_err("mismatched compiled privacy activation was accepted");
+            .expect_err("no-op privacy protocol update was accepted");
             ensure!(
-                error_chain_contains(&error, "does not match compiled native profile"),
-                "{protocol:?} compiled-digest rejection had wrong reason: {error:?}"
+                error_chain_contains(&error, "privacy protocol-limit update is a no-op"),
+                "{protocol:?} no-op policy rejected for wrong reason: {error:?}"
             );
-            wait_for_all_peer_activations(
+            wait_for_all_peer_policies(
                 &network,
                 incoming,
                 &[
                     (ZK_AMS_PROTOCOL, zk_snapshot, None),
                     (VEGA_PROTOCOL, vega_snapshot, None),
                 ],
-                "mismatched activation must not register protocol state",
+                "rejected policy update preserves available default-policy rows",
             )
             .await?;
             assert_exact_protocol_row(
-                &privacy_capabilities(&client)
-                    .await
-                    .wrap_err("query local row after activation mismatch")?,
+                &privacy_capabilities(&client).await?,
                 protocol,
                 snapshot,
                 None,
-                "local mismatch row",
+                "local default-policy row",
             )?;
         }
-        let zk_registration_height = next_execution_height(&client).await?;
-        let expected_vega_registration_height = zk_registration_height
-            .checked_add(EXECUTION_CARRIER_BLOCKS)
-            .ok_or_else(|| eyre!("Vega registration height overflowed"))?;
-        let zk_proposed = proposed_activation(zk_compiled, zk_registration_height);
-        submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(zk_proposed),
-            "register exact compiled ZK-AMS activation",
-        )
-        .await?;
-        let vega_registration_height = next_execution_height(&client).await?;
-        ensure!(
-            vega_registration_height == expected_vega_registration_height,
-            "Vega proposal landed at {vega_registration_height}, expected \
-             {expected_vega_registration_height}"
-        );
-        let vega_proposed = proposed_activation(vega_compiled, vega_registration_height);
-        submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(vega_proposed),
-            "register exact compiled Vega activation",
-        )
-        .await?;
-        wait_for_all_peer_activations(
-            &network,
-            vega_registration_height,
-            &[
-                (ZK_AMS_PROTOCOL, zk_snapshot, Some(zk_proposed)),
-                (VEGA_PROTOCOL, vega_snapshot, Some(vega_proposed)),
-            ],
-            "exact proposed ZK-AMS/Vega activation",
-        )
-        .await?;
         let zk_fixture = zk_ams_fixture()?;
-        let zk_preactivation = build_zk_ams_batch_action(
+        let zk_before_bootstrap = build_zk_ams_batch_action(
             &client,
             &zk_fixture,
             &zk_fixture.credentials[..1],
@@ -1587,12 +1532,19 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             [0x11; 32],
         )?
         .transaction;
-        let (vega_issuer_record, vega_preactivation) =
+        let (vega_issuer_record, vega_before_issuer) =
             build_vega_action(&client, genesis_hash, 21, 0x31, [0x21; 32])?;
+        assert_rejected_with(
+            &client,
+            &vega_before_issuer,
+            "canonical Vega action without committed issuer state",
+            &["MissingTrustedIssuer"],
+        )
+        .await?;
         submit_instruction(
             &client,
             RegisterPrivacyVegaIssuerV1::new(vega_issuer_record),
-            "register canonical Vega issuer while protocol is Proposed",
+            "register canonical Vega issuer under the default protocol policy",
         )
         .await?;
         let aliased_vega_issuer = PrivacyVegaIssuerRecordV1::new(
@@ -1619,100 +1571,31 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             error_chain_contains(&alias_error, "permanently owned"),
             "cross-lineage Vega key alias rejected for wrong reason: {alias_error:?}"
         );
-        let bootstrap_error = submit_instruction(
-            &client,
-            BootstrapPrivacyZkAmsRegistryV1::new(zk_fixture.bootstrap),
-            "pre-activation ZK-AMS registry bootstrap must reject",
-        )
-        .await
-        .expect_err("ZK-AMS registry bootstrap was accepted before activation");
-        ensure!(
-            error_chain_contains(
-                &bootstrap_error,
-                "cannot bootstrap a registry before ZK-AMS is active"
-            ),
-            "pre-activation ZK-AMS bootstrap rejected for wrong reason: {bootstrap_error:?}"
-        );
-        let advance_target = privacy_capabilities(&client).await?.committed_height;
-        wait_for_all_peer_activations(
-            &network,
-            advance_target,
-            &[
-                (ZK_AMS_PROTOCOL, zk_snapshot, Some(zk_proposed)),
-                (VEGA_PROTOCOL, vega_snapshot, Some(vega_proposed)),
-            ],
-            "both protocols remain Proposed before negative action probes",
-        )
-        .await?;
         assert_rejected_with(
             &client,
-            &zk_preactivation,
-            "canonical ZK-AMS action before activation",
+            &zk_before_bootstrap,
+            "canonical ZK-AMS action without a committed registry",
             &[
                 "trusted ZK-AMS registry state failed validation",
                 "ZK-AMS registry has no governed issuer-policy record",
-                "activation is not active",
             ],
         )
         .await?;
-        assert_rejected_with(
-            &client,
-            &vega_preactivation,
-            "canonical Vega action before activation",
-            &["activation is not active"],
-        )
-        .await?;
-        let last_pre_activation_height = privacy_capabilities(&client).await?.committed_height;
-        wait_for_all_peer_activations(
+        let before_bootstrap_height = privacy_capabilities(&client).await?.committed_height;
+        wait_for_all_peer_policies(
             &network,
-            last_pre_activation_height,
+            before_bootstrap_height,
             &[
-                (ZK_AMS_PROTOCOL, zk_snapshot, Some(zk_proposed)),
-                (VEGA_PROTOCOL, vega_snapshot, Some(vega_proposed)),
+                (ZK_AMS_PROTOCOL, zk_snapshot, None),
+                (VEGA_PROTOCOL, vega_snapshot, None),
             ],
-            "both protocols remain Proposed after real rejected actions advance the chain",
-        )
-        .await?;
-        let activation_height = next_execution_height(&client).await?;
-        let zk_active = zk_compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: zk_registration_height,
-                activated_at_height: activation_height,
-                state_since_height: activation_height,
-            },
-        ));
-        let vega_active = vega_compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: vega_registration_height,
-                activated_at_height: activation_height,
-                state_since_height: activation_height,
-            },
-        ));
-        submit_instructions(
-            &client,
-            vec![
-                TransitionPrivacyProtocolLifecycleV1::new(ZK_AMS_PROTOCOL, zk_active.lifecycle)
-                    .into(),
-                TransitionPrivacyProtocolLifecycleV1::new(VEGA_PROTOCOL, vega_active.lifecycle)
-                    .into(),
-            ],
-            "explicitly activate both intentionally pending protocol proposals",
-        )
-        .await?;
-        wait_for_all_peer_activations(
-            &network,
-            activation_height,
-            &[
-                (ZK_AMS_PROTOCOL, zk_snapshot, Some(zk_active)),
-                (VEGA_PROTOCOL, vega_snapshot, Some(vega_active)),
-            ],
-            "exact Active ZK-AMS/Vega state on all validators",
+            "issuer registration and rejected actions preserve default protocol policies",
         )
         .await?;
         submit_instruction(
             &client,
             BootstrapPrivacyZkAmsRegistryV1::new(zk_fixture.bootstrap),
-            "bootstrap canonical active ZK-AMS registry",
+            "bootstrap canonical ZK-AMS registry without a protocol policy row",
         )
         .await?;
         let (first_admission, second_admission) = zk_fixture
@@ -1817,6 +1700,20 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             final_issuer_record == vega_issuer_record,
             "Vega action fixture drifted from registered issuer state"
         );
+        for transaction in [&zk_admission_one.transaction, &vega_final] {
+            let profile_tamper = independently_resigned_governance_tamper(
+                transaction,
+                GovernanceTamper::ParameterDigest,
+                &client,
+            )?;
+            assert_rejected_with(
+                &client,
+                &profile_tamper,
+                "self-consistent native parameter-digest substitution",
+                &["privacy profile parameter digest differs from envelope"],
+            )
+            .await?;
+        }
         let stale_zk =
             independently_resigned_stale_intent(&zk_admission_one.transaction, 112, &client)?;
         let stale_vega = independently_resigned_stale_intent(&vega_final, 122, &client)?;
@@ -1994,14 +1891,14 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         .await
         .map_err(|_| eyre!("privacy validator restart exceeded {RESTART_TIMEOUT:?}"))?
         .wrap_err("restart privacy validator")?;
-        wait_for_all_peer_activations(
+        wait_for_all_peer_policies(
             &network,
             finalized_height,
             &[
-                (ZK_AMS_PROTOCOL, zk_snapshot, Some(zk_active)),
-                (VEGA_PROTOCOL, vega_snapshot, Some(vega_active)),
+                (ZK_AMS_PROTOCOL, zk_snapshot, None),
+                (VEGA_PROTOCOL, vega_snapshot, None),
             ],
-            "post-restart Active bindings and catch-up height",
+            "post-restart default-policy bindings and catch-up height",
         )
         .await?;
         let all_clients = network
@@ -2101,13 +1998,13 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
                     1_i64,
                 );
         });
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| eyre!("{context}: four-validator delivery requires a running network"))?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
-            "Vega lifecycle test requires exactly four trusted validators"
+            "Vega policy test requires exactly four trusted validators"
         );
         let client = bounded_client(network.client());
         let genesis_hash = canonical_genesis_hash(&client).await?;
@@ -2123,89 +2020,37 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "grant CanEnactGovernance for Vega",
         )
         .await?;
-        let mismatch_height = next_execution_height(&client).await?;
-        let mut mismatched = proposed_activation(
-            compiled,
-            mismatch_height,
-        );
-        mismatched.parameter_digest = PrivacyParameterDigestV1::new([0xA5; 32]);
-        ensure!(
-            mismatched.parameter_digest != compiled.parameter_digest,
-            "Vega mismatched digest fixture accidentally equals compiled state"
-        );
-        let mismatch_error = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(mismatched),
-            "mismatched compiled Vega activation must reject",
-        )
-        .await
-        .expect_err("mismatched compiled Vega activation was accepted");
-        ensure!(
-            error_chain_contains(&mismatch_error, "does not match compiled native profile"),
-            "Vega compiled-digest rejection had wrong reason: {mismatch_error:?}"
-        );
-        let registration_height = next_execution_height(&client).await?;
-        let proposed = proposed_activation(compiled, registration_height);
-        submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(proposed),
-            "register exact compiled Vega activation",
-        )
-        .await?;
-        wait_for_all_peer_activations(
-            &network,
-            registration_height,
-            &[(VEGA_PROTOCOL, snapshot, Some(proposed))],
-            "exact proposed Vega activation",
-        )
-        .await?;
-        let (issuer_record, preactivation) =
+        let policy_height = next_execution_height(&client).await?;
+        let policy_error = submit_instruction(&client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(VEGA_PROTOCOL,
+                policy_height.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?,
+                PrivacyProtocolLimitsV1::canonical_default_v1(VEGA_PROTOCOL)),
+            "unchanged Vega policy must reject").await
+            .expect_err("no-op Vega policy update was accepted");
+        ensure!(error_chain_contains(&policy_error, "privacy protocol-limit update is a no-op"),
+            "Vega no-op policy rejected for wrong reason: {policy_error:?}");
+        wait_for_all_peer_policies(&network, policy_height,
+            &[(VEGA_PROTOCOL, snapshot, None)], "Vega is available with no protocol policy").await?;
+        let (issuer_record, before_issuer) =
             build_vega_action(&client, genesis_hash, 21, 0x31, [0x21; 32])?;
-        submit_instruction(
-            &client,
-            RegisterPrivacyVegaIssuerV1::new(issuer_record),
-            "register canonical Vega issuer while protocol is Proposed",
-        )
-        .await?;
-        let last_pre_activation_height = privacy_capabilities(&client).await?.committed_height;
-        wait_for_all_peer_activations(
-            &network,
-            last_pre_activation_height,
-            &[(VEGA_PROTOCOL, snapshot, Some(proposed))],
-            "Vega remains Proposed after issuer registration advances the chain",
-        )
-        .await?;
-        assert_rejected_with(
-            &client,
-            &preactivation,
-            "canonical Vega action before activation",
-            &["activation is not active"],
-        )
-        .await?;
-        let activation_height = next_execution_height(&client).await?;
-        let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: registration_height,
-                activated_at_height: activation_height,
-                state_since_height: activation_height,
-            },
-        ));
-        submit_instruction(&client,
-            TransitionPrivacyProtocolLifecycleV1::new(VEGA_PROTOCOL, active.lifecycle),
-            "explicitly activate the intentionally pending Vega proposal").await?;
-        wait_for_all_peer_activations(
-            &network,
-            activation_height,
-            &[(VEGA_PROTOCOL, snapshot, Some(active))],
-            "exact Active Vega state on all validators",
-        )
-        .await?;
+        assert_rejected_with(&client, &before_issuer,
+            "canonical Vega action without committed issuer state", &["MissingTrustedIssuer"]).await?;
+        submit_instruction(&client, RegisterPrivacyVegaIssuerV1::new(issuer_record),
+            "register canonical Vega issuer under the default protocol policy").await?;
+        let issuer_height = privacy_capabilities(&client).await?.committed_height;
+        wait_for_all_peer_policies(&network, issuer_height, &[(VEGA_PROTOCOL, snapshot, None)],
+            "issuer registration preserves default protocol policy").await?;
         let (final_issuer_record, final_action) =
             build_vega_action(&client, genesis_hash, 22, 0x33, [0x22; 32])?;
         ensure!(
             final_issuer_record == issuer_record,
             "Vega action fixture drifted from registered issuer state"
         );
+        let profile_tamper = independently_resigned_governance_tamper(
+            &final_action, GovernanceTamper::ParameterDigest, &client)?;
+        assert_rejected_with(&client, &profile_tamper,
+            "self-consistent native Vega parameter-digest substitution",
+            &["privacy profile parameter digest differs from envelope"]).await?;
         let stale = independently_resigned_stale_intent(&final_action, 122, &client)?;
         let governance_tamper = independently_resigned_governance_tamper(
             &final_action,
@@ -2289,11 +2134,11 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .await
         .map_err(|_| eyre!("Vega validator restart exceeded {RESTART_TIMEOUT:?}"))?
         .wrap_err("restart Vega validator")?;
-        wait_for_all_peer_activations(
+        wait_for_all_peer_policies(
             &network,
             finalized_height,
-            &[(VEGA_PROTOCOL, snapshot, Some(active))],
-            "post-restart Active Vega binding and catch-up height",
+            &[(VEGA_PROTOCOL, snapshot, None)],
+            "post-restart default-policy Vega binding and catch-up height",
         )
         .await?;
         let all_clients = network

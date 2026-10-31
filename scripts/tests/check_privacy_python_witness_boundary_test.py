@@ -25,13 +25,21 @@ def _write_fixture(
     rust_root.mkdir(parents=True)
     python_root.mkdir(parents=True)
     (rust_root / "lib.rs").write_text(
+        "mod privacy_x509_transaction;\n"
+        "fn register() { module.add_class::<privacy_x509_transaction::PyPrivacyX509PreparedTransactionV1>(); }\n"
         "#[pymethods]\n"
         "impl TransactionBuilder {\n"
         "    fn prepare_privacy_zk_x509_identity_presentation_action_v1() {}\n"
-        "    fn sign_privacy_zk_x509_identity_presentation_action_v1() {}\n"
         f"    {extra_rust}\n"
         "}\n",
         encoding="utf-8",
+    )
+    (rust_root / "privacy_x509_transaction.rs").write_text(
+        (REPO_ROOT / "python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs").read_text(),
+        encoding="utf-8",
+    )
+    (rust_root / "privacy_native_actions.rs").write_text(
+        "enum PrivacyNativeActionRequestV1 { Generic(GenericRequest) }\n", encoding="utf-8"
     )
     (rust_root / "privacy_wallet_worker.rs").write_text(
         """fn retained_protocol(protocol: &str) {
@@ -49,10 +57,7 @@ fn next_function() {}
     )
     (python_root / "tx.py").write_text(
         """class TransactionDraft:
-    def prepare_privacy_zk_x509_identity_presentation_action_v1(self):
-        pass
-
-    def sign_privacy_zk_x509_identity_presentation_action_v1(self):
+    def prepare_privacy_zk_x509_identity_presentation_action_v1(self, *, canonical_request_archive):
         pass
 """,
         encoding="utf-8",
@@ -173,3 +178,56 @@ def test_renamed_raw_parameter_and_missing_top_level_export_fail_closed(
         for error in report.structural_errors
     )
     assert not report.release_ready
+
+
+@pytest.mark.parametrize("surface", ["lib.rs", "tx.py"])
+def test_retired_mutable_owner_signing_bypass_is_rejected(tmp_path: Path, surface: str) -> None:
+    _write_fixture(tmp_path)
+    if surface == "lib.rs":
+        path = tmp_path / "python/iroha_python/iroha_python_rs/src/lib.rs"
+        source = path.read_text().replace(
+            "impl TransactionBuilder {", "impl TransactionBuilder {\n"
+            " fn sign_privacy_zk_x509_identity_presentation_action_v1(private_key: &[u8], statement: &[u8], proof: &[u8]) {}"
+        )
+    else:
+        path = tmp_path / "python/iroha_python/src/iroha_python/tx.py"
+        source = path.read_text() + "\n    def sign_privacy_zk_x509_identity_presentation_action_v1(self, private_key, statement, proof): pass\n"
+    path.write_text(source)
+    assert any("mutable-draft X509 signing bypass" in error for error in checker.inspect_repository(tmp_path).structural_errors)
+
+
+@pytest.mark.parametrize(("old", "new", "error"), [
+    ("frozen,", "", "frozen with private retained custody"),
+    ("    plan: DirectPlan,", "    pub plan: DirectPlan,", "private retained custody"),
+    ("impl PyPrivacyX509PreparedTransactionV1 {\n    #[getter]", "impl PyPrivacyX509PreparedTransactionV1 {\n    #[new]\n    fn new() -> Self { todo!() }\n    #[getter]", "constructor or setter"),
+    ("credential_proof: &[u8]", "credential_proof: &[u8], replacement: TransactionPayload", "only the original owner"),
+    ("require_key(&self.plan.payload, &key)?;", "// require_key(&self.plan.payload, &key)?;", "custody guard missing"),
+    ("self.admission.x509_policy(self.network_id)?", "other_policy()", "custody guard missing"),
+    ("validate_materialized_against_profile_v1(", "unchecked_materialization(", "custody guard missing"),
+    ("payload.validate_signed_attachments_v1()", "payload.skip_attachment_validation()", "custody guard missing"),
+    ("intent != self.intent", "false", "custody guard missing"),
+])
+def test_owner_custody_regressions_fail_closed(tmp_path: Path, old: str, new: str, error: str) -> None:
+    _write_fixture(tmp_path)
+    path = tmp_path / "python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs"
+    source = path.read_text()
+    assert old in source
+    path.write_text(source.replace(old, new, 1))
+    assert any(error in item for item in checker.inspect_repository(tmp_path).structural_errors)
+
+
+def test_generic_action_x509_bypass_is_rejected(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    path = tmp_path / "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs"
+    path.write_text("enum PrivacyNativeActionRequestV1 { ZkX509(OldMutableRequest) }")
+    assert any("generic action dispatcher" in error for error in checker.inspect_repository(tmp_path).structural_errors)
+
+
+def test_retired_activation_validator_cannot_replace_selected_profile_admission(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    path = tmp_path / "python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs"
+    source = path.read_text()
+    assert "validate_materialized_against_profile_v1" in source
+    path.write_text(source.replace("validate_materialized_against_profile_v1", "validate_materialized_against_activation_v1"))
+    errors = checker.inspect_repository(tmp_path).structural_errors
+    assert any("X509 custody guard missing" in error and "validate_materialized_against_profile_v1" in error for error in errors)

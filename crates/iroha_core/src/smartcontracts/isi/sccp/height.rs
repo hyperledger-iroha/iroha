@@ -10,10 +10,8 @@ use crate::{
     state::WorldReadOnly,
     sumeragi::schedule::{RetainedConsensusSchedule, ScheduledSlot},
 };
-use iroha_data_model::{
-    block::consensus::MAX_VALIDATORS_PER_HEIGHT, parameter::system::ConsensusMode,
-};
-use iroha_model_base::peer::PeerId;
+use iroha_data_model::parameter::system::ConsensusMode;
+use iroha_model_base::{peer::PeerId, topology::MAX_VALIDATORS_PER_HEIGHT};
 
 /// Consensus inputs of one height for the SCCP generation step (§4.2.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,6 +435,9 @@ mod tests {
 
     #[test]
     fn height_capture_preserves_original_graph_without_admission_at_full_pool() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use crate::sumeragi::schedule::ScheduleError;
         use iroha_allocation::AllocationRefusal;
         let state = blank_state();

@@ -112,8 +112,7 @@ fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
         .as_numeric()
         .try_mantissa_u128()
-        .map(|value| u64::try_from(value).unwrap_or(u64::MAX))
-        .unwrap_or(u64::MAX);
+        .map_or(u64::MAX, |value| u64::try_from(value).unwrap_or(u64::MAX));
     (units, u64::from(amount.scale()))
 }
 #[cfg(feature = "telemetry")]
@@ -335,12 +334,12 @@ impl SpaceDirectoryActiveIndex {
     }
     #[cfg(feature = "telemetry")]
     fn remove(&mut self, uaid: UniversalAccountId, dataspace: u64) {
-        if self.entries.remove(&(uaid, dataspace)) {
-            if let Some(entry) = self.counts.get_mut(&dataspace) {
-                *entry = entry.saturating_sub(1);
-                if *entry == 0 {
-                    self.counts.remove(&dataspace);
-                }
+        if self.entries.remove(&(uaid, dataspace))
+            && let Some(entry) = self.counts.get_mut(&dataspace)
+        {
+            *entry = entry.saturating_sub(1);
+            if *entry == 0 {
+                self.counts.remove(&dataspace);
             }
         }
     }
@@ -762,7 +761,7 @@ impl StateTelemetry {
     pub fn soranet_privacy(&self) -> Arc<SoranetSecureAggregator> {
         Arc::clone(&self.soranet_privacy)
     }
-    /// Observe state_write_lock wait/hold durations during block commit.
+    /// Observe `state_write_lock` wait/hold durations during block commit.
     pub fn observe_state_commit_write_lock(&self, wait: Duration, hold: Duration) {
         if !self.enabled {
             return;
@@ -928,18 +927,18 @@ impl StateTelemetry {
     }
     fn dataspace_labels(&self, dataspace: DataSpaceId) -> DataspaceLabelSet {
         let id = dataspace.as_u64();
-        if let Ok(guard) = self.dataspace_metadata.read() {
-            if let Some(entry) = guard.get(&id) {
-                let profile = entry
-                    .description
-                    .clone()
-                    .unwrap_or_else(|| entry.alias.clone());
-                return DataspaceLabelSet {
-                    alias: entry.alias.clone(),
-                    profile,
-                    dataspace_id: id.to_string(),
-                };
-            }
+        if let Ok(guard) = self.dataspace_metadata.read()
+            && let Some(entry) = guard.get(&id)
+        {
+            let profile = entry
+                .description
+                .clone()
+                .unwrap_or_else(|| entry.alias.clone());
+            return DataspaceLabelSet {
+                alias: entry.alias.clone(),
+                profile,
+                dataspace_id: id.to_string(),
+            };
         }
         let fallback = format!("dataspace-{id}");
         DataspaceLabelSet {
@@ -2155,7 +2154,7 @@ impl StateTelemetry {
     /// Replace Parliament attempt gauges from the exact derived-state counters.
     ///
     /// Status order is Active, Certified, Rejected, Enacted, Superseded,
-    /// ExecutionFailed. Stage order follows the closed `GovernanceStageV1`
+    /// `ExecutionFailed`. Stage order follows the closed `GovernanceStageV1`
     /// lifecycle from Qualification through Enactment.
     #[cfg(feature = "telemetry")]
     pub(crate) fn set_parliament_attempt_counts(
@@ -3323,19 +3322,6 @@ impl StateTelemetry {
     [inc_runtime_upgrade_event(kind: &'static str) =>
         .runtime_upgrade_events_total.with_label_values(&[kind]).inc();]
     }
-    /// Increment runtime upgrade provenance rejection counter labeled by reason.
-    pub fn record_runtime_upgrade_provenance_rejection(
-        &self,
-        reason: iroha_data_model::runtime::RuntimeUpgradeProvenanceError,
-    ) {
-        if self.is_enabled() {
-            let label = reason.as_label();
-            self.metrics
-                .runtime_upgrade_provenance_rejections_total
-                .with_label_values(&[label])
-                .inc();
-        }
-    }
     /// Update governance proposal counters on status transition.
     pub fn record_governance_proposal_transition(
         &self,
@@ -4246,13 +4232,9 @@ fn emit_sorafs_proof_health_alert(metrics: &Metrics, alert: &SorafsProofHealthAl
 /// Update gauges that track transaction queue load and saturation as observed by consensus.
 pub fn record_state_tx_queue_backpressure(
     telemetry: &StateTelemetry,
-    depth: u64,
-    capacity: u64,
-    retained_bytes: u64,
-    max_retained_bytes: u64,
-    saturated_by_count: bool,
-    saturated_by_bytes: bool,
-    saturated_by_age: bool,
+    (depth, capacity): (u64, u64),
+    (retained_bytes, max_retained_bytes): (u64, u64),
+    (saturated_by_count, saturated_by_bytes, saturated_by_age): (bool, bool, bool),
     oldest_queued_age_ms: u64,
 ) {
     if telemetry.is_enabled() {
@@ -4352,6 +4334,10 @@ const CHANNEL_CAPACITY: usize = 1024;
 /// Keep this short so HTTP status/metrics endpoints cannot stall the runtime
 /// when the telemetry task is unavailable or backlogged.
 const METRICS_SYNC_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(test)]
+type StatusRefusalInspector =
+    Box<dyn FnOnce(Option<&crate::execution_attempt::ExecutionDeferred>) + Send>;
+
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 enum Message {
     Sync {
@@ -4359,7 +4345,7 @@ enum Message {
     },
     #[cfg(test)]
     TestInspectStatusRefusal {
-        inspect: Box<dyn FnOnce(Option<&crate::execution_attempt::ExecutionDeferred>) + Send>,
+        inspect: StatusRefusalInspector,
         reply: oneshot::Sender<()>,
     },
     #[cfg(test)]
@@ -4550,13 +4536,9 @@ impl Telemetry {
     /// Update gauges that track transaction queue load and saturation as observed by consensus.
     pub fn record_tx_queue_backpressure(
         &self,
-        depth: u64,
-        capacity: u64,
-        retained_bytes: u64,
-        max_retained_bytes: u64,
-        saturated_by_count: bool,
-        saturated_by_bytes: bool,
-        saturated_by_age: bool,
+        (depth, capacity): (u64, u64),
+        (retained_bytes, max_retained_bytes): (u64, u64),
+        (saturated_by_count, saturated_by_bytes, saturated_by_age): (bool, bool, bool),
         oldest_queued_age_ms: u64,
     ) {
         if self.enabled {
@@ -4766,12 +4748,12 @@ impl Telemetry {
         let _ = alert;
     }
     telemetry_enabled_metric_methods! {
-    /// Increment canonical active-request accounting for a SoraFS gateway route.
+    /// Increment canonical active-request accounting for a `SoraFS` gateway route.
     [start_sorafs_gateway_request(labels: SorafsGatewayRequestMetricLabels<'_>);]
     /// Complete canonical request accounting and record the response/TTFB metrics.
     [finish_sorafs_gateway_request(labels: SorafsGatewayResponseMetricLabels<'_>, ttfb: Duration) =>
         .finish_sorafs_gateway_request(labels, ttfb.as_secs_f64() * 1000.0);]
-    /// Record one canonical SoraFS gateway proof-verification outcome.
+    /// Record one canonical `SoraFS` gateway proof-verification outcome.
     [record_sorafs_gateway_proof_verification(
         profile_version: &str, result: &str, error_code: &str, duration: Duration,
     ) =>
@@ -5481,7 +5463,7 @@ impl Actor {
                     // Work remains actor-owned through finite chunked catch-up.
                     // Expiration retires only the response, never verified progress.
                     let result = match self.sync().await {
-                        Ok(target) => self.owned_status(target, &build),
+                        Ok(target) => self.owned_status(&(target), &build),
                         Err(error) => Err(error),
                     };
                     self.sync_requested.store(false, Ordering::Release);
@@ -6082,8 +6064,7 @@ pub fn start(
     state: Arc<State>,
     kura: Arc<Kura>,
     queue: Arc<Queue>,
-    online_peers: watch::Receiver<OnlinePeers>,
-    local_peer_id: PeerId,
+    (online_peers, local_peer_id): (watch::Receiver<OnlinePeers>, PeerId),
     time_source: TimeSource,
     enabled: bool,
 ) -> Result<(Telemetry, Child), iroha_telemetry::metrics::CollectorRegistrationError> {
@@ -6202,7 +6183,6 @@ mod tests {
             DataSpaceMetadata, LaneConfig, ManifestVersion, UniversalAccountId,
         },
         oracle::KeyedHash,
-        peer::Peer,
         prelude::TransactionBuilder,
         trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
@@ -6210,6 +6190,7 @@ mod tests {
     use iroha_data_model::{
         events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::peer::Peer;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{
@@ -8396,7 +8377,11 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         record_state_tx_queue_backpressure(
-            &telemetry, 12, 64, 1_024, 2_048, false, false, false, 500,
+            &telemetry,
+            (12, 64),
+            (1_024, 2_048),
+            (false, false, false),
+            500,
         );
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 12);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
@@ -8408,7 +8393,11 @@ mod tests {
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 0);
         assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 500);
         record_state_tx_queue_backpressure(
-            &telemetry, 63, 64, 2_048, 2_048, false, true, true, 7_500,
+            &telemetry,
+            (63, 64),
+            (2_048, 2_048),
+            (false, true, true),
+            7_500,
         );
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 63);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
@@ -8428,13 +8417,9 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
         record_state_tx_queue_backpressure(
             &state_telemetry,
-            2,
-            20_000,
-            21_888,
-            134_217_728,
-            false,
-            false,
-            true,
+            (2, 20_000),
+            (21_888, 134_217_728),
+            (false, false, true),
             23_611,
         );
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
@@ -8443,13 +8428,9 @@ mod tests {
 
         metrics.sumeragi_tx_queue_saturated.set(1);
         telemetry.record_tx_queue_backpressure(
-            2,
-            20_000,
-            21_888,
-            134_217_728,
-            false,
-            false,
-            true,
+            (2, 20_000),
+            (21_888, 134_217_728),
+            (false, false, true),
             23_611,
         );
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
@@ -8460,9 +8441,12 @@ mod tests {
         let system = SystemUnderTest::new();
         // Model the last event-driven sample before work was removed without
         // StateTelemetry. No new block or transaction should be needed to clear it.
-        system
-            .telemetry
-            .record_tx_queue_backpressure(2, 2, 21_888, 21_888, true, true, true, 23_611);
+        system.telemetry.record_tx_queue_backpressure(
+            (2, 2),
+            (21_888, 21_888),
+            (true, true, true),
+            23_611,
+        );
         assert_eq!(system.telemetry.metrics.sumeragi_tx_queue_depth.get(), 2);
         assert_eq!(
             system.telemetry.metrics.sumeragi_tx_queue_saturated.get(),
@@ -9134,8 +9118,7 @@ mod tests {
                 state.clone(),
                 kura.clone(),
                 queue,
-                peers_rx,
-                local_peer_id.clone(),
+                (peers_rx, local_peer_id.clone()),
                 time_source.clone(),
                 true,
             )
@@ -9184,13 +9167,11 @@ mod tests {
             let tx = builder
                 .with_instructions(instructions)
                 .sign(self.account_keypair.private_key());
-            let crypto_cfg = self.state.crypto();
             if genesis {
                 AcceptedTransaction::validate_genesis_with_now(
                     &tx,
                     max_clock_drift,
                     &self.account_id,
-                    crypto_cfg.as_ref(),
                     self.time_source.get_unix_time(),
                 )
                 .expect("telemetry fixture uses authenticated genesis transactions");
@@ -9201,7 +9182,11 @@ mod tests {
                 &self.network_id,
                 max_clock_drift,
                 tx_limits,
-                crypto_cfg.as_ref(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &self.time_source,
             )
             .unwrap()
@@ -9284,6 +9269,8 @@ mod tests {
     }
     #[tokio::test]
     async fn uptime_since_genesis_reads_the_genesis_body_once() {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let sut = SystemUnderTest::new_native();
         let genesis = NonZeroUsize::MIN;
         let genesis_time = sut
@@ -9350,7 +9337,7 @@ mod tests {
                 iroha_config::parameters::actual::LaneConfig::default(),
                 0,
             );
-            tx.insert_account_alias_binding(alias, aliased.clone());
+            tx.insert_account_alias_binding(&(alias), &(aliased.clone()));
             tx.apply();
             block.commit();
         }
@@ -9381,8 +9368,7 @@ mod tests {
             Arc::clone(&system.state),
             Kura::blank_kura_for_testing(),
             queue,
-            peers_rx,
-            PeerId::new(peer_key),
+            (peers_rx, PeerId::new(peer_key)),
             system.time_source.clone(),
             true,
         );
@@ -9430,8 +9416,7 @@ mod tests {
             state,
             kura,
             queue,
-            peers_rx,
-            local_peer_id,
+            (peers_rx, local_peer_id),
             time_source,
             false, // disabled
         )
@@ -9654,8 +9639,7 @@ mod tests {
             state,
             kura,
             queue,
-            peers_rx,
-            local_peer_id,
+            (peers_rx, local_peer_id),
             time_source,
             true,
         )

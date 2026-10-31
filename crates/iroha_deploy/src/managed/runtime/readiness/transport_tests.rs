@@ -159,7 +159,8 @@ fn peer_zero_submission_reuses_transport_but_rechecks_compatibility_and_all_four
     let expected_network = *source.network_id();
     let expected_key = source.key_pair().public_key().clone();
     let expected_headers = source.headers().clone();
-    assert!(expected_headers.contains_key("authorization"));
+    // Developer client configs carry no basic-auth credential; the fixture header stands in
+    // for every client header the rebuilt submitter must keep.
     assert!(expected_headers.contains_key("x-readiness-fixture"));
     let progress = Progress::default();
     let budget = Budget {

@@ -262,7 +262,7 @@ fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_val
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }
-pub(crate) fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
+pub fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
     PrintJsonContext {
         write: Vec::new(),
         err_write: Vec::new(),
@@ -2242,7 +2242,7 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "rose".parse().expect("name"),
             ),
-            Quantity::try_from(1_u64).expect("quantity"),
+            Quantity::from(1_u64),
         )],
         NonZeroU64::new(42),
     );
@@ -2867,10 +2867,10 @@ fn ping_submits_single_log_instruction() {
     let exec = ctx.captured.expect("captured instructions");
     let instructions = match exec {
         Executable::Instructions(instructions) => instructions.into_vec(),
-        Executable::ContractCall(_) => panic!("expected instructions"),
-        Executable::Ivm(_) => panic!("expected instructions"),
-        Executable::IvmProved(_) => panic!("expected instructions"),
-        Executable::Batch(_) => panic!("expected instructions"),
+        Executable::ContractCall(_)
+        | Executable::Ivm(_)
+        | Executable::IvmProved(_)
+        | Executable::Batch(_) => panic!("expected instructions"),
     };
     assert_eq!(instructions.len(), 1);
     let log = instructions[0]
@@ -3049,7 +3049,7 @@ fn trigger_register_builds_expected_instruction() {
         iroha::data_model::events::EventFilterBox::ExecuteTrigger(f) => {
             let expected = ExecuteTriggerEventFilter::new()
                 .for_trigger("my_trigger".parse().unwrap())
-                .under_authority(account.into());
+                .under_authority(account);
             assert_eq!(f, &expected);
         }
         _ => panic!("expected ExecuteTrigger filter"),

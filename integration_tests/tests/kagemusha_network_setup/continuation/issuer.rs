@@ -302,3 +302,7 @@ pub(super) fn run(
 #[cfg(test)]
 #[path = "issuer/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "issuer/provisioning.rs"]
+mod provisioning;

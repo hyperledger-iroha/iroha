@@ -14,8 +14,8 @@ use std::{
 
 /// Held loopback reservations for the four Torii and four P2P listeners.
 ///
-/// Keep this value alive until preparation finishes; the native worker acquires the actual
-/// listeners immediately after these reservations are released.
+/// Keep this value alive through native worker adoption. The worker retains these same
+/// sockets and transfers them to its validators without releasing their bound endpoints.
 pub struct LocalnetPorts {
     /// First of four consecutive Torii ports.
     pub base_api: u16,
@@ -25,17 +25,31 @@ pub struct LocalnetPorts {
 }
 
 impl LocalnetPorts {
-    /// Reserve two disjoint four-port blocks on IPv4 loopback.
+    /// Reserve two disjoint four-port blocks starting at OS-assigned IPv4 loopback ports.
     ///
     /// # Errors
     /// Returns an error when the operating system cannot allocate the listeners.
     pub fn reserve() -> Result<Self> {
-        let (base_api, mut reservations) = reserve_block(8080)?;
-        let (base_p2p, p2p) = reserve_block(1337)?;
+        let (base_api, mut reservations) = reserve_block()?;
+        let (base_p2p, p2p) = reserve_block()?;
         reservations.extend(p2p);
         Ok(Self {
             base_api,
             base_p2p,
+            reservations,
+        })
+    }
+
+    /// Reopen the exact stopped generation's listeners without choosing new endpoints.
+    pub(super) fn reserve_prepared(prepared: &PreparedLocalnet) -> Result<Self> {
+        let addresses = listeners::expected_addresses(prepared)?;
+        let reservations = addresses
+            .iter()
+            .map(|address| bind_reserved_listener(*address))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Self {
+            base_api: addresses[0].port(),
+            base_p2p: addresses[4].port(),
             reservations,
         })
     }
@@ -67,20 +81,20 @@ impl LocalnetPorts {
     }
 }
 
-fn reserve_block(preferred: u16) -> Result<(u16, Vec<TcpListener>)> {
-    for attempt in 0..128 {
-        let base = if attempt == 0 {
-            preferred
-        } else {
-            let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-            probe.local_addr()?.port()
-        };
+fn reserve_block() -> Result<(u16, Vec<TcpListener>)> {
+    for _ in 0..128 {
+        // Fresh generations must not all reclaim the same well-known ports while another
+        // retained generation is stopped. Keep the OS-selected first socket throughout
+        // allocation so concurrent preparations cannot take it between probe and bind.
+        let first = bind_reserved_listener((Ipv4Addr::LOCALHOST, 0).into())?;
+        let base = first.local_addr()?.port();
         if base > u16::MAX - 3 {
             continue;
         }
         let mut listeners = Vec::with_capacity(4);
-        for offset in 0..4 {
-            match TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)) {
+        listeners.push(first);
+        for offset in 1..4 {
+            match bind_reserved_listener((Ipv4Addr::LOCALHOST, base + offset).into()) {
                 Ok(listener) => listeners.push(listener),
                 Err(_) => break,
             }
@@ -92,6 +106,20 @@ fn reserve_block(preferred: u16) -> Result<(u16, Vec<TcpListener>)> {
     Err(Error::Invalid(
         "cannot reserve four consecutive loopback ports".into(),
     ))
+}
+
+fn bind_reserved_listener(address: std::net::SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    // Match the native listeners' restart semantics without sharing a live listener.
+    #[cfg(unix)]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
 }
 
 /// Owner-private managed contexts and their retained localnet generations.
@@ -246,7 +274,7 @@ impl ManagedStore {
     pub fn up_private_root(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
     ) -> Result<ManagedStatus> {
         self.up_private_root_bound(request, spec, |_| Ok(()))
     }
@@ -254,7 +282,7 @@ impl ManagedStore {
     pub(super) fn up_private_root_bound(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
         spec.validate()
@@ -274,7 +302,7 @@ impl ManagedStore {
     pub(super) fn up_private_root_with_amx_bound(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
         selection: &crate::bootstrap::AmxSourceSelection<'_>,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
@@ -400,12 +428,24 @@ impl ManagedStore {
                 &retained.prepared,
                 &root_kind,
             )?;
-            if retained.launcher.blake3 != launcher.blake3
-                || retained.daemon.blake3 != daemon.blake3
-            {
-                return Err(Error::Invalid("managed generation uses different binary contents; select its original matching installation".into()));
+            if programs_changed(&retained, &launcher, &daemon) {
+                adopt_rebuilt_programs(
+                    &directory,
+                    &request.name,
+                    retained,
+                    launcher,
+                    daemon,
+                    Instant::now()
+                        + runtime::startup_remaining_until(
+                            started,
+                            request.startup_timeout,
+                            startup_deadline_ns,
+                        )?,
+                    request.startup_timeout,
+                )?
+            } else {
+                retained
             }
-            retained
         } else {
             if matches!(generation_policy, GenerationPolicy::RetainOnly(_)) {
                 return Err(Error::Invalid(
@@ -435,6 +475,37 @@ impl ManagedStore {
         #[cfg(test)]
         selected_generation_tests::before_startup(&retained.prepared)?;
         retain_context(&retained.prepared)?;
+        if reservations.is_some() && matches!(retained.root_kind, RootKind::Global) {
+            let refusal = runtime::startup_remaining_until(
+                started,
+                request.startup_timeout,
+                startup_deadline_ns,
+            )
+            .and_then(|remaining| {
+                preflight::daemon_refusal(
+                    &retained.daemon.path,
+                    &retained.prepared.peers[0].config_path,
+                    &retained.root_kind,
+                    Instant::now() + remaining,
+                    request.startup_timeout,
+                )
+            });
+            let failure = match refusal {
+                Ok(None) => None,
+                Ok(Some(reason)) => Some(Error::RuntimeMismatch(format!(
+                    "iroha3d rejected the configuration this kagami just generated, so nothing was started: {reason}\nThis usually means the two were built from different sources. Rebuild both with `cargo build -p iroha_kagami -p irohad`, or install a complete native developer bundle."
+                ))),
+                Err(error @ Error::Timeout(_)) => Some(error),
+                Err(error) => return Err(error),
+            };
+            if let Some(failure) = failure {
+                // Nothing ran, so there is no ledger to keep and the next attempt starts clean.
+                drop(reservations.take());
+                let _runtime = acquire(&directory, "runtime.lock", &request.name)?;
+                discard_generation(&directory)?;
+                return Err(failure);
+            }
+        }
         runtime::startup_remaining_until(started, request.startup_timeout, startup_deadline_ns)?;
         if let Ok(status) = startup_exchange(
             &directory,
@@ -479,6 +550,10 @@ impl ManagedStore {
             // processes merely because their integer PID appears in a previous record.
             let available = acquire(&directory, "runtime.lock", &request.name)?;
             clear_worker_session(&directory)?;
+            if reservations.is_none() {
+                reservations = Some(LocalnetPorts::reserve_prepared(&retained.prepared)?);
+            }
+            let listener_handoff = listeners::FrontendListeners::bind(&directory)?;
             let launcher = super::program::NativeProgram::matching(&retained.launcher)?;
             let output = directory.open_append("supervisor.log")?;
             let errors = output.try_clone()?;
@@ -500,6 +575,7 @@ impl ManagedStore {
                     phase: ManagedPhase::Starting,
                     running_peers: 0,
                     failure: None,
+                    validators: Vec::new(),
                 })?,
                 PublishMode::Replace,
             )?;
@@ -516,7 +592,6 @@ impl ManagedStore {
                 .arg(milliseconds.to_string())
                 .arg("--startup-deadline-ns")
                 .arg(startup_deadline_ns.to_string());
-            drop(reservations.take());
             programs.validate()?;
             launcher.validate()?;
             // These original native owners remain alive across spawn. This is a source fence,
@@ -526,13 +601,43 @@ impl ManagedStore {
                 request.startup_timeout,
                 startup_deadline_ns,
             )?;
+            let handoff_deadline = Instant::now()
+                .checked_add(runtime::startup_remaining_until(
+                    started,
+                    request.startup_timeout,
+                    startup_deadline_ns,
+                )?)
+                .ok_or_else(|| Error::Invalid("listener handoff deadline overflow".into()))?;
             let mut worker = command.spawn()?;
+            let handoff = listener_handoff.send_to_worker(
+                &mut worker,
+                &reservations
+                    .as_ref()
+                    .expect("reserved startup listeners")
+                    .reservations,
+                handoff_deadline,
+            );
             // The inherited original remains held across process loading and admission.
             drop(available);
             // Reap this exact child eventually without blocking the CLI after successful startup.
             thread::spawn(move || {
                 let _ = worker.wait();
             });
+            if let Err(error) = handoff {
+                let cleanup = expire_startup(
+                    &directory,
+                    &retained.prepared.context,
+                    request.startup_timeout,
+                );
+                return match cleanup {
+                    Ok(_) => Err(error),
+                    Err(cleanup) => Err(Error::Invalid(format!(
+                        "listener handoff failed: {error}; startup cleanup is unconfirmed: {cleanup}"
+                    ))),
+                };
+            }
+            // The worker now owns the same bound sockets; there is no release-and-rebind gap.
+            drop(reservations.take());
         }
         loop {
             match runtime::startup_remaining_until(
@@ -616,15 +721,23 @@ impl ManagedStore {
             &retained.prepared,
             &retained.root_kind,
         )?;
-        if let Ok(status) = exchange_until(&directory, "status", deadline) {
-            if status.context != retained.prepared.context {
-                return Err(Error::Invalid(
-                    "worker status belongs to another managed identity".into(),
-                ));
+        let observation_error = match exchange_until(&directory, ControlAction::Status, deadline) {
+            Ok(status) => {
+                if status.context != retained.prepared.context {
+                    return Err(Error::Invalid(
+                        "worker status belongs to another managed identity".into(),
+                    ));
+                }
+                return Ok(status);
             }
-            return Ok(status);
-        }
+            Err(error) => error,
+        };
         if runtime_owned(&directory)? {
+            // An admitted worker may be slow or unreachable. Keep that observation failure;
+            // ownership contention describes only the handoff before a session exists.
+            if directory.read_optional(WORKER, MAX_METADATA)?.is_some() {
+                return Err(observation_error);
+            }
             return Err(Error::Busy(name.into()));
         }
         retained_status(&directory, retained.prepared.context, true)
@@ -704,7 +817,9 @@ impl ManagedStore {
                 Err(error) => return Err(error),
             }
             if stopped.is_none() {
-                if let Some(status) = exchange_optional(&directory, "down", &retained, deadline)? {
+                if let Some(status) =
+                    exchange_optional(&directory, ControlAction::Down, &retained, deadline)?
+                {
                     if status.context != context {
                         return Err(Error::Invalid(
                             "worker stop belongs to another managed identity".into(),
@@ -773,13 +888,55 @@ impl ManagedStore {
             }
         }
         let _runtime = acquire(&directory, "runtime.lock", name)?;
-        directory.revalidate()?;
-        transport::clear_stopped_endpoint(&directory)?;
-        directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
+        discard_generation(&directory)?;
         // The ownership directory and locked files remain pinned on every platform. Keep
         // selection resolution explicit: a reset selection should report the missing
         // generation, never silently switch transaction signing to another context.
         Ok(())
+    }
+
+    /// Drop a generation that never became ready, when these binaries did not create it.
+    ///
+    /// Such a generation has no ledger worth keeping, so a rebuild should not have to ask for an
+    /// explicit reset. Private roots keep their identity, and anything with a recorded deployment
+    /// or call is retained. Returns whether a generation was removed.
+    ///
+    /// # Errors
+    /// Competing operation, unsafe custody, unreadable metadata or deletion failure.
+    pub fn discard_unready_generation(&self, request: &LocalnetRequest) -> Result<bool> {
+        validate_name(&request.name)?;
+        let Some(directory) = self.networks.open_child_optional(&request.name)? else {
+            return Ok(false);
+        };
+        let _operation = acquire(&directory, "operation.lock", &request.name)?;
+        let Some(retained) = generation::read_optional(&directory)? else {
+            return Ok(false);
+        };
+        let (launcher, daemon) = request.admit_programs()?.pins()?;
+        let last_phase = directory
+            .read_optional(STATUS, MAX_METADATA)?
+            .map(|bytes| decode::<ManagedStatus>(&bytes))
+            .transpose()?
+            .map(|status| status.phase);
+        let journaled = ["deployments", "calls"].iter().any(|journals| {
+            self.root()
+                .join(journals)
+                .join(&request.name)
+                .try_exists()
+                .unwrap_or(true)
+        });
+        if !never_became_ready(
+            &retained,
+            (&launcher, &daemon),
+            directory.read_optional(BECAME_READY, 1)?.is_some(),
+            last_phase,
+            journaled,
+        ) {
+            return Ok(false);
+        }
+        let _runtime = acquire(&directory, "runtime.lock", &request.name)?;
+        discard_generation(&directory)?;
+        Ok(true)
     }
 
     /// Select an existing context without exposing its signer or copying its secret config.
@@ -879,23 +1036,162 @@ impl ManagedStore {
             &retained.prepared,
             &retained.root_kind,
         )?;
-        let log_name = match peer {
-            Some(index) => retained
-                .prepared
-                .peers
-                .get(index)
-                .ok_or_else(|| Error::Invalid("localnet peer index must be 0..3".into()))?
-                .log_name
-                .as_str(),
-            None => "supervisor.log",
-        };
-        let mut file = directory.open_read(log_name)?;
+        let mut file = open_log(&directory, &retained, peer)?;
         let length = file.metadata()?.len();
         file.seek(SeekFrom::Start(length.saturating_sub(max_bytes as u64)))?;
         let mut bytes = Vec::new();
         file.take(max_bytes as u64).read_to_end(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+
+    /// Current length of one retained log, where following it starts.
+    ///
+    /// # Errors
+    /// An unknown log, insecure file, or a read failure.
+    pub fn log_len(&self, name: &str, peer: Option<usize>) -> Result<u64> {
+        let directory = self.directory(name)?;
+        let retained = generation::read(&directory)?;
+        Ok(open_log(&directory, &retained, peer)?.metadata()?.len())
+    }
+
+    /// Read what one retained log gained after `offset`, for following it.
+    ///
+    /// Returns the new text and the offset to continue from. A log that shrank, as after a
+    /// reset, is read from its start.
+    ///
+    /// # Errors
+    /// An unknown log, insecure file, or a read failure.
+    pub fn logs_since(
+        &self,
+        name: &str,
+        peer: Option<usize>,
+        offset: u64,
+    ) -> Result<(String, u64)> {
+        let directory = self.directory(name)?;
+        let retained = generation::read(&directory)?;
+        let mut file = open_log(&directory, &retained, peer)?;
+        let length = file.metadata()?.len();
+        let start = if offset > length { 0 } else { offset };
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024).read_to_end(&mut bytes)?;
+        let next = start + bytes.len() as u64;
+        Ok((String::from_utf8_lossy(&bytes).into_owned(), next))
+    }
+}
+
+fn open_log(
+    directory: &PrivateDirectory,
+    retained: &RetainedLocalnet,
+    peer: Option<usize>,
+) -> Result<File> {
+    let log_name = match peer {
+        Some(index) => retained
+            .prepared
+            .peers
+            .get(index)
+            .ok_or_else(|| Error::Invalid("localnet peer index must be 0..3".into()))?
+            .log_name
+            .as_str(),
+        None => "supervisor.log",
+    };
+    match directory.open_read(log_name) {
+        Ok(file) => Ok(file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Error::Invalid(match peer {
+                Some(index) => {
+                    format!("validator {index} has not written a log yet; it may not have started")
+                }
+                None => "the supervisor has not written a log yet".into(),
+            }))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether a generation was recorded against other binaries, or the same ones somewhere else.
+fn programs_changed(retained: &RetainedLocalnet, launcher: &BinaryPin, daemon: &BinaryPin) -> bool {
+    retained.launcher.blake3 != launcher.blake3
+        || retained.launcher.path != launcher.path
+        || retained.daemon.blake3 != daemon.blake3
+        || retained.daemon.path != daemon.path
+}
+
+/// Decide whether a retained generation can be dropped instead of refused after a rebuild.
+///
+/// Older stores have no readiness marker, so the last status and any journal also protect them.
+pub(super) fn never_became_ready(
+    retained: &RetainedLocalnet,
+    (launcher, daemon): (&BinaryPin, &BinaryPin),
+    marked_ready: bool,
+    last_phase: Option<ManagedPhase>,
+    journaled: bool,
+) -> bool {
+    matches!(retained.root_kind, RootKind::Global)
+        && programs_changed(retained, launcher, daemon)
+        && !marked_ready
+        && !journaled
+        && matches!(
+            last_phase,
+            None | Some(ManagedPhase::Failed | ManagedPhase::Starting)
+        )
+}
+
+/// Only an unattached standard localnet may move to rebuilt binaries while keeping its ledger.
+fn can_adopt_programs(retained: &RetainedLocalnet) -> bool {
+    matches!(retained.root_kind, RootKind::Global)
+        && retained.prepared.service_profile == crate::localnet::LocalnetServiceProfile::Standard
+}
+
+/// Move a stopped developer network to rebuilt binaries when they can still open it.
+///
+/// The daemon checks the retained configuration against the signed genesis, which is what a real
+/// start would do. A change in the signed execution policy therefore still asks for a reset.
+pub(super) fn adopt_rebuilt_programs(
+    directory: &PrivateDirectory,
+    name: &str,
+    retained: RetainedLocalnet,
+    launcher: BinaryPin,
+    daemon: BinaryPin,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<RetainedLocalnet> {
+    if runtime_owned(directory)? {
+        return Err(Error::RuntimeMismatch(format!(
+            "managed environment `{name}` is running on binaries that have since been rebuilt; stop it with `kagami localnet down {name}`, then run `kagami localnet up {name}`"
+        )));
+    }
+    if !can_adopt_programs(&retained) {
+        return Err(Error::RuntimeMismatch(format!(
+            "managed environment `{name}` was created by different kagami and iroha3d binaries; start it with that original installation, or run `kagami localnet reset {name}` to recreate it with these binaries (reset discards its ledger)"
+        )));
+    }
+    if let Some(reason) = preflight::daemon_refusal(
+        &daemon.path,
+        &retained.prepared.peers[0].config_path,
+        &retained.root_kind,
+        deadline,
+        timeout,
+    )? {
+        return Err(Error::RuntimeMismatch(format!(
+            "managed environment `{name}` was created by different kagami and iroha3d binaries, and these cannot open it: {reason}\nRebuild the original code, or run `kagami localnet reset {name}` to recreate it with these binaries (reset discards its ledger)."
+        )));
+    }
+    let adopted = RetainedLocalnet {
+        launcher,
+        daemon,
+        ..retained
+    };
+    generation::replace_programs(directory, &adopted)?;
+    Ok(adopted)
+}
+
+/// Remove one stopped generation. The caller holds both ownership locks.
+fn discard_generation(directory: &PrivateDirectory) -> Result<()> {
+    directory.revalidate()?;
+    transport::clear_stopped_endpoint(directory)?;
+    directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
+    Ok(())
 }
 
 pub(super) fn random_token() -> String {
@@ -1041,7 +1337,7 @@ pub(super) fn validate_prepared(
             prepared.context.client_config.parent().ok_or_else(|| {
                 Error::Invalid("private context has no generation directory".into())
             })?;
-        crate::localnet::verify_private_root(generation, prepared, spec)?;
+        crate::sora_network::verify_private_root(generation, prepared, spec)?;
     } else {
         crate::localnet::service_authorities::validate_retained(prepared)?;
     }
@@ -1063,13 +1359,16 @@ fn confined_path(root: &Path, path: &Path) -> Result<bool> {
     Ok(path.canonicalize()? == path && root.canonicalize()? == root)
 }
 
-pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<ManagedStatus> {
+pub(super) fn exchange(
+    directory: &PrivateDirectory,
+    action: ControlAction,
+) -> Result<ManagedStatus> {
     let worker: WorkerRecord = decode(&directory.read(WORKER, MAX_METADATA)?)?;
     transport::request(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
     )
 }
@@ -1077,7 +1376,7 @@ pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<Man
 /// Retain the original worker session and bound its typed reply by the caller's deadline.
 pub(super) fn exchange_until(
     directory: &PrivateDirectory,
-    action: &str,
+    action: ControlAction,
     deadline: Instant,
 ) -> Result<ManagedStatus> {
     let worker: WorkerRecord = decode(&directory.read(WORKER, MAX_METADATA)?)?;
@@ -1085,7 +1384,7 @@ pub(super) fn exchange_until(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
         deadline,
     )
@@ -1101,7 +1400,7 @@ pub(super) fn startup_exchange(
     // Sample before reading either remainder: conversion to an Instant can only shorten it.
     let observed_at = Instant::now();
     let remaining = runtime::startup_remaining_until(started, timeout, startup_deadline_ns)?;
-    exchange_until(directory, "status", observed_at + remaining)
+    exchange_until(directory, ControlAction::Status, observed_at + remaining)
 }
 
 // Only a public status observer may interpret a competing operation lock as a foreground
@@ -1126,6 +1425,7 @@ fn retained_status(
                 // The foreground operation publishes Starting before native spawn; its
                 // lock distinguishes that small handoff window from a crashed owner.
                 last.running_peers = 0;
+                last.retain_validator_exits();
                 return Ok(last);
             }
             if last.phase != ManagedPhase::Failed {
@@ -1136,6 +1436,8 @@ fn retained_status(
             }
             last.phase = ManagedPhase::Failed;
             last.running_peers = 0;
+            // Without a live owner no retained process observation is current; exits remain.
+            last.retain_validator_exits();
             return Ok(last);
         }
     }
@@ -1144,6 +1446,7 @@ fn retained_status(
         phase: ManagedPhase::Stopped,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     })
 }
 
@@ -1151,7 +1454,7 @@ fn retained_status(
 // Present metadata uses the same exact decoder and authenticated transport as exchange.
 fn exchange_optional(
     directory: &PrivateDirectory,
-    action: &str,
+    action: ControlAction,
     retained: &RetainedLocalnet,
     deadline: Instant,
 ) -> Result<Option<ManagedStatus>> {
@@ -1175,7 +1478,7 @@ fn exchange_optional(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
         deadline,
     );
@@ -1260,7 +1563,7 @@ pub(super) fn expire_startup(
 ) -> Result<ManagedStatus> {
     // Readiness has already expired. This separate ordinary IPC budget observes the owner's
     // cancellation/cleanup result; a timeout still cannot establish that cleanup completed.
-    if let Ok(status) = exchange(directory, "startup_expired") {
+    if let Ok(status) = exchange(directory, ControlAction::StartupExpired) {
         if status.context != *context {
             return Err(Error::Invalid(
                 "startup cancellation belongs to another managed identity".into(),

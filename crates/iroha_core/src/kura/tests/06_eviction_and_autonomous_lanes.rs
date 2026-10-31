@@ -158,7 +158,6 @@ fn read_block(store: &mut BlockStore, index: usize) -> eyre::Result<SignedBlock>
     Ok(block)
 }
 
-
 fn kura_storage_fixture(
     temp_context: &str,
     blocks_in_memory: NonZeroUsize,
@@ -207,10 +206,6 @@ fn unwrapped_inline_kura_fixture_with_fsync(fsync_mode: FsyncMode) -> (TempDir, 
             .unwrap();
     (temp_dir, kura)
 }
-
-
-
-
 
 fn blank_kura_with_next_block() -> (Arc<Kura>, iroha_data_model::block::SharedSignedBlock) {
     let kura = Kura::blank_kura_for_testing();
@@ -265,7 +260,6 @@ fn test_kura_with_default_lane_markers(
     (kura, block_count)
 }
 
-
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
     publish_initial_configured_lane_geometry_for_test(kura, lane_config, &BTreeMap::new());
     kura.restore_published_lane_geometry_for_test(lane_config)
@@ -291,10 +285,8 @@ fn publish_initial_configured_lane_geometry_for_test(
     let mut incarnations = BTreeMap::new();
     let mut activations = BTreeMap::new();
     for entry in lane_config.entries() {
-        let incarnation = if let Some(incarnation) = requested_incarnations.get(&entry.lane_id) {
-            *incarnation
-        } else {
-            match kura
+        let incarnation = requested_incarnations.get(&entry.lane_id).map_or_else(
+            || match kura
                 .lane_storage_entry(entry.lane_id)
                 .and_then(|stored| kura.active_lane_incarnation_marker(&stored))
             {
@@ -314,8 +306,9 @@ fn publish_initial_configured_lane_geometry_for_test(
                     .as_bytes(),
                 ),
                 Err(error) => panic!("existing fixture lane marker is invalid: {error}"),
-            }
-        };
+            },
+            |incarnation| *incarnation,
+        );
         incarnations.insert(entry.lane_id, incarnation);
         activations.insert(entry.lane_id, 0);
     }
@@ -340,10 +333,11 @@ fn publish_initial_configured_lane_geometry_for_test(
     kura.apply_lane_geometry_transition(
         &initial,
         lane_config,
-        &BTreeMap::from([(LaneId::SINGLE, primary_incarnation)]),
-        &incarnations,
-        &BTreeMap::from([(LaneId::SINGLE, 0)]),
-        &activations,
+        (
+            &BTreeMap::from([(LaneId::SINGLE, primary_incarnation)]),
+            &incarnations,
+        ),
+        (&BTreeMap::from([(LaneId::SINGLE, 0)]), &activations),
         &BTreeSet::new(),
     )
     .expect("durably apply the fixture's secondary lane geometry");
@@ -355,7 +349,6 @@ fn publish_initial_configured_lane_geometry_for_test(
     )
     .expect("publish the fixture's exact lane geometry for restart");
 }
-
 
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {
     let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);

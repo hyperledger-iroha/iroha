@@ -63,6 +63,7 @@ impl Schedule {
 }
 
 /// Original lifecycle packet plus exact ordered semantic producer/read packets.
+#[derive(Clone, Copy)]
 pub(super) struct Ports<'a> {
     /// Same active-generation write constrained by `frame_lifecycle`.
     pub(super) active: &'a [F; packet::WIDTH],
@@ -141,9 +142,7 @@ pub(super) fn append_residues(
             ports.packets[i],
             schedule,
             i,
-            Space::Register,
-            register,
-            F::ZERO,
+            (Space::Register, register, F::ZERO),
             enabled,
         );
         let word = [ARGUMENT, ARGUMENT_COUNT, RESULT, RESULT_COUNT, SP][i];
@@ -163,9 +162,7 @@ pub(super) fn append_residues(
         ports.packets[5],
         schedule,
         5,
-        Space::Owner,
-        20,
-        F::ZERO,
+        (Space::Owner, 20, F::ZERO),
         selected,
     );
     read(
@@ -173,9 +170,7 @@ pub(super) fn append_residues(
         ports.packets[6],
         schedule,
         6,
-        Space::Owner,
-        21,
-        F::ZERO,
+        (Space::Owner, 21, F::ZERO),
         root_enabled,
     );
     for (slot, index, word, enabled, owner_generation) in [
@@ -190,9 +185,7 @@ pub(super) fn append_residues(
                 ports.packets[slot],
                 schedule,
                 slot,
-                Space::Owner,
-                index,
-                owner_generation,
+                (Space::Owner, index, owner_generation),
                 enabled,
             );
         }
@@ -341,10 +334,7 @@ pub(super) fn append_residues(
             out,
             ports.packets[9 + i],
             schedule,
-            9 + i,
-            DESCRIPTOR_INDEXES[i],
-            generation,
-            selected,
+            (9 + i, DESCRIPTOR_INDEXES[i], generation, selected),
             row,
             word,
             true,
@@ -358,10 +348,12 @@ pub(super) fn append_residues(
             out,
             ports.packets[17 + i],
             schedule,
-            17 + i,
-            16 + i as u32,
-            F::ZERO,
-            root_enabled,
+            (
+                17 + i,
+                16 + u32::try_from(i).expect("bounded circuit index"),
+                F::ZERO,
+                root_enabled,
+            ),
             row,
             word,
             false,
@@ -372,13 +364,16 @@ pub(super) fn append_residues(
 
 fn header(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     port: &[F; packet::WIDTH],
+
     schedule: Schedule,
+
     slot: usize,
-    space: packet::Space,
-    index: u32,
-    generation: F,
+    (space, index, generation): (packet::Space, u32, F),
+
     enabled: F,
+
     write: bool,
 ) {
     for (column, expected) in [
@@ -413,16 +408,24 @@ fn header(
 }
 fn read(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     port: &[F; packet::WIDTH],
+
     schedule: Schedule,
+
     slot: usize,
-    space: packet::Space,
-    index: u32,
-    generation: F,
+    (space, index, generation): (packet::Space, u32, F),
+
     enabled: F,
 ) {
     header(
-        out, port, schedule, slot, space, index, generation, enabled, false,
+        out,
+        port,
+        schedule,
+        slot,
+        (space, index, generation),
+        enabled,
+        false,
     );
     for limb_index in 0..4 {
         out.push(port[AFTER + limb_index].sub(port[BEFORE + limb_index]));
@@ -430,14 +433,16 @@ fn read(
 }
 fn write(
     out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
+
     port: &[F; packet::WIDTH],
+
     schedule: Schedule,
-    slot: usize,
-    index: u32,
-    generation: F,
-    enabled: F,
+    (slot, index, generation, enabled): (usize, u32, F, F),
+
     row: &[F; WIDTH],
+
     word: usize,
+
     fresh: bool,
 ) {
     header(
@@ -445,9 +450,7 @@ fn write(
         port,
         schedule,
         slot,
-        Space::Owner,
-        index,
-        generation,
+        (Space::Owner, index, generation),
         enabled,
         true,
     );

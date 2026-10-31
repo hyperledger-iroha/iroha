@@ -228,7 +228,7 @@
   "pinned_history": {
     "manifest": "fixtures/core/first_release_history/manifest.json",
     "format": "iroha.first_release_history.pinned.v1",
-    "history_sha256": "15e9e59d986fa80fcee294c5fadf5775f745140455797386ed07fbb75af83aa6",
+    "history_sha256": "61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5",
     "generator": {
       "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
       "test": "capture_pinned_first_release_history"
@@ -887,8 +887,8 @@
       "cutover": "fresh_genesis",
       "anchors": [
         {
-          "path": "crates/irohad/src/compatibility_probe.rs",
-          "contains": "pub gas_schedule_hash: String"
+          "path": "crates/ivm/src/gas.rs",
+          "contains": "pub fn schedule_hash"
         },
         {
           "path": "crates/iroha_core/src/sumeragi/node.rs",
@@ -1156,12 +1156,12 @@
   "declared_abi_cutover": {
     "surface": "abi",
     "cutover": "contract_redeployment",
-    "abi_hash": "cd18f9400b814b2b00724f6d3a077ef34a838c4b5be3f5f1c0663f45ec8ebc19",
+    "abi_hash": "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7",
     "golden": {
       "path": "crates/iroha_data_model/tests/fixtures/abi_v1_hash.rs",
       "prefix": "pub const ABI_V1_HASH_GOLDEN: &str =\n    \""
     },
-    "change": "ABI V1 uses the compact CS1 callable schema, declared permission identities, authenticated native event schemas and typed contract-call argument/result tables. The hashed syscall surface includes the controller-bound native asset-lock operations at 0x10220 through 0x10223 and the authorized holding, linked-FI, waterfall, link-revision and same-UID operations at 0x10224 through 0x1022A, including their exact owned-table, quantity and result arguments. These operations require an authenticated contract frame and are denied to contract-less generic programs. Generation-bound alias operations remain explicit, and 0xA0 accepts only SubmitBallot. Retired opaque contract calls and the duplicate DEX call surface are removed. The ABI version remains 1; the current complete descriptor determines this hash.",
+    "change": "ABI V1 adds the asset UID and linked-FI syscalls ASSET_UID_HOLDING_QUOTE, TRANSFER_TO_LINKED_FI, ASSET_FI_LINK_REVISION and ASSET_SAME_UID and the waterfall asset-lock drawdown, cancel and expire syscalls (0x010224 through 0x01022A), and ASSET_LOCK_OPEN now returns the derived protocol escrow custody account. The controller-bound native asset-lock open, drawdown, cancel and expire syscalls (0x010220 through 0x010223, ledger-writing and denied to contract-less generic programs), the existing compact CS1 callable schema, declared permission identities, authenticated native event schemas, typed contract-call argument/result tables, generation-bound alias operations and the operation-tagged 0xA0 bridge remain part of the current descriptor. The bridge permits tag 1 for SubmitBallot and tag 2 for SubmitPrivacyZkX509CertificateV1; tag 2 uses original signed attachment custody and returns a queued PendingAction ordinal, not proof success or applied effects. Neither tag permits RecordSccpMessage or arbitrary instructions. The ABI version remains 1; the current complete descriptor determines this hash.",
     "redeployment": "Contracts compiled before this surface change carry an obsolete interface or abi_hash and are refused by decoding or admission. Recompile .ko to .to with the current compiler and deploy its manifest. There is no alias for former hashes or compatibility decoder.",
     "fresh_genesis": false,
     "fresh_genesis_reason": "The pinned history holds no contract and no runtime-ABI record: none of its frames contains the ABI hash, which the guard re-checks on every run. A history that holds either needs a fresh genesis with this cutover."
@@ -1212,19 +1212,35 @@
   "future_checkpoint_rule": {
     "section": "Snapshots and checkpoints",
     "statements": [
-      "Authenticated snapshot restore is separate unfinished work",
+      "Authenticated complete-State checkpoint restoration remains unfinished.",
       "A future authenticated checkpoint must state its height, block hash and certified result, how they are authenticated against the genesis-bound committee schedule, and the suffix it verifies: the blocks after the checkpoint, replayed and compared with their certificates.",
       "It verifies nothing below its height and cannot retroactively validate discarded history."
     ],
-    "section_sha256": "3530d66e98773f17cdbbe6f7c6765a56d55f45a60f6f678969b6605de638a03c",
+    "section_sha256": "da91056969659e0ab118594fac45fabe8ec6e3e68c4cd455a5258fa4796e447c",
     "anchors": [
       {
         "path": "crates/iroha_core/src/sumeragi/node.rs",
-        "contains": "is not implemented (TODO(S9)); Strict startup therefore rebuilds original State from the"
+        "contains": "// Replay what Kura holds above the applied tip."
+      },
+      {
+        "path": "crates/iroha_core/src/state/deserialize_core.rs",
+        "contains": "authenticate_restored_world(&world, &self.execution_budget, certified)?;"
+      },
+      {
+        "path": "crates/iroha_core/src/state/native_execution_tip.rs",
+        "contains": "return Err(TipRestoreError::GenesisReplayRequired);"
+      },
+      {
+        "path": "crates/iroha_core/src/state/world_projection.rs",
+        "contains": "//! TODO(S9): State-level canonical fields outside World (transaction membership,"
+      },
+      {
+        "path": "crates/iroha_core/src/state/native_execution_tip/finalized_world.rs",
+        "contains": "//! This is a World-only receipt. State-owned runtime, membership and semantic"
       }
     ],
     "owner": "outside-zk-plan:consensus",
-    "summary": "No authenticated checkpoint exists: restore against the certified World root is open under Sumeragi goal S9, and startup replays from the signed genesis. The guard preserves the rule the contract states for that future work; it is not evidence that a checkpoint exists or verifies."
+    "summary": "Ordinary snapshot resume authenticates the native certified prefix and checks the decoded World against its certified successor parent root before State construction; startup replays the stored suffix. Complete-State checkpoint authority remains open: State-level fields outside World and original native World publication custody are not authenticated or recreated by that World check. The future checkpoint rule still requires an explicit verified suffix and cannot validate discarded history."
   },
   "test_prerequisites": [
     {

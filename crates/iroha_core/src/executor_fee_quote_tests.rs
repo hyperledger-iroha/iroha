@@ -14,7 +14,8 @@ fn successful_claim_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .insert(payload.authority.clone());
+        .try_insert(payload.authority.clone())
+        .expect("fixture fee exemption");
     payload.metadata.insert(
         SORA_V2_CLAIM_TX_HASH_METADATA_KEY
             .parse()
@@ -32,21 +33,22 @@ fn successful_claim_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
         AssetId::new(fee_asset, payload.authority.clone()),
     ))]
     .into();
-    assert_direct_fee_exempt_draft(world, &nexus, &pipeline, payload);
+    assert_direct_fee_exempt_draft(&(world), &nexus, &pipeline, payload);
 }
 #[test]
 fn successful_claim_fee_exemption_uses_exact_account_identity() {
     let (_, mut nexus, _, payload) = multi_component_fee_quote_fixture();
     let authority = payload.authority;
     let (other_authority, _) = gen_account_in("fee_quote_other");
-    assert!(!successful_claim_fee_authority_allowed(&nexus, &authority));
+    assert!(!successful_claim_fee_authority_allowed(&nexus.fees, &authority));
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .insert(authority.clone());
-    assert!(successful_claim_fee_authority_allowed(&nexus, &authority));
+        .try_insert(authority.clone())
+        .expect("fixture fee exemption");
+    assert!(successful_claim_fee_authority_allowed(&nexus.fees, &authority));
     assert!(!successful_claim_fee_authority_allowed(
-        &nexus,
+        &nexus.fees,
         &other_authority
     ));
 }
@@ -94,7 +96,8 @@ fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() 
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .insert(authority);
+        .try_insert(authority)
+        .expect("fixture fee exemption");
     let original = payload.clone();
     author_component_fee_policy(&world, &nexus.fees);
     let quote = || {
@@ -115,7 +118,7 @@ fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() 
     // Otherwise an earlier root-scope decode refusal could mask an erased claim refusal.
     let original_reader = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
-        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus.fees, &payload, 50).unwrap_err(),
     );
     assert_eq!(
         original_reader.reason(),
@@ -143,7 +146,8 @@ fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
     nexus
         .fees
         .successful_claim_fee_exempt_authorities
-        .insert(authority.clone());
+        .try_insert(authority.clone())
+        .expect("fixture fee exemption");
     let asset = nexus.fees.fee_asset_id.clone();
     let payload =
         original_claim_fee_payload(authority, asset, "customer@fi.universal".into(), recipient);
@@ -199,7 +203,7 @@ fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
     let metadata_prefix = minimum_prefix(false);
     let original_reader = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, metadata_prefix, 32),
-        || successful_claim_fee_exempt_payload(&world.view(), &nexus, &payload, 50).unwrap_err(),
+        || successful_claim_fee_exempt_payload(&world.view(), &nexus.fees, &payload, 50).unwrap_err(),
     );
     assert_eq!(
         original_reader.reason(),
@@ -264,7 +268,8 @@ fn original_claim_fee_admission_latches_refusal_before_debit_and_publication() {
     seed_test_asset_supply(&mut world, &fee_asset);
     let mut fees = iroha_config::parameters::actual::Nexus::default().fees;
     fees.successful_claim_fee_exempt_authorities
-        .insert(authority.clone());
+        .try_insert(authority.clone())
+        .expect("fixture fee exemption");
     author_component_fee_policy(&world, &fees);
     let state = state_after_genesis(world);
     let mut payload = original_claim_fee_payload(
@@ -277,6 +282,8 @@ fn original_claim_fee_admission_latches_refusal_before_debit_and_publication() {
     let transaction = TransactionBuilder::from_payload(payload)
         .unwrap()
         .sign(ALICE_KEYPAIR.private_key());
+    let original_state = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let original_transaction = transaction.encode();
     let header = BlockHeader::new(
         nonzero!(2_u64),
         Some(state.view().latest_block_hash().unwrap()),
@@ -316,6 +323,11 @@ fn original_claim_fee_admission_latches_refusal_before_debit_and_publication() {
         &Quantity::from(100_u32)
     );
     drop(block);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_bytes(&state),
+        original_state
+    );
+    assert_eq!(transaction.encode(), original_transaction);
     let mut retry_block = state.block(header);
     let mut retry = retry_block.transaction();
     validate_transaction_fee_admission(&mut retry, &transaction).unwrap();
@@ -437,9 +449,8 @@ fn fee_quote_prices_a_proof_instruction_with_the_committed_gas_schedule() {
         .validate()
         .expect("a policy that differs in gas is valid");
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(Parameter::Custom(policy.clone().into_custom_parameter()))
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+        crate::state::set_parameter_cell_for_testing(&mut parameters, Parameter::Custom(policy.clone().into_custom_parameter()), world.sccp_committee_generations.allocation_budget())
             .expect("valid fixture parameters");
         parameters.commit();
     }

@@ -506,6 +506,7 @@ fn slot_schedule_admits_v1(
 /// CRL `nextUpdate` slot is the only strict one.
 #[test]
 fn relation_slot_schedule_is_the_canonical_presentation_interval_predicate() {
+    const T: u64 = 1_672_531_200;
     use iroha_data_model::privacy::{
         PrivacyZkX509CertificateValidityV1, PrivacyZkX509CrlUpdateIntervalV1,
         PrivacyZkX509PresentationWindowV1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
@@ -575,7 +576,7 @@ fn relation_slot_schedule_is_the_canonical_presentation_interval_predicate() {
     assert_eq!(next_update.right, NumericOperandV1::WindowEnd);
 
     // Exhaustive boundary grid around the CRL freshness horizon.
-    const T: u64 = 1_672_531_200;
+
     let mut validities = Vec::new();
     for not_before in [T - 2, T, T + 2] {
         for not_after in [T + 297, T + 299, T + 300, T + 302] {

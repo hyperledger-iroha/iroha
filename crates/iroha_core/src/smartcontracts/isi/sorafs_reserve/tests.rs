@@ -181,7 +181,7 @@ fn transact_at_original_invocation(
     operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
 ) -> Result<(), InstructionExecutionError> {
     let header = block_header_at(height, now_unix);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut transaction = block.transaction_for_fastpq_testing(invocation);
     operation(&mut transaction)?;
     transaction.apply();
@@ -202,6 +202,69 @@ fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
                 .expect("stored reserve asset is canonical")
         })
 }
+
+#[test]
+fn sccp_reserve_guard_preserves_terminal_and_predecessor_decode_owners() {
+    for refuse_predecessor in [false, true] {
+        let governance = account(&keypair(0xD1));
+        let provider = account(&keypair(0xD2));
+        let custody = account(&keypair(0xD3));
+        let treasury = account(&keypair(0xD4));
+        let state = state_fixture(&governance, &provider, &custody, &treasury);
+        let mut block = state.block(block_header_at(1, NOW));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-reserve-journal-decode"));
+        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
+        let digest = first.digest().unwrap();
+        SetSorafsReservePolicy::new(first)
+            .execute(&governance, &mut tx)
+            .unwrap();
+        SetSorafsReservePolicy::new(policy(2, Some(digest), custody, treasury, &governance))
+            .execute(&governance, &mut tx)
+            .unwrap();
+        let world = tx.world();
+        let head = read_reserve_state(world).unwrap().unwrap().journal_head;
+        assert_eq!(head.last_sequence, 2);
+        validate_event_journal_head(world, head, Some(world)).unwrap();
+        let unconstrained =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+        let (terminal, usage) = norito::core::with_decode_limits_measured(unconstrained, || {
+            read_persisted_event(world, head.last_sequence)
+        });
+        assert!(terminal.unwrap().is_some());
+        let allowance = if refuse_predecessor {
+            usage.total_allocated_bytes()
+        } else {
+            0
+        };
+        let limits =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allowance, usize::MAX);
+        if refuse_predecessor {
+            norito::with_decode_limits_scope(limits, || {
+                read_persisted_event_with_owner(world, head.last_sequence, Some(world))
+            })
+            .expect("the terminal event fits; only its predecessor exhausts the shared scope");
+            assert!(!tx.is_execution_deferred());
+        }
+        norito::with_decode_limits_scope(limits, || {
+            validate_event_journal_head(world, head, Some(world))
+        })
+        .unwrap_err();
+        assert!(tx.is_execution_deferred());
+        assert!(matches!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .unwrap()
+                .resource_error(),
+            norito::core::DecodeResourceError::TotalAllocationExceeded { .. }
+        ));
+        assert_eq!(
+            read_reserve_state(world).unwrap().unwrap().journal_head,
+            head
+        );
+    }
+}
+
 #[test]
 fn reserve_component_funding_refuses_an_unretained_original_invocation() {
     let governance = account(&keypair(0xE1));
@@ -296,7 +359,7 @@ fn domain_retirement_rejects_active_sorafs_reserve_backing_atomically() {
         // domain and uses the canonical World mutator to retain both indexes.
         let definition_id = asset_definition();
         transaction.world.insert_asset_definition_entry(
-            definition_id.clone(),
+            &(definition_id.clone()),
             AssetDefinition::numeric(
                 definition_id.clone(),
                 "XOR".to_owned(),
@@ -924,7 +987,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut maximum_page = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = maximum_page.block(header.clone());
+        let mut block = maximum_page.block(header);
         let mut transaction = block.transaction();
         for marker in 1_u8..=129 {
             let provider_id = ProviderId::new([marker; 32]);
@@ -984,7 +1047,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut mismatched_key = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = mismatched_key.block(header.clone());
+        let mut block = mismatched_key.block(header);
         let mut transaction = block.transaction();
         let mut account = ReserveProviderAccountV1 {
             terms: terms_for(ProviderId::new([0x21; 32]), provider.clone()),
@@ -1024,7 +1087,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
     let mut oversized_record = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = oversized_record.block(header.clone());
+        let mut block = oversized_record.block(header);
         let mut transaction = block.transaction();
         transaction.world.smart_contract_state.insert(
             reserve_provider_key(ProviderId::new([0x31; 32])),
@@ -1363,7 +1426,7 @@ fn committed_event_query_accepts_maximum_page_with_full_metering() {
     })
     .expect("commit reserve policy");
     let header = block_header_at(2, NOW + 1);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut transaction = block.transaction();
     let template = read_persisted_event(transaction.world(), 1)
         .expect("read initial reserve event")
@@ -1438,7 +1501,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut missing_head = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = missing_head.block(header.clone());
+        let mut block = missing_head.block(header);
         let mut transaction = block.transaction();
         let mut reserve_state = read_reserve_state(transaction.world())
             .expect("read reserve state")
@@ -1462,7 +1525,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut oversized = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = oversized.block(header.clone());
+        let mut block = oversized.block(header);
         let mut transaction = block.transaction();
         transaction.world.smart_contract_state.insert(
             event_key(1),
@@ -1481,7 +1544,7 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
     let mut orphan = build_policy_state();
     {
         let header = block_header_at(2, NOW + 1);
-        let mut block = orphan.block(header.clone());
+        let mut block = orphan.block(header);
         let mut transaction = block.transaction();
         let mut record = read_persisted_event(transaction.world(), 1)
             .expect("read policy event")

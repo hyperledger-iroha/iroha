@@ -2082,9 +2082,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             network_id,
             &chain_id,
             &seats,
-            &launcher,
-            native_finality_limits(),
-            5,
+            iroha_test_network::GenesisDkgRunConfig { native_binary: &launcher, limits: native_finality_limits(), certificate_height: 5 },
             move |expected, _public_snapshot, deadline| {
                 let predecessor = Arc::clone(&predecessor);
                 let first_config = directory.join("peer0.toml");

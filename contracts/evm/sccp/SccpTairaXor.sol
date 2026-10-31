@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.31;
+pragma solidity 0.8.38;
 
 import {BLS12_381} from "./lib/BLS12_381.sol";
 
@@ -13,10 +13,9 @@ import {BLS12_381} from "./lib/BLS12_381.sol";
 /// validators of the current committee generation over the finality header
 /// `X` of a Taira block, verified through the EIP-2537 precompiles. The pause
 /// state changes only through control leaves of certified Taira blocks.
-/// @dev Compiled by solc 0.8.31 with the legacy pipeline and
-/// `evmVersion: cancun` (§5.5). The source avoids the 0.8.31 legacy-pipeline
-/// bug patterns: it never deletes memory `bytes` elements and declares no
-/// custom storage layout.
+/// @dev Compiled by solc 0.8.38 with the legacy pipeline and
+/// `evmVersion: cancun` (§5.5). The narrow source policy forbids deleting
+/// memory `bytes` elements and declaring a custom storage layout.
 contract SccpTairaXor {
     // ---------------------------------------------------------------------
     // ABI structures (§5.2.2)

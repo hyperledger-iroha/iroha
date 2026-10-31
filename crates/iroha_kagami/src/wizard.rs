@@ -6,9 +6,8 @@ use color_eyre::eyre::{Context as _, Result, ensure, eyre};
 use inquire::{Select, Text};
 use iroha_config::parameters::{actual, defaults};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_verify};
-use iroha_data_model::peer::Peer;
 use iroha_genesis::validate_genesis_manifest_json;
-use iroha_model_base::peer::PeerId;
+use iroha_model_base::peer::{Peer, PeerId};
 use iroha_primitives::addr::SocketAddr;
 use norito::json::{self, Value as JsonValue};
 use std::{
@@ -227,7 +226,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         defaults.observer_public_host.to_string(),
         args.non_interactive,
     )?;
-    let p2p_host = iroha_deploy::localnet::canonical_host(&p2p_host, "p2p host")?;
+    let p2p_host = iroha_deploy::host::canonical_host(&p2p_host, "p2p host")?;
     let p2p_port = resolve_number(
         "P2P port",
         args.p2p_port,
@@ -379,7 +378,7 @@ fn resolve_trusted_peers_pop(
             "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
         ));
     }
-    if !iroha_data_model::block::consensus::is_valid_committee_size(pops.len()) {
+    if !iroha_model_base::topology::is_valid_committee_size(pops.len()) {
         return Err(eyre!(
             "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
             pops.len()
@@ -972,7 +971,7 @@ fn rewrite_address_port(template: &str, port: u16) -> Result<String> {
 }
 /// Render a host and port as a checksummed canonical socket-address literal.
 fn addr_literal(host: &str, port: u16) -> Result<String> {
-    iroha_deploy::localnet::canonical_endpoint_literal(host, "address host", port)
+    iroha_deploy::host::canonical_endpoint_literal(host, "address host", port)
 }
 /// Parse either a plain socket address or an existing canonical literal and render it canonically.
 fn canonical_addr_literal(raw: &str) -> Result<String> {
@@ -1004,7 +1003,7 @@ fn validated_addr_literal(address: &SocketAddr, host_field: &str) -> Result<Stri
         return Err(eyre!("socket address port must be greater than zero"));
     }
     if let SocketAddr::Host(host) = address {
-        return iroha_deploy::localnet::canonical_endpoint_literal(
+        return iroha_deploy::host::canonical_endpoint_literal(
             host.host.as_ref(),
             host_field,
             host.port,

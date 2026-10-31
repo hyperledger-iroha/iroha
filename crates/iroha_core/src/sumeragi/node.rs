@@ -10,6 +10,8 @@
 mod configuration;
 mod replay;
 pub use configuration::consensus_configuration_fingerprint;
+/// Offline replay check of a copied store with this build (`iroha3d --check-replay`).
+pub use replay::check as replay_check;
 #[cfg(test)]
 pub(crate) use replay::original_source_fixture_for_test as isolated_replay_source_fixture_for_test;
 pub(crate) use replay::{IsolatedNativeReplay, IsolatedReplayError, ReplayedNativeTransport};
@@ -372,17 +374,20 @@ impl NodeHandle {
         deadline: Option<Instant>,
     ) -> Option<(iroha_data_model::sumeragi::BeaconHorizonStatusV1, bool)> {
         let generation = self.state.state_view_generation();
-        let observed = match deadline {
-            Some(deadline) => self.beacon_readiness.read_until(
-                generation,
-                status.height,
-                status.applied_height,
-                deadline,
-            ),
-            None => self
-                .beacon_readiness
-                .read(generation, status.height, status.applied_height),
-        }?;
+        let observed = deadline.map_or_else(
+            || {
+                self.beacon_readiness
+                    .read(generation, status.height, status.applied_height)
+            },
+            |deadline| {
+                self.beacon_readiness.read_until(
+                    generation,
+                    status.height,
+                    status.applied_height,
+                    deadline,
+                )
+            },
+        )?;
         (self.state.state_view_generation() == generation).then_some(observed)
     }
 
@@ -527,6 +532,10 @@ fn node_policy_error(error: crate::execution_attempt::ExecutionAttemptError<Stri
 ///
 /// # Errors
 /// See [`NodeError`].
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, NodeError> {
     let NodeInputs {
         state,
@@ -585,21 +594,39 @@ impl core::fmt::Debug for Prepared {
     }
 }
 
-/// Rebuild the state (§12.1): apply the supplied genesis to the empty state (fresh chain) or
-/// re-execute the stored one, then replay every block Kura holds, each checked against its
-/// certified result. Nothing is sent or signed.
+/// Rebuild the state (§12.1): apply the supplied genesis to the empty state (fresh chain),
+/// re-execute the stored one, or resume a State restored from an authenticated snapshot (E56);
+/// then replay every block Kura holds above it, each checked against its certified result.
+/// Nothing is sent or signed.
 ///
 /// # Errors
 /// See [`NodeError`].
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
-    let mut prepared = prepare_genesis(inputs, None)?;
+    // Tiered rows are a derived local projection. Replaying each historical block
+    // must not rewrite its entire manifest; publish the exact final projection once.
+    let tiered_replay = inputs
+        .state
+        .defer_tiered_snapshots_for_startup_replay()
+        .map_err(NodeError::Input)?;
+    let restored = startup::applied_height(&inputs.state);
+    let replay_started = std::time::Instant::now();
+    let mut prepared = if restored == 0 {
+        prepare_genesis(inputs, None)?
+    } else {
+        prepare_restored(inputs, restored, None)?
+    };
     let state = &prepared.state;
     let crypto = &prepared.crypto;
     let blocks = &prepared.blocks;
+    let lane_stores = &prepared.lane_stores;
     let executor = &mut prepared.executor;
-    // Replay what Kura holds above genesis.
+    // Replay what Kura holds above the applied tip.
     let stored = blocks.height();
-    for height in GENESIS_HEIGHT.saturating_add(1)..=stored {
+    for height in restored.max(GENESIS_HEIGHT).saturating_add(1)..=stored {
         let (body, commit_qc) = blocks
             .committed_body(height)
             .map_err(|error| NodeError::Replay {
@@ -616,6 +643,19 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                 height,
                 reason: ReplayError::Execution(reason),
             })?;
+        // No lane runner reconciles retirement during replay; release the stores of
+        // incarnations the replayed block retired, as the runner does once it starts.
+        let lanes = state.view().world().sumeragi_lanes().clone();
+        lane_stores.release_retired(&lanes);
+        if height.is_multiple_of(128) || height == stored {
+            iroha_logger::info!(
+                height,
+                stored_height = stored,
+                restored_height = restored,
+                elapsed_ms = replay_started.elapsed().as_millis(),
+                "Strict startup replay progress"
+            );
+        }
     }
     // Every replayed result bound the complete World state roots; the incrementally advanced
     // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
@@ -625,15 +665,34 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             height: stored.max(GENESIS_HEIGHT),
             reason: ReplayError::StateRoot(reason),
         })?;
-    admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
+    admit_window(state, crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
+    if let Err(error) = tiered_replay.finish() {
+        // This derived local projection has always been best-effort. Its failed
+        // baseline stays invalid so the next publication captures the full World.
+        iroha_logger::warn!(%error, "tiered-state: failed to persist final startup snapshot");
+    }
     Ok(prepared)
+}
+
+/// The read-only original sources of a replay into an isolated temporary destination: the
+/// original store's lane block frames and, for a FASTPQ recovery only, the height whose source
+/// tape the replay retains.
+struct IsolatedSource {
+    /// Root of the original store's lane block frames (`<store>/lanes`), only ever read.
+    lanes: PathBuf,
+    /// Height whose FASTPQ source tape the replay retains; `None` retains none.
+    fastpq_target: Option<u64>,
 }
 
 // One original signed-genesis/bootstrap and executor owner. Isolated replay changes
 // only physical destinations and local observations; all execution checks are shared.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn prepare_genesis(
     inputs: PrepareInputs,
-    read_only_lane_root: Option<(PathBuf, u64)>,
+    isolated_source: Option<IsolatedSource>,
 ) -> Result<Prepared, NodeError> {
     let PrepareInputs {
         state,
@@ -642,20 +701,12 @@ fn prepare_genesis(
         genesis_account,
         consensus_mode,
     } = inputs;
-    // Storage and configured consensus identity have one original owner. Accepting either
-    // independently can publish genesis into State while routing replay to a foreign store.
-    #[cfg(not(all(test, sumeragi_core_mutation = "HC21")))]
-    let kura = state.kura_handle();
-    #[cfg(all(test, sumeragi_core_mutation = "HC21"))]
-    let kura = Kura::blank_kura_for_testing();
     let chain_id = state.chain_id_ref().to_string();
-    // Local snapshot signatures authenticate exports, not full-World execution. Native R
-    // commits the complete World state (Appendix E, E51), but restoring a snapshot against it
-    // is not implemented (TODO(S9)); Strict startup therefore rebuilds original State from the
-    // signed genesis and certified journal before maintenance is authorized.
+    // Genesis applies only to an empty State. A State restored from an authenticated snapshot
+    // resumes through `prepare_restored` instead.
     if startup::applied_height(&state) != 0 {
         return Err(NodeError::Input(
-            "the state must be empty: Sumeragi rebuilds it from genesis and Kura".into(),
+            "the state must be empty: Sumeragi applies genesis only to an empty State".into(),
         ));
     }
     // Genesis: re-execute the stored one, or apply the supplied one.
@@ -664,53 +715,52 @@ fn prepare_genesis(
         iroha_crypto::Hash,
         Hash32,
         iroha_data_model::block::consensus::SumeragiRootScope,
-    ) = match startup::stored_genesis(&state)? {
-        Some((block, certificate, stored)) => {
-            if let Some(supplied) = &genesis
-                && startup::core_hash_of(supplied) != stored.block_hash
-            {
-                return Err(NodeError::Input(
-                    "the supplied genesis differs from the one Kura holds".into(),
-                ));
-            }
-            let fingerprint =
-                consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
-            let (instance, root_scope) =
-                root_identity(&block, &chain_id).map_err(node_policy_error)?;
-            (
-                startup::apply_genesis_with_fastpq_target(
-                    &state,
-                    block,
-                    &genesis_account,
-                    consensus_mode,
-                    Some(&certificate),
-                    read_only_lane_root.as_ref().map(|(_, height)| *height),
-                )?,
-                fingerprint,
-                instance,
-                root_scope,
-            )
+    ) = if let Some((block, certificate, stored)) = startup::stored_genesis(&state)? {
+        if let Some(supplied) = &genesis
+            && startup::core_hash_of(supplied) != stored.block_hash
+        {
+            return Err(NodeError::Input(
+                "the supplied genesis differs from the one Kura holds".into(),
+            ));
         }
-        None => {
-            let genesis = genesis.ok_or(NodeError::NoGenesis)?;
-            let fingerprint =
-                consensus_configuration_fingerprint(&genesis).map_err(node_policy_error)?;
-            let (instance, root_scope) =
-                root_identity(&genesis, &chain_id).map_err(node_policy_error)?;
-            (
-                startup::apply_genesis_with_fastpq_target(
-                    &state,
-                    genesis,
-                    &genesis_account,
-                    consensus_mode,
-                    None,
-                    read_only_lane_root.as_ref().map(|(_, height)| *height),
-                )?,
-                fingerprint,
-                instance,
-                root_scope,
-            )
-        }
+        let fingerprint = consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
+        let (instance, root_scope) = root_identity(&block, &chain_id).map_err(node_policy_error)?;
+        (
+            startup::apply_genesis_with_fastpq_target(
+                &state,
+                block,
+                &genesis_account,
+                consensus_mode,
+                Some(&certificate),
+                isolated_source
+                    .as_ref()
+                    .and_then(|source| source.fastpq_target),
+            )?,
+            fingerprint,
+            instance,
+            root_scope,
+        )
+    } else {
+        let genesis = genesis.ok_or(NodeError::NoGenesis)?;
+        let fingerprint =
+            consensus_configuration_fingerprint(&genesis).map_err(node_policy_error)?;
+        let (instance, root_scope) =
+            root_identity(&genesis, &chain_id).map_err(node_policy_error)?;
+        (
+            startup::apply_genesis_with_fastpq_target(
+                &state,
+                genesis,
+                &genesis_account,
+                consensus_mode,
+                None,
+                isolated_source
+                    .as_ref()
+                    .and_then(|source| source.fastpq_target),
+            )?,
+            fingerprint,
+            instance,
+            root_scope,
+        )
     };
     let genesis_epoch = {
         let view = state.view();
@@ -723,6 +773,131 @@ fn prepare_genesis(
             .map_err(|error| NodeError::Input(error.to_string()))?
             .id
     };
+    let applied = (GENESIS_HEIGHT, tip.block_hash);
+    assemble_prepared(
+        PrepareInputs {
+            state,
+            events,
+            genesis: None,
+            genesis_account,
+            consensus_mode,
+        },
+        StartupIdentity {
+            instance,
+            root_scope,
+            tip,
+            genesis_epoch,
+            config_fingerprint,
+        },
+        applied,
+        isolated_source,
+    )
+}
+
+/// The instance identity a node derives from its signed genesis, whichever State it starts from.
+struct StartupIdentity {
+    instance: Hash32,
+    root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    tip: GenesisTip,
+    genesis_epoch: iroha_sumeragi::types::EpochId,
+    config_fingerprint: iroha_crypto::Hash,
+}
+
+// A State restored from an authenticated snapshot at `height` (E56). The stored signed genesis
+// supplies the instance identity and the restored native tip the applied cut; nothing is
+// re-executed here, and replay continues from the block after the tip. An isolated replay
+// reads lane frames from the original store and publishes only into its temporary Kura.
+fn prepare_restored(
+    inputs: PrepareInputs,
+    height: u64,
+    isolated_source: Option<IsolatedSource>,
+) -> Result<Prepared, NodeError> {
+    let chain_id = inputs.state.chain_id_ref().to_string();
+    let Some((block, _certificate, tip)) = startup::stored_genesis(&inputs.state)? else {
+        return Err(NodeError::Input(
+            "a restored State requires the signed genesis Kura holds".into(),
+        ));
+    };
+    if let Some(supplied) = &inputs.genesis
+        && startup::core_hash_of(supplied) != tip.block_hash
+    {
+        return Err(NodeError::Input(
+            "the supplied genesis differs from the one Kura holds".into(),
+        ));
+    }
+    let config_fingerprint =
+        consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
+    let (instance, root_scope) = root_identity(&block, &chain_id).map_err(node_policy_error)?;
+    // The consensus schedule keeps only the slots around its tip; the genesis epoch comes from
+    // the same signed genesis authority that genesis execution checks its schedule against.
+    let (signed_epoch, _) = super::epoch::authenticated_genesis(&block)
+        .map_err(|error| {
+            match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                error.to_string()
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    NodeError::Input(error)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    NodeError::Deferred(reason)
+                }
+            }
+        })?
+        .into_parts();
+    let genesis_epoch = schedule::core_epoch(&signed_epoch)
+        .map_err(|error| NodeError::Input(error.to_string()))?
+        .id;
+    let applied = inputs
+        .state
+        .view()
+        .native_execution_tip()
+        .filter(|native| native.height() == height && native.root_scope() == root_scope)
+        .ok_or_else(|| {
+            NodeError::Input("the restored State has no native tip at its height".into())
+        })?;
+    assemble_prepared(
+        inputs,
+        StartupIdentity {
+            instance,
+            root_scope,
+            tip,
+            genesis_epoch,
+            config_fingerprint,
+        },
+        (height, applied.core_hash()),
+        isolated_source,
+    )
+}
+
+// Everything after the applied cut is known: native availability, block, lane and context
+// stores, and the serialized executor positioned at `applied`.
+fn assemble_prepared(
+    inputs: PrepareInputs,
+    identity: StartupIdentity,
+    applied: (u64, Hash32),
+    isolated_source: Option<IsolatedSource>,
+) -> Result<Prepared, NodeError> {
+    let PrepareInputs {
+        state,
+        events,
+        genesis: _,
+        genesis_account,
+        consensus_mode,
+    } = inputs;
+    let StartupIdentity {
+        instance,
+        root_scope,
+        tip,
+        genesis_epoch,
+        config_fingerprint,
+    } = identity;
+    // Storage and configured consensus identity have one original owner. Accepting either
+    // independently can publish genesis into State while routing replay to a foreign store.
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC21")))]
+    let kura = state.kura_handle();
+    #[cfg(all(test, sumeragi_core_mutation = "HC21"))]
+    let kura = Kura::blank_kura_for_testing();
+    let chain_id = state.chain_id_ref().to_string();
     let crypto = Arc::new(BlsCrypto::new());
     let shared: SharedCrypto = crypto.clone();
     let availability = Arc::new(
@@ -757,7 +932,7 @@ fn prepare_genesis(
         availability,
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
-        GENESIS_HEIGHT,
+        applied.0,
         state.view().latest_block_hash(),
     ));
     // Lane blocks live next to Kura; replay merges from them as live execution does.
@@ -769,12 +944,14 @@ fn prepare_genesis(
         state.ivm_execution_budget(),
         lane_authorities,
     ));
-    let isolated = read_only_lane_root.is_some();
-    let capture_target = read_only_lane_root.as_ref().map(|(_, height)| *height);
+    let isolated = isolated_source.is_some();
+    let capture_target = isolated_source
+        .as_ref()
+        .and_then(|source| source.fastpq_target);
     let lane_blocks: Arc<dyn super::lanes::merge::LaneBlockSource> =
-        if let Some((root, _)) = read_only_lane_root {
+        if let Some(IsolatedSource { lanes, .. }) = isolated_source {
             Arc::new(super::lanes::registry::LaneFrameSource::new(
-                root,
+                lanes,
                 *state.network_id_ref(),
                 chain_id.clone(),
                 crypto.clone(),
@@ -819,7 +996,7 @@ fn prepare_genesis(
         genesis_account,
         consensus_mode,
         root_scope,
-        applied: (GENESIS_HEIGHT, tip.block_hash),
+        applied,
         crypto: Some(Arc::clone(&crypto)),
         applied_watch: Arc::clone(&applied_watch),
         lane_blocks,
@@ -830,7 +1007,7 @@ fn prepare_genesis(
         StateExecutor::spawn(context)
     }
     .map_err(NodeError::ExecutorStart)?;
-    admit_window(&state, &crypto, GENESIS_HEIGHT).map_err(NodeError::Input)?;
+    admit_window(&state, &crypto, applied.0).map_err(NodeError::Input)?;
     Ok(Prepared {
         state,
         crypto,
@@ -847,10 +1024,14 @@ fn prepare_genesis(
 }
 
 impl Prepared {
-    /// Bind SoraFS capture after startup reconciliation and before consensus can advance.
+    /// Bind `SoraFS` capture after startup reconciliation and before consensus can advance.
     ///
     /// # Errors
     /// The exact committed tip cannot be captured or this executor is already bound.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn attach_finalized_archives(
         &self,
         archives: super::executor::FinalizedArchives,
@@ -877,6 +1058,10 @@ impl Prepared {
     ///
     /// # Errors
     /// See [`NodeError`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn start<N: Net + 'static>(self, inputs: StartInputs<N>) -> Result<RunningNode, NodeError> {
         let Self {
             state,
@@ -935,6 +1120,19 @@ impl Prepared {
             assertion.as_ref(),
         )
         .map_err(|error| NodeError::Input(error.to_string()))?;
+        // An active key without a safety record signs nothing until peers anchor it (§7.4 R2).
+        // That is expected when joining a running network, but on a brand-new network every key
+        // starts unanchored and consensus never begins, so name the one-shot first-boot flag.
+        if found.iter().any(|(_, state, retired)| {
+            !*retired && *state == iroha_sumeragi::safety::RecordState::Absent
+        }) {
+            iroha_logger::warn!(
+                key = %key_pair.public_key(),
+                "sumeragi: this validator key has no safety record for this chain and signs \
+                 nothing until running peers anchor it; on the first boot of a brand-new network \
+                 restart once with --sumeragi-assert-fresh-key (never after losing node data)"
+            );
+        }
         // Height configurations of the window (t, t + 1, t + 2).
         let (configs, demotion_window) = {
             let view = state.view();
@@ -1016,7 +1214,7 @@ impl Prepared {
                 global_instance: instance,
                 bodies_dir: config.bodies_dir.clone(),
                 key_pair: key_pair.clone(),
-                local: config.local.clone(),
+                local: config.local,
                 driver,
                 network: *state.network_id_ref(),
                 chain_id,
@@ -1083,6 +1281,10 @@ impl Prepared {
     /// # Errors
     /// See [`NodeError`]; subscription and ingress-thread errors retain their
     /// concrete owners as [`NodeError::Subscription`] and [`NodeError::IngressThread`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn start_on_network(
         self,
         inputs: StartInputs<P2pNet<IrohaNetwork>>,
@@ -1580,7 +1782,7 @@ mod tests {
         }
     }
 
-    struct Chain {
+    struct NodeTestChain {
         genesis: SignedBlock,
         keys: Vec<KeyPair>,
         chain_id: ChainId,
@@ -1588,17 +1790,18 @@ mod tests {
 
     /// Admit one real-node scenario before its wall-clock progress bounds begin.
     ///
-    /// Independent scenarios share the process-wide execution witness recorder. Keep
-    /// their networks from competing for that recorder while preserving all validators
-    /// and concurrent data space roots inside each scenario. Acquire at test entry,
-    /// before fixture owners, so every worker stops before the guard is released.
+    /// Keep real-node networks from competing for host time. Scenarios with committed-work
+    /// deadlines also use the maintained isolated harness to exclude unrelated tests'
+    /// process-wide witness recorder and logging. Preserve all validators and concurrent
+    /// data space roots inside each scenario. Acquire before child dispatch and fixture
+    /// owners so every worker stops before the parent releases the guard.
     fn real_node_scenario_guard() -> parking_lot::MutexGuard<'static, ()> {
         static SCENARIO: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
         SCENARIO.lock()
     }
 
     /// A chain of `validators` with a 100 ms block time and the given idle interval.
-    fn chain(validators: u8, payload_retry_interval_ms: u64) -> Chain {
+    fn chain(validators: u8, payload_retry_interval_ms: u64) -> NodeTestChain {
         chain_with(validators, payload_retry_interval_ms, |_| Vec::new())
     }
 
@@ -1608,7 +1811,7 @@ mod tests {
         validators: u8,
         payload_retry_interval_ms: u64,
         extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
-    ) -> Chain {
+    ) -> NodeTestChain {
         // The global logger's actor must outlive each synchronous node fixture.
         // Keep its actual reactor alive even when this is the first selected test.
         static LOGGER_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
@@ -1646,26 +1849,39 @@ mod tests {
             iroha_config::parameters::defaults::nexus::fees::genesis_policy().fee_asset_id;
         // Ordinary fixture work pays the committed fee policy. Establish its funds
         // in the original signed genesis so replay reconstructs the same supply.
-        let mut builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .append_instruction(Register::asset_definition(AssetDefinition::numeric(
-                fee_asset.clone(),
-                "node fixture fee",
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
-            )))
-            .append_instruction(Mint::asset_quantity(
-                1_000_000_u32,
-                AssetId::new(fee_asset.clone(), ALICE_ID.clone()),
-            ))
-            .append_instruction(Mint::asset_quantity(
-                1_000_000_u32,
-                AssetId::new(fee_asset, second_shard_account()),
-            ))
-            .append_parameter(Parameter::Sumeragi(
-                SumeragiParameter::PayloadRetryIntervalMs(
-                    NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
-                ),
-            ));
+        let mut builder = GenesisBuilder::new_without_executor(
+            chain_id.clone(),
+            ".",
+            iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+                iroha_crypto::Algorithm::BlsNormal,
+            ])
+            .expect("explicit canonical genesis producer policy"),
+        )
+        .with_staking_policy(crate::sumeragi::test_chain::staking_fixture_policy(
+            fee_asset.clone(),
+        ))
+        .expect("explicit fixture staking author")
+        .append_instruction(Register::asset_definition(AssetDefinition::numeric(
+            fee_asset.clone(),
+            "node fixture fee",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )))
+        .append_instruction(Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::new(fee_asset.clone(), ALICE_ID.clone()),
+        ))
+        .append_instruction(Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::new(fee_asset, second_shard_account()),
+        ))
+        .append_parameter(Parameter::Sumeragi(
+            SumeragiParameter::PayloadRetryIntervalMs(
+                NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
+            ),
+        ));
         for parameter in extra {
             builder = builder.append_parameter(parameter);
         }
@@ -1714,7 +1930,7 @@ mod tests {
             None,
         )
         .expect("original signed genesis policies derived from node execution configuration");
-        Chain {
+        NodeTestChain {
             genesis,
             keys,
             chain_id,
@@ -1755,7 +1971,7 @@ mod tests {
         dir: tempfile::TempDir,
     }
 
-    fn disks(chain: &Chain) -> Vec<Disk> {
+    fn disks(chain: &NodeTestChain) -> Vec<Disk> {
         (0..chain.keys.len())
             .map(|_| Disk {
                 kura: Kura::blank_kura_for_testing(),
@@ -1771,15 +1987,48 @@ mod tests {
         queue: Arc<Queue>,
     }
 
-    fn start_all(chain: &Chain, disks: &[Disk], fresh: bool) -> Vec<Validator> {
+    fn start_all(chain: &NodeTestChain, disks: &[Disk], fresh: bool) -> Vec<Validator> {
+        let states = disks
+            .iter()
+            .map(|disk| empty_state(&chain.chain_id, &chain.genesis, &disk.kura))
+            .collect();
+        start_all_with_states(chain, disks, fresh, states)
+    }
+
+    /// A State restored from `snapshot`, authenticated against the successor its Kura holds.
+    fn restored_state(snapshot: &str, kura: &Arc<Kura>) -> Arc<State> {
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let manifests =
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
+        let state = crate::state::deserialize::KuraSeed {
+            execution_budget: iroha_allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            lane_manifests: manifests,
+            kura: Arc::clone(kura),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json_str_with_configured_nexus(snapshot, nexus)
+        .expect("the certified successor authenticates the snapshot World");
+        Arc::from(state)
+    }
+
+    fn start_all_with_states(
+        chain: &NodeTestChain,
+        disks: &[Disk],
+        fresh: bool,
+        states: Vec<Arc<State>>,
+    ) -> Vec<Validator> {
         let registry = Arc::new(Registry::default());
         let validators = disks
             .iter()
+            .zip(states)
             .enumerate()
-            .map(|(index, disk)| {
+            .map(|(index, (disk, state))| {
                 let key_pair = chain.keys[index].clone();
                 let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-                let state = empty_state(&chain.chain_id, &chain.genesis, &disk.kura);
                 let queue = Arc::new(Queue::test(
                     iroha_config::parameters::actual::Queue::default(),
                     &time_source,
@@ -1897,7 +2146,15 @@ mod tests {
     fn world_state_roots(validators: &[Validator]) -> Vec<Result<Hash, String>> {
         validators
             .iter()
-            .map(|validator| validator.state.world.state_accumulator.view().get().root())
+            .map(|validator| {
+                validator
+                    .state
+                    .world
+                    .state_accumulator
+                    .view()
+                    .get()
+                    .baseline_root()
+            })
             .collect()
     }
 
@@ -2029,7 +2286,7 @@ mod tests {
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
     fn submit(
-        chain: &Chain,
+        chain: &NodeTestChain,
         validators: &[Validator],
         message: &str,
     ) -> HashOf<TransactionEntrypoint> {
@@ -2038,7 +2295,7 @@ mod tests {
 
     /// [`submit`] signed by `key`'s account.
     fn submit_as(
-        chain: &Chain,
+        chain: &NodeTestChain,
         validators: &[Validator],
         key: &KeyPair,
         message: &str,
@@ -2093,7 +2350,11 @@ mod tests {
             &network_id,
             Duration::from_secs(10),
             TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         )
         .expect("accepted");
         let hash = accepted.hash_as_entrypoint();
@@ -2213,6 +2474,11 @@ mod tests {
     #[test]
     fn a_fixed_lane_carries_transactions_the_global_chain_merges() {
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::a_fixed_lane_carries_transactions_the_global_chain_merges",
+        ) {
+            return;
+        }
         let lane = iroha_model_base::topology::LaneId::new(2);
         let chain = chain_with(4, 200, fixed_lane_policy);
         let disks = disks(&chain);
@@ -2367,6 +2633,11 @@ mod tests {
     #[test]
     fn autoscale_opens_an_elastic_lane_under_load_and_retires_it_when_idle() {
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::autoscale_opens_an_elastic_lane_under_load_and_retires_it_when_idle",
+        ) {
+            return;
+        }
         let elastic = iroha_model_base::topology::LaneId::new(16);
         let chain = chain_with(4, 200, elastic_lane_policy);
         let disks = disks(&chain);
@@ -2532,6 +2803,11 @@ mod tests {
         use mv::storage::StorageReadOnly as _;
 
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::idle_chain_never_advances_and_real_work_survives_restart",
+        ) {
+            return;
+        }
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
@@ -2609,8 +2885,71 @@ mod tests {
     }
 
     #[test]
+    fn restart_from_an_authenticated_snapshot_replays_only_later_blocks() {
+        let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::restart_from_an_authenticated_snapshot_replays_only_later_blocks",
+        ) {
+            return;
+        }
+        let chain = chain(4, 200);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        let hash = submit(&chain, &validators, "before the snapshot");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "work before the snapshot",
+            || committed_everywhere(&validators, hash),
+        );
+        let snapshot = crate::snapshot::CapturedStateSnapshot::capture(&validators[0].state)
+            .expect("stable snapshot cut");
+        let snapshot_height = validators[0].state.committed_height();
+        let hash = submit(&chain, &validators, "after the snapshot");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "work after the snapshot",
+            || committed_everywhere(&validators, hash),
+        );
+        let roots = world_state_roots(&validators);
+        let heights = committed_heights(&validators);
+        assert!(heights[0] > u64::try_from(snapshot_height).unwrap());
+        shutdown(validators);
+        // Validator 0 restores the snapshot, which the next Kura block certifies, and replays
+        // only the later blocks; the others replay from genesis.
+        let restored = restored_state(snapshot.as_json(), &disks[0].kura);
+        assert_eq!(restored.committed_height(), snapshot_height);
+        let states = std::iter::once(restored)
+            .chain(
+                disks[1..]
+                    .iter()
+                    .map(|disk| empty_state(&chain.chain_id, &chain.genesis, &disk.kura)),
+            )
+            .collect();
+        let validators = start_all_with_states(&chain, &disks, false, states);
+        assert_eq!(committed_heights(&validators), heights);
+        assert_eq!(world_state_roots(&validators), roots);
+        let hash = submit(&chain, &validators, "after the restart");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "work after the restart",
+            || committed_everywhere(&validators, hash),
+        );
+        let roots = world_state_roots(&validators);
+        assert!(roots[0].is_ok() && roots.iter().all(|root| *root == roots[0]));
+        shutdown(validators);
+    }
+
+    #[test]
     fn all_seat_restart_reproduces_missing_original_context_archives_from_certified_execution() {
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::all_seat_restart_reproduces_missing_original_context_archives_from_certified_execution",
+        ) {
+            return;
+        }
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
@@ -2696,6 +3035,11 @@ mod tests {
     fn replay_rejects_a_block_whose_certified_result_differs() {
         use iroha_sumeragi::crypto::{Crypto as _, Signer as _};
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::replay_rejects_a_block_whose_certified_result_differs",
+        ) {
+            return;
+        }
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
@@ -2708,6 +3052,9 @@ mod tests {
         );
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
         let (genesis, certificate, _) = startup::stored_genesis(&state)
             .expect("valid stored genesis projection")
@@ -2893,6 +3240,11 @@ mod tests {
     #[test]
     fn every_committed_block_contains_work_before_and_after_restart() {
         let _scenario = real_node_scenario_guard();
+        if crate::unit_test_support::run_in_isolated_harness(
+            "sumeragi::node::tests::every_committed_block_contains_work_before_and_after_restart",
+        ) {
+            return;
+        }
         // Explicit queue notifications must bypass even a long rebuild retry interval.
         let chain = chain(4, 600_000);
         let disks = disks(&chain);

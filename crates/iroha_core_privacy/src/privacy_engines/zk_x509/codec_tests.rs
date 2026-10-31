@@ -11,7 +11,9 @@ fn witness() -> ZkX509WitnessV1 {
         crl_der: vec![0x30, 0],
         ca_membership_path: ZkX509CaMembershipPathV1 {
             index: 4_095,
-            siblings: core::array::from_fn(|index| [index as u8; 32]),
+            siblings: core::array::from_fn(|index| {
+                [u8::try_from(index).expect("fixed path depth fits u8"); 32]
+            }),
         },
         wallet_ownership_signature_rs: [0x30; ZK_X509_WALLET_SIGNATURE_RS_BYTES_V1],
         attribute_openings: vec![
@@ -185,7 +187,8 @@ fn witness_codec_rejects_noncanonical_counts_lengths_and_openings() {
         Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
     );
     let mut index = witness();
-    index.ca_membership_path.index = ZK_X509_CA_COMPACT_TREE_CAPACITY_V1 as u16;
+    index.ca_membership_path.index =
+        u16::try_from(ZK_X509_CA_COMPACT_TREE_CAPACITY_V1).expect("fixed tree capacity fits u16");
     assert_eq!(
         index.encode_v1(),
         Err(ZkX509WitnessCodecErrorV1::InvalidCaPathIndex)
@@ -389,9 +392,7 @@ fn witness_decoder_clears_late_invalid_fields_and_transferred_owner() {
         let ((), observations) = inspection::observe_v1(|| {
             let result = std::panic::catch_unwind(move || {
                 let _owner = decoded;
-                if unwind {
-                    panic!("decoded owner unwind");
-                }
+                assert!(!unwind, "decoded owner unwind");
             });
             assert_eq!(result.is_err(), unwind);
         });
@@ -507,9 +508,7 @@ fn witness_writer_never_grows_and_clears_partial_success_error_and_unwind() {
                 assert_eq!(writer.bytes.as_ptr(), address);
                 assert_eq!(writer.bytes.capacity(), capacity);
                 assert!(!writer.bytes.is_empty());
-                if unwind {
-                    panic!("private writer unwind");
-                }
+                assert!(!unwind, "private writer unwind");
             });
             assert_eq!(result.is_err(), unwind);
         });

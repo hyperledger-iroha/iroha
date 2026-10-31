@@ -21,10 +21,7 @@ fn global_and_private_requests_select_only_their_original_scope_prerequisites() 
     let daemon = PathBuf::from("installed-iroha3d");
     let global = LocalnetRequest::new(launcher.clone(), daemon.clone());
     let private = LocalnetRequest::private_root(launcher.clone(), daemon.clone());
-    assert_eq!(
-        global.service_profile,
-        LocalnetServiceProfile::StreamTokenAuthorities
-    );
+    assert_eq!(global.service_profile, LocalnetServiceProfile::Standard);
     assert_eq!(private.service_profile, LocalnetServiceProfile::Standard);
     assert_eq!(
         LocalnetServiceProfile::default(),
@@ -234,13 +231,13 @@ fn retained_root_kind_is_mandatory_and_private_identity_cannot_replace_global() 
     );
 }
 
-pub(super) fn private_spec() -> crate::localnet::PrivateRootSpec {
+pub(super) fn private_spec() -> crate::sora_network::PrivateRootSpec {
     use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
     let alias = "privateapp";
     let name_hash = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)
         .unwrap()
         .name_hash();
-    crate::localnet::PrivateRootSpec {
+    crate::sora_network::PrivateRootSpec {
         parent_network_id:
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
                 .parse()
@@ -300,9 +297,14 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
     request.startup_timeout = Duration::from_secs(120);
     let spec = private_spec();
     let error = store.up_private_root(&request, &spec).unwrap_err();
+    // The test executable exits instead of adopting the worker's reserved listeners.
+    let expected = format!(
+        "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+        Error::Timeout(request.startup_timeout)
+    );
     assert!(
-        matches!(error, Error::Timeout(timeout) if timeout == request.startup_timeout),
-        "expected original-budget worker-start failure after genuine preparation: {error}"
+        matches!(&error, Error::Invalid(message) if message == &expected),
+        "expected owned worker exit during listener handoff after genuine preparation: {error}"
     );
     let prepared = store
         .prepared("private")
@@ -350,7 +352,23 @@ fn port_reservations_are_live_disjoint_and_released_on_drop() {
     let ports = LocalnetPorts::reserve().unwrap();
     assert_eq!(ports.reserved_count(), 8);
     let bases = [ports.base_api, ports.base_p2p];
+    assert_ne!(
+        ports.base_api, 8080,
+        "fresh networks use an OS-assigned port"
+    );
+    assert_ne!(
+        ports.base_p2p, 1337,
+        "fresh networks use an OS-assigned port"
+    );
     assert!((i32::from(bases[0]) - i32::from(bases[1])).abs() >= 4);
+    let concurrent = LocalnetPorts::reserve().unwrap();
+    for base in [concurrent.base_api, concurrent.base_p2p] {
+        assert!(
+            bases
+                .iter()
+                .all(|other| (i32::from(base) - i32::from(*other)).abs() >= 4)
+        );
+    }
     for base in bases {
         for offset in 0..4 {
             assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).is_err());
@@ -361,6 +379,30 @@ fn port_reservations_are_live_disjoint_and_released_on_drop() {
         for offset in 0..4 {
             TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).unwrap();
         }
+    }
+}
+
+#[test]
+fn retained_port_reservations_preserve_generated_endpoints_and_refuse_a_live_owner() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let original = LocalnetPorts::reserve().unwrap();
+    let prepared = crate::localnet::prepare_localnet_at(
+        "retained-listeners",
+        &temporary.path().join("generation"),
+        &original,
+        crate::localnet::LocalnetServiceProfile::Standard,
+        None,
+    )
+    .unwrap();
+    let bases = (original.base_api, original.base_p2p);
+    assert!(LocalnetPorts::reserve_prepared(&prepared).is_err());
+    drop(original);
+    let resumed = LocalnetPorts::reserve_prepared(&prepared).unwrap();
+    assert_eq!((resumed.base_api, resumed.base_p2p), bases);
+    assert_eq!(resumed.reserved_count(), 8);
+    for address in listeners::expected_addresses(&prepared).unwrap() {
+        assert!(TcpListener::bind(address).is_err());
     }
 }
 
@@ -393,6 +435,7 @@ fn selection_ready(context: &ManagedContext) -> ManagedStatus {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     }
 }
 
@@ -559,6 +602,33 @@ fn unreadable_worker_with_held_lock_is_not_reported_stopped_or_reset() {
 }
 
 #[test]
+fn live_worker_status_preserves_expired_observation_instead_of_ownership_conflict() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let _owned = store::acquire(&directory, "runtime.lock", "local").unwrap();
+    let worker = encode(&WorkerRecord {
+        token: "a".repeat(64),
+    })
+    .unwrap();
+    directory
+        .write_atomic(WORKER, &worker, PublishMode::CreateNew)
+        .unwrap();
+    let _listener = transport::Listener::bind(&directory).unwrap();
+
+    let error = store
+        .status_until("local", std::time::Instant::now())
+        .unwrap_err();
+    assert!(matches!(error, Error::Io(ref error) if error.kind() == std::io::ErrorKind::TimedOut));
+    assert_eq!(
+        directory.read(WORKER, MAX_METADATA).unwrap().as_slice(),
+        worker
+    );
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+    assert!(matches!(store.reset("local"), Err(Error::Busy(_))));
+}
+
+#[test]
 fn stopped_controller_cannot_leave_a_saved_ready_status() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -571,6 +641,12 @@ fn stopped_controller_cannot_leave_a_saved_ready_status() {
                 phase: ManagedPhase::Ready,
                 running_peers: 4,
                 failure: None,
+                validators: (0..4)
+                    .map(|index| ManagedValidatorStatus {
+                        index,
+                        state: ManagedValidatorState::Running,
+                    })
+                    .collect(),
             })
             .unwrap(),
             PublishMode::CreateNew,
@@ -579,7 +655,99 @@ fn stopped_controller_cannot_leave_a_saved_ready_status() {
     let status = store.status("local").unwrap();
     assert_eq!(status.phase, ManagedPhase::Failed);
     assert_eq!(status.running_peers, 0);
+    // Without a live owner, saved process observations are not current.
+    assert_eq!(status.validators, Vec::<ManagedValidatorStatus>::new());
     assert!(status.failure.unwrap().contains("unexpectedly"));
+}
+
+#[test]
+fn retained_failure_keeps_the_exited_validator_that_caused_it() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let exited = ManagedValidatorStatus {
+        index: 2,
+        state: ManagedValidatorState::Exited {
+            code: Some(101),
+            signal: None,
+        },
+    };
+    let failed = ManagedStatus {
+        context: prepared.context,
+        phase: ManagedPhase::Failed,
+        running_peers: 0,
+        failure: Some("a supervised validator exited; inspect its retained log peer2.log".into()),
+        validators: vec![exited],
+    };
+    directory
+        .write_atomic(STATUS, &encode(&failed).unwrap(), PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(store.status("local").unwrap(), failed);
+}
+
+#[test]
+fn control_actions_and_validator_states_use_closed_tagged_json() {
+    for (action, kind) in [
+        (ControlAction::Status, "status"),
+        (ControlAction::Down, "down"),
+        (ControlAction::StartupExpired, "startup_expired"),
+        (ControlAction::AttachmentStart, "attachment_start"),
+        (ControlAction::AttachmentStatus, "attachment_status"),
+    ] {
+        let request = ControlRequest {
+            token: "c".repeat(64),
+            action,
+        };
+        let bytes = encode(&request).unwrap();
+        let value: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value
+                .get("action")
+                .and_then(|action| action.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some(kind)
+        );
+        let decoded: ControlRequest = decode(&bytes).unwrap();
+        assert_eq!(decoded.token, request.token);
+        assert_eq!(decoded.action, action);
+    }
+    // Retired string actions, unknown kinds and smuggled fields never decode.
+    for rejected in [
+        r#"{"token":"t","action":"status"}"#,
+        r#"{"token":"t","action":{"kind":"stop_validator"}}"#,
+        r#"{"token":"t","action":{"kind":"status","value":1}}"#,
+        r#"{"token":"t","action":{"kind":"status"},"extra":true}"#,
+    ] {
+        assert!(
+            decode::<ControlRequest>(rejected.as_bytes()).is_err(),
+            "{rejected}"
+        );
+    }
+    for state in [
+        ManagedValidatorState::Running,
+        ManagedValidatorState::Exited {
+            code: Some(101),
+            signal: None,
+        },
+        ManagedValidatorState::Exited {
+            code: None,
+            signal: Some(9),
+        },
+    ] {
+        let validator = ManagedValidatorStatus { index: 3, state };
+        let decoded: ManagedValidatorStatus = decode(&encode(&validator).unwrap()).unwrap();
+        assert_eq!(decoded, validator);
+    }
+    for rejected in [
+        r#"{"index":0,"state":{"kind":"stopped"}}"#,
+        r#"{"index":0,"state":{"kind":"running"},"pid":7}"#,
+        r#"{"index":0,"state":{"kind":"exited","value":{"code":1,"signal":null,"log":"x"}}}"#,
+    ] {
+        assert!(
+            decode::<ManagedValidatorStatus>(rejected.as_bytes()).is_err(),
+            "{rejected}"
+        );
+    }
 }
 
 #[test]
@@ -595,6 +763,7 @@ fn live_foreground_start_is_distinguished_from_a_crashed_handoff() {
                 phase: ManagedPhase::Starting,
                 running_peers: 0,
                 failure: None,
+                validators: Vec::new(),
             })
             .unwrap(),
             PublishMode::CreateNew,
@@ -629,6 +798,7 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
         phase: ManagedPhase::Failed,
         running_peers: 0,
         failure: Some("startup readiness deadline expired while confirming the complete four-validator peer mesh".into()),
+        validators: Vec::new(),
     };
     let mut late = failed.clone();
     late.phase = ManagedPhase::Ready;
@@ -645,7 +815,7 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
                 if let Some(mut connection) = listener.accept().unwrap() {
                     let request = connection.receive().unwrap();
                     assert_eq!(request.token, token);
-                    assert_eq!(request.action, "startup_expired");
+                    assert_eq!(request.action, ControlAction::StartupExpired);
                     connection.reply(&reply).unwrap();
                     break;
                 }
@@ -904,6 +1074,34 @@ fn retained_service_profile_mismatch_and_private_selection_refuse_before_generat
 }
 
 #[test]
+fn retained_generation_refuses_other_binaries_and_says_how_to_recover() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, _directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    // A rebuilt installation: the same program with different contents.
+    let rebuilt = temporary.path().join("rebuilt-program");
+    std::fs::copy(std::env::current_exe().unwrap(), &rebuilt).unwrap();
+    let mut appended = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rebuilt)
+        .unwrap();
+    std::io::Write::write_all(&mut appended, b"\0").unwrap();
+    drop(appended);
+    let request = LocalnetRequest::new(rebuilt.clone(), rebuilt);
+    let message = match store.up(&request) {
+        Err(Error::RuntimeMismatch(message)) => message,
+        Err(other) => panic!("expected the installation refusal, got: {other}"),
+        Ok(_) => panic!("another installation must not start the retained generation"),
+    };
+    assert!(
+        message.contains("`local` was created by different kagami and iroha3d binaries"),
+        "{message}"
+    );
+    assert!(message.contains("reset discards its ledger"), "{message}");
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+}
+
+#[test]
 fn retained_standard_profile_requires_original_signed_genesis_and_identity() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -983,6 +1181,7 @@ fn startup_status_exchange_keeps_original_clocks_and_never_cancels_retained_owne
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     };
     let server = std::thread::spawn(move || {
         let accepted_before = std::time::Instant::now() + Duration::from_secs(5);
@@ -995,7 +1194,7 @@ fn startup_status_exchange_keeps_original_clocks_and_never_cancels_retained_owne
         };
         let request = connection.receive().unwrap();
         assert_eq!(request.token, token);
-        assert_eq!(request.action, "status");
+        assert_eq!(request.action, ControlAction::Status);
         std::thread::sleep(Duration::from_millis(300));
         let _ = connection.reply(&ready);
     });
@@ -1021,4 +1220,242 @@ fn startup_status_exchange_keeps_original_clocks_and_never_cancels_retained_owne
         directory.read(WORKER, MAX_METADATA).unwrap().as_slice(),
         worker_image
     );
+}
+
+fn rebuilt_pin(path: &Path) -> BinaryPin {
+    BinaryPin {
+        path: path.to_path_buf(),
+        blake3: "rebuilt".into(),
+    }
+}
+
+#[test]
+fn only_a_global_generation_that_never_became_ready_can_be_replaced_after_a_rebuild() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory, _) = fixture(&temporary.path().join("managed"), "local");
+    let retained = generation::read(&directory).unwrap();
+    let rebuilt = rebuilt_pin(&retained.daemon.path);
+    let same = (&retained.launcher, &retained.daemon);
+    let changed = (&retained.launcher, &rebuilt);
+    let eligible = |programs, marked, phase, journaled| {
+        store::never_became_ready(&retained, programs, marked, phase, journaled)
+    };
+    for phase in [
+        None,
+        Some(ManagedPhase::Failed),
+        Some(ManagedPhase::Starting),
+    ] {
+        assert!(eligible(changed, false, phase, false));
+    }
+    // The same binaries may simply retry.
+    assert!(!eligible(same, false, Some(ManagedPhase::Failed), false));
+    // The same contents at a new path count as a change, since the old path is what would run.
+    let moved = BinaryPin {
+        path: temporary.path().join("moved"),
+        blake3: retained.daemon.blake3.clone(),
+    };
+    assert!(eligible(
+        (&retained.launcher, &moved),
+        false,
+        Some(ManagedPhase::Failed),
+        false
+    ));
+    // Readiness, an older store that stopped cleanly and recorded work all keep the ledger.
+    assert!(!eligible(changed, true, Some(ManagedPhase::Failed), false));
+    assert!(!eligible(
+        changed,
+        false,
+        Some(ManagedPhase::Stopped),
+        false
+    ));
+    assert!(!eligible(changed, false, Some(ManagedPhase::Ready), false));
+    assert!(!eligible(changed, false, Some(ManagedPhase::Failed), true));
+    // A private root keeps its identity whatever happened to it.
+    let mut private = retained.clone();
+    private.root_kind = RootKind::Private {
+        spec: private_spec(),
+    };
+    assert!(!store::never_became_ready(
+        &private,
+        changed,
+        false,
+        Some(ManagedPhase::Failed),
+        false
+    ));
+}
+
+#[test]
+fn discarding_an_unready_generation_keeps_one_that_became_ready() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let rebuilt = temporary.path().join("rebuilt");
+    std::fs::copy(std::env::current_exe().unwrap(), &rebuilt).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&rebuilt, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let mut appended = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rebuilt)
+        .unwrap();
+    std::io::Write::write_all(&mut appended, b"\0").unwrap();
+    drop(appended);
+    let request = LocalnetRequest::new(rebuilt.clone(), rebuilt);
+
+    // An unknown name has nothing to discard.
+    let mut unknown = LocalnetRequest::new(request.launcher.clone(), request.daemon.clone());
+    unknown.name = "other".into();
+    assert!(!store.discard_unready_generation(&unknown).unwrap());
+
+    directory
+        .write_atomic(BECAME_READY, b"1", PublishMode::Replace)
+        .unwrap();
+    assert!(!store.discard_unready_generation(&request).unwrap());
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+
+    directory.remove_private(BECAME_READY).unwrap();
+    assert!(store.discard_unready_generation(&request).unwrap());
+    assert!(matches!(
+        store.prepared("local"),
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+}
+
+#[cfg(unix)]
+fn scripted_daemon(directory: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = directory.join("iroha3d");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn rebuilt_binaries_adopt_a_stopped_localnet_only_when_the_daemon_accepts_it() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let retained = generation::read(&directory).unwrap();
+    let deadline = || std::time::Instant::now() + Duration::from_secs(30);
+    let budget = Duration::from_secs(30);
+
+    // A refusal names the cause and the reset, and leaves the generation as it was.
+    let refusing = scripted_daemon(
+        temporary.path(),
+        "echo 'Signed genesis policy mismatch: execution a != b' >&2; exit 1",
+    );
+    let error = store::adopt_rebuilt_programs(
+        &directory,
+        "local",
+        retained.clone(),
+        retained.launcher.clone(),
+        rebuilt_pin(&refusing),
+        deadline(),
+        budget,
+    )
+    .err()
+    .unwrap();
+    let message = match error {
+        Error::RuntimeMismatch(message) => message,
+        other => panic!("expected the mismatch refusal, got: {other}"),
+    };
+    assert!(
+        message.contains("Signed genesis policy mismatch"),
+        "{message}"
+    );
+    assert!(message.contains("kagami localnet reset local"), "{message}");
+    assert_eq!(
+        encode(&generation::read(&directory).unwrap()).unwrap(),
+        encode(&retained).unwrap()
+    );
+
+    // Acceptance records the new binaries and nothing else.
+    let accepting = scripted_daemon(temporary.path(), r#"echo '{"status":"ready"}'"#);
+    let adopted = store::adopt_rebuilt_programs(
+        &directory,
+        "local",
+        retained.clone(),
+        retained.launcher.clone(),
+        rebuilt_pin(&accepting),
+        deadline(),
+        budget,
+    )
+    .unwrap();
+    assert_eq!(adopted.daemon.path, accepting);
+    assert_eq!(adopted.daemon.blake3, "rebuilt");
+    let reread = generation::read(&directory).unwrap();
+    assert_eq!(reread.daemon.path, accepting);
+    assert_eq!(reread.daemon.blake3, "rebuilt");
+    assert_eq!(reread.prepared, prepared);
+    assert_eq!(reread.root_kind, retained.root_kind);
+
+    // A network still running on the old binaries must be stopped first.
+    let runtime = store::acquire(&directory, "runtime.lock", "local").unwrap();
+    let running = store::adopt_rebuilt_programs(
+        &directory,
+        "local",
+        retained.clone(),
+        retained.launcher.clone(),
+        rebuilt_pin(&accepting),
+        deadline(),
+        budget,
+    )
+    .err()
+    .unwrap();
+    assert!(running.to_string().contains("kagami localnet down local"));
+    drop(runtime);
+
+    // Storage networks and private roots stay bound to their original binaries.
+    let mut storage = retained.clone();
+    storage.prepared.service_profile =
+        crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+    let bound = store::adopt_rebuilt_programs(
+        &directory,
+        "local",
+        storage,
+        retained.launcher.clone(),
+        rebuilt_pin(&accepting),
+        deadline(),
+        budget,
+    )
+    .err()
+    .unwrap();
+    assert!(bound.to_string().contains("reset discards its ledger"));
+}
+
+#[test]
+fn logs_name_a_missing_log_and_following_returns_only_new_text() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, _) = fixture(&temporary.path().join("managed"), "local");
+    let missing = store.logs("local", Some(1), 64).unwrap_err().to_string();
+    assert!(
+        missing.contains("validator 1 has not written a log yet"),
+        "{missing}"
+    );
+    assert!(
+        store
+            .logs("local", None, 64)
+            .unwrap_err()
+            .to_string()
+            .contains("supervisor has not written a log yet")
+    );
+
+    let mut log = directory.open_append("peer0.log").unwrap();
+    std::io::Write::write_all(&mut log, b"first\n").unwrap();
+    assert_eq!(store.log_len("local", Some(0)).unwrap(), 6);
+    let (text, offset) = store.logs_since("local", Some(0), 0).unwrap();
+    assert_eq!((text.as_str(), offset), ("first\n", 6));
+    let (text, offset) = store.logs_since("local", Some(0), offset).unwrap();
+    assert_eq!((text.as_str(), offset), ("", 6));
+    std::io::Write::write_all(&mut log, b"second\n").unwrap();
+    let (text, offset) = store.logs_since("local", Some(0), offset).unwrap();
+    assert_eq!((text.as_str(), offset), ("second\n", 13));
+    // A log that shrank, as after a reset, is read again from its start.
+    let (text, offset) = store.logs_since("local", Some(0), 1000).unwrap();
+    assert_eq!((text.as_str(), offset), ("first\nsecond\n", 13));
 }

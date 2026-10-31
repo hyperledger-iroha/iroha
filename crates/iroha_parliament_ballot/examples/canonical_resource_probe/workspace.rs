@@ -195,7 +195,7 @@ pub fn run(options: Options<'_>) -> Result<(Report, i32), native::NativeError> {
     let result = unsafe { (*request).result };
     Ok((
         Report {
-            outcome: result.outcome.outcome,
+            outcome: result.outcome.label,
             verifier_stage: result.outcome.stage,
             charged_units: result.charge.units,
             charged_bytes: result.charge.bytes,

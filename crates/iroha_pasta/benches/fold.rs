@@ -8,7 +8,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use group::{Curve, Group};
 use iroha_pasta::fold::fold_generators_vartime;
 use iroha_pasta::{Eq, EqAffine, Fp};

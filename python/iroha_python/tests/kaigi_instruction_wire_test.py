@@ -15,6 +15,8 @@ from iroha_python.kaigi import (
     KAIGI_INSTRUCTION_WIRE_IDS_V1,
     KAIGI_MAX_PARTICIPANTS_V1,
     KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+    KAIGI_RELAY_HPKE_SUITES_V1,
+    encode_kaigi_relay_hpke_key_v1,
     KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
     REGISTER_KAIGI_RELAY_WIRE_ID_V1,
     UNREGISTER_KAIGI_RELAY_WIRE_ID_V1,
@@ -496,6 +498,18 @@ def test_identity_codec_preserves_every_rust_controller_fixture() -> None:
             call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=literal
         )
         assert wire.to_instruction().to_norito_bytes() == wire.to_norito_bytes()
+
+
+def test_relay_hpke_key_descriptor_prefixes_the_exact_suite() -> None:
+    for suite, (suite_id, key_length) in KAIGI_RELAY_HPKE_SUITES_V1.items():
+        key = bytes([0x5A]) * key_length
+        descriptor = encode_kaigi_relay_hpke_key_v1(suite, key)
+        assert descriptor == suite_id.to_bytes(2, "little") + key
+        assert len(descriptor) <= KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
+        with pytest.raises(ValueError, match="exactly"):
+            encode_kaigi_relay_hpke_key_v1(suite, key[:-1])
+    with pytest.raises(ValueError, match="suite must be one of"):
+        encode_kaigi_relay_hpke_key_v1("x25519", bytes(32))
 
 
 def test_identity_codec_rejects_degenerate_ed25519() -> None:

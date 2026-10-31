@@ -22,7 +22,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{CryptoRng, Rng, SeedableRng, rngs::StdRng};
 use soranet_pq::MlDsaSuite;
 use soranet_relay::config::{
     ConfigError as RelayConfigError, HandshakePolicy, PowConfig, PrivateFileBytes, RelayConfig,
@@ -619,7 +619,7 @@ impl PuzzleService {
             encode(fingerprint.as_bytes())
         })
     }
-    fn mint_ticket<R: RngCore + CryptoRng>(
+    fn mint_ticket<R: Rng + CryptoRng>(
         &self,
         ttl: Duration,
         transcript_hash: [u8; 32],
@@ -652,7 +652,7 @@ impl PuzzleService {
         })?;
         TokenConfigResponse::enabled(&issuer, false)
     }
-    fn mint_token<R: RngCore + CryptoRng>(
+    fn mint_token<R: Rng + CryptoRng>(
         &self,
         ttl_override: Option<Duration>,
         transcript_hash: [u8; 32],
@@ -868,7 +868,7 @@ impl TokenIssuer {
         }
         Ok(desired)
     }
-    fn mint<R: RngCore + CryptoRng>(
+    fn mint<R: Rng + CryptoRng>(
         &mut self,
         transcript_hash: [u8; 32],
         ttl: Duration,
@@ -1297,7 +1297,8 @@ async fn mint_ticket(
         Signed(SignedTicket),
     }
     let credential = tokio::task::spawn_blocking(move || {
-        let mut rng = StdRng::from_os_rng();
+        let mut rng =
+            StdRng::try_from_rng(&mut rand::rngs::SysRng).expect("OS randomness is unavailable");
         let ticket = mint_state
             .mint_ticket(ttl, transcript_hash, &mut rng)
             .map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -1396,7 +1397,8 @@ async fn mint_token(
     let issued_at = canonical_issued_at(SystemTime::now())?;
     let mint_state = Arc::clone(&state);
     let minted = tokio::task::spawn_blocking(move || {
-        let mut rng = StdRng::from_os_rng();
+        let mut rng =
+            StdRng::try_from_rng(&mut rand::rngs::SysRng).expect("OS randomness is unavailable");
         mint_state.mint_token(ttl_override, transcript_hash, issued_at, &mut rng)
     })
     .await

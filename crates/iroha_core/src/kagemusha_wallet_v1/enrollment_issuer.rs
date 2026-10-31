@@ -100,8 +100,7 @@ pub fn enrollment_issuer_journal_scope_v1(scope: [u8; 32]) -> Result<Vec<u8>> {
 
 fn random_nonce() -> Result<[u8; 32]> {
     let mut value = [0; 32];
-    rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut value)
-        .map_err(|_| Unavailable)?;
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut value).map_err(|_| Unavailable)?;
     if value == [0; 32] {
         return Err(Unavailable);
     }
@@ -206,10 +205,10 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
             .request_key(&account_digest, &dispatch.request_id)?;
         let stable = dispatch.stable_selection().map_err(|_| Invalid)?;
         let prior = self.journal.read(&key)?;
-        if let Some(prior) = &prior {
-            if prior.selection().stable_selection != stable {
-                return Err(Selection);
-            }
+        if let Some(prior) = &prior
+            && prior.selection().stable_selection != stable
+        {
+            return Err(Selection);
         }
         // A durably retained terminal refusal is recovered from the journal alone: answering
         // it unchanged needs no live provider, worker or signer dependency.

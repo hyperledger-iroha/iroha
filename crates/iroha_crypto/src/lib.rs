@@ -16,6 +16,7 @@ pub mod confidential_spool;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
+mod ed25519_decode_cache;
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;
 /// Baseline BFV fully homomorphic encryption primitives.
@@ -34,6 +35,8 @@ mod mldsa_seed;
 #[cfg(feature = "pqc")]
 pub use soranet_pq::{sign_mldsa65_detached, verify_mldsa65_detached};
 mod multihash;
+/// Canonical native commitment framing and its frozen semantic profile.
+pub mod native_commitment;
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
 mod protocol_key;
@@ -216,9 +219,9 @@ pub mod gost {
     pub use super::signature::gost::*;
 }
 use crate::secrecy::Secret;
-pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
-#[cfg(feature = "bls")]
-pub use algorithm::{BLS_NORMAL, BLS_SMALL};
+pub use algorithm::{Algorithm, BLS_NORMAL, BLS_SMALL, ED_25519, SECP_256_K1};
+mod implementation;
+pub use implementation::{CryptoOperation, UnsupportedImplementation};
 
 /// Securely wipe a supported value before confidential discard.
 ///
@@ -257,8 +260,12 @@ fn public_key_validation_call_count() -> usize {
 // ML-DSA-65 wire widths are stable protocol constants. Keep them available
 // when the optional native PQC backend is disabled so
 // parsers preserve the same framing and algorithm discriminant.
-const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
-const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 public key length.
+pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
+/// Encoded FIPS 204 ML-DSA-65 signature length.
+pub const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 expanded secret key length.
+pub const ML_DSA_65_SECRET_KEY_BYTES: usize = 4_032;
 /// Protocol-wide ceiling for the raw payload of any canonical public key.
 ///
 /// This excludes the one-byte algorithm tag stored by [`PublicKey`]. The
@@ -279,10 +286,19 @@ fn validate_public_key_structural_envelope(
     algorithm: Algorithm,
     payload: &[u8],
 ) -> Result<(), ParseError> {
+    public_key_structural_envelope_reason(algorithm, payload)
+        .map_err(|message| ParseError::Invalid(message.to_owned()))
+}
+
+// Original structural predicates shared with the allocation-free bounded encoder.
+fn public_key_structural_envelope_reason(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<(), &'static str> {
     let exact_len = |expected: usize| {
         (payload.len() == expected && !is_all_zero_material(payload))
             .then_some(())
-            .ok_or_else(|| ParseError("invalid public key structural envelope".to_owned()))
+            .ok_or("invalid public key structural envelope")
     };
     match algorithm {
         Algorithm::Ed25519 => exact_len(32),
@@ -290,44 +306,39 @@ fn validate_public_key_structural_envelope(
             exact_len(33)?;
             matches!(payload.first().copied(), Some(0x02 | 0x03))
                 .then_some(())
-                .ok_or_else(|| ParseError("invalid secp256k1 public key envelope".to_owned()))
+                .ok_or("invalid secp256k1 public key envelope")
         }
         Algorithm::MlDsa => exact_len(ML_DSA_65_PUBLIC_KEY_BYTES),
-        #[cfg(feature = "bls")]
         Algorithm::BlsNormal => exact_len(48),
-        #[cfg(feature = "bls")]
         Algorithm::BlsSmall => exact_len(96),
-        #[cfg(feature = "gost")]
         Algorithm::Gost3410_2012_256ParamSetA
         | Algorithm::Gost3410_2012_256ParamSetB
         | Algorithm::Gost3410_2012_256ParamSetC => exact_len(64),
-        #[cfg(feature = "gost")]
         Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => {
             exact_len(128)
         }
-        #[cfg(feature = "sm")]
         Algorithm::Sm2 => {
             const PREFIX_BYTES: usize = 2;
             const SEC1_BYTES: usize = 65;
             let prefix: [u8; PREFIX_BYTES] = payload
                 .get(..PREFIX_BYTES)
                 .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let distid_len = usize::from(u16::from_be_bytes(prefix));
             if distid_len > usize::from(u16::MAX) / 8 {
-                return Err(ParseError("invalid SM2 public key envelope".to_owned()));
+                return Err("invalid SM2 public key envelope");
             }
             let sec1_start = PREFIX_BYTES
                 .checked_add(distid_len)
-                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             let expected = sec1_start
                 .checked_add(SEC1_BYTES)
-                .ok_or_else(|| ParseError("invalid SM2 public key envelope".to_owned()))?;
+                .ok_or("invalid SM2 public key envelope")?;
             if payload.len() != expected
                 || core::str::from_utf8(&payload[PREFIX_BYTES..sec1_start]).is_err()
                 || payload.get(sec1_start) != Some(&0x04)
             {
-                return Err(ParseError("invalid SM2 public key envelope".to_owned()));
+                return Err("invalid SM2 public key envelope");
             }
             Ok(())
         }
@@ -390,7 +401,8 @@ impl KeyPair {
     /// # Errors
     ///
     /// Returns [`Error::KeyGen`] when the selected algorithm cannot generate an
-    /// internally consistent key pair.
+    /// internally consistent key pair. Returns [`Error::UnsupportedImplementation`]
+    /// when the canonical algorithm has no compiled key-generation implementation.
     pub fn try_random_with_algorithm(algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -402,10 +414,6 @@ impl KeyPair {
             #[cfg(feature = "pqc")]
             Algorithm::MlDsa => mldsa_seed::mldsa65::random_keypair()
                 .and_then(|(public_key, private_key)| KeyPair::new(public_key, private_key)),
-            #[cfg(not(feature = "pqc"))]
-            Algorithm::MlDsa => Err(Error::KeyGen(String::from(
-                "ML-DSA backend is unavailable on this target",
-            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -430,7 +438,7 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
-                let mut rng = rand::rngs::OsRng;
+                let mut rng = rand::rngs::SysRng;
                 let private =
                     sm::Sm2PrivateKey::try_random(sm::Sm2PublicKey::default_distid(), &mut rng)
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
@@ -441,6 +449,38 @@ impl KeyPair {
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
                 KeyPair::new(public_key, private_key)
             }
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => Err(Error::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::GenerateKeyPair,
+                },
+            )),
+            #[cfg(not(feature = "bls"))]
+            Algorithm::BlsNormal | Algorithm::BlsSmall => Err(Error::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::GenerateKeyPair,
+                },
+            )),
+            #[cfg(not(feature = "gost"))]
+            Algorithm::Gost3410_2012_256ParamSetA
+            | Algorithm::Gost3410_2012_256ParamSetB
+            | Algorithm::Gost3410_2012_256ParamSetC
+            | Algorithm::Gost3410_2012_512ParamSetA
+            | Algorithm::Gost3410_2012_512ParamSetB => Err(Error::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::GenerateKeyPair,
+                },
+            )),
+            #[cfg(not(feature = "sm"))]
+            Algorithm::Sm2 => Err(Error::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::GenerateKeyPair,
+                },
+            )),
         }
     }
     /// Generate a random key pair
@@ -465,7 +505,9 @@ impl KeyPair {
     /// # Errors
     ///
     /// Returns [`Error::KeyGen`] when the selected algorithm cannot derive an
-    /// internally consistent key pair from the seed material.
+    /// internally consistent key pair from the seed material. Returns
+    /// [`Error::UnsupportedImplementation`] when its key-generation implementation
+    /// is unavailable, after zeroizing the moved seed.
     pub fn try_from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -481,10 +523,6 @@ impl KeyPair {
                 let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(seed.as_slice())?;
                 KeyPair::new(public, private)
             }
-            #[cfg(not(feature = "pqc"))]
-            Algorithm::MlDsa => Err(Error::KeyGen(String::from(
-                "ML-DSA backend is unavailable on this target",
-            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -522,6 +560,50 @@ impl KeyPair {
                 let private_key =
                     PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private_inner))));
                 KeyPair::new(public_key, private_key)
+            }
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => {
+                let _secret_seed = Zeroizing::new(seed);
+                Err(Error::UnsupportedImplementation(
+                    UnsupportedImplementation {
+                        algorithm,
+                        operation: CryptoOperation::GenerateKeyPair,
+                    },
+                ))
+            }
+            #[cfg(not(feature = "bls"))]
+            Algorithm::BlsNormal | Algorithm::BlsSmall => {
+                let _secret_seed = Zeroizing::new(seed);
+                Err(Error::UnsupportedImplementation(
+                    UnsupportedImplementation {
+                        algorithm,
+                        operation: CryptoOperation::GenerateKeyPair,
+                    },
+                ))
+            }
+            #[cfg(not(feature = "gost"))]
+            Algorithm::Gost3410_2012_256ParamSetA
+            | Algorithm::Gost3410_2012_256ParamSetB
+            | Algorithm::Gost3410_2012_256ParamSetC
+            | Algorithm::Gost3410_2012_512ParamSetA
+            | Algorithm::Gost3410_2012_512ParamSetB => {
+                let _secret_seed = Zeroizing::new(seed);
+                Err(Error::UnsupportedImplementation(
+                    UnsupportedImplementation {
+                        algorithm,
+                        operation: CryptoOperation::GenerateKeyPair,
+                    },
+                ))
+            }
+            #[cfg(not(feature = "sm"))]
+            Algorithm::Sm2 => {
+                let _secret_seed = Zeroizing::new(seed);
+                Err(Error::UnsupportedImplementation(
+                    UnsupportedImplementation {
+                        algorithm,
+                        operation: CryptoOperation::GenerateKeyPair,
+                    },
+                ))
             }
         }
     }
@@ -571,7 +653,7 @@ impl KeyPair {
             let gost_public = match &public_full {
                 PublicKeyMaterial::Gost { bytes, .. } => *bytes,
                 _ => {
-                    return Err(Error::Parse(ParseError(
+                    return Err(Error::Parse(ParseError::Invalid(
                         "public key algorithm mismatch".to_owned(),
                     )));
                 }
@@ -601,12 +683,6 @@ impl KeyPair {
                 public_key,
                 private_key,
             });
-        }
-        #[cfg(not(feature = "pqc"))]
-        if algorithm == Algorithm::MlDsa {
-            return Err(Error::KeyGen(String::from(
-                "ML-DSA backend is unavailable on this target",
-            )));
         }
         if PublicKey::from(private_key.clone()) != public_key {
             return Err(Error::KeyGen(String::from("Key pair mismatch")));
@@ -796,6 +872,31 @@ fn parse_public_key_material(
                 .map(PublicKeyMaterial::Sm2)
                 .map_err(sm::verification::KeyRejection::into_parse_error);
         }
+        #[cfg(not(feature = "bls"))]
+        Algorithm::BlsNormal | Algorithm::BlsSmall => Err(ParseError::UnsupportedImplementation(
+            UnsupportedImplementation {
+                algorithm,
+                operation: CryptoOperation::ParsePublicKey,
+            },
+        )),
+        #[cfg(not(feature = "gost"))]
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC
+        | Algorithm::Gost3410_2012_512ParamSetA
+        | Algorithm::Gost3410_2012_512ParamSetB => Err(ParseError::UnsupportedImplementation(
+            UnsupportedImplementation {
+                algorithm,
+                operation: CryptoOperation::ParsePublicKey,
+            },
+        )),
+        #[cfg(not(feature = "sm"))]
+        Algorithm::Sm2 => Err(ParseError::UnsupportedImplementation(
+            UnsupportedImplementation {
+                algorithm,
+                operation: CryptoOperation::ParsePublicKey,
+            },
+        )),
     }
     .map(PublicKeyMaterial::Decoded)
 }
@@ -917,14 +1018,10 @@ pub fn ed25519_public_key_is_valid(candidate: &[u8; 32]) -> bool {
 /// the prime-order subgroup.
 /// Returns [`Error::Parse`] if the payload is empty or all zero.
 pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
-    if payload.is_empty() || payload.iter().all(|byte| *byte == 0) {
-        return Err(Error::Parse(ParseError(
-            "signature payload must not be empty or all zero".to_owned(),
-        )));
-    }
-    signature::ed25519::Ed25519Sha512::parse_signature(payload)?;
+    ed25519_validate_signature_encoding(payload).map_err(SignatureEncodingError::into_error)?;
+    // TODO: retain the original admission refusal after migrating every owned-parser caller.
     Signature::try_from_bytes_for_admission(payload)
-        .map_err(|_| Error::Parse(ParseError("invalid Ed25519 signature".to_owned())))
+        .map_err(|_| Error::Parse(ParseError::Invalid("invalid Ed25519 signature".to_owned())))
 }
 /// Parse raw ML-DSA-65 signature bytes for admission before storing them as an opaque signature.
 ///
@@ -933,22 +1030,10 @@ pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
 /// detached signature encoding is malformed. Returns [`Error::Parse`] if the
 /// payload is empty or all zero.
 pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
-    if payload.is_empty() || payload.iter().all(|byte| *byte == 0) {
-        return Err(Error::Parse(ParseError(
-            "signature payload must not be empty or all zero".to_owned(),
-        )));
-    }
-    if payload.len() != ML_DSA_65_SIGNATURE_BYTES {
-        return Err(Error::BadSignature);
-    }
-    #[cfg(feature = "pqc")]
-    {
-        use pqcrypto_mldsa::mldsa65;
-        use pqcrypto_traits::sign::DetachedSignature as _;
-        mldsa65::DetachedSignature::from_bytes(payload).map_err(|_| Error::BadSignature)?;
-    }
+    mldsa65_validate_signature_encoding(payload).map_err(SignatureEncodingError::into_error)?;
+    // TODO: retain the original admission refusal after migrating every owned-parser caller.
     Signature::try_from_bytes_for_admission(payload)
-        .map_err(|_| Error::Parse(ParseError("invalid ML-DSA signature".to_owned())))
+        .map_err(|_| Error::Parse(ParseError::Invalid("invalid ML-DSA signature".to_owned())))
 }
 
 /// Verify an externally admitted signature without consulting persistent key
@@ -1187,7 +1272,8 @@ pub fn secp256k1_verify_batch_deterministic(
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] when the input is empty, the input lengths differ,
-/// or when signature validation fails.
+/// or when signature validation fails. Returns [`Error::UnsupportedImplementation`]
+/// when a structurally valid ML-DSA key requires an unavailable verifier.
 pub fn pqc_verify_batch_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -1200,8 +1286,15 @@ pub fn pqc_verify_batch_deterministic(
         return Err(Error::BadSignature);
     }
     for ((message, signature), public_key) in messages.iter().zip(signatures).zip(public_keys) {
-        signature::mldsa::verify(public_key, signature, message)
-            .map_err(|_| Error::BadSignature)?;
+        signature::mldsa::verify(public_key, signature, message).map_err(|error| match error {
+            #[cfg(not(feature = "pqc"))]
+            signature::mldsa::Rejection::UnsupportedImplementation(original) => {
+                Error::UnsupportedImplementation(original)
+            }
+            signature::mldsa::Rejection::Key(_) => Error::BadSignature,
+            #[cfg(any(feature = "pqc", test))]
+            signature::mldsa::Rejection::Signature => Error::BadSignature,
+        })?;
     }
     Ok(())
 }
@@ -1813,27 +1906,7 @@ pub fn pqc_verify_aggregate(
 }
 impl PublicKeyCompact {
     fn algorithm_tag(algorithm: Algorithm) -> u8 {
-        match algorithm {
-            Algorithm::Ed25519 => 0,
-            Algorithm::Secp256k1 => 1,
-            Algorithm::MlDsa => 4,
-            #[cfg(feature = "gost")]
-            Algorithm::Gost3410_2012_256ParamSetA => 5,
-            #[cfg(feature = "gost")]
-            Algorithm::Gost3410_2012_256ParamSetB => 6,
-            #[cfg(feature = "gost")]
-            Algorithm::Gost3410_2012_256ParamSetC => 7,
-            #[cfg(feature = "gost")]
-            Algorithm::Gost3410_2012_512ParamSetA => 8,
-            #[cfg(feature = "gost")]
-            Algorithm::Gost3410_2012_512ParamSetB => 9,
-            #[cfg(feature = "bls")]
-            Algorithm::BlsNormal => 2,
-            #[cfg(feature = "bls")]
-            Algorithm::BlsSmall => 3,
-            #[cfg(feature = "sm")]
-            Algorithm::Sm2 => 10,
-        }
+        algorithm as u8
     }
     fn new(algorithm: Algorithm, payload: &[u8]) -> Self {
         // Use stable discriminants matching `Algorithm::try_from(u8)` below.
@@ -1854,6 +1927,28 @@ impl PublicKeyCompact {
             .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
 
+    /// Charge original compact bytes before structural inspection; no backend parse.
+    fn bounded_encode_structure(&self) -> Result<bool, norito::core::Error> {
+        let bytes: &[u8] = self.algorithm_and_payload.as_ref();
+        if !norito::core::charge_encode_prewrite(bytes.len())? {
+            return Ok(false);
+        }
+        // Reuse the original fixed-error envelope readers in their original
+        // algorithm-before-payload order, without constructing ParseError.
+        let algorithm =
+            public_key_input::algorithm(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        let payload =
+            public_key_input::payload(bytes).map_err(|_| norito::core::refuse_encode_source())?;
+        if algorithm == Algorithm::Secp256k1 {
+            // Its structural predicate revisits the SEC1 prefix after the
+            // all-zero scan; that extra byte visit needs its own precharge.
+            norito::core::charge_encode_prewrite(1)?;
+        }
+        public_key_structural_envelope_reason(algorithm, payload)
+            .map_err(|_| norito::core::refuse_encode_source())?;
+        Ok(true)
+    }
+
     fn structural_components(&self) -> Result<(Algorithm, &[u8]), ParseError> {
         let algorithm = self.try_algorithm()?;
         let payload = self.try_payload()?;
@@ -1869,8 +1964,10 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 
 impl norito::core::SerializePayload for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        self.structural_components()
-            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        if !self.bounded_encode_structure()? {
+            self.structural_components()
+                .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::serialize(
             &self.algorithm_and_payload,
             writer,
@@ -1880,13 +1977,25 @@ impl norito::core::SerializePayload for PublicKeyCompact {
         // `algorithm_and_payload` is private and every public constructor and
         // Norito decoder establishes its validity. Encoding and sizing are
         // therefore structural and never reparse cryptographic key material.
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.structural_components().ok()?;
+        if self.bounded_encode_structure().ok()? {
+            // ConstVec sizing visits each byte again, independently of the
+            // structural scan; pay before entering that loop as well.
+            norito::core::charge_encode_prewrite(self.algorithm_and_payload.len()).ok()?;
+        } else {
+            self.structural_components().ok()?;
+        }
         <ConstVec<u8> as norito::core::SerializePayload>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
@@ -2078,11 +2187,13 @@ impl PublicKey {
         let (algorithm, payload) = self.structural_components()?;
         let digest_function = multihash::public_key_digest_function(algorithm);
         let output_len = canonical_public_key_multihash_hex_len(digest_function, payload.len())
-            .ok_or_else(|| ParseError("public-key multihash length overflow".to_owned()))?;
+            .ok_or_else(|| {
+                ParseError::Invalid("public-key multihash length overflow".to_owned())
+            })?;
         let mut output = String::new();
-        output
-            .try_reserve_exact(output_len)
-            .map_err(|_| ParseError("failed to allocate public-key multihash".to_owned()))?;
+        output.try_reserve_exact(output_len).map_err(|_| {
+            ParseError::Invalid("failed to allocate public-key multihash".to_owned())
+        })?;
         push_lower_varint_hex(digest_function, &mut output);
         push_lower_varint_hex(payload.len() as u64, &mut output);
         for byte in payload {
@@ -2319,7 +2430,9 @@ impl norito::json::JsonObjectKeyOwned for PublicKey {
 }
 
 fn public_key_json_decode_error(error: norito::core::Error) -> norito::json::Error {
-    if error.is_decode_resource_limit() {
+    if error.is_decode_resource_limit()
+        || matches!(error, norito::core::Error::UnsupportedFeature(_))
+    {
         norito::json::Error::from_decode_resource(error)
     } else {
         norito::json::Error::Message("invalid public key".to_owned())
@@ -2354,9 +2467,7 @@ impl norito::json::JsonDeserialize for PrivateKey {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value: String = norito::json::JsonDeserialize::json_deserialize(parser)?;
-        value
-            .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.to_string()))
+        value.parse().map_err(ParseError::into_json_error)
     }
 }
 impl FromStr for PublicKey {
@@ -2432,37 +2543,36 @@ struct MlDsaSecretKey {
 }
 #[cfg(feature = "pqc")]
 struct MlDsaSecretKeyInner {
-    secret: pqcrypto_mldsa::mldsa65::SecretKey,
+    secret: [u8; 4032],
 }
 #[cfg(feature = "pqc")]
 impl MlDsaSecretKey {
-    fn new(inner: &pqcrypto_mldsa::mldsa65::SecretKey) -> Self {
+    fn new(inner: &[u8; 4032]) -> Self {
         Self {
             inner: Arc::new(MlDsaSecretKeyInner { secret: *inner }),
         }
     }
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
-        use pqcrypto_traits::sign::SecretKey as _;
         soranet_pq::validate_mldsa_secret_key(soranet_pq::MlDsaSuite::MlDsa65, bytes)
-            .map_err(|err| ParseError(err.to_string()))?;
-        let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
-            .map_err(|err| ParseError(err.to_string()))?;
+            .map_err(|err| ParseError::Invalid(err.to_string()))?;
+        let mut inner: [u8; 4032] = bytes
+            .try_into()
+            .map_err(|_| ParseError::Invalid("invalid ML-DSA secret key length".to_owned()))?;
         let secret = Self::new(&inner);
         zeroize_mldsa_secret_key(&mut inner);
         Ok(secret)
     }
-    fn as_secret(&self) -> &pqcrypto_mldsa::mldsa65::SecretKey {
+    fn as_secret(&self) -> &[u8; 4032] {
         &self.inner.secret
     }
     fn to_vec(&self) -> Vec<u8> {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes().to_vec()
+        self.inner.secret.as_slice().to_vec()
     }
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
         self.try_sign_with_context(&[], payload)
     }
     fn try_sign_with_context(&self, context: &[u8], payload: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.try_sign_with_context_and_rng(context, payload, &mut rng)
     }
     #[cfg(test)]
@@ -2479,12 +2589,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut R,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa_from_rng(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2498,12 +2607,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut soranet_pq::HedgedChaCha20Rng,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2519,8 +2627,7 @@ impl MlDsaSecretKey {
 #[cfg(feature = "pqc")]
 impl PartialEq for MlDsaSecretKey {
     fn eq(&self, other: &Self) -> bool {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes() == other.inner.secret.as_bytes()
+        self.inner.secret.as_slice() == other.inner.secret.as_slice()
     }
 }
 #[cfg(feature = "pqc")]
@@ -2528,22 +2635,8 @@ impl Eq for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
-#[allow(unsafe_code)]
-fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
-    use core::{mem, ptr, slice};
-    let byte_ptr = ptr::addr_of_mut!(*secret).cast::<u8>();
-    // SAFETY: `byte_ptr` points to the complete live `SecretKey` object. The
-    // upstream type is a plain fixed-size byte wrapper; treating its object
-    // representation as bytes is the same layout assumption required to hold
-    // the key at all. `Zeroize` uses volatile stores plus a compiler fence, so
-    // the erase cannot be removed merely because the object is about to drop.
-    let bytes = unsafe {
-        slice::from_raw_parts_mut(
-            byte_ptr,
-            mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
-        )
-    };
-    zeroize::Zeroize::zeroize(bytes);
+fn zeroize_mldsa_secret_key(secret: &mut [u8; 4032]) {
+    zeroize::Zeroize::zeroize(secret);
 }
 #[cfg(feature = "pqc")]
 impl Drop for MlDsaSecretKeyInner {
@@ -2637,13 +2730,9 @@ impl PrivateKey {
             #[cfg(feature = "pqc")]
             Algorithm::MlDsa => MlDsaSecretKey::from_bytes(payload).and_then(|secret| {
                 mldsa_seed::mldsa65::public_key_from_secret(secret.as_secret())
-                    .map_err(|err| ParseError(err.to_string()))?;
+                    .map_err(|err| ParseError::Invalid(err.to_string()))?;
                 Ok(PrivateKeyInner::MlDsa(secret))
             }),
-            #[cfg(not(feature = "pqc"))]
-            Algorithm::MlDsa => Err(ParseError(String::from(
-                "ML-DSA backend is unavailable on this target",
-            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -2663,6 +2752,38 @@ impl PrivateKey {
             Algorithm::BlsSmall => {
                 bls::BlsSmall::parse_private_key(payload).map(PrivateKeyInner::BlsSmall)
             }
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => Err(ParseError::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::ParsePrivateKey,
+                },
+            )),
+            #[cfg(not(feature = "bls"))]
+            Algorithm::BlsNormal | Algorithm::BlsSmall => Err(
+                ParseError::UnsupportedImplementation(UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::ParsePrivateKey,
+                }),
+            ),
+            #[cfg(not(feature = "gost"))]
+            Algorithm::Gost3410_2012_256ParamSetA
+            | Algorithm::Gost3410_2012_256ParamSetB
+            | Algorithm::Gost3410_2012_256ParamSetC
+            | Algorithm::Gost3410_2012_512ParamSetA
+            | Algorithm::Gost3410_2012_512ParamSetB => Err(ParseError::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::ParsePrivateKey,
+                },
+            )),
+            #[cfg(not(feature = "sm"))]
+            Algorithm::Sm2 => Err(ParseError::UnsupportedImplementation(
+                UnsupportedImplementation {
+                    algorithm,
+                    operation: CryptoOperation::ParsePrivateKey,
+                },
+            )),
         }
         .map(Secret::new)
         .map(Box::new)
@@ -2774,8 +2895,12 @@ impl norito::json::JsonDeserialize for KeyPair {
             public_key.ok_or_else(|| norito::json::MapVisitor::missing_field("public_key"))?;
         let exposed =
             private_key.ok_or_else(|| norito::json::MapVisitor::missing_field("private_key"))?;
-        KeyPair::new(public_key, exposed.0.clone())
-            .map_err(|err| norito::json::Error::Message(err.to_string()))
+        KeyPair::new(public_key, exposed.0.clone()).map_err(|err| match err {
+            Error::UnsupportedImplementation(original) => {
+                norito::json::Error::UnsupportedFeature(original.algorithm.as_static_str())
+            }
+            other => norito::json::Error::Message(other.to_string()),
+        })
     }
 }
 impl norito::json::JsonSerialize for KeyPair {
@@ -2969,7 +3094,7 @@ impl norito::json::JsonDeserialize for ExposedPrivateKey {
         let value: String = norito::json::JsonDeserialize::json_deserialize(parser)?;
         value
             .parse::<ExposedPrivateKey>()
-            .map_err(|err| norito::json::Error::Message(err.to_string()))
+            .map_err(ParseError::into_json_error)
     }
 }
 
@@ -2990,7 +3115,7 @@ impl<'de> norito::core::DeserializePayload<'de> for ExposedPrivateKey {
         let archived_str: &norito::core::Archived<String> = archived.cast();
         let raw = <String as norito::core::DeserializePayload>::try_deserialize(archived_str)?;
         raw.parse::<ExposedPrivateKey>()
-            .map_err(|err| norito::core::Error::Message(err.to_string()))
+            .map_err(ParseError::into_decode_error)
     }
 }
 impl fmt::Display for ExposedPrivateKey {
@@ -3080,7 +3205,7 @@ pub(crate) fn hex_decode<T: AsRef<[u8]> + ?Sized>(payload: &T) -> Result<Vec<u8>
     } else {
         bytes
     };
-    hex::decode(trimmed).map_err(|err| ParseError(err.to_string()))
+    hex::decode(trimmed).map_err(|err| ParseError::Invalid(err.to_string()))
 }
 pub mod error {
     //! Module containing errors
@@ -3092,12 +3217,34 @@ pub mod error {
     impl std::error::Error for NoSuchAlgorithm {}
     /// Error parsing a key
     #[derive(Debug, Display, Clone, PartialEq, Eq)]
-    #[display("{_0}")]
-    pub struct ParseError(pub(crate) String);
+    pub enum ParseError {
+        /// The supplied key encoding is malformed.
+        #[display("{_0}")]
+        Invalid(String),
+        /// Its canonical identity is known but a local implementation is absent.
+        #[display("{_0}")]
+        UnsupportedImplementation(UnsupportedImplementation),
+    }
+    impl ParseError {
+        pub(crate) fn into_decode_error(self) -> norito::Error {
+            match self {
+                Self::UnsupportedImplementation(original) => {
+                    norito::Error::UnsupportedFeature(original.algorithm.as_static_str())
+                }
+                Self::Invalid(message) => norito::Error::Message(message),
+            }
+        }
+        pub(crate) fn into_json_error(self) -> norito::json::Error {
+            norito::json::Error::from_decode_resource(self.into_decode_error())
+        }
+    }
     impl std::error::Error for ParseError {}
     /// Error when dealing with cryptographic functions
     #[derive(Debug, Display, PartialEq, Eq)]
     pub enum Error {
+        /// The known algorithm lacks this local operation's implementation.
+        #[display("{_0}")]
+        UnsupportedImplementation(UnsupportedImplementation),
         /// Returned when trying to create an algorithm which does not exist
         #[display("Algorithm '{_0}' is not supported")]
         NoSuchAlgorithm(String),
@@ -3124,9 +3271,17 @@ pub mod error {
     }
     impl From<ParseError> for Error {
         fn from(source: ParseError) -> Self {
-            Self::Parse(source)
+            match source {
+                ParseError::UnsupportedImplementation(original) => {
+                    Self::UnsupportedImplementation(original)
+                }
+                invalid => Self::Parse(invalid),
+            }
         }
     }
     impl std::error::Error for Error {}
 }
 include!("lib_tests.rs");
+
+#[cfg(test)]
+mod bounded_key_encode_tests;

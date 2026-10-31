@@ -844,8 +844,10 @@ mod tests {
 
     #[test]
     fn unfinished_phase_does_not_reserve_complete_aggregate_storage() {
-        assert!(size_of::<Incomplete>() < size_of::<ServiceBootstrapProgress>());
-        assert!(size_of::<Phase<()>>() < size_of::<ServiceBootstrapProgress>());
+        // The outer progress enum now boxes its complete history. Compare with
+        // that actual payload, whose inline storage unfinished phases exclude.
+        assert!(size_of::<Incomplete>() < size_of::<HistoricalServiceBootstrap>());
+        assert!(size_of::<Phase<()>>() < size_of::<HistoricalServiceBootstrap>());
     }
 }
 

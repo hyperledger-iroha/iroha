@@ -2,11 +2,25 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.util.Base64
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class KaigiInstructionValidationTest {
+
+    @Test
+    fun `relay HPKE descriptor prefixes the exact suite`() {
+        for (suite in KaigiInstructionUtils.RelayHpkeSuite.entries) {
+            val key = ByteArray(suite.publicKeyBytes) { 0x5A }
+            val descriptor = KaigiInstructionUtils.relayHpkeKeyDescriptor(suite, key)
+            assertEquals(suite.suiteId, (descriptor[0].toInt() and 255) or ((descriptor[1].toInt() and 255) shl 8))
+            assertContentEquals(key, descriptor.copyOfRange(2, descriptor.size))
+            assertFailsWith<IllegalArgumentException> {
+                KaigiInstructionUtils.relayHpkeKeyDescriptor(suite, key.copyOf(key.size - 1))
+            }
+        }
+    }
 
     @Test
     fun `usage duration above signed int range round trips`() {

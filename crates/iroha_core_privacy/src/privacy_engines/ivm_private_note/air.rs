@@ -1411,15 +1411,18 @@ fn validate_sha_round_v1(
             return Err(IvmPrivateNoteAirErrorV1::Sha256);
         }
     }
-    let a = field_to_u32(state[0])?;
-    let b = field_to_u32(state[1])?;
-    let c = field_to_u32(state[2])?;
-    let d = field_to_u32(state[3])?;
-    let e = field_to_u32(state[4])?;
+    let leading_word = field_to_u32(state[0])?;
+    let second_word = field_to_u32(state[1])?;
+    let third_word = field_to_u32(state[2])?;
+    let fourth_word = field_to_u32(state[3])?;
+    let middle_word = field_to_u32(state[4])?;
     let f = field_to_u32(state[5])?;
     let g = field_to_u32(state[6])?;
     let h = field_to_u32(state[7])?;
-    for (group, value) in [a, b, c, e, f, g].into_iter().enumerate() {
+    for (group, value) in [leading_word, second_word, third_word, middle_word, f, g]
+        .into_iter()
+        .enumerate()
+    {
         validate_word_group(row, group, F(u64::from(value)))?;
     }
     let w = field_to_u32(schedule[round])?;
@@ -1478,24 +1481,40 @@ fn validate_sha_round_v1(
         ensure_boolean(*value)?;
     }
     let t1_wide = u64::from(h)
-        + u64::from(sigma_big_1(e))
-        + u64::from(sha_choose(e, f, g))
+        + u64::from(sigma_big_1(middle_word))
+        + u64::from(sha_choose(middle_word, f, g))
         + u64::from(SHA256_ROUND_CONSTANTS_V1[round])
         + u64::from(w);
-    let t2_wide = u64::from(sigma_big_0(a)) + u64::from(sha_majority(a, b, c));
+    let t2_wide = u64::from(sigma_big_0(leading_word))
+        + u64::from(sha_majority(leading_word, second_word, third_word));
     if t1_wide != u64::from(t1) + (u64::from(t1_carry) << 32)
         || t2_wide != u64::from(t2) + (u64::from(t2_carry) << 32)
     {
         return Err(IvmPrivateNoteAirErrorV1::Sha256);
     }
-    let new_a_wide = u64::from(t1) + u64::from(t2);
-    let new_e_wide = u64::from(d) + u64::from(t1);
-    if new_a_wide != u64::from(new_a_wide as u32) + (u64::from(a_carry) << 32)
-        || new_e_wide != u64::from(new_e_wide as u32) + (u64::from(e_carry) << 32)
+    let next_leading_word = u64::from(t1) + u64::from(t2);
+    let next_middle_word = u64::from(fourth_word) + u64::from(t1);
+    if next_leading_word
+        != u64::from(
+            u32::try_from(next_leading_word & u64::from(u32::MAX)).expect("SHA-256 low word"),
+        ) + (u64::from(a_carry) << 32)
+        || next_middle_word
+            != u64::from(
+                u32::try_from(next_middle_word & u64::from(u32::MAX)).expect("SHA-256 low word"),
+            ) + (u64::from(e_carry) << 32)
     {
         return Err(IvmPrivateNoteAirErrorV1::Sha256);
     }
-    let working_next = [new_a_wide as u32, a, b, c, new_e_wide as u32, e, f, g];
+    let working_next = [
+        u32::try_from(next_leading_word & u64::from(u32::MAX)).expect("SHA-256 low word"),
+        leading_word,
+        second_word,
+        third_word,
+        u32::try_from(next_middle_word & u64::from(u32::MAX)).expect("SHA-256 low word"),
+        middle_word,
+        f,
+        g,
+    ];
     if row[SHA_CARRY_OFFSET + 16..SHA_CARRY_OFFSET + SHA_CARRY_WIDTH]
         .iter()
         .any(|value| *value != F::ZERO)
@@ -1676,10 +1695,9 @@ fn validate_sha_end_v1(
         block: 0,
         ..
     } = next_fixed
+        && usize::from(*next_invocation) != usize::from(*invocation) + 1
     {
-        if usize::from(*next_invocation) != usize::from(*invocation) + 1 {
-            return Err(IvmPrivateNoteAirErrorV1::Topology);
-        }
+        return Err(IvmPrivateNoteAirErrorV1::Topology);
     }
     Ok(())
 }
@@ -2581,7 +2599,8 @@ mod tests {
         test_fixtures::{fixture, three_output_fixture},
     };
     use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::collections::BTreeSet;
     fn changed(value: F) -> F {
         if value == F::ZERO { F::ONE } else { F::ZERO }
@@ -2983,7 +3002,7 @@ mod tests {
         let recipient_public_key =
             ivm_private_recipient_public_key_v1(&[0x95; 32]).expect("second recipient public key");
         let second_encrypted_output = encrypt_ivm_private_wallet_note_v1(
-            &mut StdRng::seed_from_u64(0x49_50_4e_45_02),
+            &mut ChaCha12Rng::seed_from_u64(0x49_50_4e_45_02),
             value.statement.pool_id,
             value.statement.program_id,
             &second_output_note,

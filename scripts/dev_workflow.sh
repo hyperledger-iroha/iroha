@@ -24,11 +24,12 @@ Usage: scripts/dev_workflow.sh [options]
 Runs the affected contributor workflow:
   1) cargo fmt --all -- --check
   2) classify changed packages with locked Cargo metadata
-  3) cargo clippy/build/test --locked for the reverse-dependency closure
+  3) incremental clippy/build/test --locked in one warm development target
   4) prepare current native artifacts and run Swift tests when affected (macOS)
 
 Options:
-  --base REF       Compare committed changes with REF instead of origin/main.
+  --base REF       Compare committed changes with REF instead of the branch
+                   named in ci/default_base_ref.
   --full           Validate every Rust lane and run Swift tests.
   --skip-tests     Omit affected cargo tests.
   --skip-swift     Omit Swift tests.
@@ -38,6 +39,8 @@ Options:
 Unknown, ambiguous, root-build, fixture, configuration, script, and workflow
 changes fail closed to all Rust lanes. The full workspace release workflow
 remains the source of exhaustive release evidence.
+Rust checks use cargo_fast.sh with stable local metadata. The existing Cargo
+target is reused; --target-dir selects a different persistent development lane.
 USAGE
 }
 
@@ -137,7 +140,7 @@ if [[ -n "${package_csv}" ]]; then
 		checks="${checks},test"
 	fi
 	echo "[3/4] locked affected Cargo checks (${checks})"
-	python3 "${ROUTER}" run --packages "${package_csv}" --checks "${checks}"
+	python3 "${ROUTER}" run --local --packages "${package_csv}" --checks "${checks}"
 else
 	echo "[3/4] locked affected Cargo checks (not required)"
 fi

@@ -1,6 +1,6 @@
 #![cfg(feature = "privacy-release-evidence")]
 
-//! Enforced four-peer DA/RBC, activation, adversarial-proof, state-replay, exact-finality, and
+//! Enforced four-peer DA/RBC, native-default admission, adversarial-proof, state-replay, exact-finality, and
 //! restart gate for five available retained exact-12 native engines, plus fail-closed ZK-ACE
 //! capability and production-builder coverage.
 use eyre::{Result, WrapErr as _, ensure, eyre};
@@ -15,10 +15,8 @@ use iroha::{
         isi::{
             Grant, InstructionBox, Mint, Register, SetParameter,
             privacy::{
-                BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyProofManagedPoolV1,
-                RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
+                BootstrapPrivacyProofManagedPoolV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
                 RotatePrivacyBootleLanternIssuerPolicyV1, SubmitPrivacyProofV1,
-                TransitionPrivacyProtocolLifecycleV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -27,12 +25,10 @@ use iroha::{
             AssetDefinitionId, AssetId, FindAssets, HashOf, Identifiable, Quantity, QueryBuilderExt,
         },
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
-            PrivacyConsensusLimitsV1, PrivacyExact12CapabilityManifestV1,
-            PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
+            PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1,
+            PrivacyPoolIdV1, PrivacyProtocolIdV1, PrivacyStatementDigestV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -49,8 +45,8 @@ use iroha_core::privacy_release_evidence::{
     build_privacy_release_zk_ace_network_action_v1,
 };
 use iroha_core_privacy::privacy_profiles::{
-    CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
-    compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
+    CompiledPrivacyProfileErrorV1, compiled_privacy_profile_snapshot_result_v1,
+    compiled_privacy_profile_v1,
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;
@@ -90,7 +86,6 @@ const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 struct ProtocolExpectationV1 {
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
 }
 fn bounded_client(client: Client) -> Client {
     integration_tests::sync::rebind_blocking_client(&client, |configured| {
@@ -157,11 +152,12 @@ fn assert_protocol_expectations(
             row.compiled_profile
         );
         ensure!(
-            row.activation == expected.activation,
-            "{context}: {:?} lifecycle mismatch: expected {:?}, got {:?}",
+            row.policy.is_none()
+                && row.is_network_available()
+                && row.effective_protocol_limits_v1() == Some(expected.compiled.protocol_limits),
+            "{context}: {:?} must use its actual compiled defaults without a policy prerequisite: {:?}",
             expected.protocol,
-            expected.activation,
-            row.activation
+            row
         );
     }
     let zk_ace = protocol_row(snapshot, ZK_ACE_PROTOCOL)?;
@@ -174,9 +170,11 @@ fn assert_protocol_expectations(
         zk_ace.compiled_profile
     );
     ensure!(
-        zk_ace.activation.is_none(),
-        "{context}: unavailable ZK-ACE unexpectedly has an activation: {:?}",
-        zk_ace.activation
+        zk_ace.policy.is_none()
+            && !zk_ace.is_network_available()
+            && zk_ace.effective_protocol_limits_v1().is_none(),
+        "{context}: unavailable ZK-ACE must remain unavailable without a policy: {:?}",
+        zk_ace
     );
     Ok(())
 }
@@ -244,36 +242,6 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let hash = *genesis[0].header().hash().as_ref();
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
-}
-// Each isolated ordinary submission executes in the next native certified global carrier.
-async fn next_governed_execution_height(client: &Client) -> Result<u64> {
-    read_privacy_capabilities(client)
-        .await
-        .wrap_err("query committed height before governed transaction")?
-        .committed_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("governed privacy execution height overflowed"))
-}
-fn proposed_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 { proposed_at_height },
-    ))
-}
-fn active_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-    activated_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height,
-            activated_at_height,
-            state_since_height: activated_at_height,
-        },
-    ))
 }
 async fn submit_instructions(
     client: &Client,
@@ -819,9 +787,9 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             None,
         )))
         .with_genesis_instruction(Mint::asset_quantity(100_u32, zk_asset_at_alice.clone()));
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| eyre!("the retained exact-12 four-peer gate must not skip"))?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -857,41 +825,16 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "grant CanEnactGovernance",
         )
         .await?;
-        let registration_height = next_governed_execution_height(&client).await?;
-        let proposed_records = compiled_profiles
-            .iter()
-            .copied()
-            .map(|compiled| proposed_activation(compiled, registration_height))
-            .collect::<Vec<_>>();
-        submit_instructions(
-            &client,
-            proposed_records
-                .iter()
-                .copied()
-                .map(RegisterPrivacyProtocolActivationV1::new)
-                .map(InstructionBox::from)
-                .collect(),
-            "register exact retained exact-12 activations",
-        )
-        .await?;
-        let proposed_expectations = AVAILABLE_PROTOCOLS
-            .iter()
-            .copied()
-            .zip(compiled_profiles.iter().copied())
-            .zip(proposed_records.iter().copied())
-            .map(|((protocol, compiled), activation)| ProtocolExpectationV1 {
-                protocol,
-                compiled: compiled.into(),
-                activation: Some(activation),
-            })
-            .collect::<Vec<_>>();
+        let default_height = read_privacy_capabilities(&client).await?.committed_height;
+        let default_expectations = AVAILABLE_PROTOCOLS
+            .iter().copied().zip(compiled_profiles.iter().copied())
+            .map(|(protocol, compiled)| ProtocolExpectationV1 {
+                protocol, compiled: compiled.into(),
+            }).collect::<Vec<_>>();
         wait_for_all_peer_protocols(
-            &network,
-            registration_height,
-            &proposed_expectations,
-            "exact proposed retained exact-12 lifecycles",
-        )
-        .await?;
+            &network, default_height, &default_expectations,
+            "exact retained native profiles with default ordinary limits",
+        ).await?;
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
@@ -902,6 +845,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             creation_time + Duration::from_millis(1),
             201,
         );
+        let pgc_bootstrap_context = action_context(&client, genesis_hash, creation_time + Duration::from_millis(12), 212);
         let pgc_context = action_context(
             &client,
             genesis_hash,
@@ -914,7 +858,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             creation_time + Duration::from_millis(3),
             203,
         );
-        let pre_verange_context = action_context(
+        let default_verange_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(4),
@@ -975,62 +919,61 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let build_actions = tokio::task::spawn_blocking(move || {
             ensure!(
                 build_privacy_release_zk_ace_network_action_v1(
-                    zk_context,
+                    &zk_context,
                     ALICE_ID.clone(),
                     reserve_for_builder.clone(),
                     zk_asset_for_builder,
                     19,
-                    [0x31; 32],
-                    [0x32; 32],
+                    ([0x31; 32], [0x32; 32]),
                     &signing_key,
                 )
                 .is_err(),
                 "disabled ZK-ACE release builder admitted a production action"
             );
             let pgc = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_context,
+                &pgc_context,
+                &pgc_bootstrap_context,
                 pgc_asset_for_builder.clone(),
                 pgc_pool,
-                0,
                 [0x41; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical Anonymous-PGC action: {error:?}"))?;
             let pgc_replay = build_privacy_release_anonymous_pgc_network_action_v1(
-                pgc_replay_context,
+                &pgc_replay_context,
+                &pgc_bootstrap_context,
                 pgc_asset_for_builder,
                 pgc_pool,
-                0,
                 [0x41; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build stale-head Anonymous-PGC action: {error:?}"))?;
-            let pre_verange = build_privacy_release_verange_network_action_v1(
-                pre_verange_context,
+            let default_verange = build_privacy_release_verange_network_action_v1(
+                &(default_verange_context),
                 verange_asset_for_builder.clone(),
                 verange_policy,
-                vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)],
+                &(vec![1, 2, 3, 5, 8, 13, 21, u64::from(u32::MAX)]),
                 [0x51; 32],
                 &signing_key,
             )
-            .map_err(|error| eyre!("build pre-activation VeRange action: {error:?}"))?;
+            .map_err(|error| eyre!("build default-policy VeRange action: {error:?}"))?;
             let verange = build_privacy_release_verange_network_action_v1(
-                verange_context,
+                &(verange_context),
                 verange_asset_for_builder,
                 verange_policy,
-                vec![0, 1, 17, u64::from(u32::MAX)],
+                &(vec![0, 1, 17, u64::from(u32::MAX)]),
                 [0x52; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical VeRange action: {error:?}"))?;
             let bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                bootle_context,
+                &(bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build canonical Bootle/Lantern action: {error:?}"))?;
             let stale_bootle = build_privacy_release_bootle_lantern_network_action_v1(
-                stale_bootle_context,
+                &(stale_bootle_context),
                 [0x61; 32],
                 &signing_key,
             )
@@ -1045,7 +988,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "Bootle/Lantern successor reused the initial issuer public key"
             );
             let fcmp = build_privacy_release_fcmp_network_action_v1(
-                fcmp_context,
+                &(fcmp_context),
                 fcmp_asset_for_builder.clone(),
                 fcmp_pool,
                 [0x71; 32],
@@ -1053,7 +996,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical FCMP++ action: {error:?}"))?;
             let fcmp_replay = build_privacy_release_fcmp_network_action_v1(
-                fcmp_replay_context,
+                &(fcmp_replay_context),
                 fcmp_asset_for_builder,
                 fcmp_pool,
                 [0x71; 32],
@@ -1061,7 +1004,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build key-image replay FCMP++ action: {error:?}"))?;
             let ivm = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_context,
+                &(ivm_context),
                 ivm_asset_for_builder.clone(),
                 ivm_pool,
                 reserve_for_builder.clone(),
@@ -1070,7 +1013,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build canonical private-IVM action: {error:?}"))?;
             let ivm_replay = build_privacy_release_ivm_private_note_network_action_v1(
-                ivm_replay_context,
+                &(ivm_replay_context),
                 ivm_asset_for_builder,
                 ivm_pool,
                 reserve_for_builder,
@@ -1081,7 +1024,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             Ok::<_, eyre::Report>((
                 pgc,
                 pgc_replay,
-                pre_verange,
+                default_verange,
                 verange,
                 bootle,
                 stale_bootle,
@@ -1094,7 +1037,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let (
             pgc,
             pgc_replay,
-            pre_verange,
+            default_verange,
             verange,
             bootle,
             stale_bootle,
@@ -1107,8 +1050,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map_err(|_| eyre!("retained exact-12 proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained exact-12 prover task failed: {error}"))??;
         ensure!(
-            pgc.bootstrap == pgc_replay.bootstrap
-                && pgc.bootstrap_proof == pgc_replay.bootstrap_proof
+            pgc.bootstrap_transaction == pgc_replay.bootstrap_transaction
                 && pgc.statement.account_state_root == pgc_replay.statement.account_state_root
                 && pgc.statement.next_account_state_root
                     == pgc_replay.statement.next_account_state_root,
@@ -1146,7 +1088,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         for (label, transaction) in [
             ("canonical Anonymous-PGC", &pgc.transaction),
             ("stale-head Anonymous-PGC", &pgc_replay.transaction),
-            ("pre-activation VeRange", &pre_verange.transaction),
+            ("default-policy VeRange", &default_verange.transaction),
             ("canonical VeRange", &verange.transaction),
             ("canonical Bootle/Lantern", &bootle.transaction),
             ("stale-policy Bootle/Lantern", &stale_bootle.transaction),
@@ -1157,56 +1099,25 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         ] {
             assert_exactly_one_direct_privacy_submission(transaction, label)?;
         }
-        let preactivation_error = submit_signed_transaction(
-            &client,
-            &pre_verange.transaction,
-            "valid VeRange action before activation must reject",
-        )
-        .await
-        .expect_err("valid VeRange action was admitted before activation");
-        ensure!(
-            error_chain_contains(&preactivation_error, "activation is not active"),
-            "pre-activation VeRange rejection had wrong reason: {preactivation_error:?}"
-        );
+        submit_signed_transaction(
+            &client, &default_verange.transaction,
+            "valid native VeRange action without a protocol policy",
+        ).await?;
         wait_for_transaction_result_on_peers(
-            &all_clients,
-            &pre_verange.transaction,
-            false,
-            "pre-activation VeRange rejection convergence",
-        )
-        .await?;
+            &all_clients, &default_verange.transaction, true,
+            "default-policy VeRange success convergence",
+        ).await?;
         wait_for_asset_quantities(
             &all_clients,
             &[zk_asset_at_alice.clone(), zk_asset_at_reserve.clone()],
             &[Some(Quantity::from(100_u32)), None],
-            "pre-activation and unavailable-ZK-ACE paths must preserve public balances",
-        )
-        .await?;
-        let activation_height = next_governed_execution_height(&client).await?;
-        let active_records = compiled_profiles.iter().copied()
-            .map(|compiled| active_activation(compiled, registration_height, activation_height))
-            .collect::<Vec<_>>();
-        submit_instructions(&client, active_records.iter().map(|record| {
-            TransitionPrivacyProtocolLifecycleV1::new(record.protocol_id, record.lifecycle).into()
-        }).collect(), "explicitly activate exact retained profiles").await?;
-        let active_expectations = AVAILABLE_PROTOCOLS
-            .iter()
-            .copied()
-            .zip(compiled_profiles.iter().copied())
-            .zip(active_records.iter().copied())
-            .map(|((protocol, compiled), activation)| ProtocolExpectationV1 {
-                protocol,
-                compiled: compiled.into(),
-                activation: Some(activation),
-            })
-            .collect::<Vec<_>>();
+            "default-policy VeRange and unavailable-ZK-ACE paths preserve public balances",
+        ).await?;
+        let admitted_height = read_privacy_capabilities(&client).await?.committed_height;
         wait_for_all_peer_protocols(
-            &network,
-            activation_height,
-            &active_expectations,
-            "exact active retained exact-12 lifecycles",
-        )
-        .await?;
+            &network, admitted_height, &default_expectations,
+            "native admission preserves absent ordinary protocol policies",
+        ).await?;
         // Taira permits one budgeted privacy action per transaction. Keep
         // every governed policy/bootstrap in its own consensus action so the
         // PGC proof is bound to the exact action index zero and no setup path
@@ -1217,15 +1128,9 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "register authoritative Bootle/Lantern policy",
         )
         .await?;
-        submit_instructions(
+        submit_signed_transaction(
             &client,
-            vec![
-                BootstrapPrivacyPgcAccountsV1::new(
-                    pgc.bootstrap.clone(),
-                    pgc.bootstrap_proof.clone(),
-                )
-                .into(),
-            ],
+            &pgc.bootstrap_transaction,
             "bootstrap authoritative Anonymous-PGC account table",
         )
         .await?;
@@ -1558,8 +1463,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         wait_for_all_peer_protocols(
             &network,
             canonical_height,
-            &active_expectations,
-            "post-restart active retained exact-12 lifecycles",
+            &default_expectations,
+            "post-restart retained native profiles and absent ordinary policies",
         )
         .await?;
         let recovered_clients = network
@@ -1670,8 +1575,11 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "stale Bootle/Lantern policy rejection convergence",
         )
         .await?;
+        wait_for_transaction_result_on_peers(
+            &recovered_clients, &default_verange.transaction, true,
+            "post-restart default-policy VeRange success visibility",
+        ).await?;
         for (label, transaction) in [
-            ("pre-activation VeRange", &pre_verange.transaction),
             ("corrupted Anonymous-PGC", &corrupted_pgc),
             ("corrupted VeRange", &corrupted_verange),
             ("corrupted Bootle/Lantern", &corrupted_bootle),

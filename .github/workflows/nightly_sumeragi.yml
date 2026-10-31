@@ -21,19 +21,25 @@ env:
   NORITO_SKIP_BINDINGS_SYNC: "1"
 
 jobs:
+  ci_image:
+    uses: ./.github/workflows/ci_image_preflight.yml
+    permissions:
+      contents: read
+
   simulator:
+    needs: ci_image
     name: Simulator (10 000 seeds per scenario)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Run every fault scenario at 10 000 seeds
@@ -42,25 +48,26 @@ jobs:
         run: "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE cargo test --locked -p iroha_sumeragi --release --features sim --lib -- sim::"
 
   mutation_gate:
+    needs: ci_image
     name: Mutation gate (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every mutation with its named test
         run: python3 scripts/sumeragi_mutation_gate.py --jobs 4 --strict
       - name: Upload the gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-mutation-gate-${{ github.run_id }}
           path: |
@@ -70,18 +77,19 @@ jobs:
           retention-days: 14
 
   core_mutation_gate:
+    needs: ci_image
     name: Core evidence and custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered Core rule with its named test
@@ -92,7 +100,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --core --core-profile test --jobs 1 --strict --fast
       - name: Upload the Core gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-core-mutation-gate-${{ github.run_id }}
           path: |
@@ -102,18 +110,19 @@ jobs:
           retention-days: 14
 
   model_mutation_gate:
+    needs: ci_image
     name: Model AMX allocation custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered Model rule with its named test
@@ -122,7 +131,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --model --jobs 1 --strict
       - name: Upload the Model gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-model-mutation-gate-${{ github.run_id }}
           path: |
@@ -132,18 +141,19 @@ jobs:
           retention-days: 14
 
   daemon_mutation_gate:
+    needs: ci_image
     name: Daemon beacon custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered daemon rule with its named test
@@ -152,7 +162,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --daemon --jobs 1 --strict --fast
       - name: Upload the daemon gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-daemon-mutation-gate-${{ github.run_id }}
           path: |
@@ -162,18 +172,19 @@ jobs:
           retention-days: 14
 
   sdk_mutation_gate:
+    needs: ci_image
     name: SDK public-read mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered SDK public-read rule with its named test
@@ -182,7 +193,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --sdk --jobs 1 --strict
       - name: Upload the SDK public-read gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-sdk-mutation-gate-${{ github.run_id }}
           path: |
@@ -192,18 +203,19 @@ jobs:
           retention-days: 14
 
   deploy_mutation_gate:
+    needs: ci_image
     name: Deploy managed AMX source-custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered Deploy managed AMX source-custody rule with its named test
@@ -212,7 +224,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --deploy --jobs 1 --strict
       - name: Upload the Deploy managed AMX source-custody gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-deploy-mutation-gate-${{ github.run_id }}
           path: |
@@ -222,18 +234,19 @@ jobs:
           retention-days: 14
 
   torii_mutation_gate:
+    needs: ci_image
     name: Torii canonical-outcome custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered Torii canonical-outcome custody rule with its named test
@@ -242,7 +255,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --torii --jobs 1 --strict
       - name: Upload the Torii canonical-outcome custody gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-torii-mutation-gate-${{ github.run_id }}
           path: |
@@ -252,18 +265,19 @@ jobs:
           retention-days: 14
 
   norito_mutation_gate:
+    needs: ci_image
     name: Norito canonical decode-origin mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered Norito canonical decode-origin rule with its named test
@@ -272,7 +286,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --norito --jobs 1 --strict
       - name: Upload the Norito canonical decode-origin gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-norito-mutation-gate-${{ github.run_id }}
           path: |
@@ -282,18 +296,19 @@ jobs:
           retention-days: 14
 
   p2p_mutation_gate:
+    needs: ci_image
     name: P2P receive-credit custody mutations (§13.4)
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 480
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
       - name: Kill every registered P2P receive-credit custody rule with its named test
@@ -302,7 +317,7 @@ jobs:
         run: python3 scripts/sumeragi_mutation_gate.py --p2p --jobs 1 --strict
       - name: Upload the P2P receive-credit custody gate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sumeragi-p2p-mutation-gate-${{ github.run_id }}
           path: |

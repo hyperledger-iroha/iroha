@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { NetworkId } from "../src/networkId.js";
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";

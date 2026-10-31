@@ -60,8 +60,8 @@ fn fee_quote_decision_schema_is_an_exact_closed_payer_union() {
         ("generated spec", generate_spec()),
     ] {
         assert_eq!(
-            component_schemas(&document)["FeeQuoteResponse"]["properties"]["decision"]
-                ["properties"]["value"],
+            component_schemas(&document)["FeeQuoteResponse"]["properties"]["decision"]["properties"]
+                ["value"],
             expected,
             "{label} FeeQuoteResponse decision value schema"
         );

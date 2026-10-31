@@ -147,6 +147,10 @@ dev-tests = []
 # every user-provided executor path runs the admitted guest bytecode.
 iroha-core-tests = ["iroha_sccp/test-fixtures", "iroha_core_zk/test-utils", "iroha_core_privacy/test-utils", "iroha_core_timed_ovn/test-utils"]
 
+# Ignored genuine-proof merchant acceptance (100 payers, one merchant) through iroha_core_zk's
+# software-key wallet simulator. Non-shipping; enable explicitly.
+kagemusha-simulator = ["iroha_core_zk/kagemusha-simulator"]
+
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 
 # Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
@@ -167,7 +171,7 @@ iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "http"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
@@ -196,21 +200,20 @@ settlement_router = { path = "../settlement_router" }
 iroha_sccp = { path = "../iroha_sccp" }
 iroha_sumeragi = { workspace = true }
 tracing = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 soranet_pq = { workspace = true }
 rayon = { workspace = true }
 base64 = { workspace = true }
 http = "1.3.1"
-ff = "0.13.1"
+ff = "0.14.0"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 kaigi_zk = { path = "../kaigi_zk" }
-orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"], optional = true }
-incrementalmerkletree = { version = "=0.8.2", optional = true }
+orchard = { version = "=0.16.0", default-features = false, features = ["circuit", "multicore", "std", "zeroize"], optional = true }
+incrementalmerkletree = { version = "=0.9.0", optional = true }
 
 dashmap = { workspace = true }
 eyre = { workspace = true }
 rand = { workspace = true }
-rand_core_06 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "rt-multi-thread", "macros", "fs"] }
 crossbeam-queue = { workspace = true }
 thiserror = { workspace = true }
@@ -224,7 +227,7 @@ blake3 = "1.8.2"
 zstd = { workspace = true }
 blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve"] }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 once_cell = { workspace = true }
 indexmap = "2.12.0"
@@ -243,7 +246,7 @@ kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures", "privacy-exact12-conformance"] }
-crossbeam-epoch = "=0.9.20"
+crossbeam-epoch = "=0.9.21"
 futures = { workspace = true, features = ["std", "async-await"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
 tokio = { workspace = true, features = ["test-util"] }
@@ -254,7 +257,6 @@ iroha_config_base = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 hex = { workspace = true }
 expect-test = { workspace = true }
-rand_08 = { package = "rand", version = "=0.8.7" }
 # The simulator hosts the Sumeragi driver for its §13.5 conformance tests.
 iroha_sumeragi = { workspace = true, features = ["sim"] }
 
@@ -292,6 +294,12 @@ required-features = ["zk-ipa-native"]
 [[bench]]
 name = "isi_gas_calibration"
 path = "benches/isi_gas_calibration.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "kaigi"
+path = "benches/kaigi.rs"
 harness = false
 required-features = ["bench"]
 

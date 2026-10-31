@@ -73,25 +73,81 @@ fn print_uid_and_controlled_lock_record_fixture_rows() {
     let mut lock = OpenAssetLock::new(escrow_id, asset.clone(), destination, 30_u32);
     lock.release_authority = Some(controller.subject_id());
     lock.expires_at_ms = Some(604_800_000);
+    // Actual capture output must be retained by the native qualification producer.
+
     let rows = vec![
+        row(
+            crate::isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1 {
+                asset_definition_id: asset.clone(),
+                expected_incarnation: crate::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                    *Hash::new("scope-capture").as_ref(),
+                )
+                .unwrap(),
+                expected_revision: 0,
+            },
+        ),
         row(crate::isi::asset_uid::SetAssetUidPolicyReaderV1 {
-            asset_definition_id: asset.clone(), controller: controller.clone(), revision: 1, enabled: true,
+            asset_definition_id: asset.clone(),
+            controller: controller.clone(),
+            revision: 1,
+            enabled: true,
         }),
-        row(crate::isi::asset_uid_enrollment::ActivateAssetUidEnrollmentV1 { asset_definition_id: asset.clone() }),
-        row(crate::isi::asset_uid_enrollment::SetAssetUidSystemAccountV1 {
-            account: crate::asset::uid_enrollment::AssetUidSystemAccountV1 { asset_definition_id: asset.clone(), account_id: source.clone(), revision: 1, enabled: true },
-        }),
+        row(
+            crate::isi::asset_uid_enrollment::ActivateAssetUidEnrollmentV1 {
+                asset_definition_id: asset.clone(),
+            },
+        ),
+        row(
+            crate::isi::asset_uid_enrollment::SetAssetUidSystemAccountV1 {
+                account: crate::asset::uid_enrollment::AssetUidSystemAccountV1 {
+                    asset_definition_id: asset.clone(),
+                    account_id: source.clone(),
+                    revision: 1,
+                    enabled: true,
+                },
+            },
+        ),
         row(crate::isi::asset_fi::SetAssetFiV1 {
-            fi: crate::asset::fi_link::AssetFiV1 { asset_definition_id: asset.clone(), fi_account_id: source.clone(), revision: 1, enabled: true },
+            fi: crate::asset::fi_link::AssetFiV1 {
+                asset_definition_id: asset.clone(),
+                fi_account_id: source.clone(),
+                revision: 1,
+                enabled: true,
+            },
         }),
         row(crate::isi::asset_fi::SetAssetFiLinkAttestationV1 {
-            attestation: crate::asset::fi_link::AssetFiLinkAttestationV1 { asset_definition_id: asset.clone(), account_id: source.clone(), fi_account_id: account(93), reference_digest: [18;32], revision: 1, enabled: true },
+            attestation: crate::asset::fi_link::AssetFiLinkAttestationV1 {
+                asset_definition_id: asset.clone(),
+                account_id: source.clone(),
+                fi_account_id: account(93),
+                reference_digest: [18; 32],
+                revision: 1,
+                enabled: true,
+            },
         }),
         row(crate::isi::asset_fi::SetAssetFiLinkV1 {
-            link: crate::asset::fi_link::AssetFiLinkV1 { asset_definition_id: asset.clone(), account_id: source.clone(), fi_account_id: account(93), reference_digest: [18;32], fi_revision: 1, attestation_revision: 1, revision: 1, enabled: true, controller: None, waterfall: false, reverse_waterfall: false },
+            link: crate::asset::fi_link::AssetFiLinkV1 {
+                asset_definition_id: asset.clone(),
+                account_id: source.clone(),
+                fi_account_id: account(93),
+                reference_digest: [18; 32],
+                fi_revision: 1,
+                attestation_revision: 1,
+                revision: 1,
+                enabled: true,
+                controller: None,
+                waterfall: false,
+                reverse_waterfall: false,
+            },
             expected_policy_revision: 1,
         }),
-        row(crate::isi::asset_fi::TransferToLinkedFiV1 { asset_definition_id: asset.clone(), account_id: source.clone(), amount: 5_u32.into(), expected_link_revision: 1, expected_policy_revision: 1 }),
+        row(crate::isi::asset_fi::TransferToLinkedFiV1 {
+            asset_definition_id: asset.clone(),
+            account_id: source.clone(),
+            amount: 5_u32.into(),
+            expected_link_revision: 1,
+            expected_policy_revision: 1,
+        }),
         row(SetAssetUidPolicyV1 {
             policy: AssetUidPolicyV1 {
                 asset_definition_id: asset,

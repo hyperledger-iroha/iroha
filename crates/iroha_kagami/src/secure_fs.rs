@@ -42,7 +42,7 @@ pub fn create_fifo_for_test(path: &std::path::Path, mode: libc::mode_t) -> std::
 ))]
 mod unix {
     use color_eyre::eyre::{Result, WrapErr as _, eyre};
-    use rand::{TryRngCore as _, rngs::OsRng};
+    use rand::{TryRng as _, rngs::SysRng};
     use rustix::fs::{
         AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, fchmod, open, openat, statat,
     };
@@ -756,7 +756,7 @@ mod unix {
     }
     fn random_temporary_path(parent: &Path, target_name: &str) -> Result<PathBuf> {
         let mut random = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut random)
             .wrap_err("obtain OS entropy for private temporary filename")?;
         let suffix = hex::encode(random);
@@ -1072,11 +1072,34 @@ mod unix {
         }
         #[test]
         fn harden_private_tree_rejects_special_files() {
+            const CHILD_ROOT: &str = "IROHA_KAGAMI_PRIVATE_TREE_SOCKET_TEST_ROOT";
+            if let Some(expected_root) = std::env::var_os(CHILD_ROOT) {
+                let root = std::env::current_dir().expect("child fixture directory");
+                assert_eq!(root, PathBuf::from(expected_root));
+                // Only this child changes cwd. A relative socket address keeps the
+                // actual socket fixture below SUN_LEN even with a long TMPDIR.
+                let _listener = UnixListener::bind("control.sock").expect("bind Unix socket");
+                let error = harden_private_tree(&root).expect_err("socket must fail closed");
+                assert!(error.to_string().contains("special or multi-link entry"));
+                return;
+            }
             let (_root_guard, root) = private_root();
-            let socket_path = root.join("control.sock");
-            let _listener = UnixListener::bind(&socket_path).expect("bind Unix socket");
-            let error = harden_private_tree(&root).expect_err("socket must fail closed");
-            assert!(error.to_string().contains("special or multi-link entry"));
+            let root = root.canonicalize().expect("canonical private root");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "secure_fs::unix::tests::harden_private_tree_rejects_special_files",
+                    "--nocapture",
+                ])
+                .current_dir(&root)
+                .env(CHILD_ROOT, &root)
+                .output()
+                .expect("execute isolated socket fixture");
+            assert!(output.status.success(), "socket fixture failed: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed; 0 ignored"),
+                "the child must execute the exact socket assertion: {output:?}"
+            );
         }
         #[test]
         fn harden_private_tree_rejects_hard_linked_regular_files() {

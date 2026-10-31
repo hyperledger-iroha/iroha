@@ -216,9 +216,9 @@ fn main_p256_log8_verifier_covers_five_buses_with_exact_local_air_parity() {
     let mut source = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
-    .expect("closed log8 verifier source");
+    .expect("closed medium_group verifier source");
     assert!(core::ptr::eq(source.fixed, &raw const fixed));
     assert_eq!(source.registrations.len(), P256_SIGNATURE_COUNT_V1);
     let base = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1];
@@ -301,9 +301,9 @@ fn main_p256_log8_closed_provider_routes_only_the_concrete_verifier() {
     let mut scalar = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
-    .expect("closed log8 verifier source");
+    .expect("closed medium_group verifier source");
     let registration = scalar.registrations[2].main;
     let query_index = 31;
     let next_query_index = scalar
@@ -319,26 +319,26 @@ fn main_p256_log8_closed_provider_routes_only_the_concrete_verifier() {
         aux_current: &aux,
         aux_next: &aux,
     };
-    let mut log5 = MockMainTraceGroupSourceV1::default();
-    let mut log15 = MockMainTraceGroupSourceV1::default();
-    let mut log16 = MockMainTraceGroupSourceV1::default();
-    let mut log18 = MockMainTraceGroupSourceV1::default();
-    let mut log19 = MockMainTraceGroupSourceV1::default();
+    let mut small_group = MockMainTraceGroupSourceV1::default();
+    let mut projection_group = MockMainTraceGroupSourceV1::default();
+    let mut lookup_group = MockMainTraceGroupSourceV1::default();
+    let mut io_group = MockMainTraceGroupSourceV1::default();
+    let mut large_group = MockMainTraceGroupSourceV1::default();
     let mut providers = MainOpenedProviderSetV1::new_v1(
         &layout,
         vec![
-            MainOpenedGroupProviderV1::TestLog5(&mut log5),
+            MainOpenedGroupProviderV1::TestLog5(&mut small_group),
             MainOpenedGroupProviderV1::P256Scalar(&mut scalar),
-            MainOpenedGroupProviderV1::TestLog15(&mut log15),
-            MainOpenedGroupProviderV1::TestLog16(&mut log16),
-            MainOpenedGroupProviderV1::TestLog18(&mut log18),
-            MainOpenedGroupProviderV1::TestLog19(&mut log19),
+            MainOpenedGroupProviderV1::TestLog15(&mut projection_group),
+            MainOpenedGroupProviderV1::TestLog16(&mut lookup_group),
+            MainOpenedGroupProviderV1::TestLog18(&mut io_group),
+            MainOpenedGroupProviderV1::TestLog19(&mut large_group),
         ],
     )
     .expect("exact closed MAIN providers");
     let residues = providers
         .registered_constraint_residues_v1(registration, query_index, next_query_index, x, opening)
-        .expect("production concrete log8 route");
+        .expect("production concrete medium_group route");
     assert_eq!(
         residues.len(),
         P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1
@@ -353,9 +353,9 @@ fn main_p256_log8_verifier_rejects_adversarial_inputs_before_sampling() {
     let mut source = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
-    .expect("closed log8 verifier source");
+    .expect("closed medium_group verifier source");
     let registration = source.registrations[0].main;
     let query_index = 23;
     let next_query_index = source
@@ -462,9 +462,9 @@ fn main_p256_log8_verifier_fixed_cache_is_bounded_per_signature() {
     let mut source = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
-    .expect("closed log8 verifier source");
+    .expect("closed medium_group verifier source");
     let first = source.registrations[0];
     for pair in 0..(VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 / 2) {
         source
@@ -518,7 +518,7 @@ fn main_p256_log8_shared_central_source_matches_prover_and_verifier() {
     }
     let post_base = p256_main_provider_post_base_fixture_v1();
     let bound = central
-        .bind_v1(post_base)
+        .bind_v1(&post_base)
         .expect("single opaque central P-256 phase transition");
     let mut trace = MainP256ScalarTraceGroupSourceV1::for_bound_v1(&layout, &bound)
         .expect("borrowed bound scalar view");
@@ -527,7 +527,7 @@ fn main_p256_log8_shared_central_source_matches_prover_and_verifier() {
     let fixed =
         P256MainVerifierFixedSourceV1::new_v1().expect("shared verifier-fixed P-256 source");
     let mut verifier =
-        MainP256ScalarVerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256ScalarVerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("witness-free scalar verifier");
     let mut streamed_fixed = 0_usize;
     prover
@@ -617,7 +617,7 @@ fn main_p256_log8_shared_central_source_matches_prover_and_verifier() {
         routed
             .source_mut_v1()
             .native_aux_column_v1(first_registration.main, 0)
-            .expect("closed production log8 trace route")
+            .expect("closed production medium_group trace route")
             .len(),
         first_registration.main.segment.trace_size()
     );
@@ -626,12 +626,12 @@ fn evaluate_native_fixed_column_v1(
     segment: SegmentLayoutV1,
     common_lde_log2: u8,
     index: usize,
-    mut native_value: impl FnMut(usize) -> F,
+    native_value: impl FnMut(usize) -> F,
 ) -> F {
     let trace_root = goldilocks_primitive_root_v1(segment.trace_log2).expect("native trace root");
     let common_root = goldilocks_primitive_root_v1(common_lde_log2).expect("common LDE root");
     let mut coefficients = (0..segment.trace_size())
-        .map(|row| native_value(row))
+        .map(native_value)
         .collect::<Vec<_>>();
     goldilocks_ifft_v1(&mut coefficients, trace_root).expect("fixed-column interpolation");
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(common_root.pow(index as u128));
@@ -816,7 +816,7 @@ fn main_p256_log5_central_trace_views_and_prover_are_end_to_end_closed() {
     }
     let post_base = p256_main_provider_post_base_fixture_v1();
     let mut bound = base_source
-        .bind_v1(post_base)
+        .bind_v1(&post_base)
         .expect("single central P-256 phase transition");
     {
         let bound_view = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &bound)
@@ -966,7 +966,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
     let post_base = p256_main_provider_post_base_fixture_v1();
     {
         let mut routed =
-            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
                 .expect("routed log-five verifier source");
         let registration = routed.bindings[0].main;
         let query_index = 5;
@@ -994,7 +994,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         );
     }
     let mut source =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("canonical log-five verifier source");
     let bindings = source.bindings.clone();
     for (registration_index, binding) in bindings.iter().copied().enumerate() {
@@ -1011,9 +1011,9 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         for index in [query_index, next_query_index] {
             let opened = cache.get(&index).expect("verifier-minted fixed opening");
             assert_eq!(opened.len(), binding.main.segment.fixed_width);
-            for column in 0..binding.main.segment.fixed_width {
+            for (column, actual) in opened.iter().enumerate() {
                 assert_eq!(
-                    opened[column],
+                    *actual,
                     evaluate_native_fixed_column_v1(
                         binding.main.segment,
                         layout.common_lde_log2,
@@ -1030,7 +1030,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         }
     }
     let mut rejected =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("fresh log-five verifier source");
     let canonical = rejected.bindings[0].main;
     let mut forged_slice = canonical;
@@ -1104,7 +1104,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
     );
     assert_eq!(rejected.cached_openings_v1(0), Some(0));
     let mut bounded =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("fresh bounded log-five verifier source");
     let stride = 1_usize << (layout.common_lde_log2 - 5);
     for query in 0..(VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 / 2) {
@@ -1138,7 +1138,7 @@ fn assert_p256_private_endpoint_local_recurrence_v1(
     registration: RegisteredSegmentLayoutV1,
     identity: P256MainRegistrationV1,
     fixed_source: &P256MainVerifierFixedSourceV1,
-    challenges: P256AggregateChallengesV1,
+    challenges: &P256AggregateChallengesV1,
     family: super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1,
 ) {
     let fixed = fixed_source
@@ -1231,14 +1231,14 @@ fn main_p256_log5_private_chain_forgeries_require_local_recurrences() {
         main_p256_terminal_registrations_v1(&forged_claims)
             .expect("coordinated host-side chain remains equal");
         let verifier =
-            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
                 .expect("private log-five verifier source");
         let binding = verifier.bindings[registration_index];
         assert_p256_private_endpoint_local_recurrence_v1(
             binding.main,
             binding.p256,
             &fixed,
-            verifier.challenges,
+            &verifier.challenges,
             super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1::ChainTerminal,
         );
     }
@@ -1352,7 +1352,7 @@ fn main_p256_log16_registration_order_ranges_and_stride_are_exact() {
     let source = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
-        p256_main_provider_post_base_fixture_v1(),
+        &p256_main_provider_post_base_fixture_v1(),
     )
     .expect("canonical log-sixteen verifier");
     assert_eq!(
@@ -1414,7 +1414,7 @@ fn main_p256_log16_registration_order_ranges_and_stride_are_exact() {
 fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .name("main-p256-log16".to_owned())
+            .name("main-p256-lookup_group".to_owned())
             .stack_size(32 * 1024 * 1024)
             .spawn_scoped(scope, || {
                 let layout =
@@ -1474,7 +1474,7 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                 }
                 let post_base = p256_main_provider_post_base_fixture_v1();
                 let mut bound = central
-                    .bind_v1(post_base)
+                    .bind_v1(&post_base)
                     .expect("single opaque central P-256 phase transition");
                 {
                     let bound_view = MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &bound)
@@ -1517,7 +1517,7 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                     let fixed = P256MainVerifierFixedSourceV1::new_v1()
                         .expect("independent witness-free fixed source");
                     let mut verifier = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
-                        &layout, &fixed, post_base,
+                        &layout, &fixed, &post_base,
                     )
                     .expect("witness-free log-sixteen verifier source");
                     let root = goldilocks_primitive_root_v1(layout.common_lde_log2)
@@ -1624,7 +1624,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
     let mut rejected =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("fresh log-sixteen verifier");
     let canonical = rejected.bindings[0].main;
     let query_index = 7;
@@ -1767,7 +1767,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
             .all(|(index, cache)| matches!(index, 0 | 7) || cache.is_empty())
     );
     let mut transactional =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("fresh transactional log-sixteen verifier");
     transactional.bindings[0].main.segment.fixed_width += 1;
     assert!(
@@ -1777,7 +1777,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     );
     assert_eq!(transactional.cached_openings_v1(0), Some(0));
     let mut bounded =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
             .expect("fresh bounded log-sixteen verifier");
     let width = bounded.bindings[0].main.segment.fixed_width;
     for index in 0..VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 {
@@ -1805,8 +1805,9 @@ fn main_p256_log16_private_forgeries_require_window_and_sink_recurrences() {
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
     let canonical = p256_main_terminal_claims_fixture_v1();
-    let verifier = MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
-        .expect("canonical log-sixteen verifier");
+    let verifier =
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, &post_base)
+            .expect("canonical log-sixteen verifier");
     for family in [Family::ChainTerminal, Family::WindowScalar] {
         let mut forged = canonical;
         if family == Family::ChainTerminal {
@@ -1822,7 +1823,7 @@ fn main_p256_log16_private_forgeries_require_window_and_sink_recurrences() {
             binding.main,
             binding.p256,
             &fixed,
-            verifier.challenges,
+            &verifier.challenges,
             family,
         );
     }
@@ -1835,7 +1836,7 @@ fn main_p256_log16_private_forgeries_require_window_and_sink_recurrences() {
         sink.main,
         sink.p256,
         &fixed,
-        verifier.challenges,
+        &verifier.challenges,
         Family::ChainTerminal,
     );
 }

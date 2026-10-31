@@ -393,6 +393,9 @@ Root {
         query_fanout_max_working_set_bytes: Bytes(
             48000000,
         ),
+        finality_max_working_set_bytes: Bytes(
+            384000000,
+        ),
         sccp_history_cache_max_bytes: Bytes(
             8000000,
         ),
@@ -705,6 +708,7 @@ Root {
         poll_interval: 2s,
         max_source_heights_per_pass: 32,
         max_finality_proof_reads: 64,
+        max_pending_finality_walks: 16,
         routes: [],
     },
     kura: Kura {
@@ -830,20 +834,7 @@ Root {
         staking: NexusStaking {
             public_validator_mode: StakeElected,
             restricted_validator_mode: AdminManaged,
-            min_validator_stake: Quantity(
-                Numeric {
-                    mantissa: 1,
-                    scale: 0,
-                },
-            ),
             max_validators: 32,
-            max_stake_shares_per_validator: 256,
-            max_pending_unbonds_per_share: 8,
-            unbonding_delay: 0ns,
-            max_slash_bps: 10000,
-            stake_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         },
         fees: RootFeePolicy {
             fee_asset_id: AssetDefinitionId {
@@ -868,7 +859,9 @@ Root {
             },
             fee_sink_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
-            successful_claim_fee_exempt_authorities: {},
+            successful_claim_fee_exempt_authorities: RootFeeExemptions(
+                [],
+            ),
             base_fee: Quantity(
                 Numeric {
                     mantissa: 0,
@@ -912,31 +905,8 @@ Root {
             replay_retention_slots: 128,
         },
         atomic_private_settlement: NexusAtomicPrivateSettlement {
-            enabled: false,
-            activation_height: None,
-            minimum_activation_notice_blocks: 7200,
-            proof_profile_version: 1,
-            max_participants: 255,
-            max_expiry_blocks: 7200,
-            audit_timeout_blocks: 1200,
-            prepare_timeout_blocks: 1200,
-            commit_timeout_blocks: 1200,
-            capsule_padding_classes_bytes: [
-                4096,
-                16384,
-                65536,
-                262144,
-            ],
-            max_proof_bytes: 8388608,
-            max_capsule_bytes: 1048576,
-            max_carrier_bytes: 4194304,
-            sidecar_retention_blocks: 1000000,
             sidecar_max_records: 256,
             sidecar_max_total_bytes: 3221225472,
-            default_min_auditor_approvals: 1,
-            permitted_policy_versions: {
-                1,
-            },
         },
         lane_catalog: LaneCatalog {
             lane_count: 1,
@@ -1148,6 +1118,11 @@ Root {
         },
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: SnapshotUpgradeCheckpoint {
+            height: None,
+            block_hash: None,
+            signer: None,
+        },
     },
     telemetry_profile: Operator,
     telemetry: None,
@@ -1726,13 +1701,6 @@ Root {
         jdg_signature_schemes: {
             SimpleThreshold,
         },
-        runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
-            mode: Optional,
-            require_sbom: false,
-            require_slsa: false,
-            trusted_signers: {},
-            signature_threshold: 0,
-        },
         viral_incentives: ViralIncentives {
             incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
@@ -2021,15 +1989,7 @@ Root {
         enable_sm_openssl_preview: false,
         sm_intrinsics: Auto,
         default_hash: "blake2b-256",
-        allowed_signing: [
-            Ed25519,
-            Secp256k1,
-        ],
         sm2_distid_default: "1234567812345678",
-        allowed_curve_ids: [
-            1,
-            4,
-        ],
     },
     settlement: Settlement {
         router: Router {
@@ -2069,7 +2029,7 @@ Root {
         codec: StreamingCodec {
             cabac_mode: Disabled,
             trellis_block_sizes: [],
-            rans_tables_path: "codec/rans/tables/rans_seed0.toml",
+            rans_tables_path: None,
             entropy_mode: RansBundled,
             bundle_width: 2,
             bundle_accel: None,

@@ -114,7 +114,7 @@ pub(super) enum Cause {
 pub(super) enum Failure {
     Readiness(readiness::Failure),
     ObservationExpired,
-    ValidatorExited,
+    ValidatorExited { index: u8 },
     Bootstrap(crate::managed::ManagedBootstrapFailure),
     Activation { phase: Phase, cause: Cause },
 }
@@ -128,7 +128,10 @@ impl Failure {
         match self {
             Self::Readiness(failure) => failure.message(),
             Self::Bootstrap(reason) => reason.to_string(),
-            Self::ValidatorExited => "a supervised validator exited; inspect its retained log".into(),
+            // The log name identifies the validator in every frontend's own numbering.
+            Self::ValidatorExited { index } => {
+                format!("a supervised validator exited; inspect its retained log peer{index}.log")
+            }
             Self::ObservationExpired => "generated service readiness observation expired; fresh authenticated activation is required".into(),
             Self::Activation { phase, cause } => {
                 let cause = match cause {

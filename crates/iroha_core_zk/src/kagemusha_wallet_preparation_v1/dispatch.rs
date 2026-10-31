@@ -22,6 +22,11 @@ pub(super) fn proof<T>(result: core::result::Result<T, Error>) -> Result<T> {
         Error::DecodeResource(original) => state::Error::DecodeResource(original),
         Error::Unavailable => state::Error::ArtifactsUnavailable("native operation artifact"),
         Error::Cancelled => state::Error::Cancelled,
+        original @ (Error::Verification(_)
+        | Error::Recursion(_)
+        | Error::RuntimeBinding
+        | Error::Inventory
+        | Error::Profile) => state::Error::NativeVerification(original),
         Error::Blocked(field) => state::Error::Blocked(field),
         Error::Entropy => {
             crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderErrorV1::Unavailable(
@@ -506,14 +511,14 @@ impl PreparedOperationV1 {
 /// wallet owner (design §5.1, Payment row). It holds no plan, custody, signing or Advance
 /// capability: execute derives again from its durable plan and uses the σ only through
 /// [`PreparedOperationV1::freeze_speculated`] for an identical statement and relation.
-pub(crate) struct SpeculativeSendStepV1 {
+pub struct SpeculativeSendStepV1 {
     selector: u8,
     step: Box<MonetaryStepV1>,
 }
 
 /// A `σ_send` proved speculatively for one exact statement and relation. DATA only: it is
 /// never signed or retained durably.
-pub(crate) struct SpeculativeSigmaV1 {
+pub struct SpeculativeSigmaV1 {
     statement: KagemushaWalletStatementV1,
     relation: iroha_kagemusha_proof::witness::SigmaRelation,
     sigma: KagemushaWalletStepProofV1,
@@ -522,9 +527,9 @@ pub(crate) struct SpeculativeSigmaV1 {
 #[cfg(test)]
 impl SpeculativeSigmaV1 {
     /// Test support: a σ DATA value with no proof authority, for review slot tests.
-    pub(crate) fn for_test(statement: KagemushaWalletStatementV1, bytes: Vec<u8>) -> Self {
+    pub(crate) fn for_test(statement: &KagemushaWalletStatementV1, bytes: Vec<u8>) -> Self {
         Self {
-            statement,
+            statement: *statement,
             relation: iroha_kagemusha_proof::witness::SigmaRelation::SEND,
             sigma: KagemushaWalletStepProofV1 { bytes },
         }
@@ -1140,13 +1145,29 @@ mod error_tests {
                 "native operation artifact"
             ))
         ));
-        for rejected in [
-            Error::Authority,
+        for original in [
             Error::RuntimeBinding,
             Error::Inventory,
             Error::Profile,
-            Error::Proof,
+            Error::Verification(iroha_plonk::VerifyError::Ipa(
+                iroha_plonk::pcs::ipa::IpaError::Msm(iroha_pasta::msm::MsmError::Budget(
+                    iroha_pasta::msm::BudgetExceeded {
+                        required: 4096,
+                        budget: 1024,
+                    },
+                )),
+            )),
+            Error::Recursion(iroha_plonk_recursion::Error::Kernel(
+                iroha_pasta::msm::MsmError::ScalarBound,
+            )),
         ] {
+            let expected = original.clone();
+            assert!(matches!(
+                proof::<()>(Err(original)),
+                Err(state::Error::NativeVerification(actual)) if actual == expected
+            ));
+        }
+        for rejected in [Error::Authority, Error::Proof] {
             assert!(matches!(
                 proof::<()>(Err(rejected)),
                 Err(state::Error::Proof(

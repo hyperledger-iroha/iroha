@@ -28,10 +28,13 @@ fn signed_app_headers_for_network(
     body: &[u8],
 ) -> HeaderMap {
     static TEST_NONCE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis() as u64;
+    let timestamp_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_millis(),
+    )
+    .expect("fixture timestamp fits u64");
     let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!("vpn-test-{timestamp_ms}-{nonce_seq}");
     let message = crate::app_auth::canonical_network_request_signature_message(
@@ -368,8 +371,8 @@ fn vpn_enabled_app_with_operator_unchecked(
     operator_account_id: &AccountId,
 ) -> SharedAppState {
     let app = mk_app_state_for_tests_with_world(world);
-    let quote_signer = (1_u16..=u16::from(u8::MAX))
-        .map(|seed| checked_vpn_ed25519_keypair(seed as u8))
+    let quote_signer = (1_u8..=u8::MAX)
+        .map(checked_vpn_ed25519_keypair)
         .find(|keypair| account_id_for(keypair) == *operator_account_id)
         .expect("VPN fixture operator must come from a checked one-byte seed");
     let mut cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -540,7 +543,7 @@ fn install_active_lease_for_quote(
     quote: &VpnQuoteResponseDto,
 ) -> VpnLeaseRecordV1 {
     let lease = active_lease_record_from_quote(quote);
-    app.state.insert_vpn_lease_for_testing(lease.clone());
+    app.state.insert_vpn_lease_for_testing(&(lease));
     lease
 }
 fn wsv_lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLeaseRecordV1> {
@@ -734,8 +737,8 @@ fn sample_indexed_session_record(
     record
 }
 fn fixture_operator_key(operator_account_id: &AccountId) -> KeyPair {
-    (1_u16..=u16::from(u8::MAX))
-        .map(|seed| checked_vpn_ed25519_keypair(seed as u8))
+    (1_u8..=u8::MAX)
+        .map(checked_vpn_ed25519_keypair)
         .find(|keypair| account_id_for(keypair) == *operator_account_id)
         .expect("fixture VPN operator must come from a checked one-byte seed")
 }
@@ -1131,12 +1134,9 @@ async fn active_wsv_receipt_fixture_with_additional_accounts(
         .expect("active session")
         .clone();
     let fixture = receipt_fixture_for_session(&session, &active_record, &user, &metering_keys);
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     app.vpn_sessions.clear();
     (
         app,
@@ -1596,7 +1596,7 @@ async fn vpn_request_rejects_foreign_network_signature_before_decode() {
 }
 #[tokio::test]
 async fn vpn_request_handlers_reject_unknown_json_fields_after_auth() {
-    fn assert_unknown_field(error: Error, payload_label: &str) {
+    fn assert_unknown_field(error: &Error, payload_label: &str) {
         let message = format!("{error:?}");
         assert!(
             message.contains(payload_label),
@@ -1619,7 +1619,7 @@ async fn vpn_request_handlers_reject_unknown_json_fields_after_auth() {
         handle_create_vpn_quote(app.clone(), &method, &quote_uri, &quote_headers, quote_body)
             .await
             .expect_err("unknown quote field must fail after auth");
-    assert_unknown_field(quote_error, "invalid vpn quote create payload");
+    assert_unknown_field(&(quote_error), "invalid vpn quote create payload");
     let session_uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
     let session_body =
         br#"{"quote_id":"","payment_tx_hash":"","metering_public_key_hex":"","unexpected":true}"#;
@@ -1634,7 +1634,7 @@ async fn vpn_request_handlers_reject_unknown_json_fields_after_auth() {
     )
     .await
     .expect_err("unknown session field must fail after auth");
-    assert_unknown_field(session_error, "invalid vpn session create payload");
+    assert_unknown_field(&(session_error), "invalid vpn session create payload");
     let receipt_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let receipt_body = br#"{"relay_receipt_hex":"","client_voucher_hex":"","unexpected":true}"#;
     let receipt_headers =
@@ -1643,7 +1643,7 @@ async fn vpn_request_handlers_reject_unknown_json_fields_after_auth() {
         handle_submit_vpn_receipt(app, &method, &receipt_uri, &receipt_headers, receipt_body)
             .await
             .expect_err("unknown receipt field must fail after auth");
-    assert_unknown_field(receipt_error, "invalid vpn receipt payload");
+    assert_unknown_field(&(receipt_error), "invalid vpn receipt payload");
 }
 #[tokio::test]
 async fn vpn_write_handlers_authenticate_before_parsing_malformed_json() {
@@ -1869,7 +1869,7 @@ async fn get_vpn_session_cache_hit_does_not_mask_settled_wsv_lease() {
     let fixture = receipt_fixture_for_session(&session, &active_record, &account, &metering_keys);
     let mut lease =
         lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None);
-    app.state.insert_vpn_lease_for_testing(lease.clone());
+    app.state.insert_vpn_lease_for_testing(&(lease));
     lease.status = VpnLeaseStatusV1::Settled;
     lease.settled_at_ms = Some(fixture.relay_receipt.receipt.ended_at_ms);
     lease.highest_voucher_sequence = fixture.relay_receipt.receipt.highest_voucher_sequence;
@@ -1882,7 +1882,7 @@ async fn get_vpn_session_cache_hit_does_not_mask_settled_wsv_lease() {
         .lease_fee
         .checked_sub(&fixture.earned_fee)
         .expect("fixture earned fee does not exceed lease fee");
-    app.state.insert_vpn_lease_for_testing(lease);
+    app.state.insert_vpn_lease_for_testing(&(lease));
 
     let method = Method::GET;
     let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
@@ -1949,12 +1949,9 @@ async fn get_vpn_session_reconstructs_active_record_from_wsv_after_cache_loss() 
         .get(&session.session_id)
         .expect("active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     app.vpn_sessions.clear();
     let method = Method::GET;
     let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
@@ -1987,12 +1984,9 @@ async fn get_vpn_session_reconstruction_rejects_a_non_operator_node_signer() {
         .get(&session.session_id)
         .expect("active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     app.vpn_sessions.clear();
     Arc::get_mut(&mut app)
         .expect("temporary test app has no remaining external owners")
@@ -2023,7 +2017,7 @@ async fn get_vpn_session_does_not_reconstruct_expired_wsv_lease() {
     lease_record.opened_at_ms = lease_record.expires_at_ms.saturating_sub(10_000);
     resign_lease_quote_projection(&mut lease_record);
     let session_id = hex::encode(lease_record.session_id);
-    app.state.insert_vpn_lease_for_testing(lease_record);
+    app.state.insert_vpn_lease_for_testing(&(lease_record));
     let method = Method::GET;
     let uri: Uri = format!("/v1/vpn/sessions/{session_id}")
         .parse()
@@ -2050,12 +2044,9 @@ async fn get_vpn_session_does_not_reconstruct_non_active_wsv_lease() {
         .get(&session.session_id)
         .expect("active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Refunded,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Refunded, None)),
+    );
     app.vpn_sessions.clear();
     let method = Method::GET;
     let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
@@ -2088,12 +2079,9 @@ async fn get_vpn_session_rejects_wrong_account_after_wsv_cache_loss() {
         .get(&session.session_id)
         .expect("active session")
         .clone();
-    app.state
-        .insert_vpn_lease_for_testing(lease_record_from_session_record(
-            &active_record,
-            VpnLeaseStatusV1::Active,
-            None,
-        ));
+    app.state.insert_vpn_lease_for_testing(
+        &(lease_record_from_session_record(&active_record, VpnLeaseStatusV1::Active, None)),
+    );
     app.vpn_sessions.clear();
     let method = Method::GET;
     let uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
@@ -2219,7 +2207,7 @@ async fn list_vpn_receipts_reconstructs_settled_records_from_wsv() {
     stale_local.earned_fee = Quantity::zero();
     stale_local.refunded_fee = stale_local.lease_fee.clone();
     store_receipt(&app, stale_local);
-    app.state.insert_vpn_lease_for_testing(lease);
+    app.state.insert_vpn_lease_for_testing(&(lease));
     let method = Method::GET;
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(&account, &key_pair, &method, &uri, &[]);
@@ -2260,11 +2248,12 @@ fn list_vpn_receipts_uses_bounded_account_projection() {
     let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
     for ordinal in 1..=30_u16 {
         app.state
-            .insert_vpn_lease_for_testing(settled_lease_for_account(&account, ordinal));
+            .insert_vpn_lease_for_testing(&(settled_lease_for_account(&account, ordinal)));
     }
     for ordinal in 100..200_u16 {
-        app.state
-            .insert_vpn_lease_for_testing(settled_lease_for_account(&unrelated_account, ordinal));
+        app.state.insert_vpn_lease_for_testing(
+            &(settled_lease_for_account(&unrelated_account, ordinal)),
+        );
     }
     let world = app.state.world_view();
     assert_eq!(
@@ -2413,7 +2402,7 @@ async fn session_revalidation_rejects_a_consensus_transition_after_payment_snaps
     lease.status = VpnLeaseStatusV1::Refunded;
     lease.refunded_at_ms = Some(lease.refund_available_at_ms());
     lease.refunded_fee = lease.lease_fee.clone();
-    app.state.insert_vpn_lease_for_testing(lease);
+    app.state.insert_vpn_lease_for_testing(&(lease));
 
     let error = revalidate_unchanged_paid_lease(
         &app,

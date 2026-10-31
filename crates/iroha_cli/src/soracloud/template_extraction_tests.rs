@@ -1,5 +1,10 @@
 #[test]
 fn real_template_wrappers_are_parametric_and_single_pass() {
+    const NAME: &str = "travel_ops";
+    const PACKAGE: &str = "travel-ops";
+    const BUNDLE: &str = "http-service.tgz";
+    const DNS: &str = "travel-ops.sora";
+
     let render_outputs = |name: &str, package: &str, bundle: &str, dns: &str| {
         [
             ("site_package_json", site_package_json(package)),
@@ -71,10 +76,6 @@ fn real_template_wrappers_are_parametric_and_single_pass() {
         ]
     };
 
-    const NAME: &str = "travel_ops";
-    const PACKAGE: &str = "travel-ops";
-    const BUNDLE: &str = "http-service.tgz";
-    const DNS: &str = "travel-ops.sora";
     let canonical = render_outputs(NAME, PACKAGE, BUNDLE, DNS);
     let name = "line one\n\"quoted\" {braced} __SORACLOUD_PACKAGE_NAME__ 雪";
     let package = "pkg-{braced}-__SORACLOUD_SERVICE_NAME__";

@@ -348,7 +348,7 @@ fn require_initial_upload(record: &PlanRecord, journal: &Journal) -> Result<()> 
             "expiry reconciliation supports only the single-chunk initial upload"
         ));
     }
-    journal.require_expiry_recovery_entries(MAX_HEIGHT as usize + 5, None)?;
+    journal.require_expiry_recovery_entries(usize::try_from(MAX_HEIGHT)? + 5, None)?;
     let attempt: TransactionAttempt = journal.read("attempt-0000.json")?;
     if attempt.name != record.transactions[0].name || attempt.hash != record.transactions[0].hash {
         return Err(eyre!(
@@ -358,7 +358,7 @@ fn require_initial_upload(record: &PlanRecord, journal: &Journal) -> Result<()> 
     Ok(())
 }
 
-pub(super) fn retained(
+pub fn retained(
     record: &PlanRecord,
     journal: &Journal,
 ) -> DeploymentResult<Option<DeploymentValidityWindowElapsed>> {
@@ -369,12 +369,12 @@ pub(super) fn retained(
         require_initial_upload(record, journal)?;
         let expected: DeploymentValidityWindowElapsed = journal.read(MARKER)?;
         if !(2..=MAX_HEIGHT).contains(&expected.finalized_height)
-            || expected.proof_digests.len() != expected.finalized_height as usize
+            || expected.proof_digests.len() != usize::try_from(expected.finalized_height)?
         {
             return Err(eyre!("invalid retained expiry history range"));
         }
         journal.require_expiry_recovery_entries(
-            MAX_HEIGHT as usize + 5,
+            usize::try_from(MAX_HEIGHT)? + 5,
             Some(expected.finalized_height),
         )?;
         let root: RetainedRoot = journal.read(ROOT)?;

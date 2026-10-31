@@ -123,9 +123,9 @@ docker run --rm \
   hyperledger/iroha:taira-local
 ```
 
-The runtime image also carries the bundled rANS tables under
-`/opt/iroha/codec/rans/tables`, matching the default
-`streaming.codec.rans_tables_path`.
+The daemon uses the canonical rANS tables compiled into `iroha3d` unless
+`streaming.codec.rans_tables_path` names another artefact; the runtime image also
+carries the repository tables under `/opt/iroha/codec/rans/tables` for explicit paths.
 
 For disconnected or one-node smoke starts, mount both a manifest JSON and a
 signed genesis payload. The entrypoint accepts `IROHA_TAIRA_SIGNED_GENESIS` and

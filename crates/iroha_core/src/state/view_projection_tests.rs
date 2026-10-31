@@ -336,6 +336,19 @@ fn set_asset_metadata_inserts_value_and_event() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("fixture crypto policy parameter"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
@@ -393,6 +406,19 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("fixture crypto policy parameter"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();

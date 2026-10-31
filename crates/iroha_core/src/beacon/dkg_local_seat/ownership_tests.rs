@@ -74,7 +74,7 @@ pub(super) fn authenticated_source(
 // These canonical bytes are a component-only intent commitment. Actual daemon
 // write-ahead/file+directory durability and durable replay are separate controls.
 fn component_intent(session: &GlobalThresholdBeaconDkgSessionV1, seat: u16) -> [u8; 32] {
-    Hash::new(&norito::encode_canonical(&(session.attempt_id, seat, session.start_height)).unwrap())
+    Hash::new(norito::encode_canonical(&(session.attempt_id, seat, session.start_height)).unwrap())
         .into()
 }
 
@@ -89,15 +89,15 @@ fn checked_context(
     authority
         .checkpoint_context(
             clock,
-            1,
-            seat,
+            (1, seat),
             signer,
-            "software-provider",
-            revision,
-            Hash::new(publication).into(),
-            [0; 32],
-            [0; 32],
-            component_intent(&authority.session(), seat),
+            ("software-provider", revision),
+            (
+                Hash::new(publication).into(),
+                [0; 32],
+                [0; 32],
+                component_intent(&authority.session(), seat),
+            ),
         )
         .unwrap()
 }
@@ -654,15 +654,15 @@ fn phase_one_restore_authenticates_original_signatures_proof_canonical_bytes_and
         authority
             .checkpoint_context(
                 &foreign_clock,
-                1,
-                1,
+                (1, 1),
                 signer,
-                "software-provider",
-                7,
-                context.binding().public_output_hash,
-                [0; 32],
-                [0; 32],
-                component_intent(&authority.session(), 1)
+                ("software-provider", 7),
+                (
+                    context.binding().public_output_hash,
+                    [0; 32],
+                    [0; 32],
+                    component_intent(&authority.session(), 1)
+                )
             )
             .is_err()
     );
@@ -1156,7 +1156,7 @@ fn original_dealer_entropy_failures_remain_local_threshold_causes() {
         unavailable: bool,
         calls: usize,
     }
-    impl rand::TryRngCore for Entropy {
+    impl rand::TryRng for Entropy {
         type Error = std::io::Error;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];

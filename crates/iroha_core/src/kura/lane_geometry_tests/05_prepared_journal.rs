@@ -586,10 +586,8 @@ fn prepared_geometry_non_tail_retry_preserves_rolled_back_successor_history() {
         kura.apply_lane_geometry_transition_at_height(
             configs[index],
             configs[index + 1],
-            incarnations[index],
-            incarnations[index + 1],
-            activations[index],
-            activations[index + 1],
+            (incarnations[index], incarnations[index + 1]),
+            (activations[index], activations[index + 1]),
             &BTreeSet::new(),
             9 + index as u64,
         )
@@ -638,10 +636,8 @@ fn prepared_geometry_non_tail_retry_preserves_rolled_back_successor_history() {
         kura.apply_lane_geometry_transition_at_height(
             configs[index],
             configs[index + 1],
-            incarnations[index],
-            incarnations[index + 1],
-            activations[index],
-            activations[index + 1],
+            (incarnations[index], incarnations[index + 1]),
+            (activations[index], activations[index + 1]),
             &BTreeSet::new(),
             9 + index as u64,
         )

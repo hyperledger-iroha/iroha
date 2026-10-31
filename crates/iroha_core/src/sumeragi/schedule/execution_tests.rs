@@ -9,19 +9,26 @@ use iroha_model_base::peer::PeerId;
 fn registered_world(context: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1) -> World {
     let mut world = World::new();
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(
                 iroha_config::parameters::defaults::nexus::fees::genesis_policy()
                     .into_custom_parameter()
                     .unwrap(),
-            ))
-            .expect("explicit committed fixture fee policy");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("explicit committed fixture fee policy");
         parameters.commit();
     }
     for member in &context.committee {
@@ -74,20 +81,28 @@ fn sccp_executed_genesis_rejects_work_budgets_that_starve_pause_enactment() {
             ..GovernanceClockParametersV1::default()
         };
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(CustomParameter::new(
                     GovernanceClockParametersV1::parameter_id().clone(),
                     norito::json::to_json(&policy)
                         .unwrap()
                         .parse::<iroha_primitives::json::Json>()
                         .unwrap(),
-                )))
-                .unwrap();
+                )),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .unwrap();
             parameters.commit();
         }
         let result = validate_executed_genesis(&world.view(), &context);
-        if !(minimum..=maximum).contains(&units) {
+        if (minimum..=maximum).contains(&units) {
+            result.unwrap_or_else(|error| {
+                panic!("the inclusive {minimum}..={maximum} range supports SCCP progress: {units}: {error:?}")
+            });
+        } else {
             assert!(
                 matches!(result,
                     Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -96,10 +111,6 @@ fn sccp_executed_genesis_rejects_work_budgets_that_starve_pause_enactment() {
                 ),
                 "genesis must reject budgets outside the current ticket, draw, six-conclusion and enactment range\nunits={units}, result={result:?}"
             );
-        } else {
-            result.unwrap_or_else(|error| {
-                panic!("the inclusive {minimum}..={maximum} range supports SCCP progress: {units}: {error:?}")
-            });
         }
     }
 }
@@ -125,33 +136,43 @@ fn executed_genesis_clock_drift_bound_cannot_be_bypassed_by_raw_state() {
         u64::MAX,
     ] {
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Sumeragi(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Sumeragi(
                     iroha_data_model::parameter::SumeragiParameter::DueWorkMaxLagMs(
                         std::num::NonZeroU64::new(124_000).unwrap(),
                     ),
-                ))
-                .unwrap();
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .unwrap();
             let governance_clock = GovernanceClockParametersV1 {
                 due_work_max_lag_ms: 2 * MAX_CLOCK_DRIFT_BOUND_MS
                     + 4 * parameters.sumeragi().block_cadence_ms().get(),
                 ..GovernanceClockParametersV1::default()
             };
-            parameters
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(CustomParameter::new(
                     GovernanceClockParametersV1::parameter_id().clone(),
                     norito::json::to_json(&governance_clock)
                         .unwrap()
                         .parse::<iroha_primitives::json::Json>()
                         .unwrap(),
-                )))
-                .unwrap();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Sumeragi(
+                )),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Sumeragi(
                     iroha_data_model::parameter::SumeragiParameter::MaxClockDriftMs(value),
-                ))
-                .expect("raw State bypasses instruction admission for this control");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("raw State bypasses instruction admission for this control");
             parameters.commit();
         }
         let result = validate_executed_genesis(&world.view(), &context);
@@ -187,11 +208,17 @@ fn executed_genesis_due_work_policy_cannot_be_bypassed_by_raw_state() {
         (u64::MAX / 7_201 + 1, u64::MAX, false),
     ] {
         {
-            let mut parameters = world.parameters.block();
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded fixture parameter cell");
             let mut current = parameters.sumeragi().clone();
             current.block_cadence_ms = std::num::NonZeroU64::new(cadence).unwrap();
             current.due_work_max_lag_ms = std::num::NonZeroU64::new(lag).unwrap();
-            parameters.set_sumeragi(current);
+            crate::state::set_sumeragi_cell_for_testing(
+                &mut parameters,
+                current,
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture consensus family");
             parameters.commit();
         }
         assert_eq!(
@@ -271,10 +298,21 @@ fn executed_genesis_requires_committed_fee_policy_without_defaults() {
     let world = registered_world(&context);
     validate_executed_genesis(&world.view(), &context).unwrap();
     let policy = {
-        let mut parameters = world.parameters.block();
-        let policy = parameters
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
+        // This negative control authors a missing-policy fixture; runtime
+        // successors must continue rejecting initialized-policy removal.
+        let mut authored = parameters.get().get().clone();
+        let policy = authored
             .remove_custom_parameter(&RootFeePolicy::parameter_id())
+            .expect("root fee policy removal is permitted")
             .expect("registered world has a committed fee policy");
+        let missing = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &authored,
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("funded missing-policy fixture");
+        *parameters.get_mut() = missing;
         parameters.commit();
         policy
     };
@@ -285,8 +323,14 @@ fn executed_genesis_requires_committed_fee_policy_without_defaults() {
         )) if message == "executed genesis fee policy is invalid: committed root fee policy is absent"
     ));
     {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(Parameter::Custom(policy)).unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Custom(policy),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
     }
     validate_executed_genesis(&world.view(), &context).unwrap();

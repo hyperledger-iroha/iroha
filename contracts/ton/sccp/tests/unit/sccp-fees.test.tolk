@@ -658,7 +658,7 @@ get fun `test the cost rows of the specification at n=31`() {
 /// sizes, a 1024-byte sender, four bucket activations, and a key-changing
 /// rotation to another committee of `n`.
 fun measureLimits(n: int) {
-    val env = setupEnvWith(n, SCCP_TON_AMOUNT_LIMIT * 4);
+    val env = setupEnvWith(n, SCCP_TON_AMOUNT_LIMIT - 1);
     val alice = testing.treasury("alice").address;
     fillCheckpointSlots(env);
     var maximumCustody = minterStorage(env);
@@ -785,7 +785,7 @@ get fun `test the certificate steps stay within their gas limits at the largest 
 // The other steps.
 
 get fun `test the bucket and wallet round trip of a finalize and the floors`() {
-    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT * 4);
+    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT - 1);
     val alice = testing.treasury("alice").address;
     // a mint of the largest amount that activates four buckets and deploys the wallet
     val nonce = (SCCP_MAX_DEPLOY_AHEAD - 1) * SCCP_BUCKET_BITS + 7;
@@ -876,7 +876,12 @@ get fun `test the bucket and wallet round trip of a finalize and the floors`() {
         consumedValue(res, value, env.deployer),
     );
 
-    // the same message again: the bucket answers `sccp_already_consumed`
+    // The same message again: the bucket answers `sccp_already_consumed`. The
+    // cap is full, and the early refusal of §5.1.4 would answer first, so a
+    // burn frees it.
+    expect(
+        sendBurn(env, alice, SCCP_TON_AMOUNT_LIMIT - 1, snakeOfLength(8), burnValue(env, alice)),
+    ).toHaveAllSuccessfulTxs();
     val again = sendFinalize(env, env.deployer, d, finalizeValue(env, nonce));
     expect(again).toHaveAllSuccessfulTxs();
     expect(again).toHaveSuccessfulTx<SccpRecoveryAck>({ to: env.minter.address });

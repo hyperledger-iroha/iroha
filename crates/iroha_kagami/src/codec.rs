@@ -4,9 +4,10 @@ use color_eyre::{
     eyre::{Result, eyre},
     owo_colors::OwoColorize,
 };
-use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
+use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain};
 use iroha_fs::FileMetadata;
 use iroha_genesis::RawGenesisTransaction;
+use iroha_model_base::peer::Peer;
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
 use std::{
     collections::BTreeMap,
@@ -588,8 +589,9 @@ mod tests {
         read_codec_file_bounded, read_codec_input_bounded, run_json_conversion,
     };
     use color_eyre::eyre::Result as EyreResult;
-    use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
+    use iroha_data_model::{account::NewAccount, asset::AssetId};
     use iroha_genesis::RawGenesisTransaction;
+    use iroha_model_base::peer::Peer;
     use iroha_schema::{Compact, TypeId};
     use std::{fmt::Write as _, fs, io::BufWriter, path::PathBuf, sync::Arc};
 

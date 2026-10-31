@@ -157,7 +157,7 @@ fn write_report(context: &mut impl RunContext, report: &Report) -> Result<()> {
     context.println_data(render_report(report)?)
 }
 
-pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
+pub(super) fn run(context: &mut impl RunContext, args: &Args) -> Result<()> {
     ensure!(
         context.output_format() == CliOutputFormat::Json,
         "genesis-readiness requires --output-format json"
@@ -207,11 +207,8 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
             .1
             .to_vec()
     });
-    let verifier = SumeragiFinalityVerifier::new(
-        genesis.block(),
-        &manifest.chain_id().to_string(),
-        validators,
-    )?;
+    let verifier =
+        SumeragiFinalityVerifier::new(genesis.block(), manifest.chain_id().as_ref(), validators)?;
     let network_id = context.config().network_id;
     ensure!(
         network_id == NetworkId::from_genesis_hash(genesis_hash),
@@ -225,7 +222,7 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     write_report(
         context,
         &report(
-            &args,
+            args,
             network_id,
             verifier.instance().0,
             verifier.root_scope(),

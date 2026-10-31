@@ -8,7 +8,7 @@ JAVA_HOME_OVERRIDE="${PRIVACY_JVM_SDK_JAVA_HOME:-}"
 PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
-ABI31_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
+ABI33_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
 
@@ -55,8 +55,8 @@ SELECTED_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
   || fail "the tracked root Cargo.lock does not match the canonical reviewed graph"
 
 RUSTC_VERSION="$("${RUSTC_BIN}" --version)"
-[[ "${RUSTC_VERSION}" == rustc\ 1.93.1\ * ]] \
-  || fail "privacy JVM native execution requires exact rustc 1.93.1"
+[[ "${RUSTC_VERSION}" == rustc\ 1.99.1\ * ]] \
+  || fail "privacy JVM native execution requires exact rustc 1.99.1"
 HOST_TRIPLE="$("${RUSTC_BIN}" -vV | sed -n 's/^host: //p')"
 [[ "${HOST_TRIPLE}" =~ ^[A-Za-z0-9_.-]+$ ]] \
   || fail "rustc returned a non-canonical host triple"
@@ -98,7 +98,7 @@ case "${HOST_TRIPLE}" in
   *) NATIVE_LIBRARY="${TARGET_ARTIFACT_DIR}/libconnect_norito_bridge.so" ;;
 esac
 [[ -f "${NATIVE_LIBRARY}" && ! -L "${NATIVE_LIBRARY}" ]] \
-  || fail "fresh ABI31 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
+  || fail "fresh ABI33 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
 # This is the exact same-target dev-tools output just built above, never an
 # inherited path or a Cargo command launched by a JVM test.
 case "${HOST_TRIPLE}" in
@@ -110,30 +110,30 @@ esac
 FIXTURE_GENERATOR_SHA256="$(sha256_file "${FIXTURE_GENERATOR}")"
 
 NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
-NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi31.json"
-CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi31-csharp.json"
+NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi33.json"
+CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi33-csharp.json"
 
 # Native evidence binds the clean source tree, including the tracked root lock.
 # The independently sealed canonical graph snapshot remains external for all
 # wrapped Cargo invocations and is authenticated independently above.
 
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" record \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --sdk c-jni \
   --target "${HOST_TRIPLE}"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" record \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --sdk csharp \
   --target "${HOST_TRIPLE}"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
@@ -206,8 +206,19 @@ export JAVA_HOME
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test --no-build-cache --rerun-tasks \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitiesV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCapabilityModelInvariantV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.tx.SignedAttachmentVectorsTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.SignedAttachmentsCodecTest \
+  --tests org.hyperledger.iroha.sdk.tx.TransactionBuilderTest \
+  --tests org.hyperledger.iroha.sdk.tx.SignedTransactionHasherTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
@@ -272,11 +283,11 @@ NORITO_RUNTIME_CLASSPATH="$(<"${NORITO_RUNTIME_CLASSPATH_FILE}")"
 [[ "$(sha256_file "${FIXTURE_GENERATOR}")" == "${FIXTURE_GENERATOR_SHA256}" ]] \
   || fail "fixture generator changed during privacy JVM execution"
 
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-"${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
@@ -293,17 +304,17 @@ if [[ -n "${PRIVACY_JVM_NATIVE_EXPORT_DIR:-}" ]]; then
   EXPORTED_LIBRARY="${PRIVACY_JVM_NATIVE_EXPORT_DIR}/$(basename "${NATIVE_LIBRARY}")"
   install -m 500 "${NATIVE_LIBRARY}" "${EXPORTED_LIBRARY}"
   install -m 400 "${NATIVE_MANIFEST}" \
-    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi31-c-jni.json"
+    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi33-c-jni.json"
   install -m 400 "${CSHARP_NATIVE_MANIFEST}" \
-    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi31-csharp.json"
+    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi33-csharp.json"
   install -m 400 "${SELECTED_CARGO_LOCK}" \
     "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/Cargo.lock"
-  "${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+  "${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
     --artifact "${EXPORTED_LIBRARY}" \
-    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi31-c-jni.json" \
+    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi33-c-jni.json" \
     --source-root "${ROOT_DIR}"
-  "${PYTHON_BIN}" -I -S "${ABI31_CHECKER}" verify \
+  "${PYTHON_BIN}" -I -S "${ABI33_CHECKER}" verify \
     --artifact "${EXPORTED_LIBRARY}" \
-    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi31-csharp.json" \
+    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi33-csharp.json" \
     --source-root "${ROOT_DIR}"
 fi

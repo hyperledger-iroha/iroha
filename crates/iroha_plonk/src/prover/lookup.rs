@@ -31,7 +31,8 @@ use crate::secret::SecretPolynomial;
 use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
+use rayon::prelude::*;
 
 use super::{
     ProverError, batch::invert_column_cancellable, quotient::CompiledExpressions, random_values,
@@ -118,7 +119,7 @@ pub(super) trait LookupPermutation<F> {
     /// # Errors
     ///
     /// [`ProverError::LookupInputMissing`] when no permutation exists.
-    fn permute<R: RngCore>(
+    fn permute<R: Rng>(
         &mut self,
         input: &[F],
         table: &[F],
@@ -136,7 +137,7 @@ pub(super) struct VendoredPermutation;
 impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
     const PUBLIC_TABLE_BOUND: bool = true;
 
-    fn permute<R: RngCore>(
+    fn permute<R: Rng>(
         &mut self,
         input: &[F],
         table: &[F],
@@ -157,7 +158,7 @@ impl<F: PastaField> LookupPermutation<F> for VendoredPermutation {
 ///
 /// [`ProverError::LookupInputMissing`] when an input value is not in the
 /// table.
-pub(super) fn permute<F: PastaField, R: RngCore>(
+pub(super) fn permute<F: PastaField, R: Rng>(
     input: &[F],
     table: &[F],
     usable_rows: usize,
@@ -172,12 +173,14 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     // Field ordering converts both operands out of Montgomery form on each
     // comparison. Convert once, then sort compact integer keys in precisely
     // the same canonical order, without a tree allocation for every group.
-    let mut sorted_input =
-        zeroize::Zeroizing::new(input.iter().map(canonical_key).collect::<Vec<_>>());
-    sorted_input.sort_unstable();
-    let mut sorted_table =
-        zeroize::Zeroizing::new(table.iter().map(canonical_key).collect::<Vec<_>>());
-    sorted_table.sort_unstable();
+    // Equal keys are identical values, so the parallel sorts give one sequence.
+    let sorted_keys = |column: &[F]| {
+        let mut keys =
+            zeroize::Zeroizing::new(column.par_iter().map(canonical_key).collect::<Vec<_>>());
+        keys.par_sort_unstable();
+        keys
+    };
+    let (sorted_input, sorted_table) = rayon::join(|| sorted_keys(input), || sorted_keys(table));
     let mut groups = sorted_input
         .chunk_by(|left, right| left == right)
         .peekable();
@@ -199,21 +202,26 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     if groups.next().is_some() {
         return Err(missing());
     }
-    let mut permuted_input = SecretPolynomial::new(Vec::with_capacity(n));
-    let mut permuted_table = SecretPolynomial::new(Vec::with_capacity(n));
+    // The sorted input is already the permuted input; order the table keys, then
+    // convert both back to field elements in parallel within the final allocations.
+    let mut table_keys = zeroize::Zeroizing::new(Vec::with_capacity(usable_rows));
     let mut leftover = leftover.iter().copied();
     for group in sorted_input.chunk_by(|left, right| left == right) {
-        let value = canonical_value::<F>(group[0]);
-        permuted_input.push(value);
-        permuted_table.push(value);
+        table_keys.push(group[0]);
         for _ in 1..group.len() {
-            permuted_input.push(value);
-            permuted_table.push(canonical_value(leftover.next().ok_or_else(missing)?));
+            table_keys.push(leftover.next().ok_or_else(missing)?);
         }
     }
-    if leftover.next().is_some() || permuted_input.len() != usable_rows {
+    if leftover.next().is_some() || sorted_input.len() != usable_rows {
         return Err(missing());
     }
+    let to_field = |keys: &[[u64; 4]]| {
+        let mut values = SecretPolynomial::new(Vec::with_capacity(n));
+        values.par_extend(keys.par_iter().map(|key| canonical_value::<F>(*key)));
+        values
+    };
+    let (mut permuted_input, mut permuted_table) =
+        rayon::join(|| to_field(&sorted_input), || to_field(&table_keys));
     let input_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
     permuted_input.extend_from_slice(&input_pad);
     let table_pad = SecretPolynomial::new(random_values::<F, _>(rng, pad));
@@ -308,7 +316,7 @@ pub(super) fn commit_permuted<C, T, R, P>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
     P: LookupPermutation<C::ScalarExt>,
 {
     if shape.lookups == 0 {
@@ -413,7 +421,7 @@ pub(super) fn commit_products<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let tables = pk.commitment_tables();
     let u = shape.usable_rows;
@@ -468,16 +476,15 @@ where
             )?
             .to_affine();
         write_point(transcript, &commitment)?;
-        pk.domain().ifft_cancellable(&mut product, cancellation)?;
         // The grand product is the last consumer of the evaluations. Move
         // their allocations into coefficient form instead of retaining an
         // extra pair of n-element vectors for every pending lookup.
         let mut input_poly = SecretPolynomial::new(core::mem::take(&mut lookup.input_values));
         let mut table_poly = SecretPolynomial::new(core::mem::take(&mut lookup.table_values));
-        pk.domain()
-            .ifft_cancellable(&mut input_poly, cancellation)?;
-        pk.domain()
-            .ifft_cancellable(&mut table_poly, cancellation)?;
+        // Three independent transforms: one column alone leaves most workers idle.
+        [&mut product, &mut input_poly, &mut table_poly]
+            .into_par_iter()
+            .try_for_each(|column| pk.domain().ifft_cancellable(column, cancellation))?;
         committed.push(Committed {
             input_poly: input_poly.into_vec(),
             input_blind: lookup.input_blind,
@@ -496,7 +503,7 @@ mod tests {
 
     use iroha_pasta::{Ep, Eq, Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::{RngCore, SeedableRng};
+    use rand_core::{Rng, SeedableRng};
 
     use super::*;
     use crate::{

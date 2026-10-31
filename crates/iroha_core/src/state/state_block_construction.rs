@@ -165,6 +165,7 @@ impl State {
                 canonical_runtime,
                 native_execution_tip,
                 projection,
+                privacy,
                 block_hashes,
                 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
                 da_rewind_releases,
@@ -173,6 +174,8 @@ impl State {
                 .expect("original acquired State block")
                 .into_fields();
             let block = StateBlock::from_fields(StateBlockFields {
+                genesis_crypto_policy: None,
+                genesis_staking_policy: None,
                 local_storage_refusal: None,
                 _ivm_refunds: pipeline_ivm_prepared_cache
                     .as_ref()
@@ -203,6 +206,7 @@ impl State {
                 query_ledger_time_ms: query_ledger_time_ms.take().expect("prepared State input"),
                 soracloud_runtime: soracloud_runtime.take().expect("prepared State input"),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
+                ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 accounts_snapshot_cache: accounts_snapshot_cache
                     .take()
                     .expect("prepared State input"),
@@ -212,7 +216,7 @@ impl State {
                 lane_incarnation_lineage: projection.lineage,
                 lane_incarnation_activation_heights: projection.activation_heights,
                 lane_manifests: projection.manifests,
-                lane_privacy_registry: projection.privacy,
+                lane_privacy_registry: privacy,
                 lane_compliance: lane_compliance.take().expect("prepared State input"),
                 runtime_policy: runtime_policy.take().expect("prepared State input"),
                 fraud_monitoring: fraud_monitoring.take().expect("prepared State input"),

@@ -13,7 +13,10 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet down`↴](#kagami-localnet-down)
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
-* [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
+* [`kagami node`↴](#kagami-node)
+* [`kagami node init`↴](#kagami-node-init)
+* [`kagami network`↴](#kagami-network)
+* [`kagami network create`↴](#kagami-network-create)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
@@ -27,9 +30,13 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami contract deploy`↴](#kagami-contract-deploy)
 * [`kagami contract view`↴](#kagami-contract-view)
 * [`kagami contract call`↴](#kagami-contract-call)
+* [`kagami contract saved`↴](#kagami-contract-saved)
 * [`kagami package`↴](#kagami-package)
 * [`kagami package publish`↴](#kagami-package-publish)
 * [`kagami docker`↴](#kagami-docker)
+* [`kagami sora-network`↴](#kagami-sora-network)
+* [`kagami sora-network generate`↴](#kagami-sora-network-generate)
+* [`kagami sora-network validate-beacon-launch`↴](#kagami-sora-network-validate-beacon-launch)
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami genesis`↴](#kagami-genesis)
 * [`kagami genesis sign`↴](#kagami-genesis-sign)
@@ -42,14 +49,11 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
-* [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
-* [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap catalog`↴](#kagami-privacy-bootstrap-catalog)
 * [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
-* [`kagami advanced network-bootstrap`↴](#kagami-advanced-network-bootstrap)
-* [`kagami advanced network-bootstrap prepare`↴](#kagami-advanced-network-bootstrap-prepare)
 * [`kagami advanced client-configs`↴](#kagami-advanced-client-configs)
 * [`kagami advanced codec`↴](#kagami-advanced-codec)
 * [`kagami advanced codec list-types`↴](#kagami-advanced-codec-list-types)
@@ -60,6 +64,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
+* [`kagami advanced kura pack-native-contexts`↴](#kagami-advanced-kura-pack-native-contexts)
 * [`kagami advanced kura sidecar`↴](#kagami-advanced-kura-sidecar)
 * [`kagami advanced markdown-help`↴](#kagami-advanced-markdown-help)
 * [`kagami advanced schema`↴](#kagami-advanced-schema)
@@ -78,6 +83,9 @@ Common tasks:
   kagami context list
   kagami wizard
   kagami localnet generate --out-dir ./localnet
+  kagami sora-network generate --profile nexus --out-dir ./nexus
+  kagami node init --dir ./node --public-address 203.0.113.7:1337
+  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -88,14 +96,17 @@ Common tasks:
 
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet` — Start and manage a persistent localnet without supplying configuration
+* `node` — Prepare one node directory (keys and starter config) for an existing or new network
+* `network` — Sign genesis for validators that hold their own keys and write the files nodes share
 * `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
 * `package` — Publish native Musubi packages through an exact generated local environment
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
+* `sora-network` — Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
-* `privacy-bootstrap` — Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+* `privacy-bootstrap` — Inspect native privacy profiles and prepare reviewed Taira release inputs
 * `verify` — Verify a genesis manifest against a preset profile
 * `advanced` — Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
 
@@ -148,8 +159,7 @@ Start and manage a persistent localnet without supplying configuration
 * `logs` — Read a bounded retained supervisor or validator log tail
 * `down` — Stop the owned validators, preserving their identities and ledger
 * `reset` — Explicitly retire one stopped generation so the next up creates a fresh ledger
-* `generate` — Generate an operator-owned network bundle without starting validators
-* `validate-beacon-launch` — Validate an isolated native beacon configuration and opaque descriptor handoff
+* `generate` — Generate a developer network bundle without starting validators
 
 
 
@@ -168,11 +178,14 @@ Generate, start, verify, and select a localnet without supplying configuration
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
-* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds
+* `--with-storage` — Provision local storage and package-registry services when creating this network
+* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds.
 
-  Default value: `30`
+   A ready localnet returns as soon as all four validators are verified; the budget only bounds slow first starts, such as debug builds on a loaded machine.
+
+  Default value: `120`
 
 
 
@@ -191,7 +204,7 @@ Observe the live supervisor and its retained environment
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -211,12 +224,13 @@ Read a bounded retained supervisor or validator log tail
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
-* `--peer <PEER>` — Validator index (0..3). Omit to read the supervisor log
+* `--peer <PEER>` — Validator index (0..3). Omit to read the supervisor log, which is usually short; validator output is here
 * `--bytes <BYTES>` — Maximum bytes returned from the end of the log
 
   Default value: `16384`
+* `-f`, `--follow` — Keep printing new log output until interrupted
 
 
 
@@ -235,7 +249,7 @@ Stop the owned validators, preserving their identities and ledger
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -253,14 +267,14 @@ Explicitly retire one stopped generation so the next up creates a fresh ledger
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
 
 ## `kagami localnet generate`
 
-Generate an operator-owned network bundle without starting validators
+Generate a developer network bundle without starting validators
 
 **Usage:** `kagami localnet generate [OPTIONS] --out-dir <DIR>`
 
@@ -272,24 +286,10 @@ Generate an operator-owned network bundle without starting validators
 * `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys.
 
    Omit this option to generate independent keys from operating-system entropy.
-* `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
+* `--chain-id <CHAIN_ID>` — Canonical developer chain identifier written into genesis, peer configs, and the client config. Public chain identities are rejected
 
   Default value: `00000000-0000-0000-0000-000000000000`
-* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
-* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
-
-  Possible values: `dataspace`, `nexus`
-
-* `--private-dataspace <DATASPACE>` — Select an exact restricted dataspace preset for the `dataspace` Sora profile
-
-  Possible values:
-  - `sbp`:
-    State Bank of Pakistan dataspace (id 10, lane 3)
-  - `cbuae`:
-    Central Bank of the UAE dataspace (id 12, lane 4)
-  - `bpng`:
-    Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5)
-
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs
 * `--perf-profile <PROFILE>` — Apply a localnet performance profile (10k TPS / 1s finality presets)
 
   Possible values: `10k-permissioned`, `10k-npos`
@@ -315,25 +315,82 @@ Generate an operator-owned network bundle without starting validators
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
 * `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
-* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned`. Sora profile localnets and perf profiles require `npos`
+* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned`; perf profiles select their own mode
 
   Possible values: `permissioned`, `npos`
 
 
 
 
-## `kagami localnet validate-beacon-launch`
+## `kagami node`
 
-Validate an isolated native beacon configuration and opaque descriptor handoff
+Prepare one node directory (keys and starter config) for an existing or new network
 
-**Usage:** `kagami localnet validate-beacon-launch --network-dir <NETWORK_DIR> --peer-index <PEER_INDEX> --beacon-config <BEACON_CONFIG> --beacon-credential <BEACON_CREDENTIAL>`
+**Usage:** `kagami node <COMMAND>`
+
+###### **Subcommands:**
+
+* `init` — Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+
+
+## `kagami node init`
+
+Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+**Usage:** `kagami node init [OPTIONS] --dir <DIR>`
 
 ###### **Options:**
 
-* `--network-dir <NETWORK_DIR>` — Absolute directory containing the unchanged generated peer0..3 configurations
-* `--peer-index <PEER_INDEX>` — Zero-based generated peer index
-* `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
-* `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
+* `--dir <DIR>` — Node directory: keys go to `<DIR>/secrets/`, state to `<DIR>/state/`.
+
+   It is created owner-only when missing; an existing `secrets/` or `config.toml` is never replaced.
+* `--public-address <HOST:PORT>` — P2P address other peers dial (`host:port`); the node binds the same port on all interfaces in the address's IP family (IPv4 for a DNS name)
+
+  Default value: `127.0.0.1:1337`
+* `--api-address <HOST:PORT>` — Torii API listener (`host:port`)
+
+  Default value: `127.0.0.1:8080`
+
+
+
+## `kagami network`
+
+Sign genesis for validators that hold their own keys and write the files nodes share
+
+**Usage:** `kagami network <COMMAND>`
+
+###### **Subcommands:**
+
+* `create` — Sign genesis for `kagami node init` validators and write the files every node shares
+
+
+
+## `kagami network create`
+
+Sign genesis for `kagami node init` validators and write the files every node shares
+
+**Usage:** `kagami network create [OPTIONS] --validator <PUBLIC_KEY@HOST:PORT=POP_HEX> --out-dir <DIR>`
+
+###### **Options:**
+
+* `--validator <PUBLIC_KEY@HOST:PORT=POP_HEX>` — One genesis validator, exactly as `kagami node init` prints it on the validator's host.
+
+   Repeat once per validator. The roster must be an exact Sumeragi `3f + 1` committee (4, 7, 10, ...) of distinct BLS-normal keys, each with a valid proof of possession and a distinct `HOST:PORT` that the other validators dial.
+* `--out-dir <DIR>` — Output directory, created owner-only; an existing directory must be empty
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier; a fresh random UUID when omitted
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and the shared configuration.
+
+   Omit it to use the node default.
+* `--consensus-mode <MODE>` — Consensus mode committed in genesis
+
+  Default value: `permissioned`
+
+  Possible values: `permissioned`, `npos`
+
+* `--torii-url <URL>` — Torii API that the operator's `client.toml` dials; any validator's Torii works
+
+  Default value: `http://127.0.0.1:8080/`
 
 
 
@@ -373,7 +430,7 @@ Create, fund, register, and select four private validators without supplying con
 
   Default value: `60`
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -398,7 +455,7 @@ Explicit administrative parent AMX registration of one retained private generati
 
   Default value: `60`
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -416,7 +473,7 @@ Observe local validators and independently verified parent attachment separately
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -456,7 +513,7 @@ List retained contexts in this workspace
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -474,7 +531,7 @@ Show the selected context, or one exact named context
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -492,7 +549,7 @@ Select an existing context for subsequent developer commands
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -508,6 +565,7 @@ Build and deploy native IVM contracts in one invocation
 * `deploy` — Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed
 * `view` — Read a verified deployed view in the selected managed environment
 * `call` — Prepare, execute or resume a finite durable mutable call
+* `saved` — List the saved deployment journals that deploy --resume accepts, by contract alias
 
 
 
@@ -524,7 +582,7 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Use an existing managed context without changing the workspace selection
 * `--alias <ALIAS>` — Exact authorized contract alias; otherwise derive the name in the context's dataspace
@@ -533,6 +591,9 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 * `--locked` — Require an unchanged Musubi dependency lock
 * `--resume <RESUME>` — Recover this exact retained deployment without rebuilding or signing another plan
 * `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
+* `--timeout <TIMEOUT>` — Startup budget in seconds when the deployment has to start its localnet first
+
+  Default value: `120`
 
 
 
@@ -549,7 +610,7 @@ Read a verified deployed view in the selected managed environment
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 * `--entrypoint <ENTRYPOINT>` — Read-only public entrypoint
@@ -575,14 +636,14 @@ Prepare, execute or resume a finite durable mutable call
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 * `--entrypoint <ENTRYPOINT>` — Mutable public selector, including an explicitly requested lifecycle hook
 * `--args <ARGS>` — Named arguments validated and encoded natively from the retained deployed interface
 
   Default value: `{}`
-* `--max-fee <MAX_FEE>` — Positive aggregate cap across any exact self-grant and the call in the generated fee asset
+* `--max-fee <MAX_FEE>` — Positive aggregate cap across any exact self-grant and the call in the generated fee asset [default: 1000]
 * `--gas-limit <GAS_LIMIT>` — Signature-bound mutable execution budget
 
   Default value: `1500000`
@@ -598,6 +659,21 @@ Prepare, execute or resume a finite durable mutable call
 * `--readback-gas-limit <READBACK_GAS_LIMIT>` — Independent positive gas budget for the readback view
 
   Default value: `1500000`
+
+
+
+## `kagami contract saved`
+
+List the saved deployment journals that deploy --resume accepts, by contract alias
+
+**Usage:** `kagami contract saved [OPTIONS]`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 
 
 
@@ -626,7 +702,7 @@ Publish with original generated client/namespace intent and the canonical durabl
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Use this exact retained environment without changing workspace selection
 * `--package <PACKAGE>` — Exact package when the workspace contains more than one selected member
@@ -682,6 +758,87 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
    Note that the target path still needs to be provided, as it is used to resolve paths.
 * `-F`, `--force` — Overwrite the target file if it already exists
 * `--no-banner` — Do not include the banner with the generation notice in the file
+
+
+
+## `kagami sora-network`
+
+Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
+
+**Usage:** `kagami sora-network <COMMAND>`
+
+###### **Subcommands:**
+
+* `generate` — Generate a Sora network bundle without starting validators
+* `validate-beacon-launch` — Validate an isolated native beacon configuration and opaque descriptor handoff
+
+
+
+## `kagami sora-network generate`
+
+Generate a Sora network bundle without starting validators
+
+**Usage:** `kagami sora-network generate [OPTIONS] --profile <PROFILE> --out-dir <DIR>`
+
+###### **Options:**
+
+* `--profile <PROFILE>` — Sora network profile; `nexus` enforces public dataspace rules
+
+  Possible values:
+  - `dataspace`:
+    Dataspace-oriented defaults; `--private-dataspace` selects a restricted preset
+  - `nexus`:
+    Public dataspace rules (Nexus); the public Taira chain uses this profile
+
+* `--private-dataspace <DATASPACE>` — Select an exact restricted dataspace preset for the `dataspace` profile
+
+  Possible values:
+  - `sbp`:
+    State Bank of Pakistan dataspace (id 10, lane 3)
+  - `cbuae`:
+    Central Bank of the UAE dataspace (id 12, lane 4)
+  - `bpng`:
+    Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5)
+
+* `-p`, `--peers <COUNT>` — Number of validators to generate (an exact `3f + 1` committee, minimum four)
+
+  Default value: `4`
+* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic keys.
+
+   Omit this option to generate independent keys from operating-system entropy.
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
+
+  Default value: `00000000-0000-0000-0000-000000000000`
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
+* `--bind-host <HOST>` — Host to bind P2P and Torii listeners to (host/IP only, no port)
+
+  Default value: `0.0.0.0`
+* `--public-host <HOST>` — Host to advertise to peers and use for client Torii URL (host/IP only, no port)
+
+  Default value: `127.0.0.1`
+* `--base-api-port <BASE_API_PORT>` — Base Torii API port (per-peer increments by 1)
+
+  Default value: `8080`
+* `--base-p2p-port <BASE_P2P_PORT>` — Base P2P port (per-peer increments by 1)
+
+  Default value: `1337`
+* `-o`, `--out-dir <DIR>` — Output directory for configs/genesis/scripts
+* `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second default cadence
+
+
+
+## `kagami sora-network validate-beacon-launch`
+
+Validate an isolated native beacon configuration and opaque descriptor handoff
+
+**Usage:** `kagami sora-network validate-beacon-launch --network-dir <NETWORK_DIR> --peer-index <PEER_INDEX> --beacon-config <BEACON_CONFIG> --beacon-credential <BEACON_CREDENTIAL>`
+
+###### **Options:**
+
+* `--network-dir <NETWORK_DIR>` — Absolute directory containing the unchanged generated peer0..3 configurations
+* `--peer-index <PEER_INDEX>` — Zero-based generated peer index
+* `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
+* `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
 
 
 
@@ -745,6 +902,8 @@ Sign the genesis block
 
    Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
 * `--nexus-context-output <PATH>` — Publish the exact Nexus/AMX context preimage whose hash the signed genesis commits (`nexus-amx-context.v1.bin`). Validators and public reset inputs consume these bytes
+* `--sccp-reset-history <PATH>` — Reserve the final SCCP network identity in the same history used during genesis generation. Rejects an unreserved nonce or any previously signed reset identity
+* `--fresh-sccp-reset-nonce` — Reserve a fresh SCCP reset nonce before signing a revised genesis. Requires the durable history; use when reseating a previously signed network
 * `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all four output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
@@ -768,7 +927,7 @@ Sign the genesis block
 
 Generate a genesis configuration and standard-output in JSON format
 
-**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> [COMMAND]`
+**Usage:** `kagami genesis generate [OPTIONS] --ivm-dir <PATH> --genesis-public-key <MULTI_HASH> --allowed-signing <ALGO> [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -781,6 +940,7 @@ Generate a genesis configuration and standard-output in JSON format
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id. With a profile, it must equal that profile's pinned chain id
 * `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for the public `iroha3-taira`/`iroha3-nexus` profiles
 * `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
+* `--sccp-reset-history <PATH>` — Install the SCCP genesis profile and reserve a fresh nonce in this persistent reset-history directory. Requires NPoS and a global root; retain the history across resets
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
@@ -790,17 +950,7 @@ Generate a genesis configuration and standard-output in JSON format
   Possible values: `permissioned`, `npos`
 
 * `--lane-policy <PATH>` — Optional path to a JSON Sumeragi lane policy (fixed lanes, routes, autoscale) to set in genesis. If omitted, the chain has lane 0 only until governance sets a policy
-* `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
-
-  Possible values: `true`, `false`
-
-* `--default-hash <HASH>` — Override the default hash advertised in the manifest
-* `--allowed-signing <ALGO>` — Replace the allowed signing algorithms (repeat flag to supply multiple values)
-
-  Possible values: `ed25519`, `secp256k1`, `sm2`
-
-* `--sm2-distid-default <DISTID>` — Override the fallback SM2 distinguishing identifier
-* `--allowed-curve-id <CURVE_ID>` — Override the allowed curve identifiers (repeat flag to supply multiple values)
+* `--allowed-signing <ALGO>` — Explicit ordinary signing/controller algorithms in ascending canonical tag order. Repeat this flag for every selected member; duplicates and omissions are not filled in
 
 
 
@@ -919,42 +1069,23 @@ Expand a genesis manifest and show the final ordered transactions
 
 ## `kagami privacy-bootstrap`
 
-Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+Inspect native privacy profiles and prepare reviewed Taira release inputs
 
 **Usage:** `kagami privacy-bootstrap <COMMAND>`
 
 ###### **Subcommands:**
 
-* `emit-taira-v1` — Emit one height-1 template of twelve ordered registration/activation pairs
-* `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `catalog` — Print the complete native catalog, including concrete unavailable implementations
 * `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO genesis source template without creating release artifacts
 * `render-taira-release-v1` — Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
 
 
-## `kagami privacy-bootstrap emit-taira-v1`
+## `kagami privacy-bootstrap catalog`
 
-Emit one height-1 template of twelve ordered registration/activation pairs
+Print the complete native catalog, including concrete unavailable implementations
 
-**Usage:** `kagami privacy-bootstrap emit-taira-v1 --instructions-output <INSTRUCTIONS_OUTPUT> --report-output <REPORT_OUTPUT>`
-
-###### **Options:**
-
-* `--instructions-output <INSTRUCTIONS_OUTPUT>` — New file receiving the canonical governance-template instruction array
-* `--report-output <REPORT_OUTPUT>` — New file receiving base64 Norito instructions and deterministic digests
-
-
-
-## `kagami privacy-bootstrap validate-taira-v1`
-
-Validate an emitted exact-12 instruction set and its digest inventory
-
-**Usage:** `kagami privacy-bootstrap validate-taira-v1 --instructions <INSTRUCTIONS> --report <REPORT>`
-
-###### **Options:**
-
-* `--instructions <INSTRUCTIONS>` — Canonical genesis instruction JSON array emitted by this command group
-* `--report <REPORT>` — Canonical digest inventory emitted alongside the instruction array
+**Usage:** `kagami privacy-bootstrap catalog`
 
 
 
@@ -975,12 +1106,10 @@ Validate a reviewed Taira NEVO genesis source template without creating release 
 
 Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
-**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --activation-instructions <ACTIVATION_INSTRUCTIONS> --activation-report <ACTIVATION_REPORT> --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
+**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
 
 ###### **Options:**
 
-* `--activation-instructions <ACTIVATION_INSTRUCTIONS>` — Exact-12 instruction JSON emitted by `emit-taira-v1`
-* `--activation-report <ACTIVATION_REPORT>` — Digest report emitted together with the exact-12 instructions
 * `--broker-public-export <BROKER_PUBLIC_EXPORT>` — Canonical public JSON emitted by the qualified peer-1 broker
 * `--plan-template <PLAN_TEMPLATE>` — Canonical disabled Taira privacy plan template
 * `--config-template <CONFIG_TEMPLATE>` — Canonical disabled peer-1 Taira config template
@@ -1015,59 +1144,11 @@ Advanced low-level helpers for codec conversion, schema generation, block inspec
 
 ###### **Subcommands:**
 
-* `network-bootstrap` — Prepare signed remote-network bootstrap and native installation authorities offline
 * `client-configs` — Generate per-client CLI configs from a base client.toml
 * `codec` — Commands related to Norito codec conversions
 * `kura` — Commands related to block inspection
 * `markdown-help` — Output CLI documentation in Markdown format
 * `schema` — Generate the schema used for code generation in Iroha SDKs
-
-
-
-## `kagami advanced network-bootstrap`
-
-Prepare signed remote-network bootstrap and native installation authorities offline
-
-**Usage:** `kagami advanced network-bootstrap <COMMAND>`
-
-###### **Subcommands:**
-
-* `prepare` — Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-
-
-## `kagami advanced network-bootstrap prepare`
-
-Verify pinned genesis/proofs and atomically prepare canonical public release artifacts
-
-**Usage:** `kagami advanced network-bootstrap prepare [OPTIONS] --genesis-manifest <GENESIS_MANIFEST> --expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256> --signed-genesis <SIGNED_GENESIS> --genesis-public-key <GENESIS_PUBLIC_KEY> --expected-network-id <EXPECTED_NETWORK_ID> --proof-json <PROOF_JSON> --network-name <NETWORK_NAME> --serial <SERIAL> --generation <GENERATION> --issued-at-ms <ISSUED_AT_MS> --expires-at-ms <EXPIRES_AT_MS> --torii-root <TORII_ROOT> --peer <PEER> --checkpoint-url <CHECKPOINT_URL> --release-public-key <RELEASE_PUBLIC_KEY> --release-key-file <RELEASE_KEY_FILE> --output-dir <OUTPUT_DIR>`
-
-###### **Options:**
-
-* `--genesis-manifest <GENESIS_MANIFEST>` — Exact manifest semantically bound to the independently authenticated signed genesis
-* `--expected-genesis-manifest-sha256 <EXPECTED_GENESIS_MANIFEST_SHA256>` — Manifest SHA256 authenticated independently, for example by native public-inputs metadata
-* `--signed-genesis <SIGNED_GENESIS>` — Original canonical signed genesis, selected independently of peer responses
-* `--genesis-public-key <GENESIS_PUBLIC_KEY>` — Independently selected public key that must authenticate the complete genesis
-* `--expected-network-id <EXPECTED_NETWORK_ID>` — Independently selected exact genesis-derived network identity
-* `--proof-json <PROOF_JSON>` — Existing typed finality-proof JSON, repeated in contiguous height order from 1 through N
-* `--network-name <NETWORK_NAME>` — Exact installed network selection; no official label is inferred
-* `--serial <SERIAL>` — Official monotonic publication serial and resulting installation rollback floor
-* `--generation <GENERATION>` — Explicit monotonic reset generation for this signed genesis
-* `--issued-at-ms <ISSUED_AT_MS>` — Inclusive release validity start in Unix milliseconds
-* `--expires-at-ms <EXPIRES_AT_MS>` — Exclusive expiry; native policy caps validity at one day
-* `--torii-root <TORII_ROOT>` — Approved canonical HTTPS parent root; repeat for each selected root
-* `--peer <PEER>` — Exact BLS public key and approved root as PUBLIC_KEY=HTTPS_ROOT; repeat for every member
-* `--checkpoint-url <CHECKPOINT_URL>` — Independently selected canonical HTTPS location where checkpoint.nrt will be published
-* `--release-public-key <RELEASE_PUBLIC_KEY>` — Independently selected release public key; must match the native signing file
-* `--release-key-file <RELEASE_KEY_FILE>` — Absolute native owner-only canonical release signing-key file (mode 0400 or 0600)
-* `--faucet-root <FAUCET_ROOT>` — Optional approved testnet faucet root; all allowance fields must be supplied together
-* `--faucet-issuer <FAUCET_ISSUER>` — Independently authenticated single-key faucet issuer
-* `--faucet-asset <FAUCET_ASSET>` — Exact sole currency available for automatic fees and namespace rent
-* `--faucet-amount <FAUCET_AMOUNT>` — Positive allowance supplied by one testnet faucet claim
-* `--max-operation-fee <MAX_OPERATION_FEE>` — Finite maximum aggregate fees for one managed parent operation
-* `--max-namespace-rent <MAX_NAMESPACE_RENT>` — Finite maximum combined dataspace and owner-alias one-year namespace rent
-* `--build-registry-root <BUILD_REGISTRY_ROOT>` — Optional approved parent build-registry root; repeat for selected roots
-* `--output-dir <OUTPUT_DIR>` — Fresh directory beneath an existing safe owner-held parent; outputs publish together
 
 
 
@@ -1166,6 +1247,7 @@ Commands related to block inspection
 * `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `finality` — Verify a locally anchored retained prefix and export its exact finality proof
+* `pack-native-contexts` — Rewrite a stopped node's canonical native context records in packed form
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
 
 
@@ -1223,6 +1305,23 @@ Verify a locally anchored retained prefix and export its exact finality proof
 * `--chain-id <CHAIN_ID>` — Exact chain label used to derive the native consensus instance
 * `-H`, `--height <HEIGHT>` — Verify all heights from genesis through this height (1..=4096)
 * `-o`, `--output <OUTPUT>` — Write the public JSON outside the inspected store (default: stdout)
+
+
+
+## `kagami advanced kura pack-native-contexts`
+
+Rewrite a stopped node's canonical native context records in packed form
+
+**Usage:** `kagami advanced kura pack-native-contexts [OPTIONS] <STORE_ROOT>`
+
+###### **Arguments:**
+
+* `<STORE_ROOT>` — Kura store root of the stopped node (its configured `kura.store_dir`)
+
+###### **Options:**
+
+* `--dry-run` — Report the space packing would recover without writing anything
+* `--unpack` — Restore packed records to canonical form for a release that cannot read them
 
 
 

@@ -12,7 +12,7 @@ use super::*;
 use crate::sumeragi::crypto::{BlsCrypto, KeyPairSigner};
 use iroha_crypto::{Algorithm, KeyPair};
 
-pub(crate) fn fixture(size: usize) -> (AvailableBody, AvailabilitySource, AllocationBudget) {
+pub fn fixture(size: usize) -> (AvailableBody, AvailabilitySource, AllocationBudget) {
     let crypto = BlsCrypto::new();
     let mut signers: Vec<_> = (1..=4)
         .map(|seed| {
@@ -79,7 +79,7 @@ pub(crate) fn fixture(size: usize) -> (AvailableBody, AvailabilitySource, Alloca
     (body, source, budget)
 }
 
-pub(crate) fn decode_record(
+pub fn decode_record(
     bytes: &[u8],
     budget: &AllocationBudget,
 ) -> Result<BodyRecord, BodyDecodeError> {

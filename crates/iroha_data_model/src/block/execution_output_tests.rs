@@ -548,7 +548,10 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                     &mut output.failure_root,
                     &mut output.completions,
                 ),
-                ExecutionOutputV1::Network(_) => unreachable!("internal fixture"),
+                ExecutionOutputV1::Network(_)
+                | ExecutionOutputV1::NetworkWithLifecycle(_)
+                | ExecutionOutputV1::PipelineWithLifecycle(_)
+                | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!("internal fixture"),
             };
             *result = rejected();
             *failure_root = Some(diagnostic);
@@ -563,7 +566,10 @@ fn rejected_internal_output_retains_only_the_whole_invocation_root_failure() {
                 let completions = match &mut invalid {
                     ExecutionOutputV1::Pipeline(output) => &mut output.completions,
                     ExecutionOutputV1::Time(output) => &mut output.completions,
-                    ExecutionOutputV1::Network(_) => unreachable!("internal fixture"),
+                    ExecutionOutputV1::Network(_)
+                    | ExecutionOutputV1::NetworkWithLifecycle(_)
+                    | ExecutionOutputV1::PipelineWithLifecycle(_)
+                    | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!("internal fixture"),
                 };
                 match mutation {
                     0 => completions[0].outcome = TriggerCompletedOutcome::Success,
@@ -975,7 +981,10 @@ fn bounded_terminals_roundtrip_maximum_trigger_name_and_scalar_positions() {
             ExecutionOutputV1::Time(row) => {
                 row.invocation.trigger.action_hash = Hash::new(b"different actual action digest");
             }
-            ExecutionOutputV1::Network(_) => unreachable!(),
+            ExecutionOutputV1::Network(_)
+            | ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!(),
         }
         assert_eq!(
             norito::encode_canonical(&changed).unwrap().len(),
@@ -993,7 +1002,10 @@ fn omitted_internal_rejection(mut row: ExecutionOutputV1) -> ExecutionOutputV1 {
         ExecutionOutputV1::Time(row) => {
             (&mut row.result, &mut row.failure_root, &mut row.completions)
         }
-        ExecutionOutputV1::Network(_) => panic!("internal fixture"),
+        ExecutionOutputV1::Network(_)
+        | ExecutionOutputV1::NetworkWithLifecycle(_)
+        | ExecutionOutputV1::PipelineWithLifecycle(_)
+        | ExecutionOutputV1::TimeWithLifecycle(_) => panic!("internal fixture"),
     };
     *result = TransactionResult::new(Err(TransactionRejectionReason::LimitCheck(
         crate::transaction::error::TransactionLimitError {
@@ -1061,7 +1073,10 @@ fn omitted_internal_rejection_refuses_tampered_result_root_completion_and_receip
                 ExecutionOutputV1::Time(row) => {
                     (&mut row.result, &mut row.failure_root, &mut row.completions)
                 }
-                ExecutionOutputV1::Network(_) => unreachable!(),
+                ExecutionOutputV1::Network(_)
+                | ExecutionOutputV1::NetworkWithLifecycle(_)
+                | ExecutionOutputV1::PipelineWithLifecycle(_)
+                | ExecutionOutputV1::TimeWithLifecycle(_) => unreachable!(),
             };
             match fault {
                 0 => *result = rejected(),
@@ -1094,4 +1109,1143 @@ fn omitted_internal_rejection_refuses_tampered_result_root_completion_and_receip
             );
         }
     }
+}
+
+// Test-only owned codec oracle: deliberately NOT a production bounded scanner.
+// The production interface has no implementation in this candidate.
+#[derive(Default)]
+struct LifecycleActionCodecOracle {
+    calls: usize,
+}
+
+impl TriggerLifecycleActionValidatorV1 for LifecycleActionCodecOracle {
+    fn validate_canonical_action(
+        &mut self,
+        frame: &[u8],
+        _payload: &[u8],
+    ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
+        use crate::events::EventFilterBox;
+        self.calls += 1;
+        let action: crate::trigger::action::Action =
+            norito::decode_canonical(frame).map_err(|error| error.to_string())?;
+        let filter_kind = match action.filter() {
+            EventFilterBox::Data(_) => TriggerLifecycleStateKindV1::Data,
+            EventFilterBox::ExecuteTrigger(_) => TriggerLifecycleStateKindV1::ByCall,
+            EventFilterBox::Pipeline(_) => TriggerLifecycleStateKindV1::Pipeline,
+            EventFilterBox::Time(_) => TriggerLifecycleStateKindV1::Time,
+            _ => return Err("invalid trigger filter in test oracle".into()),
+        };
+        Ok(TriggerLifecycleActionSemanticsV1 {
+            filter_kind,
+            has_retry_policy: action.retry_policy().is_some(),
+        })
+    }
+}
+
+fn lifecycle_frame(action: &crate::trigger::action::Action) -> TriggerLifecycleActionFrameV1 {
+    TriggerLifecycleActionFrameV1 {
+        codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+        bytes: norito::encode_canonical(action).unwrap(),
+    }
+}
+
+fn lifecycle_fixture_action(
+    frame: &TriggerLifecycleActionFrameV1,
+) -> crate::trigger::action::Action {
+    norito::decode_canonical(&frame.bytes).unwrap()
+}
+
+fn lifecycle_fixture_limits() -> TriggerLifecycleActionFrameLimitsV1 {
+    // Inert fixture bounds, never a selected production policy.
+    TriggerLifecycleActionFrameLimitsV1 {
+        max_frame_bytes: 1024 * 1024,
+        max_total_frame_bytes: 8 * 1024 * 1024,
+        max_frames: 64,
+    }
+}
+
+fn lifecycle_fixture_validate_frames(trace: &TriggerLifecycleEffectsV1) -> Result<(), String> {
+    trace.validate_action_frames(
+        &mut TriggerLifecycleActionFrameBudgetV1::new(lifecycle_fixture_limits()),
+        &mut LifecycleActionCodecOracle::default(),
+    )
+}
+
+fn lifecycle_network() -> ExecutionOutputV1 {
+    let ExecutionOutputV1::Network(execution) = network() else {
+        unreachable!()
+    };
+    ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+        execution,
+        trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+            effects: Vec::new(),
+        },
+    })
+}
+fn lifecycle_pipeline() -> ExecutionOutputV1 {
+    let ExecutionOutputV1::Pipeline(execution) = pipeline() else {
+        unreachable!()
+    };
+    ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+        execution,
+        trigger_lifecycle: lifecycle_root(TriggerLifecycleStateKindV1::Pipeline),
+    })
+}
+fn lifecycle_time() -> ExecutionOutputV1 {
+    let ExecutionOutputV1::Time(execution) = time() else {
+        unreachable!()
+    };
+    ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+        execution,
+        trigger_lifecycle: lifecycle_root(TriggerLifecycleStateKindV1::Time),
+    })
+}
+
+fn lifecycle_state(kind: TriggerLifecycleStateKindV1) -> TriggerLifecycleStateV1 {
+    use crate::{
+        events::{
+            EventFilterBox,
+            pipeline::{BlockEventFilter, PipelineEventFilterBox},
+            time::{ExecutionTime, Schedule, TimeEventFilter},
+        },
+        transaction::Executable,
+        trigger::action::{Action, Repeats, TimeTriggerRetryPolicy},
+    };
+    let filter = match kind {
+        TriggerLifecycleStateKindV1::Pipeline => {
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(BlockEventFilter::new()))
+        }
+        TriggerLifecycleStateKindV1::Time => EventFilterBox::Time(TimeEventFilter::new(
+            ExecutionTime::Schedule(Schedule::starting_at(std::time::Duration::from_millis(100))),
+        )),
+        _ => unreachable!("these fixtures exercise actual Pipeline/Time owners"),
+    };
+    let action = Action::new(
+        Executable::Instructions(iroha_primitives::const_vec::ConstVec::new_empty()),
+        Repeats::Exactly(1),
+        input().authority_opt().unwrap().clone(),
+        filter,
+    )
+    .unwrap();
+    let action = if kind == TriggerLifecycleStateKindV1::Time {
+        action
+            .with_retry_policy(TimeTriggerRetryPolicy {
+                max_retries: std::num::NonZeroU32::new(2).unwrap(),
+                retry_after_ms: std::num::NonZeroU64::new(10).unwrap(),
+            })
+            .unwrap()
+    } else {
+        action
+    };
+    TriggerLifecycleStateV1 {
+        kind,
+        registered_at_height: Some(trigger().registered_at_height),
+        action_hash: Some(trigger().action_hash),
+        action: lifecycle_frame(&action),
+        retry_state: None,
+    }
+}
+
+fn lifecycle_use(
+    kind: TriggerLifecycleStateKindV1,
+    index: u32,
+    id: TriggerId,
+) -> TriggerLifecycleEffectV1 {
+    TriggerLifecycleEffectV1 {
+        ordinal: 0,
+        trigger_id: id,
+        origin: TriggerLifecycleOriginV1::Derived {
+            callback_index: Some(index),
+        },
+        change: TriggerLifecycleChangeV1::Invoke {
+            state: lifecycle_state(kind),
+            callback_index: index,
+        },
+    }
+}
+
+fn lifecycle_root(kind: TriggerLifecycleStateKindV1) -> TriggerLifecycleEffectsV1 {
+    TriggerLifecycleEffectsV1::Complete {
+        effects: vec![lifecycle_use(kind, 0, trigger().trigger_id)],
+    }
+}
+
+fn lifecycle_mut(row: &mut ExecutionOutputV1) -> &mut TriggerLifecycleEffectsV1 {
+    match row {
+        ExecutionOutputV1::NetworkWithLifecycle(row) => &mut row.trigger_lifecycle,
+        ExecutionOutputV1::PipelineWithLifecycle(row) => &mut row.trigger_lifecycle,
+        ExecutionOutputV1::TimeWithLifecycle(row) => &mut row.trigger_lifecycle,
+        ExecutionOutputV1::Network(_)
+        | ExecutionOutputV1::Pipeline(_)
+        | ExecutionOutputV1::Time(_) => panic!("explicit successor fixture required"),
+    }
+}
+
+fn lifecycle_insert() -> TriggerLifecycleEffectV1 {
+    TriggerLifecycleEffectV1 {
+        ordinal: 0,
+        trigger_id: trigger().trigger_id,
+        origin: TriggerLifecycleOriginV1::DirectNetworkInstruction { item_index: 0 },
+        change: TriggerLifecycleChangeV1::Insert {
+            after: lifecycle_state(TriggerLifecycleStateKindV1::Time),
+        },
+    }
+}
+
+#[test]
+fn lifecycle_complete_empty_and_populated_successor_rows_roundtrip() {
+    for row in [
+        lifecycle_network(),
+        lifecycle_pipeline(),
+        lifecycle_time(),
+        ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation()),
+    ] {
+        row.validate_structure(8, &[input()]).unwrap();
+        let bytes = norito::encode_canonical(&row).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ExecutionOutputV1>(&bytes).unwrap(),
+            row
+        );
+        let json = norito::json::to_json(&row).unwrap();
+        assert!(json.contains("trigger_lifecycle") && json.contains("complete"));
+        assert_eq!(
+            norito::json::from_str::<ExecutionOutputV1>(&json).unwrap(),
+            row
+        );
+    }
+    assert!(
+        lifecycle_network()
+            .require_trigger_lifecycle()
+            .unwrap()
+            .effects()
+            .is_empty()
+    );
+    assert_eq!(
+        lifecycle_time()
+            .require_trigger_lifecycle()
+            .unwrap()
+            .effects()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn lifecycle_missing_or_partial_coverage_never_becomes_complete_empty() {
+    for row in [lifecycle_network(), lifecycle_pipeline(), lifecycle_time()] {
+        let json = norito::json::to_json(&row).unwrap();
+        let trace = norito::json::to_json(row.require_trigger_lifecycle().unwrap()).unwrap();
+        let field = format!(",\"trigger_lifecycle\":{trace}");
+        let missing = json.replace(&field, "");
+        assert_ne!(missing, json, "the actual required member was removed");
+        assert!(norito::json::from_str::<ExecutionOutputV1>(&missing).is_err());
+    }
+    for malformed in [
+        r#"{"kind":"partial","detail":{"effects":[]}}"#,
+        r#"{"kind":"complete","detail":{}}"#,
+        r#"{"kind":"complete","detail":{"effects":[],"extra":true}}"#,
+    ] {
+        assert!(norito::json::from_str::<TriggerLifecycleEffectsV1>(malformed).is_err());
+    }
+}
+
+#[test]
+fn lifecycle_full_action_and_retry_state_survive_canonical_roundtrip() {
+    let mut state = lifecycle_state(TriggerLifecycleStateKindV1::Time);
+    state.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    });
+    let trace = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![TriggerLifecycleEffectV1 {
+            change: TriggerLifecycleChangeV1::Insert {
+                after: state.clone(),
+            },
+            ..lifecycle_insert()
+        }],
+    };
+    trace
+        .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+        .unwrap();
+    let bytes = norito::encode_canonical(&trace).unwrap();
+    let decoded = norito::decode_canonical::<TriggerLifecycleEffectsV1>(&bytes).unwrap();
+    assert_eq!(decoded, trace);
+    let TriggerLifecycleChangeV1::Insert { after } = &decoded.effects()[0].change else {
+        unreachable!()
+    };
+    assert_eq!(after.action.bytes, state.action.bytes);
+    let after_action = lifecycle_fixture_action(&after.action);
+    let state_action = lifecycle_fixture_action(&state.action);
+    assert_eq!(after_action.executable(), state_action.executable());
+    assert_eq!(after_action.filter(), state_action.filter());
+    assert_eq!(after_action.authority(), state_action.authority());
+    assert_eq!(after_action.repeats(), state_action.repeats());
+    assert_eq!(after_action.metadata, state_action.metadata);
+    assert_eq!(after_action.retry_policy(), state_action.retry_policy());
+    lifecycle_fixture_validate_frames(&decoded).unwrap();
+    assert_eq!(
+        after.retry_state,
+        Some(TriggerLifecycleRetryStateV1 {
+            attempt: 1,
+            next_time_ms: 120
+        })
+    );
+    // Shape checks deliberately do not accept the fixture hash as State proof.
+}
+
+#[test]
+fn lifecycle_order_preserves_remove_reinsert_and_equal_state_touches() {
+    let state = lifecycle_state(TriggerLifecycleStateKindV1::Time);
+    let mut effects = vec![lifecycle_insert(); 4];
+    effects[1].change = TriggerLifecycleChangeV1::Update {
+        before: state.clone(),
+        after: state.clone(),
+    };
+    effects[2].change = TriggerLifecycleChangeV1::Remove {
+        before: state.clone(),
+    };
+    for (index, effect) in effects.iter_mut().enumerate() {
+        effect.ordinal = u32::try_from(index).unwrap();
+    }
+    let trace = TriggerLifecycleEffectsV1::Complete { effects };
+    trace
+        .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+        .unwrap();
+    assert_eq!(trace.effects().len(), 4);
+    for fault in 0..4 {
+        let mut changed = trace.clone();
+        let TriggerLifecycleEffectsV1::Complete { effects } = &mut changed;
+        match fault {
+            0 => effects[1].ordinal = 0,
+            1 => effects[1].ordinal = 2,
+            2 => effects.swap(0, 1),
+            _ => {
+                if let TriggerLifecycleChangeV1::Remove { before } = &mut effects[2].change {
+                    before.action_hash = Some(Hash::new(b"foreign preceding state"));
+                }
+            }
+        }
+        assert!(
+            changed
+                .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+                .is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_direct_origin_and_callback_zero_keep_distinct_owners() {
+    let direct = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![lifecycle_insert()],
+    };
+    direct
+        .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+        .unwrap();
+    assert!(
+        direct
+            .validate_structure(TriggerLifecycleOwnerV1::Time(&trigger()), 8, &[], false)
+            .is_err()
+    );
+    let mut network = lifecycle_network();
+    let ExecutionOutputV1::NetworkWithLifecycle(row) = &mut network else {
+        unreachable!()
+    };
+    row.execution.completions.push(completion(&trigger()));
+    row.trigger_lifecycle = lifecycle_root(TriggerLifecycleStateKindV1::Time);
+    network.validate_structure(8, &[input()]).unwrap();
+    let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut network);
+    effects[0].origin = TriggerLifecycleOriginV1::DirectNetworkInstruction { item_index: 0 };
+    assert!(network.validate_structure(8, &[input()]).is_err());
+}
+
+#[test]
+fn lifecycle_invocations_require_exact_unique_successful_completions() {
+    for fault in 0..7 {
+        let mut row = lifecycle_time();
+        let ExecutionOutputV1::TimeWithLifecycle(output) = &mut row else {
+            unreachable!()
+        };
+        let TriggerLifecycleEffectsV1::Complete { effects } = &mut output.trigger_lifecycle;
+        match fault {
+            0 => effects.clear(),
+            1 => {
+                let mut duplicate = effects[0].clone();
+                duplicate.ordinal = 1;
+                effects.push(duplicate);
+            }
+            2 => {
+                effects[0].origin = TriggerLifecycleOriginV1::Derived {
+                    callback_index: None,
+                }
+            }
+            3 => effects[0].trigger_id = "foreign-callback".parse().unwrap(),
+            4 => {
+                effects[0].origin = TriggerLifecycleOriginV1::Derived {
+                    callback_index: Some(8),
+                }
+            }
+            5 => {
+                output.execution.completions[0].outcome =
+                    TriggerCompletedOutcome::Failure("failed".into())
+            }
+            _ => {
+                effects.clear();
+                output.execution.completions.clear();
+            }
+        }
+        assert!(row.validate_structure(8, &[]).is_err(), "fault {fault}");
+    }
+}
+
+#[test]
+fn lifecycle_rollback_and_output_limit_never_retain_body_effects() {
+    let mut terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation());
+    terminal.validate_structure(8, &[]).unwrap();
+    *lifecycle_mut(&mut terminal) = lifecycle_root(TriggerLifecycleStateKindV1::Time);
+    assert!(!terminal.is_output_limit_rejection());
+    assert!(terminal.validate_structure(8, &[]).is_err());
+    let trace = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![lifecycle_insert()],
+    };
+    assert!(
+        trace
+            .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], true)
+            .is_err()
+    );
+}
+
+#[test]
+fn lifecycle_genuine_rejection_keeps_typed_retry_policy_with_full_state() {
+    let mut row = lifecycle_time();
+    let ExecutionOutputV1::TimeWithLifecycle(output) = &mut row else {
+        unreachable!()
+    };
+    output.execution.result = rejected();
+    output.execution.failure_root =
+        Some(TriggerFailureRootV1::DeclaredInstructionProjection(step()));
+    output.execution.completions[0].outcome =
+        TriggerCompletedOutcome::Failure("actual native rejection".into());
+    let before = lifecycle_state(TriggerLifecycleStateKindV1::Time);
+    let mut after = before.clone();
+    after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 130,
+    });
+    after.action_hash = Some(Hash::new(b"untrusted fixture retry action hash"));
+    output.trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![TriggerLifecycleEffectV1 {
+            ordinal: 0,
+            trigger_id: trigger().trigger_id,
+            origin: TriggerLifecycleOriginV1::InvocationPolicy {
+                callback_index: 0,
+                policy: TriggerLifecyclePolicyV1::AdvanceTimeRetry,
+            },
+            change: TriggerLifecycleChangeV1::Update { before, after },
+        }],
+    };
+    row.validate_structure(8, &[]).unwrap();
+    assert!(!row.is_output_limit_rejection());
+    for fault in 0..5 {
+        let mut invalid = row.clone();
+        let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut invalid);
+        match fault {
+            0 => effects[0].trigger_id = "foreign-policy".parse().unwrap(),
+            1 => {
+                effects[0].origin = TriggerLifecycleOriginV1::InvocationPolicy {
+                    callback_index: 1,
+                    policy: TriggerLifecyclePolicyV1::AdvanceTimeRetry,
+                }
+            }
+            2 => {
+                effects[0].origin = TriggerLifecycleOriginV1::InvocationPolicy {
+                    callback_index: 0,
+                    policy: TriggerLifecyclePolicyV1::ClearTimeRetry,
+                }
+            }
+            3 => {
+                effects[0].origin = TriggerLifecycleOriginV1::Derived {
+                    callback_index: Some(0),
+                }
+            }
+            _ => {
+                if let TriggerLifecycleChangeV1::Update { before, .. } = &mut effects[0].change {
+                    before.action_hash = Some(Hash::new(b"foreign use state"));
+                }
+            }
+        }
+        assert!(invalid.validate_structure(8, &[]).is_err(), "fault {fault}");
+    }
+}
+
+#[test]
+fn lifecycle_invalid_filter_height_retry_and_hash_shapes_refuse() {
+    for fault in 0..5 {
+        let mut effect = lifecycle_insert();
+        let TriggerLifecycleChangeV1::Insert { after } = &mut effect.change else {
+            unreachable!()
+        };
+        match fault {
+            0 => after.action_hash = Some(Hash::prehashed([0; Hash::LENGTH])),
+            1 => after.registered_at_height = None,
+            2 => after.registered_at_height = Some(9),
+            3 => after.kind = TriggerLifecycleStateKindV1::Pipeline,
+            _ => {
+                after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                    attempt: 0,
+                    next_time_ms: 120,
+                })
+            }
+        }
+        let trace = TriggerLifecycleEffectsV1::Complete {
+            effects: vec![effect],
+        };
+        assert!(
+            trace
+                .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+                .and_then(|()| lifecycle_fixture_validate_frames(&trace))
+                .is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_successor_trace_does_not_change_execution_call_identity() {
+    let mut row = lifecycle_network();
+    let call = row.execution_call_hash(proposal(), &[input()]).unwrap();
+    let before = norito::encode_canonical(&row).unwrap();
+    *lifecycle_mut(&mut row) = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![lifecycle_insert()],
+    };
+    row.validate_structure(8, &[input()]).unwrap();
+    assert_eq!(
+        row.execution_call_hash(proposal(), &[input()]).unwrap(),
+        call
+    );
+    assert_ne!(norito::encode_canonical(&row).unwrap(), before);
+}
+
+#[test]
+fn lifecycle_historical_row_payloads_preserved_but_never_claim_coverage() {
+    // Exact original enum shape and schema name. These controls are required
+    // before activation; they are not a substitute for captured historical
+    // block/proof/checkpoint replay under the actual old/new native decoders.
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::block::execution_output::ExecutionOutputV1")]
+    #[norito(
+        tag = "kind",
+        content = "detail",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
+    enum HistoricalExecutionOutputV1 {
+        Network(NetworkExecutionOutputV1),
+        Pipeline(PipelineExecutionOutputV1),
+        Time(TimeExecutionOutputV1),
+    }
+    for row in [network(), pipeline(), time()] {
+        let prior = match &row {
+            ExecutionOutputV1::Network(value) => {
+                HistoricalExecutionOutputV1::Network(value.clone())
+            }
+            ExecutionOutputV1::Pipeline(value) => {
+                HistoricalExecutionOutputV1::Pipeline(value.clone())
+            }
+            ExecutionOutputV1::Time(value) => HistoricalExecutionOutputV1::Time(value.clone()),
+            _ => unreachable!("historical fixture"),
+        };
+        assert_eq!(row.encode(), prior.encode());
+        let retained_layout = norito::encode_canonical(&prior).unwrap();
+        assert_eq!(norito::encode_canonical(&row).unwrap(), retained_layout);
+        assert_eq!(
+            norito::decode_canonical::<ExecutionOutputV1>(&retained_layout).unwrap(),
+            row
+        );
+        row.validate_structure(8, &[input()]).unwrap();
+        assert!(row.trigger_lifecycle().is_none());
+        assert!(row.require_trigger_lifecycle().is_err());
+    }
+}
+
+#[test]
+fn lifecycle_complete_range_refuses_historical_mixed_and_duplicate_rows() {
+    let complete = vec![lifecycle_network(), lifecycle_pipeline(), lifecycle_time()];
+    validate_execution_outputs_with_lifecycle_v1(
+        &complete,
+        proposal(),
+        8,
+        &[input()],
+        lifecycle_fixture_limits(),
+        &mut LifecycleActionCodecOracle::default(),
+    )
+    .unwrap();
+    for index in 0..3 {
+        let mut mixed = complete.clone();
+        mixed[index] = [network(), pipeline(), time()][index].clone();
+        // Ordinary historical shape is valid, but cannot establish complete coverage.
+        validate_execution_outputs_v1(&mixed, proposal(), 8, &[input()]).unwrap();
+        assert!(
+            validate_execution_outputs_with_lifecycle_v1(
+                &mixed,
+                proposal(),
+                8,
+                &[input()],
+                lifecycle_fixture_limits(),
+                &mut LifecycleActionCodecOracle::default()
+            )
+            .is_err()
+        );
+    }
+    let mut duplicate = complete.clone();
+    duplicate.insert(1, lifecycle_network());
+    assert!(
+        validate_execution_outputs_with_lifecycle_v1(
+            &duplicate,
+            proposal(),
+            8,
+            &[input()],
+            lifecycle_fixture_limits(),
+            &mut LifecycleActionCodecOracle::default()
+        )
+        .is_err()
+    );
+    let mut unordered = complete;
+    unordered.swap(1, 2);
+    assert!(
+        validate_execution_outputs_with_lifecycle_v1(
+            &unordered,
+            proposal(),
+            8,
+            &[input()],
+            lifecycle_fixture_limits(),
+            &mut LifecycleActionCodecOracle::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn lifecycle_successor_keeps_exact_result_and_prebody_call_identity() {
+    for (historical, complete) in [
+        (network(), lifecycle_network()),
+        (pipeline(), lifecycle_pipeline()),
+        (time(), lifecycle_time()),
+    ] {
+        assert_eq!(historical.result(), complete.result());
+        assert_eq!(historical.completions(), complete.completions());
+        assert_eq!(
+            historical
+                .execution_call_hash(proposal(), &[input()])
+                .unwrap(),
+            complete
+                .execution_call_hash(proposal(), &[input()])
+                .unwrap()
+        );
+        assert_ne!(historical.encode(), complete.encode());
+    }
+}
+
+fn lifecycle_renumber(trace: &mut TriggerLifecycleEffectsV1) {
+    let TriggerLifecycleEffectsV1::Complete { effects } = trace;
+    for (index, effect) in effects.iter_mut().enumerate() {
+        effect.ordinal = u32::try_from(index).unwrap();
+    }
+}
+
+#[test]
+fn lifecycle_callback_mutation_requires_an_encountered_invoke() {
+    let mut row = lifecycle_time();
+    let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut row);
+    let mut mutation = lifecycle_insert();
+    mutation.trigger_id = "separate-body-created".parse().unwrap();
+    mutation.origin = TriggerLifecycleOriginV1::Derived {
+        callback_index: Some(0),
+    };
+    effects.insert(0, mutation);
+    lifecycle_renumber(lifecycle_mut(&mut row));
+    // Independent IDs ensure before-state continuity cannot mask this ordering bug.
+    assert_eq!(
+        row.validate_structure(8, &[]).unwrap_err(),
+        "callback lifecycle effect precedes its Invoke"
+    );
+    let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut row);
+    effects.swap(0, 1);
+    lifecycle_renumber(lifecycle_mut(&mut row));
+    row.validate_structure(8, &[]).unwrap();
+}
+
+#[test]
+fn lifecycle_success_policy_requires_an_encountered_invoke() {
+    let mut row = lifecycle_time();
+    let mut depleted = lifecycle_state(TriggerLifecycleStateKindV1::Time);
+    let mut depleted_action = lifecycle_fixture_action(&depleted.action);
+    depleted_action.repeats = crate::trigger::action::Repeats::Exactly(0);
+    assert!(depleted_action.repeats().is_depleted());
+    depleted.action = lifecycle_frame(&depleted_action);
+    let policy = TriggerLifecycleEffectV1 {
+        ordinal: 0,
+        trigger_id: "separate-depleted-entry".parse().unwrap(),
+        origin: TriggerLifecycleOriginV1::InvocationPolicy {
+            callback_index: 0,
+            policy: TriggerLifecyclePolicyV1::RemoveDepleted,
+        },
+        change: TriggerLifecycleChangeV1::Remove { before: depleted },
+    };
+    let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut row);
+    effects.insert(0, policy);
+    lifecycle_renumber(lifecycle_mut(&mut row));
+    assert_eq!(
+        row.validate_structure(8, &[]).unwrap_err(),
+        "successful lifecycle policy precedes its Invoke"
+    );
+    let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut row);
+    effects.swap(0, 1);
+    lifecycle_renumber(lifecycle_mut(&mut row));
+    row.validate_structure(8, &[]).unwrap();
+}
+
+#[test]
+fn lifecycle_network_root_effects_do_not_need_a_callback_invoke() {
+    for origin in [
+        TriggerLifecycleOriginV1::DirectNetworkInstruction { item_index: 0 },
+        TriggerLifecycleOriginV1::Derived {
+            callback_index: None,
+        },
+    ] {
+        let mut row = lifecycle_network();
+        let ExecutionOutputV1::NetworkWithLifecycle(output) = &mut row else {
+            unreachable!()
+        };
+        output.execution.completions.push(completion(&trigger()));
+        let mut first = lifecycle_insert();
+        first.trigger_id = "network-root-before".parse().unwrap();
+        first.origin = origin.clone();
+        let mut last = first.clone();
+        last.trigger_id = "network-root-after".parse().unwrap();
+        output.trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+            effects: vec![first, lifecycle_by_call_use(0, trigger().trigger_id), last],
+        };
+        lifecycle_renumber(lifecycle_mut(&mut row));
+        row.validate_structure(8, &[input()]).unwrap();
+    }
+}
+
+fn lifecycle_by_call_use(index: u32, id: TriggerId) -> TriggerLifecycleEffectV1 {
+    use crate::{
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        transaction::Executable,
+        trigger::action::{Action, Repeats},
+    };
+    let action = Action::new(
+        Executable::Instructions(iroha_primitives::const_vec::ConstVec::new_empty()),
+        Repeats::Exactly(1),
+        input().authority_opt().unwrap().clone(),
+        ExecuteTriggerEventFilter::new().for_trigger(id.clone()),
+    )
+    .unwrap();
+    TriggerLifecycleEffectV1 {
+        ordinal: 0,
+        trigger_id: id,
+        origin: TriggerLifecycleOriginV1::Derived {
+            callback_index: Some(index),
+        },
+        change: TriggerLifecycleChangeV1::Invoke {
+            callback_index: index,
+            state: TriggerLifecycleStateV1 {
+                kind: TriggerLifecycleStateKindV1::ByCall,
+                registered_at_height: None,
+                action_hash: None,
+                action: lifecycle_frame(&action),
+                retry_state: None,
+            },
+        },
+    }
+}
+
+#[test]
+fn lifecycle_invoke_encounter_order_preserves_allocation_gaps_and_nested_work() {
+    for nested_index in [1, 3] {
+        let mut row = lifecycle_time();
+        let ExecutionOutputV1::TimeWithLifecycle(output) = &mut row else {
+            unreachable!()
+        };
+        let nested_id: TriggerId = "nested-by-call".parse().unwrap();
+        output.execution.completions.push(InvocationCompletionV1 {
+            callback_index: nested_index,
+            trigger_id: nested_id.clone(),
+            outcome: TriggerCompletedOutcome::Success,
+        });
+        let Ok(steps) = &mut output.execution.result.0 else {
+            unreachable!()
+        };
+        steps.push(DataTriggerStep {
+            id: nested_id.clone(),
+            instructions: step(),
+        });
+        let TriggerLifecycleEffectsV1::Complete { effects } = &mut output.trigger_lifecycle;
+        effects.push(lifecycle_by_call_use(nested_index, nested_id));
+        let mut nested_work = lifecycle_insert();
+        nested_work.trigger_id = "nested-created-entry".parse().unwrap();
+        nested_work.origin = TriggerLifecycleOriginV1::Derived {
+            callback_index: Some(nested_index),
+        };
+        effects.push(nested_work);
+        lifecycle_renumber(lifecycle_mut(&mut row));
+        row.validate_structure(8, &[]).unwrap();
+
+        let mut reversed = row.clone();
+        let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut reversed);
+        effects.swap(0, 1);
+        lifecycle_renumber(lifecycle_mut(&mut reversed));
+        assert_eq!(
+            reversed.validate_structure(8, &[]).unwrap_err(),
+            "lifecycle Invoke order differs from callback allocation"
+        );
+
+        let TriggerLifecycleEffectsV1::Complete { effects } = lifecycle_mut(&mut row);
+        effects.swap(1, 2);
+        lifecycle_renumber(lifecycle_mut(&mut row));
+        assert_eq!(
+            row.validate_structure(8, &[]).unwrap_err(),
+            "callback lifecycle effect precedes its Invoke"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_rejected_policy_only_traces_do_not_require_an_invoke() {
+    for (mut row, policy) in [
+        (lifecycle_time(), TriggerLifecyclePolicyV1::AdvanceTimeRetry),
+        (
+            lifecycle_pipeline(),
+            TriggerLifecyclePolicyV1::QuarantinePipeline,
+        ),
+    ] {
+        let (result, failure_root, completions, trace, kind) = match &mut row {
+            ExecutionOutputV1::TimeWithLifecycle(output) => (
+                &mut output.execution.result,
+                &mut output.execution.failure_root,
+                &mut output.execution.completions,
+                &mut output.trigger_lifecycle,
+                TriggerLifecycleStateKindV1::Time,
+            ),
+            ExecutionOutputV1::PipelineWithLifecycle(output) => (
+                &mut output.execution.result,
+                &mut output.execution.failure_root,
+                &mut output.execution.completions,
+                &mut output.trigger_lifecycle,
+                TriggerLifecycleStateKindV1::Pipeline,
+            ),
+            _ => unreachable!("internal rejection fixture"),
+        };
+        *result = rejected();
+        *failure_root = Some(TriggerFailureRootV1::DeclaredInstructionProjection(step()));
+        completions[0].outcome = TriggerCompletedOutcome::Failure("actual failure fixture".into());
+        let before = lifecycle_state(kind);
+        let change = if kind == TriggerLifecycleStateKindV1::Time {
+            let mut after = before.clone();
+            after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                attempt: 1,
+                next_time_ms: 130,
+            });
+            after.action_hash = Some(Hash::new(b"untrusted fixture retry action hash"));
+            TriggerLifecycleChangeV1::Update { before, after }
+        } else {
+            TriggerLifecycleChangeV1::Remove { before }
+        };
+        *trace = TriggerLifecycleEffectsV1::Complete {
+            effects: vec![TriggerLifecycleEffectV1 {
+                ordinal: 0,
+                trigger_id: trigger().trigger_id,
+                origin: TriggerLifecycleOriginV1::InvocationPolicy {
+                    callback_index: 0,
+                    policy,
+                },
+                change,
+            }],
+        };
+        assert!(
+            row.require_trigger_lifecycle()
+                .unwrap()
+                .effects()
+                .iter()
+                .all(|effect| !matches!(&effect.change, TriggerLifecycleChangeV1::Invoke { .. }))
+        );
+        row.validate_structure(8, &[]).unwrap();
+    }
+}
+
+#[test]
+fn lifecycle_action_frame_retains_full_original_ivm_metadata_and_retry_content() {
+    let mut state = lifecycle_state(TriggerLifecycleStateKindV1::Time);
+    let mut original = lifecycle_fixture_action(&state.action);
+    // Stored bytecode source fixture, never an assertion of valid/executed IVM code.
+    original.executable =
+        crate::transaction::Executable::Ivm(crate::transaction::IvmBytecode::from_compiled(vec![
+            0xaa, 0xbb, 0xcc, 0xdd,
+        ]));
+    original.repeats = crate::trigger::action::Repeats::Exactly(7);
+    original.metadata.insert(
+        "complete-original".parse().unwrap(),
+        iroha_primitives::json::Json::new("full metadata, not its hash"),
+    );
+    state.action = lifecycle_frame(&original);
+    state.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    });
+    let trace = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![TriggerLifecycleEffectV1 {
+            change: TriggerLifecycleChangeV1::Insert {
+                after: state.clone(),
+            },
+            ..lifecycle_insert()
+        }],
+    };
+    lifecycle_fixture_validate_frames(&trace).unwrap();
+    let bytes = norito::encode_canonical(&trace).unwrap();
+    let decoded: TriggerLifecycleEffectsV1 = norito::decode_canonical(&bytes).unwrap();
+    let TriggerLifecycleChangeV1::Insert { after } = &decoded.effects()[0].change else {
+        unreachable!()
+    };
+    assert_eq!(
+        after.action.bytes,
+        norito::encode_canonical(&original).unwrap()
+    );
+    assert_eq!(lifecycle_fixture_action(&after.action), original);
+    assert_eq!(
+        after.retry_state,
+        Some(TriggerLifecycleRetryStateV1 {
+            attempt: 1,
+            next_time_ms: 120
+        })
+    );
+    let json = norito::json::to_json(&state.action).unwrap();
+    assert_eq!(
+        norito::json::from_str::<TriggerLifecycleActionFrameV1>(&json).unwrap(),
+        state.action
+    );
+    let codec_json = norito::json::to_json(&state.action.codec).unwrap();
+    let bytes_json = norito::json::to_json(&state.action.bytes).unwrap();
+    for malformed in [
+        json.replace(&codec_json, r#"{"kind":"unknown"}"#),
+        json.replace(&format!("\"codec\":{codec_json},"), ""),
+        json.replace(&format!(",\"bytes\":{bytes_json}"), ""),
+    ] {
+        assert_ne!(
+            malformed, json,
+            "mutate an actual serialized required field"
+        );
+        assert!(norito::json::from_str::<TriggerLifecycleActionFrameV1>(&malformed).is_err());
+    }
+}
+
+#[test]
+fn lifecycle_action_frame_refuses_bad_envelope_and_noncanonical_payload_layout() {
+    let original =
+        lifecycle_fixture_action(&lifecycle_state(TriggerLifecycleStateKindV1::Time).action);
+    let canonical = norito::encode_canonical(&original).unwrap();
+    let alternative = {
+        let _fixed = norito::core::DecodeFlagsGuard::enter(0);
+        norito::core::to_bytes(&original).unwrap()
+    };
+    assert_ne!(canonical, alternative);
+    let mut suffix = canonical.clone();
+    suffix.push(0);
+    let mut corrupt = canonical.clone();
+    *corrupt.last_mut().unwrap() ^= 0x80;
+    for (bytes, oracle_calls) in [
+        (Vec::new(), 0),
+        (canonical[..canonical.len() - 1].to_vec(), 0),
+        (suffix, 0),
+        (corrupt, 0),
+        (norito::encode_canonical(&42_u64).unwrap(), 0),
+        // Valid alternate-layout envelope alone must never be sufficient.
+        (alternative, 1),
+    ] {
+        let mut effect = lifecycle_insert();
+        let TriggerLifecycleChangeV1::Insert { after } = &mut effect.change else {
+            unreachable!()
+        };
+        after.action.bytes = bytes;
+        let trace = TriggerLifecycleEffectsV1::Complete {
+            effects: vec![effect],
+        };
+        let mut oracle = LifecycleActionCodecOracle::default();
+        assert!(
+            trace
+                .validate_action_frames(
+                    &mut TriggerLifecycleActionFrameBudgetV1::new(lifecycle_fixture_limits()),
+                    &mut oracle,
+                )
+                .is_err()
+        );
+        assert_eq!(oracle.calls, oracle_calls);
+    }
+}
+
+#[test]
+fn lifecycle_action_frame_limits_precede_payload_validation_and_span_rows() {
+    let effect = lifecycle_insert();
+    let TriggerLifecycleChangeV1::Insert { after } = &effect.change else {
+        unreachable!()
+    };
+    let bytes = after.action.bytes.len() as u64;
+    let trace = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![effect],
+    };
+    for limits in [
+        TriggerLifecycleActionFrameLimitsV1 {
+            max_frame_bytes: bytes - 1,
+            max_total_frame_bytes: bytes,
+            max_frames: 1,
+        },
+        TriggerLifecycleActionFrameLimitsV1 {
+            max_frame_bytes: bytes,
+            max_total_frame_bytes: bytes - 1,
+            max_frames: 1,
+        },
+        TriggerLifecycleActionFrameLimitsV1 {
+            max_frame_bytes: bytes,
+            max_total_frame_bytes: bytes,
+            max_frames: 0,
+        },
+    ] {
+        let mut oracle = LifecycleActionCodecOracle::default();
+        assert!(
+            trace
+                .validate_action_frames(
+                    &mut TriggerLifecycleActionFrameBudgetV1::new(limits),
+                    &mut oracle
+                )
+                .is_err()
+        );
+        assert_eq!(oracle.calls, 0);
+    }
+    let mut oracle = LifecycleActionCodecOracle::default();
+    let mut budget =
+        TriggerLifecycleActionFrameBudgetV1::new(TriggerLifecycleActionFrameLimitsV1 {
+            max_frame_bytes: bytes,
+            max_total_frame_bytes: bytes,
+            max_frames: 1,
+        });
+    trace
+        .validate_action_frames(&mut budget, &mut oracle)
+        .unwrap();
+    assert_eq!(oracle.calls, 1);
+    assert!(
+        trace
+            .validate_action_frames(&mut budget, &mut oracle)
+            .is_err()
+    );
+    assert_eq!(oracle.calls, 1);
+    assert!(
+        TriggerLifecycleEffectsV1::Complete {
+            effects: Vec::new()
+        }
+        .validate_action_frames(&mut budget, &mut oracle)
+        .is_err(),
+        "a refused range cannot recover by substituting Complete[]"
+    );
+    let complete = vec![lifecycle_network(), lifecycle_pipeline(), lifecycle_time()];
+    let mut oracle = LifecycleActionCodecOracle::default();
+    let mut limits = lifecycle_fixture_limits();
+    limits.max_frames = 1;
+    assert!(
+        validate_execution_outputs_with_lifecycle_v1(
+            &complete,
+            proposal(),
+            8,
+            &[input()],
+            limits,
+            &mut oracle,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        oracle.calls, 1,
+        "the block range must not reset its frame counter per row"
+    );
+}
+
+#[test]
+fn lifecycle_action_frame_semantics_and_validator_refusals_cannot_be_bypassed() {
+    for wrong_kind in [true, false] {
+        let mut effect = lifecycle_insert();
+        let TriggerLifecycleChangeV1::Insert { after } = &mut effect.change else {
+            unreachable!()
+        };
+        if wrong_kind {
+            after.kind = TriggerLifecycleStateKindV1::Pipeline;
+        } else {
+            let mut action = lifecycle_fixture_action(&after.action);
+            action.retry_policy = None;
+            after.action = lifecycle_frame(&action);
+            after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                attempt: 1,
+                next_time_ms: 120,
+            });
+        }
+        let trace = TriggerLifecycleEffectsV1::Complete {
+            effects: vec![effect],
+        };
+        // Outer shape alone is explicitly non-admitting for Action semantics.
+        trace
+            .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
+            .unwrap();
+        assert!(lifecycle_fixture_validate_frames(&trace).is_err());
+    }
+    struct Refuse;
+    impl TriggerLifecycleActionValidatorV1 for Refuse {
+        fn validate_canonical_action(
+            &mut self,
+            _: &[u8],
+            _: &[u8],
+        ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
+            Err("actual bounded scanner refusal".into())
+        }
+    }
+    let complete = vec![lifecycle_network(), lifecycle_pipeline(), lifecycle_time()];
+    assert_eq!(
+        validate_execution_outputs_with_lifecycle_v1(
+            &complete,
+            proposal(),
+            8,
+            &[input()],
+            lifecycle_fixture_limits(),
+            &mut Refuse,
+        )
+        .unwrap_err(),
+        "actual bounded scanner refusal"
+    );
+}
+
+#[test]
+fn lifecycle_retry_json_requires_both_exact_fields_and_rejects_unknowns() {
+    for json in [
+        "{}",
+        r#"{"attempt":1}"#,
+        r#"{"next_time_ms":120}"#,
+        r#"{"attempt":1,"next_time_ms":120,"extra":0}"#,
+        r#"{"attempt":null,"next_time_ms":120}"#,
+        r#"{"attempt":1,"next_time_ms":null}"#,
+        r#"{"attempt":-1,"next_time_ms":120}"#,
+        r#"{"attempt":1,"next_time_ms":-1}"#,
+        r#"[1,120]"#,
+    ] {
+        assert!(
+            norito::json::from_str::<TriggerLifecycleRetryStateV1>(json).is_err(),
+            "{json}"
+        );
+    }
+    let actual = TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    };
+    let json = norito::json::to_json(&actual).unwrap();
+    assert_eq!(
+        norito::json::from_str::<TriggerLifecycleRetryStateV1>(&json).unwrap(),
+        actual
+    );
 }

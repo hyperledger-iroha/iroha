@@ -267,6 +267,9 @@ sixty-second authorization; `--resume JOURNAL` reconciles those exact hashes wit
 rebuilding, quoting or signing replacements. `DeploymentRuntime::current_deployment`
 provides the verified current artifact and receipt for native alias-selected view/call
 adapters and never creates a missing slot or repairs its records.
+`DeploymentRuntime::saved_deployments` lists the journal each alias slot would resume,
+authenticated with the original authority, for frontends that offer resume without a
+typed path; it reconciles, signs and dispatches nothing.
 
 For a first single-chunk upload that expired before observation, an operator may run
 `musubi --manifest-path Musubi.toml deploy --network NAME --reconcile-expiry JOURNAL

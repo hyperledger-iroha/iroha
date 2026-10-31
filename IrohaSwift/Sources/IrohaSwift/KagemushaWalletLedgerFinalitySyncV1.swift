@@ -16,7 +16,7 @@ public struct KagemushaWalletLedgerConfirmationV1: Equatable, Sendable {
 
 private struct KagemushaWalletLedgerWaitV1: Error {}
 
-extension KagemushaWalletV1 {
+extension KagemushaWalletExchangeCallV1 {
     /// Confirm one retained Activate or Unload attempt with at most one finality read.
     ///
     /// A retained outcome returns without network. Otherwise one account-signed GET reads the
@@ -33,45 +33,47 @@ extension KagemushaWalletV1 {
         maximumBoundaries: Int = 64,
         requireCurrentOwner: @escaping @Sendable () async throws -> Void
     ) async throws -> KagemushaWalletLedgerConfirmationV1 {
-        try await kagemushaWalletConfirmLedgerAttemptV1(
-            requireCurrentOwner: requireCurrentOwner,
-            outcome: { try self.ledgerAttemptOutcome(attempt) },
-            fetch: { entrypoint in
-                try await transport.getKagemushaWalletLedgerAttemptFinalityV1(
-                    selection: .init(schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint),
-                    canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
-            },
-            ingest: { finality in try self.ingestLedgerAttempt(attempt, finality: finality) },
-            synchronize: { entrypoint, targetHeight in
-                let selection = try ToriiKagemushaWalletLedgerSelectionV1(
-                    schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint)
-                let before = try self.epochProgress()
-                do {
-                    let after = try await kagemushaWalletSynchronizeEpochsV1(
-                        targetHeight: targetHeight, maximumBoundaries: maximumBoundaries,
-                        requireCurrentOwner: requireCurrentOwner,
-                        progress: { try self.epochProgress() },
-                        fetch: { height in
-                            let read = try await transport.getKagemushaWalletLedgerAttemptEpochV1(
-                                selection: selection, boundaryHeight: height,
-                                canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
-                            guard case .original(let bytes) = read else { throw KagemushaWalletLedgerWaitV1() }
-                            return bytes
-                        },
-                        ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
-                    return (targetHeight <= after.boundaryHeight, after.epoch != before.epoch)
-                } catch is KagemushaWalletLedgerWaitV1 {
-                    return (false, try self.epochProgress().epoch != before.epoch)
-                }
-            })
+        return try await task.withUse {
+            try await kagemushaWalletConfirmLedgerAttemptV1(
+                requireCurrentOwner: requireCurrentOwner,
+                outcome: { try self.ledgerAttemptOutcome(attempt) },
+                fetch: { entrypoint in
+                    try await transport.getKagemushaWalletLedgerAttemptFinalityV1(
+                        selection: .init(schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint),
+                        canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
+                },
+                ingest: { finality in try self.ingestLedgerAttempt(attempt, finality: finality) },
+                synchronize: { entrypoint, targetHeight in
+                    let selection = try ToriiKagemushaWalletLedgerSelectionV1(
+                        schemeID: schemeID, walletID: walletID, entrypointHash: entrypoint)
+                    let before = try self.wallet.epochProgress()
+                    do {
+                        let after = try await kagemushaWalletSynchronizeEpochsV1(
+                            targetHeight: targetHeight, maximumBoundaries: maximumBoundaries,
+                            requireCurrentOwner: requireCurrentOwner,
+                            progress: { try self.wallet.epochProgress() },
+                            fetch: { height in
+                                let read = try await transport.getKagemushaWalletLedgerAttemptEpochV1(
+                                    selection: selection, boundaryHeight: height,
+                                    canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
+                                guard case .original(let bytes) = read else { throw KagemushaWalletLedgerWaitV1() }
+                                return bytes
+                            },
+                            ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
+                        return (targetHeight <= after.boundaryHeight, after.epoch != before.epoch)
+                    } catch is KagemushaWalletLedgerWaitV1 {
+                        return (false, try self.wallet.epochProgress().epoch != before.epoch)
+                    }
+                })
+        }
     }
 
     func ledgerAttemptOutcome(_ attempt: KagemushaWalletLedgerAttemptV1) throws -> KagemushaWalletLedgerOutcomeV1 {
         switch attempt {
         case .activation(let signedWire):
-            return try activationAttemptOutcome(signedWire: signedWire)
+            return try wallet.activationAttemptOutcome(signedWire: signedWire)
         case .unload(let claim, let signedWire):
-            return try unloadAttemptOutcome(claim: claim, signedWire: signedWire)
+            return try wallet.unloadAttemptOutcome(claim: claim, signedWire: signedWire)
         }
     }
 

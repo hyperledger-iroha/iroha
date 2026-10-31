@@ -16,6 +16,7 @@ use super::{
     ring::ApplicationPolynomialV1,
     transcript::{MatrixRoleV1, MatrixSeedV1, expand_application_matrix_v1},
 };
+use core::ops::Add;
 use iroha_data_model::privacy::{
     BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
     IrohaBootleLanternAnoncredStatementV1,
@@ -117,12 +118,12 @@ impl BootleLanternApplicationRelationV1 {
     /// Fixed row count.
     #[must_use]
     pub const fn rows(&self) -> usize {
-        APPLICATION_ROWS_V1
+        self.public_offset.len()
     }
     /// Fixed witness-column count.
     #[must_use]
-    pub const fn columns(&self) -> usize {
-        APPLICATION_WITNESS_POLYNOMIALS_V1
+    pub fn columns(&self) -> usize {
+        self.matrix.len() / self.rows()
     }
     /// Borrow one matrix polynomial.
     #[must_use]
@@ -543,7 +544,6 @@ mod tests {
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest as _, Sha256};
     use std::sync::OnceLock;
     struct TestRng {
@@ -555,22 +555,24 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("relation test RNG is infallible");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
                 hash.update(b"iroha.privacy.bootle-lantern.relation-test-rng.v1");
@@ -583,7 +585,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
@@ -660,9 +662,11 @@ mod tests {
             let mut authorization_rng = TestRng::new([0x16; 32]);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash(),
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash(),
+                    policy: &policy,
+                },
                 raw(16),
                 10,
                 20,
@@ -685,9 +689,11 @@ mod tests {
             let mut issuer_issuance_rng = TestRng::new([0x14; 32]);
             let response = issuer_blind_issue_once_with_rng_v1(
                 &issuer_key_pair,
-                &context,
-                genesis_hash(),
-                &policy,
+                crate::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceContextV1 {
+                    context: &context,
+                    canonical_genesis_hash: genesis_hash(),
+                    policy: &policy,
+                },
                 &authorization,
                 &request,
                 10,

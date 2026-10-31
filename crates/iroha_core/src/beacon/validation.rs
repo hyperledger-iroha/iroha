@@ -84,6 +84,7 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload
 }
 
 /// Exact signed/AAD byte sequences borrowing their source fields.
+#[derive(Clone, Copy)]
 pub(super) enum DkgSignaturePreimage<'a> {
     RecipientKey(
         &'a GlobalThresholdBeaconDkgSessionV1,

@@ -70,7 +70,7 @@ struct Pin {
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct Candidate {
+struct PreparedCandidate {
     commit: String,
     tree: String,
     signer_fingerprint: String,
@@ -146,7 +146,7 @@ struct Plan {
     host_identity_sha256: String,
     hosts: super::super::host_pair::ResetHostPairV1,
     trusted_public_key: Pin,
-    candidate: Candidate,
+    candidate: PreparedCandidate,
     predecessor: Predecessor,
 }
 
@@ -173,11 +173,18 @@ fn coordination_root(plan: &Plan) -> PathBuf {
 
 impl DispatcherTransition {
     /// Run before loading any ledger credentials. No SSH or service mutation is performed.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "Linux custody uses the receiver; unsupported platforms preserve the same rejecting interface"
+        )
+    )]
     pub(in super::super) fn run<W: Write>(&self, output: &mut W) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = output;
-            return Err(eyre!("dispatcher transition requires Linux"));
+            Err(eyre!("dispatcher transition requires Linux"))
         }
         #[cfg(target_os = "linux")]
         {

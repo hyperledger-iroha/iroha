@@ -288,6 +288,9 @@ impl NativeFixture {
         let tip = self.chain.committed(self.chain.height());
         // Borrow the original State pool: certified storage rejects foreign scopes.
         let budget = self.chain.state().ivm_execution_budget();
+        // An open view pins the EBR epoch: generations retired by earlier commits
+        // cannot refund this shared pool while the snapshot is measured.
+        let _retired_generations = self.chain.state().view();
         let retained_bytes = budget.reserved_bytes();
         let (bytes, charge) = self
             .chain
@@ -331,6 +334,9 @@ impl NativeFixture {
         let tip = self.chain.committed(self.chain.height());
         // Borrow the original State pool: certified storage rejects foreign scopes.
         let budget = self.chain.state().ivm_execution_budget();
+        // An open view pins the EBR epoch: generations retired by earlier commits
+        // cannot refund this shared pool while the snapshot is measured.
+        let _retired_generations = self.chain.state().view();
         let retained_bytes = budget.reserved_bytes();
         let (bytes, charge) = self
             .chain

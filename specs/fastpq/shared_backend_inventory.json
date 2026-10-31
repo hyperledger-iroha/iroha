@@ -164,6 +164,10 @@
           "role": "test"
         },
         {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
+          "role": "test"
+        },
+        {
           "path": "crates/iroha_core/src/state/authority_registry/keyed_commitment/candidates_tests.rs",
           "role": "test"
         },
@@ -1024,8 +1028,8 @@
       ],
       "importers": [
         {
-          "path": "crates/iroha_core/src/executor.rs",
-          "role": "source"
+          "path": "crates/iroha_core/src/executor_tests.rs",
+          "role": "test"
         },
         {
           "path": "crates/iroha_core/src/frame_identity_tests.rs",
@@ -1048,11 +1052,11 @@
           "role": "source"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-          "role": "source"
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs",
+          "role": "test"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "role": "test"
         },
         {
@@ -1662,7 +1666,7 @@
           "symbol": "pub fn preverify_with_budget"
         },
         {
-          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
           "symbol": "crate::zk_stark::"
         },
         {
@@ -1711,8 +1715,8 @@
             "role": "cli"
           },
           {
-            "path": "crates/iroha_core/src/executor.rs",
-            "role": "source"
+            "path": "crates/iroha_core/src/executor_tests.rs",
+            "role": "test"
           },
           {
             "path": "crates/iroha_core/src/gas.rs",
@@ -1756,6 +1760,10 @@
           },
           {
             "path": "crates/iroha_core/src/smartcontracts/ivm/host/zk_verification_tests.rs",
+            "role": "test"
+          },
+          {
+            "path": "crates/iroha_core/src/smartcontracts/ivm/host_tests.rs",
             "role": "test"
           },
           {

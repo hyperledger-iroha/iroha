@@ -7,15 +7,15 @@ serves Ethereum and BSC, so the corridor has a single target, `evm`:
 
 | Target | Compiler | Platforms pinned in `compiler-lock.json` |
 |---|---|---|
-| `evm` (Ethereum, BSC) | Ethereum solc `0.8.31+commit.fd3a2265` | macOS universal (arm64 + x86-64), Linux x86-64, Linux arm64 |
+| `evm` (Ethereum, BSC) | Ethereum solc `0.8.38+commit.1835d247` | macOS universal (arm64 + x86-64), Linux x86-64, Linux arm64 |
 
-Settings: `evmVersion: "cancun"` (explicit, because the compiler defaults to
-`osaka`), `optimizer: {enabled: true, runs: 200}`, `viaIR: false` (legacy
+Settings: `evmVersion: "cancun"` (explicit execution-fork selection),
+`optimizer: {enabled: true, runs: 200}`, `viaIR: false` (legacy
 pipeline), `metadata.bytecodeHash: "none"`, `metadata.appendCBOR: false`.
 `compiler-lock.json` lists exactly the two sources above. Each must start with
-an SPDX identifier, keep the exact `pragma solidity 0.8.31;`, declare no custom
-storage layout and never use `delete` (the 0.8.31 legacy-pipeline bug
-patterns). `SccpTairaXor.sol` contains exactly one import directive,
+an SPDX identifier, keep the exact `pragma solidity 0.8.38;`, declare no custom
+storage layout and never use `delete`; these source restrictions remain part
+of the reviewed contract boundary. `SccpTairaXor.sol` contains exactly one import directive,
 `import {BLS12_381} from "./lib/BLS12_381.sol";`; the library imports nothing.
 The corridor rejects a violating source before compiling it, and requires the
 compiler to emit exactly `SccpTairaXor` and the internal library `BLS12_381`
@@ -23,7 +23,7 @@ with no link references.
 
 ## Compiler authentication
 
-The SHA-256 pins match `binaries.soliditylang.org/<platform>/list.json`.
+The SHA-256 pins match the official [Solidity 0.8.38 release assets](https://github.com/argotorg/solidity/releases/tag/v0.8.38).
 `scripts/contract_artifact_corridor.py` checks the complete compiler record
 against its reviewed constants before downloading anything, then authenticates
 the download (SHA-256, ELF machine or universal Mach-O slices) and caches it by
@@ -68,9 +68,9 @@ code.
 
 ## EVM runtime
 
-`evm-runtime/` pins the native EDR `0.12.1` Node-API engine, ethers `6.16.0`
-and `@noble/curves` `1.2.0` (the BLS12-381 implementation of the independent
-JavaScript model; ethers already resolves the same version) for the EDR suites
+`evm-runtime/` pins the native EDR `0.25.0` Node-API engine, ethers `6.17.0`
+and `@noble/curves` `2.4.0` (the BLS12-381 implementation of the independent
+JavaScript model) for the EDR suites
 under `contracts/evm/sccp/test/`. Install it with `npm ci --ignore-scripts` in
 that directory; `node_modules/` is ignored by git. `edr-provider.js` creates
 isolated in-memory chains with explicit chain ids, gas limits and

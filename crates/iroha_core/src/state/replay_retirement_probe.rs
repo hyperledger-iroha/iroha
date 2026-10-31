@@ -15,7 +15,7 @@ use std::sync::{
 use std::task::Wake;
 
 /// One original-source callback and its independent physical observations.
-pub(crate) struct ReplayRetirementProbe {
+pub struct ReplayRetirementProbe {
     state: Arc<State>,
     calls: AtomicUsize,
     blocked: AtomicUsize,
@@ -113,7 +113,7 @@ impl Wake for ReplayRetirementProbe {
             if slot.is_some() {
                 self.blocked.fetch_add(1, Ordering::SeqCst);
             }
-            *slot = guard.map(|guard| guard.release_deferred());
+            *slot = guard.map(crate::publication_lock::PublicationGuard::release_deferred);
         }
     }
 }

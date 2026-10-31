@@ -15,6 +15,7 @@ mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
+mod privacy_x509_transaction;
 mod public_finality_checkpoint;
 mod scheduled_contract_trigger;
 mod scheduled_execution_verification;
@@ -105,16 +106,16 @@ use iroha_data_model::{
     permission::Permission,
     prelude::AccountId,
     privacy::{
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PrivacyChallengeV1, PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1,
-        PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
-        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
-        PrivacyVegaIssuerRecordDigestV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
-        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
-        PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1, PrivacyChallengeV1,
+        PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
+        PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+        PrivacyProtocolIdV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
+        PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1,
+        VegaExistingCredentialStatementV1,
     },
     proof::{
         ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId,
@@ -130,6 +131,7 @@ use iroha_data_model::{
         transaction::prelude::FindTransactions,
     },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    runtime::lifecycle::RuntimeRejectionV1,
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
     sorafs::{
@@ -202,7 +204,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
-use rand_core_06::{OsRng as OsRng06, RngCore as _};
+use rand::{TryRng as _, rngs::SysRng};
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
@@ -5596,8 +5598,8 @@ mod tests {
     include!("tests/python_transaction_account_context_tests.rs");
     include!("tests/python_ensure_alias_tests.rs");
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 31);
+    fn native_sdk_bridge_abi_version_is_exactly_thirty_three() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 33);
     }
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
@@ -7423,6 +7425,43 @@ mod tests {
             ),
         ] {
             let rejection = TransactionRejectionReason::AnonymousBallot(reason);
+            assert_eq!(transaction_rejection_code(&rejection), code);
+            assert!(transaction_contract_rejection_json(&rejection).is_none());
+            assert!(transaction_ivm_fault_json(&rejection).is_none());
+        }
+    }
+    #[test]
+    fn runtime_rejection_projection_preserves_each_typed_reason() {
+        use iroha_data_model::runtime::{definition::DefinitionId, lifecycle::RestrictionKindV1};
+
+        for (reason, code) in [
+            (
+                RuntimeRejectionV1::DefinitionInactive {
+                    wire_id: "iroha.bond.call.v1".into(),
+                },
+                "DefinitionInactive",
+            ),
+            (
+                RuntimeRejectionV1::DefinitionRestricted {
+                    definition: DefinitionId([1; 32]),
+                    restriction: RestrictionKindV1::Disabled.at(9),
+                },
+                "DefinitionRestricted",
+            ),
+            (
+                RuntimeRejectionV1::ExpectationMismatch { wire_id: None },
+                "ExpectationMismatch",
+            ),
+            (
+                RuntimeRejectionV1::MalformedPayload {
+                    wire_id: "iroha.bond.call.v1".into(),
+                },
+                "MalformedPayload",
+            ),
+        ] {
+            let rejection = TransactionRejectionReason::Validation(
+                ValidationFail::InstructionFailed(InstructionExecutionError::Runtime(reason)),
+            );
             assert_eq!(transaction_rejection_code(&rejection), code);
             assert!(transaction_contract_rejection_json(&rejection).is_none());
             assert!(transaction_ivm_fault_json(&rejection).is_none());
@@ -10824,6 +10863,10 @@ impl Instruction {
     }
     #[classmethod]
     #[pyo3(signature = (trigger_id, authority, contract_address, expected_code_hash_hex, entrypoint, arguments, *, start_ms, period_ms, max_retries, retry_after_ms, chain_discriminant))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+    )]
     fn register_scheduled_contract_call(
         _cls: &Bound<'_, PyType>,
         trigger_id: &str,
@@ -10839,15 +10882,25 @@ impl Instruction {
         #[pyo3(from_py_with = exact_chain_discriminant)] chain_discriminant: u16,
     ) -> PyResult<Self> {
         if !arguments.is_exact_instance_of::<PyBytes>() {
-            return Err(PyTypeError::new_err("arguments must be exact immutable bytes"));
+            return Err(PyTypeError::new_err(
+                "arguments must be exact immutable bytes",
+            ));
         }
         let authority = parse_selected_account_id(authority, "authority", chain_discriminant)?;
-        let instruction = scheduled_contract_trigger::build(
-            scheduled_contract_trigger::ScheduledContractCall {
-                trigger_id, authority, contract_address, expected_code_hash_hex, entrypoint,
-                arguments: arguments.as_bytes(), start_ms, period_ms, max_retries, retry_after_ms,
-            },
-        ).map_err(PyValueError::new_err)?;
+        let instruction =
+            scheduled_contract_trigger::build(scheduled_contract_trigger::ScheduledContractCall {
+                trigger_id,
+                authority,
+                contract_address,
+                expected_code_hash_hex,
+                entrypoint,
+                arguments: arguments.as_bytes(),
+                start_ms,
+                period_ms,
+                max_retries,
+                retry_after_ms,
+            })
+            .map_err(PyValueError::new_err)?;
         Ok(Self::new(instruction))
     }
     #[classmethod]
@@ -11031,32 +11084,6 @@ impl Instruction {
         self.clone()
     }
 }
-fn python_zk_x509_statement_archive_v1(
-    canonical_statement_archive: &[u8],
-) -> PyResult<IrohaZkX509StarkP256StatementV1> {
-    let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1;
-    if canonical_statement_archive.is_empty() || canonical_statement_archive.len() > maximum {
-        return Err(PyValueError::new_err(format!(
-            "canonical_statement_archive must contain between 1 and {maximum} bytes"
-        )));
-    }
-    norito::decode_canonical::<IrohaZkX509StarkP256StatementV1>(canonical_statement_archive)
-        .map_err(|_| {
-            PyValueError::new_err(
-                "canonical_statement_archive is not the exact canonical ZK-X509 statement wire",
-            )
-        })
-}
-#[derive(Clone)]
-struct PythonPrivacyActionTransactionContextV1 {
-    network_id: NetworkId,
-    authority: AccountId,
-    creation_time: Duration,
-    time_to_live: Option<Duration>,
-    nonce: Option<NonZeroU32>,
-    fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-}
 fn python_compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
     protocol_label: &str,
@@ -11197,80 +11224,6 @@ impl TransactionBuilder {
         manifest.require_authenticated_network(self.network_id)?;
         manifest.require_network_profile(protocol_id)?;
         Ok(())
-    }
-    fn privacy_action_transaction_context_v1(&self) -> PythonPrivacyActionTransactionContextV1 {
-        // Resolve the default clock exactly once. Both intent construction and
-        // final signing must use this same signature-bound millisecond value.
-        let resolved_builder = self.to_model_builder();
-        PythonPrivacyActionTransactionContextV1 {
-            network_id: self.network_id,
-            authority: self.authority.clone(),
-            creation_time: Duration::from_millis(resolved_builder.payload().creation_time_ms),
-            time_to_live: self.ttl,
-            nonce: self.nonce,
-            fee_payment: self.fee_payment.clone(),
-            metadata: self.metadata.clone(),
-        }
-    }
-    fn privacy_native_action_transaction_context_v1(
-        &self,
-    ) -> crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
-        let context = self.privacy_action_transaction_context_v1();
-        crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
-            network_id: context.network_id,
-            authority: context.authority,
-            creation_time: context.creation_time,
-            time_to_live: context.time_to_live,
-            nonce: context.nonce,
-            fee_payment: context.fee_payment,
-            metadata: context.metadata,
-        }
-    }
-    fn validate_privacy_action_signing_authority_v1(
-        &self,
-        private_key: &PrivateKey,
-    ) -> PyResult<()> {
-        let expected = self.authority.try_signatory().ok_or_else(|| {
-            PyValueError::new_err(
-                "native privacy actions require a direct single-signatory authority",
-            )
-        })?;
-        let derived = PublicKey::from(private_key.clone());
-        if expected != &derived {
-            return Err(PyValueError::new_err(
-                "privacy action private key does not match the transaction authority",
-            ));
-        }
-        Ok(())
-    }
-    fn privacy_native_action_build_result_v1(
-        &self,
-        py: Python<'_>,
-        signed: &crate::privacy_native_actions::SignedPrivacyActionV1,
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        let envelope = signed_transaction_envelope_from_model_v1(
-            signed.signed_transaction(),
-            self.chain_discriminant,
-        )?;
-        Ok(PrivacyNativeActionBuildResultV1 {
-            envelope: Py::new(py, envelope)?,
-            protocol_id: signed.protocol_id().canonical_label().to_owned(),
-            operation_schema:
-                crate::privacy_native_actions::privacy_native_action_capability_for_protocol_v1(
-                    signed.protocol_id(),
-                )
-                .expect("dispatcher result has a retained capability")
-                .operation_schema,
-            transaction_hash: signed.transaction_hash(),
-            transaction_intent_digest: signed.transaction_intent_digest(),
-            statement_digest: signed.statement_digest(),
-            proof_envelope_hash: signed.proof_envelope_hash(),
-            statement_bytes: signed.statement_bytes(),
-            proof_bytes: signed.proof_bytes(),
-            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes(),
-            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes(),
-            versioned_signed_transaction_bytes: signed.versioned_signed_transaction_bytes(),
-        })
     }
     fn validate_executable(&self) -> PyResult<()> {
         if self.executable_override.is_some()
@@ -11673,101 +11626,16 @@ impl TransactionBuilder {
         self.clear_transaction_state();
         Ok(envelope)
     }
-    /// Derive the sole transaction intent that an isolated ZK-X509 prover worker must bind.
-    ///
-    /// The canonical statement archive must contain the exact public action
-    /// with an all-zero transaction intent. This method performs no proving or
-    /// signing and leaves the builder unchanged.
-    fn prepare_privacy_zk_x509_identity_presentation_action_v1<'py>(
+    /// Freeze one current proof-free X509 request and its original signed occurrence.
+    /// Returns a private immutable owner; callers cannot replace context while signing.
+    fn prepare_privacy_zk_x509_identity_presentation_action_v1(
         &self,
-        py: Python<'py>,
-        canonical_statement_archive: &[u8],
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        self.require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-            "ZK-X509",
-        )?;
-        let canonical_genesis_hash = *self.network_id.as_bytes();
-        let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
-        let context = self.privacy_native_action_transaction_context_v1();
-        let intent =
-            crate::privacy_native_actions::prepare_zk_x509_identity_presentation_action_intent_v1(
-                &context,
-                canonical_genesis_hash,
-                &statement,
-            )
-            .map_err(|error| {
-                PyValueError::new_err(format!(
-                    "native ZK-X509 action preparation failed at {}",
-                    error.stage()
-                ))
-            })?;
-        let mut resolved_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement);
-        resolved_statement.context_mut().transaction_intent_digest = intent;
-        self.privacy_capability_manifest
-            .as_ref()
-            .ok_or_else(|| {
-                PyRuntimeError::new_err("privacy preparation requires an admitted manifest")
-            })?
-            .require_governed_statement(&resolved_statement)?;
-        Ok(PyBytes::new(py, intent.as_bytes()))
-    }
-    /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
-    ///
-    /// The profile-owned worker returns only a typed public statement and its fixed-capacity `X5S1`
-    /// proof. Native code authenticates their exact transaction/genesis binding before the
-    /// transaction is signed. Signing remains unavailable until the production compiled profile
-    /// passes every release-readiness gate.
-    fn sign_privacy_zk_x509_identity_presentation_action_v1(
-        &mut self,
-        py: Python<'_>,
-        private_key: &[u8],
-        canonical_statement_archive: &[u8],
-        credential_proof: &[u8],
-    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        self.require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-            "ZK-X509",
-        )?;
-        let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1;
-        if credential_proof.is_empty() || credential_proof.len() > maximum {
-            return Err(PyValueError::new_err(format!(
-                "credential_proof must contain between 1 and {maximum} bytes"
-            )));
-        }
-        let canonical_genesis_hash = *self.network_id.as_bytes();
-        let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
-        self.privacy_capability_manifest
-            .as_ref()
-            .ok_or_else(|| {
-                PyRuntimeError::new_err("privacy signing requires an admitted manifest")
-            })?
-            .require_governed_x509_action(&statement, credential_proof)?;
-        let private_key = parse_private_key(private_key)?;
-        self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let proof = crate::privacy_native_actions::ZkX509CredentialProofBytesV1::try_new(
-            credential_proof.to_vec(),
+        canonical_request_archive: &[u8],
+    ) -> PyResult<privacy_x509_transaction::PyPrivacyX509PreparedTransactionV1> {
+        privacy_x509_transaction::PyPrivacyX509PreparedTransactionV1::prepare(
+            self,
+            canonical_request_archive,
         )
-        .map_err(|error| {
-            PyValueError::new_err(format!("native ZK-X509 action failed at {}", error.stage()))
-        })?;
-        let context = self.privacy_native_action_transaction_context_v1();
-        let signed =
-            crate::privacy_native_actions::build_signed_zk_x509_identity_presentation_action_v1(
-                context,
-                crate::privacy_native_actions::ZkX509IdentityPresentationActionRequestV1 {
-                    statement,
-                    proof,
-                },
-                canonical_genesis_hash,
-                &private_key,
-            )
-            .map_err(|error| {
-                PyValueError::new_err(format!("native ZK-X509 action failed at {}", error.stage()))
-            })?;
-        let result = self.privacy_native_action_build_result_v1(py, &signed)?;
-        self.clear_transaction_state();
-        Ok(result)
     }
     /// Replace only fee maxima using a quote, then sign the exact quoted draft.
     fn sign_quoted_payload(
@@ -11860,77 +11728,6 @@ const PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
 const PQ_MASP_LEDGER_EFFECT_V1: &str = "pq_masp_note_state_transition";
 const ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
 const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
-/// Common signed result for typed native privacy action bindings.
-///
-/// Secret-bearing bundle buffers are held in zeroizing storage around their
-/// decoder boundary. The result exposes only the authenticated public
-/// envelope, digests, and byte counts; witness material is never returned.
-#[pyclass(frozen, module = "iroha_native._crypto")]
-struct PrivacyNativeActionBuildResultV1 {
-    envelope: Py<SignedTransactionEnvelope>,
-    protocol_id: String,
-    operation_schema: &'static str,
-    transaction_hash: [u8; 32],
-    transaction_intent_digest: [u8; 32],
-    statement_digest: [u8; 32],
-    proof_envelope_hash: [u8; 32],
-    statement_bytes: u32,
-    proof_bytes: u32,
-    encoded_proof_envelope_bytes: u32,
-    adaptive_signed_transaction_bytes: u32,
-    versioned_signed_transaction_bytes: u32,
-}
-#[pymethods]
-impl PrivacyNativeActionBuildResultV1 {
-    #[getter]
-    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
-        self.envelope.clone_ref(py)
-    }
-    #[getter]
-    fn protocol_id(&self) -> &str {
-        &self.protocol_id
-    }
-    #[getter]
-    const fn operation_schema(&self) -> &'static str {
-        self.operation_schema
-    }
-    #[getter]
-    fn transaction_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_hash)
-    }
-    #[getter]
-    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.transaction_intent_digest)
-    }
-    #[getter]
-    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.statement_digest)
-    }
-    #[getter]
-    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.proof_envelope_hash)
-    }
-    #[getter]
-    const fn statement_bytes(&self) -> u32 {
-        self.statement_bytes
-    }
-    #[getter]
-    const fn proof_bytes(&self) -> u32 {
-        self.proof_bytes
-    }
-    #[getter]
-    const fn encoded_proof_envelope_bytes(&self) -> u32 {
-        self.encoded_proof_envelope_bytes
-    }
-    #[getter]
-    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
-        self.adaptive_signed_transaction_bytes
-    }
-    #[getter]
-    const fn versioned_signed_transaction_bytes(&self) -> u32 {
-        self.versioned_signed_transaction_bytes
-    }
-}
 /// Signed transaction outputs exposed to Python.
 #[pyclass(module = "iroha_native._crypto")]
 struct SignedTransactionEnvelope {
@@ -12355,7 +12152,7 @@ fn sign_query_request(
     let time_to_live_ms =
         NonZeroU64::new(QUERY_TIME_TO_LIVE_MS).expect("query TTL constant is nonzero");
     let mut nonce = [0_u8; 32];
-    OsRng06
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
     request
@@ -12587,6 +12384,12 @@ fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'
         InstructionExecutionError::InvalidParameter(_) => "InvalidParameter",
         InstructionExecutionError::AccountAdmission(_) => "AccountAdmission",
         InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
+        InstructionExecutionError::Runtime(rejection) => match rejection {
+            RuntimeRejectionV1::DefinitionInactive { .. } => "DefinitionInactive",
+            RuntimeRejectionV1::DefinitionRestricted { .. } => "DefinitionRestricted",
+            RuntimeRejectionV1::ExpectationMismatch { .. } => "ExpectationMismatch",
+            RuntimeRejectionV1::MalformedPayload { .. } => "MalformedPayload",
+        },
     }
 }
 fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
@@ -12706,6 +12509,10 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
 #[pyfunction]
 #[pyo3(name = "verify_committed_transaction_inclusion", signature = (transaction_hash, transaction_response_bytes, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant))]
 /// Authenticate a selected full output against an independently anchored finality chain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
+)]
 fn verify_committed_transaction_inclusion_py(
     py: Python<'_>,
     transaction_hash: &str,
@@ -14658,35 +14465,40 @@ fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     network_id: &PyNetworkId,
 ) -> PyResult<Py<PyDict>> {
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
-    crate::privacy_native_actions::inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
-        &signed,
-        *network_id.inner.as_bytes(),
-    )
-    .map_err(|error| {
-        PyValueError::new_err(format!(
-            "invalid ZK-X509 signed action at {}",
-            error.stage()
-        ))
-    })?;
-    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
-        &signed,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-        "ZK-X509",
+    let (statement, intent, action_digest, proof_bytes) =
+        privacy_x509_transaction::inspect(&signed, network_id)?;
+    let result = PyDict::new(py);
+    result.set_item(
+        "protocol_id",
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1.canonical_label(),
     )?;
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &envelope.statement else {
-        return Err(PyValueError::new_err(
-            "signed_transaction_versioned has a mismatched ZK-X509 statement",
-        ));
-    };
-    let result = python_privacy_action_inspection_result_v1(
-        py,
-        &signed,
-        signed_transaction_versioned,
-        intent,
-        envelope,
+    result.set_item("network_id", PyBytes::new(py, network_id.inner.as_bytes()))?;
+    result.set_item("transaction_hash", PyBytes::new(py, signed.hash().as_ref()))?;
+    result.set_item("ordered_intent_digest", PyBytes::new(py, intent.as_bytes()))?;
+    result.set_item(
+        "action_statement_digest",
+        PyBytes::new(py, action_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "materialized_statement_norito",
+        PyBytes::new(
+            py,
+            &norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+                statement.clone(),
+            ))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        ),
+    )?;
+    result.set_item("proof_bytes", proof_bytes)?;
+    result.set_item(
+        "submitted_versioned_transaction_bytes",
+        signed_transaction_versioned.len(),
+    )?;
+    result.set_item(
+        "execution_classification",
         ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1,
-        Some(ZK_X509_LEDGER_EFFECT_V1),
     )?;
+    result.set_item("ledger_effect", ZK_X509_LEDGER_EFFECT_V1)?;
     result.set_item("action_kind", "identity_presentation")?;
     result.set_item(
         "trust_anchor_id",
@@ -15765,7 +15577,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
     module.add_class::<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>()?;
-    module.add_class::<PrivacyNativeActionBuildResultV1>()?;
+    module.add_class::<privacy_x509_transaction::PyPrivacyX509PreparedTransactionV1>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
     module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
     module.add_function(wrap_pyfunction!(
@@ -15799,7 +15611,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         verify_committed_transaction_inclusion_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(scheduled_execution_verification::verify, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        scheduled_execution_verification::verify,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         contract_arguments::encode_contract_arguments_v1_py,
         module

@@ -2190,7 +2190,10 @@ fn build_torii_harness_with_history(
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        runtime_deps,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            runtime_deps,
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
+        ),
     )
     .expect("valid Torii SoraFS-discovery fixture");
     let app = torii

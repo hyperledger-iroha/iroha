@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 use std::{fs, io::Write as _};
 struct Fixture {
-    _temp: tempfile::TempDir,
+    temp: tempfile::TempDir,
     source: RegistrationSourceV1,
     genesis: SumeragiFinalityVerifier,
     scheme: KagemushaWalletSchemeV1,
@@ -76,7 +76,7 @@ fn fixture() -> Fixture {
         version: 1,
         network_id: *native.network_id().as_bytes(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            p256.verifying_key().to_encoded_point(false).as_bytes(),
+            p256.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],
@@ -146,7 +146,7 @@ fn fixture() -> Fixture {
         .collect();
     let receipt = put(&path, &encode(&committed));
     let mut result = Fixture {
-        _temp: temp,
+        temp,
         genesis,
         scheme,
         asset: asset.clone(),
@@ -353,19 +353,14 @@ fn root_and_selected_child_symlinks_are_custody_failures() {
     use std::os::unix::fs::symlink;
     let mut f = fixture();
     let selected = f.source.originals_root.clone();
-    let alias = f._temp.path().canonicalize().unwrap().join("alias");
+    let alias = f.temp.path().canonicalize().unwrap().join("alias");
     symlink(&selected, &alias).unwrap();
     f.source.originals_root = alias.to_str().unwrap().to_owned();
     assert!(matches!(run(&f), Err(RegistrationErrorV1::Custody(_))));
     f.source.originals_root = selected;
     let name =
         Path::new(&f.source.originals_root).join(hex::encode(f.source.inventory.first.sha256));
-    let original = f
-        ._temp
-        .path()
-        .canonicalize()
-        .unwrap()
-        .join("original-entry");
+    let original = f.temp.path().canonicalize().unwrap().join("original-entry");
     fs::rename(&name, &original).unwrap();
     symlink(original, name).unwrap();
     assert!(matches!(run(&f), Err(RegistrationErrorV1::Custody(_))));
@@ -421,7 +416,7 @@ fn completed_finality_verdict_remains_distinct_from_unfinished_reads() {
 #[test]
 fn publisher_authenticates_lazy_readers_and_emits_deterministic_inventory() {
     let f = fixture();
-    let parent = PrivateDirectory::open_exact(f._temp.path().canonicalize().unwrap()).unwrap();
+    let parent = PrivateDirectory::open_exact(f.temp.path().canonicalize().unwrap()).unwrap();
     let selection = RegistrationSelectionV1 {
         genesis: &f.genesis,
         scheme: &f.scheme,
@@ -485,7 +480,7 @@ impl<I: ExactSizeIterator> ExactSizeIterator for Declared<I> {
 #[test]
 fn publisher_refuses_false_counts_foreign_registration_and_cancel_without_manifest() {
     let f = fixture();
-    let parent = PrivateDirectory::open_exact(f._temp.path().canonicalize().unwrap()).unwrap();
+    let parent = PrivateDirectory::open_exact(f.temp.path().canonicalize().unwrap()).unwrap();
     for (name, count, asset, cancel) in [
         ("short", 4, f.asset.asset_digest(), false),
         ("excess", 2, f.asset.asset_digest(), false),

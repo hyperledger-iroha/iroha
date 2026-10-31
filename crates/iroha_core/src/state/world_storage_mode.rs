@@ -82,6 +82,10 @@ impl<K: Key, V: Value> WorldStorageMode<K, V> for Untracked {
 
 // A refused inert installation keeps its exact source in the caller-owned field.
 // Physical acquisition has not started, and normal recovery remains possible.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Prepaid publication and refusal retain original backing without allocating a replacement owner"
+)]
 pub(super) enum PrepaidSlot<'a, K: Key, V: Value, P>
 where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,

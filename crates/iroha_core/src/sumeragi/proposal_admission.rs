@@ -12,7 +12,7 @@ use iroha_sumeragi::{
 
 /// Original source captured before asynchronous control, authoring or signing work.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ProposalSource {
+pub struct ProposalSource {
     pub(crate) instance: Hash32,
     pub(crate) epoch: EpochId,
     pub(crate) height: u64,
@@ -70,7 +70,11 @@ impl ProposalAdmissionOwner for NativeProposalAdmission {
 }
 
 /// Retain the original paid bytes and clock; this grants no block execution authority.
-pub(crate) fn capture(
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
+pub fn capture(
     source: ProposalSource,
     payload: &PayloadBytes,
     creation_time: std::time::Duration,

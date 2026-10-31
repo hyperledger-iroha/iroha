@@ -120,9 +120,7 @@ impl SnsNativeMaintenancePermit {
         Ok(Self {
             network: transaction.network_id,
             proposal: transaction._curr_block.hash(),
-            direct_slot: transaction
-                .direct_execution_identity()
-                .map_err(|error| SnsError::Internal(error.to_owned()))?,
+            direct_slot: transaction.direct_execution_identity(),
             storage_key: alias_auto_renew_storage_key(&state.target)?,
             revision: state.revision,
             record_digest: Self::record_digest(
@@ -175,10 +173,7 @@ impl SnsNativeMaintenancePermit {
     ) -> Result<(), SnsError> {
         if self.network != transaction.network_id
             || self.proposal != transaction._curr_block.hash()
-            || self.direct_slot
-                != transaction
-                    .direct_execution_identity()
-                    .map_err(|error| SnsError::Internal(error.to_owned()))?
+            || self.direct_slot != transaction.direct_execution_identity()
         {
             return Err(SnsError::Internal(
                 "SNS native source belongs to a foreign execution scope".into(),
@@ -215,11 +210,8 @@ impl VerifiedSnsAutoRenewalCharge {
         state: &AliasAutoRenewStateV1,
         selector: NameSelectorV1,
         owner: AccountId,
-        current_expiry_ms: u64,
-        target_expiry_ms: u64,
-        source_id: AssetId,
-        destination: AccountId,
-        amount: Quantity,
+        (current_expiry_ms, target_expiry_ms): (u64, u64),
+        (source_id, destination, amount): (AssetId, AccountId, Quantity),
     ) -> Result<Self, SnsError> {
         Ok(Self {
             source: SnsNativeMaintenancePermit::issue(transaction, scope, state)?,
@@ -788,7 +780,7 @@ fn alias_auto_renew_attempt(
         .saturating_add(years_to_ms(config.term_years));
     let quote = match quote_resolved_name_renewal(
         state_transaction.world(),
-        selector.clone(),
+        &(selector.clone()),
         record.expires_at_ms,
         target_expiry_ms,
         now_ms,
@@ -816,11 +808,12 @@ fn alias_auto_renew_attempt(
         state,
         selector.clone(),
         state.owner.clone(),
-        record.expires_at_ms,
-        target_expiry_ms,
-        AssetId::of(config.payment_asset.clone(), state.owner.clone()),
-        quote.collector_account.clone(),
-        quote.charge_amount.clone(),
+        (record.expires_at_ms, target_expiry_ms),
+        (
+            AssetId::of(config.payment_asset.clone(), state.owner.clone()),
+            quote.collector_account.clone(),
+            quote.charge_amount.clone(),
+        ),
     ) {
         Ok(charge) => charge,
         Err(error) => {
@@ -850,10 +843,10 @@ fn alias_auto_renew_attempt(
     let payment = native_payment_for_quote(&quote);
     match renew_resolved_name(
         state_transaction,
-        selector,
+        &(selector),
         record.expires_at_ms,
         target_expiry_ms,
-        payment,
+        &(payment),
     ) {
         Ok(_) => AliasAutoRenewAttempt::Renewed,
         Err(error) => match error.into_deferral() {
@@ -1255,10 +1248,10 @@ fn decode_policy_for_suffix(bytes: &[u8], suffix_id: SuffixId) -> Result<SuffixP
     Ok(policy)
 }
 fn bootstrap_steward_for_world(world: &impl WorldReadOnly) -> AccountId {
-    world
-        .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
-        .map(|domain| domain.owned_by().clone())
-        .unwrap_or_else(|_| fixtures::steward_account())
+    world.domain(&iroha_genesis::GENESIS_DOMAIN_ID).map_or_else(
+        |_| fixtures::steward_account(),
+        |domain| domain.owned_by().clone(),
+    )
 }
 fn active_account_alias_lease_record(
     state_transaction: &StateTransaction<'_, '_>,
@@ -2037,15 +2030,13 @@ pub(crate) fn validate_name_controllers(controllers: &[NameControllerV1]) -> Res
     Ok(())
 }
 fn registration_record(
-    selector: NameSelectorV1,
+    selector: &NameSelectorV1,
     owner: AccountId,
     controllers: Vec<NameControllerV1>,
     term_years: u8,
     payment: &LeasePayment,
     metadata: Metadata,
-    policy: &SuffixPolicyV1,
-    tier: &PriceTierV1,
-    now_ms: u64,
+    (policy, tier, now_ms): (&SuffixPolicyV1, &PriceTierV1, u64),
 ) -> Result<NameRecordV1, SnsError> {
     enforce_policy_active(policy)?;
     validate_name_controllers(&controllers)?;
@@ -2130,7 +2121,7 @@ fn ensure_selector_is_mutable(selector: &NameSelectorV1) -> Result<(), SnsError>
     Ok(())
 }
 fn canonicalize_resolved_selector(
-    selector: NameSelectorV1,
+    selector: &NameSelectorV1,
 ) -> Result<(SnsNamespace, NameSelectorV1), SnsError> {
     if selector.version != NameSelectorV1::VERSION {
         return Err(SnsError::BadRequest(format!(
@@ -2253,8 +2244,7 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
     catalog: &impl DataSpaceCatalogRead,
     alias: &AccountAlias,
     owner: &AccountId,
-    term_years: u8,
-    pricing_class_hint: Option<u8>,
+    (term_years, pricing_class_hint): (u8, Option<u8>),
     now_ms: u64,
     configured_fee_asset_selector: &str,
 ) -> Result<LeaseQuote, SnsError> {
@@ -2390,7 +2380,7 @@ fn quote_account_alias_renewal_inner(
 /// suffix policy is unavailable, the label is reserved, or the name exists.
 pub fn quote_resolved_name_registration(
     world: &impl WorldReadOnly,
-    selector: NameSelectorV1,
+    selector: &NameSelectorV1,
     owner: &AccountId,
     term_years: u8,
     pricing_class_hint: Option<u8>,
@@ -2450,7 +2440,7 @@ fn ensure_record_renewable(record: &NameRecordV1) -> Result<(), SnsError> {
 /// record is frozen/tombstoned, or the target does not add an allowed whole-year term.
 pub fn quote_resolved_name_renewal(
     world: &impl WorldReadOnly,
-    selector: NameSelectorV1,
+    selector: &NameSelectorV1,
     expected_current_expiry_ms: u64,
     target_expiry_ms: u64,
     now_ms: u64,
@@ -2516,10 +2506,10 @@ pub(crate) fn register_resolved_name(
 /// Apply a catalog-free absolute-expiry renewal after exact payment was charged.
 pub(crate) fn renew_resolved_name(
     state_transaction: &mut StateTransaction<'_, '_>,
-    selector: NameSelectorV1,
+    selector: &NameSelectorV1,
     expected_current_expiry_ms: u64,
     target_expiry_ms: u64,
-    payment: LeasePayment,
+    payment: &LeasePayment,
 ) -> Result<NameRecordV1, SnsError> {
     let (_, canonical_selector) = canonicalize_resolved_selector(selector)?;
     ensure_selector_is_mutable(&canonical_selector)?;
@@ -2538,7 +2528,7 @@ pub(crate) fn renew_resolved_name(
     let term_years = resolved_renewal_term_years(expected_current_expiry_ms, target_expiry_ms)?;
     let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
     validate_term_bounds(&policy, &tier, term_years)?;
-    validate_payment_for_term(&policy, &tier, term_years, &payment)?;
+    validate_payment_for_term(&policy, &tier, term_years, payment)?;
     record.expires_at_ms = target_expiry_ms;
     record.grace_expires_at_ms =
         target_expiry_ms.saturating_add(u64::from(policy.grace_period_days) * MS_PER_DAY);
@@ -2562,7 +2552,7 @@ fn register_name_with_selector(
         payment,
         metadata,
     } = request;
-    let (namespace, canonical_selector) = canonicalize_resolved_selector(selector)?;
+    let (namespace, canonical_selector) = canonicalize_resolved_selector(&selector)?;
     ensure_selector_is_mutable(&canonical_selector)?;
     let policy = policy_or_not_found(state_transaction.world(), canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
@@ -2582,15 +2572,13 @@ fn register_name_with_selector(
     }
     let tier = pick_pricing_tier(&policy, &canonical_selector, pricing_class_hint)?;
     let record = registration_record(
-        canonical_selector,
+        &(canonical_selector),
         owner,
         controllers,
         term_years,
         &payment,
         metadata,
-        &policy,
-        &tier,
-        now_ms,
+        (&policy, &tier, now_ms),
     )?;
     persist_record(state_transaction, &record);
     Ok(record)
@@ -2656,13 +2644,11 @@ pub fn apply_with_state_block<T>(
     })?;
     let next_height = latest_block
         .as_ref()
-        .map(|block| block.header().height().get().saturating_add(1))
-        .unwrap_or(1);
+        .map_or(1, |block| block.header().height().get().saturating_add(1));
     let prev_hash = latest_block.as_ref().map(|block| block.as_ref().hash());
-    let ledger_time_ms = latest_block
-        .as_ref()
-        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+    let ledger_time_ms = latest_block.as_ref().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
     let wall_clock_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .ok()

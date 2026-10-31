@@ -41,7 +41,7 @@ clap-markdown = "0.1.5"
 owo-colors = { workspace = true }
 color-eyre.workspace = true
 derive_more.workspace = true
-toml = { version = "0.9.8" }
+toml = { workspace = true }
 
 blake3.workspace = true
 hex = { workspace = true }

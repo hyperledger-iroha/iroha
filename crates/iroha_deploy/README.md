@@ -1,8 +1,9 @@
 # iroha_deploy
 
 The shared deployment engine for Kagami and Mochi developer environments and
-operator network/dataspace workflows. This crate owns native localnet generation,
-persistent supervision, context selection, definition parsing and finality verification. `iroha_cli` wires
+operator network/dataspace workflows. This crate owns native Sora network and developer
+localnet generation, persistent supervision, context selection, definition parsing and
+finality verification. `iroha_cli` wires
 `iroha dataspace plan/apply/status` to the existing native deployment engine;
 the broader network/host engine remains in the phase plan below.
 
@@ -11,7 +12,7 @@ The design, file formats and phase plan are in
 
 What exists so far:
 
-- `genesis::sccp`: canonical Taira localnets initialize SCCP inside genesis with
+- `genesis::sccp`: canonical Taira networks initialize SCCP inside genesis with
   a fresh OS-random nonce, a minimum one-hour epoch, 21-day unbonding and a
   10,000-basis-point slash ceiling. Generation one comes from the native signed
   committee; no route is seeded. Public nonce and signed-network markers live in
@@ -27,26 +28,29 @@ What exists so far:
   bound into the signed Nexus policy. Parliament and reconciliation launch
   gates remain closed.
 
-- `bootstrap::publication`: offline native release production from independently pinned complete
-  manifest bytes, signed-genesis key/network and a bounded contiguous current finality-proof prefix. Kagami exposes
-  `advanced network-bootstrap prepare`; it derives consensus coordinates, signs the canonical
-  `SignedNetworkCheckpoint`, and atomically prepares `checkpoint.nrt` and `network-profiles.nrt`
-  for an explicitly selected release authority and HTTPS publication location. The schema in its
-  public receipt binds the compiled candidate; preparation does not qualify a live network,
-  publish the endpoint, or authenticate a bundle installation. Release packaging selects the exact
-  committed `defaults/developer/network-profiles.nrt` image automatically: use
-  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the matching
-  client/worker/daemon CLI package, or `cargo xtask mochi-bundle --profile release --out <fresh-directory>`
-  for the desktop application. `--network-profiles` is an override for development bundles only.
+- Native bundles include `defaults/developer/network-profiles.nrt`, which selects the
+  public endpoint, chain label and address prefix. Use
+  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the CLI
+  package or `cargo xtask mochi-bundle --profile release --out <fresh-directory>` for
+  the desktop application. `--network-profiles` selects an explicit development bundle
+  profile, including numeric-loopback HTTP for a local parent network.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
   requires one signed transaction to be applied by every validator. Kagami and
-  Mochi call this owner directly. Explicit deployment/recovery targets preserve the
+  Mochi call this owner directly. Fresh environments use the `Standard` profile;
+  storage and package-registry development explicitly select `StreamTokenAuthorities`.
+  Plain contract deployment and local package builds do not provision those services.
+  Explicit deployment/recovery targets preserve the
   workspace selection; ordinary startup and default auto-creation select their environment.
   Startup transfers the original runtime lock through inherited stdin, preserving ownership
   through worker loading and into its validator children. Unix retains the shared native file
   lock; Windows relies on the trusted inherited handle's writer exclusion.
+  The frontend retains all eight bound loopback sockets until authenticated native handoff
+  to its worker. The worker keeps them through validator startup and internal restarts,
+  transferring each pair only to its owned child after kernel process-identity checks.
+  Receivers verify the exact configured addresses before acknowledging adoption. Starting
+  a stopped generation reacquires its original endpoints and fails if they are occupied.
   Binary verification, worker loading, activation and Ready publication share the original
   startup budget. A same-boot continuous deadline includes suspend across the handoff;
   clock failures refuse startup. Selection preparation, including fresh generation validation,
@@ -102,28 +106,27 @@ What exists so far:
   lookup, including absent registries and errors. Successful lookup also retains the
   original deadline. Kagami and Mochi use this shared check for deployment and publication;
   source, bytecode and local-only packages keep lazy registry resolution.
-- `localnet` and `genesis`: canonical configuration generation, independent private
-  authority seeds, profile policy and genuine core genesis execution. CLI parsing
-  stays in Kagami; generation and process ownership have no CLI or GUI dependency.
+- `sora_network` and `genesis`: canonical configuration generation, independent private
+  authority seeds, profile policy and genuine core genesis execution for Nexus, the public
+  Taira chain and the private dataspace presets (`kagami sora-network`), plus owner-private
+  roots. `network` signs genesis and writes the shared `network.toml` for validators that
+  hold their own keys (`kagami network create`), with no Sora profile. `localnet` is the dedicated developer generator behind `kagami localnet generate`
+  and `kagami localnet up`: it refuses public chain identities and Sora profiles, and emits
+  peer configs limited to node essentials with no faucet, onboarding, fee sponsorship,
+  alias setup or SoraNet VPN operator. Its `service_authorities` module is the opt-in
+  storage layer of managed networks (`kagami localnet up --with-storage`): three storage
+  providers, their network services and the `dev.universal` publication namespace. CLI
+  parsing stays in Kagami; generation and process ownership have no CLI or GUI dependency.
   Retained private-root fee policies decode under the validated child's account
   profile; verification restores the parent caller's profile on success and failure.
-- `bootstrap`: canonical release-signed native checkpoint verification against an
-  independently installed authority, with private durable release/clock rollback
-  protection and explicit network reset identity. `ParentFinalityStore` retains
-  the advancing native prefix separately and publishes before returning fresh
-  readiness; reopening an older release never rewinds it. The Taira installation profile is
-  bundled from its committed image. A previously retrieved checkpoint passed native
-  verification but has expired; attachment requires a fresh signed checkpoint at the
-  confirmed `https://taira.sora.org/bootstrap/checkpoint.nrt` location, which currently
-  returns HTTP 404 from the validation host. Authenticated bundle distribution,
-  recurring signed checkpoint publication and combined parent-provisioning
-  qualification remain outstanding.
-  Native installation profiles and bounded unsigned HTTPS retrieval select the release
-  independently. Signed account profiles, committee endpoints and optional faucet
-  allowances feed exact parent SDK contexts without forwarding child credentials.
-  Parent profiles require a committed global root. Signed native World schema and
-  optional build-registry roots select cold-download discovery; a fresh committee
-  observation precedes authentication of the provider policy and token signer.
+- `bootstrap`: native discovery through an installed HTTPS root, chain label and address
+  prefix. Signed genesis and compact epoch-boundary certificates authenticate a recent
+  checkpoint without replaying every block or fetching a separate signed publication.
+  Private custody pins the exact network identity, faucet terms and verified progress;
+  a response cannot silently replace a retained network. The native World schema comes
+  from the compiled reader. `ParentFinalityStore` publishes verified progress before
+  exposing it. Ordinary setup uses certified state and original transaction receipts;
+  explicit readiness, custody and registry discovery keep their fresh quorum checks.
   See the [developer acceptance contract](../../specs/kagami_mochi_devex_goals.md).
 - `attachment`: exact compact parent registration/anchor operations using the shared
   wallet journal, explicit fee ceilings and fresh independent parent verification.
@@ -134,16 +137,20 @@ What exists so far:
   loopback certificate reads to this workflow without forwarding private bodies or credentials.
 - `provisioning`: retains the exact child registration, imports its owner into a
   separate public parent wallet, and coordinates the canonical faucet and paid SNS
-  operations under signed release allowances. Fresh parent quorum precedes funding.
+  operations under finite client fee and rent limits. Native certificates establish the
+  parent state used for setup; registration execution enforces current ownership and
+  the exact SNS lease generation.
   One request leases the private dataspace and its owner's default `admin@ALIAS`
   account alias together, with both rents under the original combined allowance.
   Recovery preserves signed journals and the exact original namespace quote,
   expiry, owner label and spending allowance, including failure before journal creation.
   Its state lives outside local reset, so a replacement child cannot silently inherit
-  an existing parent attachment. After namespace completion, a fresh certified parent
+  an existing parent attachment. After namespace completion, a certified parent
   World projection authenticates the exact active owner and lease generation.
   Only `attachment` receipts confirm anchoring. Native supervisor scheduling and CLI/GUI
-  wiring share this owner; combined real-network qualification remains outstanding.
+  wiring share this owner. The installed CLI passes the disposable four-parent/four-private
+  attachment, deployment, execution, recovery and parent-anchoring fixture on macOS.
+  Live Taira, native desktop and other-platform qualification remain outstanding.
   Initial custody directories publish their complete records and locks atomically;
   interrupted staging cannot leave an empty operation journal at its final path.
 - `definition`: parsers and validation for network definitions
@@ -178,8 +185,9 @@ What exists so far:
   its contiguous prefix, including across boundaries. Supplied proofs cannot select
   their own trust roots. `verify::http` supplies native SDK proof retrieval and
   concurrent challenge-bound committee reads, with one operation deadline and
-  bounded per-peer tip retries. Release bootstraps constrain every selected endpoint
-  to the independently signed HTTPS roots. Other gates remain in the phase plan.
+  bounded per-peer tip retries. Native bootstrap constrains every selected endpoint
+  to the installed root retained with the exact network identity. Other gates remain
+  in the phase plan.
 
 The committed definitions are `networks/dev.toml`, `networks/ci.toml` and
 `networks/perf-10k.toml`. The dataspace examples are in `dataspaces/`.

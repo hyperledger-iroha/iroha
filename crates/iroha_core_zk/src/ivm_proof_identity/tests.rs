@@ -105,10 +105,7 @@ fn reserved_ivm_registry_records_reject_before_inline_material() {
                 }
             })
             .expect_err("an off-ledger commitment cannot reserve an IVM binding identity");
-        assert!(
-            error.to_string().contains("not admitted"),
-            "{circuit}: {error}"
-        );
+        assert!(error.contains("not admitted"), "{circuit}: {error}");
     }
 }
 
@@ -165,10 +162,7 @@ fn reserved_ivm_native_material_rejects_interior_and_snake_case_components() {
             &payload, &circuit, "test",
         )
         .expect_err("direct native material cannot bypass registry identity rejection");
-        assert!(
-            error.to_string().contains("IVM execution"),
-            "{circuit}: {error}"
-        );
+        assert!(error.contains("IVM execution"), "{circuit}: {error}");
         assert!(
             crate::prove_stark_fri_open_verify_envelope(
                 backend,
@@ -193,7 +187,7 @@ fn reserved_ivm_native_material_rejects_interior_and_snake_case_components() {
             params,
             crate::STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
             circuit.clone(),
-            Default::default(),
+            iroha_data_model::privacy::GoldilocksDigest384V1::default(),
         )
         .expect_err("direct native AIR prover cannot bypass the common identity guard");
         assert!(

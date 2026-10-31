@@ -5,7 +5,7 @@
 //! the inverse is checked, never independent authority. Physical work and encoding
 //! limits are caller-admitted local bounds, not new registry or consensus limits.
 //!
-//! TODO: consume this group with every canonical table/cell in StatePublication
+//! TODO: consume this group with every canonical table/cell in `StatePublication`
 //! after deterministic tail writes and complete freeze, before original publication
 //! reacquisition and the generation fence. That integration must retain its actual
 //! admitted policy, classify every local refusal, and retain all node custody through
@@ -56,9 +56,13 @@ impl<'frozen> Original<'frozen> {
 /// `None` means this owner is not completely frozen or does not belong to its State.
 /// No rows are copied/reacquired and no State/configuration view is consulted. Both
 /// borrows survive validation and encoding; every refusal leaves the caller's same
-/// StateBlock untouched for retry. Local work/row/byte/pool limits are operational
+/// `StateBlock` untouched for retry. Local work/row/byte/pool limits are operational
 /// refusal only, never a transaction verdict. The eventual State publisher still
 /// must check every original target predecessor before consuming these nodes.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,

@@ -256,7 +256,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
         npos.evidence_horizon_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.slashing_delay_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.validate().map_err(|error| eyre!(error))?;
-        parameters.custom.insert(id, npos.into_custom_parameter());
+        parameters.custom.insert(npos.into_custom_parameter());
         *parameters_value = json::value::to_value(&parameters)?;
     }
     ensure!(
@@ -380,16 +380,14 @@ pub(super) async fn prepare(
     let mut generate = kagami.command()?;
     generate
         .args([
-            "localnet",
+            "sora-network",
             "generate",
             "--peers",
             "4",
             "--chain-id",
             "fc56984b-2be7-431d-840e-21514d1883f0",
-            "--sora-profile",
+            "--profile",
             "nexus",
-            "--consensus-mode",
-            "npos",
             "--block-cadence-ms",
             "2000",
             "--bind-host",

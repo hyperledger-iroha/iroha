@@ -112,7 +112,7 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/VERSION",
     "scripts/archive_norito_xcframework.py",
     "scripts/build_norito_xcframework.sh",
-    "scripts/normalize_pqcrypto_archive.py",
+    "scripts/audit_native_static_archive.py",
     "scripts/exec_with_file_lock.py",
     "scripts/norito_bridge_apple_slice_handoff.py",
     "scripts/package_mobile_sdk_artifacts.sh",
@@ -441,7 +441,7 @@ _REVIEWED_PUBLIC_MOCK_ENV_INPUTS = frozenset({
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
 })
 _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS = {
-    "crates/iroha_config/tests/fixtures/full.env": ("159bdddf2c286caf700320df07b79edbf0a78a8385c7bef6d8a5b0db7d4e0c31", 2089),
+    "crates/iroha_config/tests/fixtures/full.env": ("89a46c809c1c5791a4d8f075af920995611b0b85249ed6193df084c54cad7fa4", 2048),
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env": ("196c68787e11f84107aaa983a5cb02a97b5d2ef6f860269c85920a1baf5817f5", 26),
     "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("06f3e6f960e02cb8a452e85d634d6b5b7518ac511d9ab98c69d2ba3e42d8eb4f", 53080),
     "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv": ("cbb124b4bda971357c61de40bf82566436efecf593e4bb5f9df8e4ac77b678db", 3525),
@@ -488,10 +488,115 @@ _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
-    "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",
+    # Public Apple privacy declaration: no tracking/data collection, file timestamp
+    # access reason C617.1. The provider verifier separately pins its source bytes.
+    "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy",
+})
+
+
+# Exact upstream Nearby c80c38e Apple adapters and submodule provenance, plus
+# three nlohmann public serializer headers in its source directory named output.
+# Each original was checked against its pinned Git blob and SHA256. This admits
+# neither generic Objective-C suffixes nor other operational/output paths.
+_REVIEWED_PUBLIC_NEARBY_SOURCE_PINS = {
+    'vendor/nearby/.gitmodules': ('deddc8d42845cf35729298abca1473191256e6969dedae80aed8b3924834f1b2', 456),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/CPPInputStream.mm': ('18638e3f92f062c647a6c4ad4f5c54c9de862041f899f4ba0462f27096125615', 1513),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCAdvertisingOptions+CppConversions.mm': ('3d0284efe8a85c7250cf363c153702eda66a6a3621bae88a05c7638686d9d4c5', 1784),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCAdvertisingOptions.mm': ('e8fb731165d356cb55bc9cf2fcfd59b43a065f289fe06a602afb44c2c0a2409c', 1179),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCConnectionOptions+CppConversions.mm': ('5aa5e160c34d6d2e3a2e66a12ac00fccfe58c0768d5623cbad5f901d8c254b79', 2111),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCConnectionOptions.mm': ('33328a657d95a120d994d6e6a659c9d89e83f3ddb1ee53627426abd4f7caa4f2', 1024),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCCoreAdapter.mm': ('a9af0eb057234ab0121e048784b2471650428377edc71aa1fe2491b2a2cc1153', 16404),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCDiscoveryOptions+CppConversions.mm': ('a2c3e867b5d4973bd2fd8bc3975d186ad05dbcbcecbeece56d94148065f1a9c9', 1415),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCDiscoveryOptions.mm': ('ae0c1b9dea070f60c66ce0e298a196f2a0f8f14cedda9de82d179f80dd03345e', 1142),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCError.mm': ('73fbfe45e4d1a2ef63e3760566436d24ee1ee82350b965c1d26d97c94b313254', 3924),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCException.mm': ('1df01bb9a21ff2194222f4bfd893539d64f11bfaee6b3b5efd1dc508d99b88d0', 2429),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCFlags.mm': ('45a69646be348da91ed74954ff6dd4ceacb44d4b9bb6893de2af75fa0a09810d', 1443),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCInputStream.mm': ('a7d4c2824dfb38685087a7612c73d2f4c8be90637c3157886b45bf1ae9327b1f', 3245),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCPayload+CppConversions.mm': ('1c0b2a47ebd6690728ec41a687df3daceadd3b2772b3254579ddd537e4f0b2e7', 3256),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCPayload.mm': ('95c8eaf37733fb8f4400e0b9bb4b113cd7bcf0e4e10fe5575040020ddebe080c', 2862),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCStrategy.mm': ('2ca4c8545b7244126b3b474d9ad567d2d04af9f1b94f4fcfb98b2b41bffca551', 1214),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCSupportedMediums+CppConversions.mm': ('04c98c1bf0220fe3fd6821d8877b42190567eeb744c65cd80b2b919ecdfa2862', 1295),
+    'vendor/nearby/connections/swift/NearbyCoreAdapter/Sources/GNCSupportedMediums.mm': ('45c30759f371bfdf2246f0c1ffbe70a1ffecd7e06c72a22fea83520667e02ab9', 1724),
+    'vendor/nearby/internal/platform/implementation/apple/Flags/GNCFeatureFlags.mm': ('0f1a0f67555a66cca348b9be22c1323c89f6fc575f43f9128ad55322fb31f3e1', 2429),
+    'vendor/nearby/internal/platform/implementation/apple/GNCDevicePaths.m': ('d5108c8318a6bbd1bd42fa70d83417dd9e0e814153fa17e91d8d402e28d90c24', 1676),
+    'vendor/nearby/internal/platform/implementation/apple/GNCUtils.m': ('c89ae19ae1b594e4309d213edc0a5557db17be68e64159299acdec99e2afdd01', 1963),
+    'vendor/nearby/internal/platform/implementation/apple/Log/GNCLogger.mm': ('11feb6c3d3ad8b103724e1f901c2758e52433784fc0a0e6aee0b99b96c9ed55c', 1759),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEError.m': ('6d446b5b1cdc86e5205b2be739bac5b00eaf4135287d67c5d2a247d9f4dfa1e5', 772),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEGATTCharacteristic.m': ('a1e243b704fea87da4107e4b0824ca8f878a62a57122e434b5e4d3b3f968fcc5', 1645),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEGATTClient.m': ('297023754bbb05212f63240457c0931527f2e88d8880e9a0139ebcc6b91a9772', 19168),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEGATTServer.m': ('a002075b4e9fc9c4d17c692e94e4afb876b43d9f37df2d23387dd8e62a9b62db', 17430),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEL2CAPClient.m': ('452068a73485f88cd2aba9bf94c01354fb4e5df6d094cf2f3568f46f4e4418fb', 5104),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEL2CAPConnection.m': ('d5c0d5768919340418330524955b58959d11a35039ee03fd1baf29710b7744ff', 14772),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEL2CAPServer.m': ('4282b2c90528d9d45c00f90b4669d6b076a0c39192c5048bb1a6fb2f6c02fccd', 10199),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEL2CAPStream.m': ('57ee2016bda21862bc6b76a5a3de4bb9790c13f6869ca087b444b4e2fca1ab39', 12386),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCBLEMedium.m': ('1ee2549993562f773ae5dfbf1220e927f4291a295132707d0ae9b346023c8c00', 24499),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCCentralManager.m': ('a67f3814396dafcb7e041cd2d7605d8e34a29ba8eb35762003e6b55bbfabc56b', 1333),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCLeaks.m': ('fdec73305e97922bb913cba384630eb9fbd82a7ff646e6b3a45555060a8bfbdd', 1235),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCMBleConnection.m': ('7e3828a0a4b718bff57deec4994182c251db7f817efd1b09ebae532dcad44524', 6209),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCMBleUtils.mm': ('936946a777e71a70d7437ab3e4b1e1d58135d7100d8c3acc99586b95317dbba0', 10908),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCMConnection.m': ('19265bb77281900a04d44e4a525ef5e6318a057e86a39919dbe930a4e45a2155', 1094),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCPeripheral.m': ('a9573bedcab5e22c372aebdf6abae41d8a1ea34c9de7fbf3bd6763a12cc0480c', 1091),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCPeripheralManager.m': ('f2dbce51d166f22b98c27417397f388660a75082b272cbae8d4d7e45c36cf667', 1159),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/GNCPeripheralManagerMultiplexer.m': ('6fc1edf86738ab478d294c2edff6bea23b7f95078d3604d60f52cd9e89670122', 7422),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/NSData+GNCBase85.mm': ('897e5b571ab6c0c0ef41bb204c0b3c95f05eb70eab3be41bf284920de82fb398', 1560),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/NSData+GNCWebSafeBase64.m': ('a871096d9fcde2ace9ef7340adabe281c50c19e0cd80d599374716a9a9afab9c', 2080),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Central/GNSCentralManager.m': ('a9dc2ca54814f0f9c849cb14e92459943a1c76de9ae66e7967ff6b9afb9c8298', 14530),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Central/GNSCentralPeerManager.m': ('a3f8f8442b00975853ab770cf88e2c82d19e86cf92c531e77cf05088717fb317', 32771),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Peripheral/GNSPeripheralManager.m': ('8fbc874768b061a940a12134d5cc4e5237fa6743c32c4c574fe3cf3f2c6d3a06', 22878),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Peripheral/GNSPeripheralServiceManager.m': ('4d230d08bcab39214b3eaf23343bf3bc2a87c782c421c097081741b0b3689e1a', 24489),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Shared/CBATTRequest+GNSATTRequest.m': ('2923e97e09c4beadb3eedfc48a985a6e0d9f5132553006d5aa327229b54657c4', 752),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Shared/GNSSocket.m': ('7341016c15c278bddd6ca47c1767f4015d7fbafbfef05463d8354112c95e4c9e', 8108),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Shared/GNSUtils.m': ('5512b157c81831e1e039c16a67abac21d76e971ee199e9e830b00cddc183e6bb', 4348),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/BLE/Sockets/Source/Shared/GNSWeavePacket.m': ('f7aa29b18d93839ae2d708ad566a2cc00976200a2d644da2721454d8b171d88f', 15959),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/Hotspot/GNCHotspotMedium.m': ('37bfbf77bde3b1cd3f248812d8ea96e3e3b10eb78199fb85deba3e3453e45d1b', 11058),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCIPv4Address.m': ('df623ea83bc69dd38d1ca8b8887a64aa4022f217c4e85c99e6ff5d33050ff839', 2869),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWBrowseResultImpl.m': ('efc805e5d3a8d9fc363e54fdaa8c8f1823224cb0c034b9aa448f2acf5b0a1792', 2410),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWBrowserImpl.m': ('d6560fc6318fdbb44145ac7117200f86d9a07b0cd42a77ceb608d3ff8b64fad2', 1659),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWConnectionImpl.m': ('f1e4d3ee8b27376adc3dc8f3e9b965726ff814c6ad80e17137d7d7b1cfbe78a2', 2504),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFramework.m': ('5966e55f872b1e0ab3b9e863de8620f95600aab8e3dd5d322ff24fafa7a9bb3c', 23279),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFrameworkError.m': ('dae3942304ceb9e8718cc8f23c99fa87e59210081e48631a78d76f77f73524c6', 764),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFrameworkServerSocket.m': ('676bb52d2709049a9a0e37406461c4f360fd6d3b47fed5b3af45bac9fa2f930c', 13322),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFrameworkSocket.mm': ('7017f7c15e89ee73a34da5cc7613d162135370935dd1cfcbadc169dcec237ed8', 6288),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWListenerImpl.m': ('922a36e8a0352f99420a725336bb22d9cb6a9c69e249013cdf1a97148393d2e6', 2322),
+    'vendor/nearby/internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWParameters.m': ('6075036aafbad15c7edc6035a43b5ade911e18b25f841d4dfe5797429194f226', 3832),
+    'vendor/nearby/internal/platform/implementation/apple/app_lifecycle_monitor.mm': ('73ea3620087f2a084a9b0d95bbc8248989f0a78aeb5b91bb5da80e494b9f320d', 4090),
+    'vendor/nearby/internal/platform/implementation/apple/awdl.mm': ('7e55d07cef3303461e6953887be1477ef4431e13b06ab36e87fd0702290c7233', 7451),
+    'vendor/nearby/internal/platform/implementation/apple/ble_gatt_client.mm': ('49a47c6aec834b75de762ce6c0750b6f4a777a5d29249f1119d19dd27d3315d0', 5596),
+    'vendor/nearby/internal/platform/implementation/apple/ble_gatt_server.mm': ('eb030191e8123ea7a8518087388f78acf3671ae4e8ec4b88feedaf4be680c9c9', 4312),
+    'vendor/nearby/internal/platform/implementation/apple/ble_l2cap_server_socket.mm': ('b3a1a6053fb00806c4cdd7e1cd35afb4522be295438d774e3fe3cf48226c5f2e', 2593),
+    'vendor/nearby/internal/platform/implementation/apple/ble_l2cap_socket.mm': ('16aa69b361c0a80ca39f3ec891e42d65b767b99eb282a7aa623009fe297426a4', 7909),
+    'vendor/nearby/internal/platform/implementation/apple/ble_medium.mm': ('f09122f40afacf3a77d409d1110b1940bc200553b1a5f15e3e508d001d1d9e23', 41148),
+    'vendor/nearby/internal/platform/implementation/apple/ble_peripheral.mm': ('8a25681727b3619e8d059dee5e1aea0a47014e5591817b34f1b52e92863bc766', 1426),
+    'vendor/nearby/internal/platform/implementation/apple/ble_server_socket.mm': ('efc146a25806d8d450c86cdf9ffc2692349d76e448a47c20e4a6b5a8045a4bb4', 2246),
+    'vendor/nearby/internal/platform/implementation/apple/ble_socket.mm': ('5dfa784cbbb9e2bc838727fb4f0fcf07abe4663c4727bbebbba938aca34f1d98', 8799),
+    'vendor/nearby/internal/platform/implementation/apple/ble_utils.mm': ('fd0e0444c7efe1c2ecf91bda5c6dad8c9a4db0b108bfd4eff6ca5b77614bbff9', 6131),
+    'vendor/nearby/internal/platform/implementation/apple/bluetooth_adapter_v2.mm': ('a89fe3546a8969af07b08e9c41ef53a14ac3f6b41bc2facb4501c16b1cd0beb8', 2084),
+    'vendor/nearby/internal/platform/implementation/apple/crypto.mm': ('39a4902140b49e758701fb4d7ef177147de83c96ce8447a54b2d3ec0975d7c8a', 1350),
+    'vendor/nearby/internal/platform/implementation/apple/device_info.mm': ('a949f55d9d8ca0a1f55c22e1671be21047a3cd757a63174ab8fe294b15b4d676', 3918),
+    'vendor/nearby/internal/platform/implementation/apple/json_utils.mm': ('f823b09173283802a6dd6f39164977965a9528e21527a68b08cbbdad0e667dc4', 7199),
+    'vendor/nearby/internal/platform/implementation/apple/multi_thread_executor.mm': ('f80dd000520bceab8d26572eeb1d7057c183d4ee5ade91cd4acc407fe574887f', 1312),
+    'vendor/nearby/internal/platform/implementation/apple/nearby_logger.mm': ('5df5cbf4d10b1187b16510eedc502491fe2a55f40f65c61b238065eefca5d957', 1132),
+    'vendor/nearby/internal/platform/implementation/apple/network_utils.mm': ('c1d0050395cdbcedbf3fe2194209aec3733f20489011125db6584ff181fe69b4', 9200),
+    'vendor/nearby/internal/platform/implementation/apple/os_log_sink.mm': ('0178d4f0249bf090ee7dc43f342994ffe834518fcf144f8d91f488664510ada2', 1787),
+    'vendor/nearby/internal/platform/implementation/apple/platform.mm': ('caaee7b72918566ff6fd3f6997c881b49f7f979ff40f83ae6d0e6e854d12137f', 11688),
+    'vendor/nearby/internal/platform/implementation/apple/preferences_manager.mm': ('2511ffdf66d4600c69684386ee8ecdba4a0a69489eeda0f3c92b20f2aba7eb02', 11176),
+    'vendor/nearby/internal/platform/implementation/apple/scheduled_executor.mm': ('44c38ff5865ce304e7aff8bdffbf0fbc336d4511cf249ffed202d2c30449a24f', 6654),
+    'vendor/nearby/internal/platform/implementation/apple/timer.mm': ('8b925d44aaddfdb0e05e55e745a68a77deae1bfe95fd1d5d5208984c91f783a6', 3890),
+    'vendor/nearby/internal/platform/implementation/apple/utils.mm': ('6c12537b2cfd4d4a080bae1f1c2e45a220f5a6c0e3314aeba0a8d23ec996c1c8', 3977),
+    'vendor/nearby/internal/platform/implementation/apple/wifi_aware.mm': ('fa393071f23493958dc2992a6dc657ba5e0a76004afa8504bd17397a93170180', 30261),
+    'vendor/nearby/internal/platform/implementation/apple/wifi_hotspot.mm': ('fd6d09fe595a98acd1ed90b239cc81f1e2c953a5171fca898e2cf96239b8d892', 7647),
+    'vendor/nearby/internal/platform/implementation/apple/wifi_lan.mm': ('6c039b8f73a79a9974f3cdc84f123165556ee7383b2b75975698846fbea9f492', 7614),
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/binary_writer.hpp': ('a6ccc235e52fa612c2717e278939ed1632c456e96881805d084847cf3cc3d06d', 69893),
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/output_adapters.hpp': ('fec93f451953874aad7a30c79b921cd0c4ade1698e36e964bfe89f1a4a6a3c0f', 4067),
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/serializer.hpp': ('5eaa3faae3791c53ada6800967e166cad8159bd9545b5abdfc18cda5ea9826e4', 39896),
+}
+_REVIEWED_PUBLIC_NEARBY_OUTPUT_INPUTS = frozenset({
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/binary_writer.hpp',
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/output_adapters.hpp',
+    'vendor/nearby/third_party/json/json/include/nlohmann/detail/output/serializer.hpp',
 })
 
 # Exact public parser seeds reviewed from the Norito cargo-fuzz owners. The
@@ -525,8 +630,10 @@ def _public_source_relative(
     lower = relative.lower()
     reviewed_fixture = relative in _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS
     if (any(part.lower() in _PROHIBITED_SOURCE_PARTS
-            and not (relative in _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS
-                     and part.lower() in {"artifacts", "run"}) for part in path.parts)
+            and not ((relative in _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS
+                      and part.lower() in {"artifacts", "run"})
+                     or (relative in _REVIEWED_PUBLIC_NEARBY_OUTPUT_INPUTS
+                         and part.lower() == "output")) for part in path.parts)
             or "vultr" in lower or "sydneycreds" in lower
             or (path.suffix.lower() in _MATERIAL_SUFFIXES
                 and not (relative in _REVIEWED_PUBLIC_MOCK_ENV_INPUTS
@@ -538,6 +645,7 @@ def _public_source_relative(
         raise RuntimeError(f"source-seal input is prohibited material or operational input: {relative}")
     if file_name and not (relative in ROOT_INPUTS
             or relative in _REVIEWED_PUBLIC_VENDOR_INPUTS
+            or relative in _REVIEWED_PUBLIC_NEARBY_SOURCE_PINS
             or relative in _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS
             or relative in _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS
             or relative in _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS
@@ -640,6 +748,12 @@ def _read_public_source_bytes(root: pathlib.Path, relative: str) -> bytes:
                 if (len(contents) != size
                         or hashlib.sha256(contents).hexdigest() != digest):
                     raise RuntimeError(f"source-seal public fixture differs from its reviewed original: {relative}")
+            nearby_source = _REVIEWED_PUBLIC_NEARBY_SOURCE_PINS.get(relative)
+            if nearby_source is not None:
+                expected_digest, expected_size = nearby_source
+                if (len(contents) != expected_size
+                        or hashlib.sha256(contents).hexdigest() != expected_digest):
+                    raise RuntimeError(f"source-seal reviewed Nearby source differs from its original: {relative}")
             if _norito_public_corpus_path(relative):
                 declaration = initial[root / _NORITO_PUBLIC_CORPUS_MANIFEST]
                 if (len(contents) != declaration[-1]

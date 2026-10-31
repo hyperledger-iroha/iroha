@@ -63,9 +63,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             };
             // Authenticate before touching the retained owner. No provider, platform,
             // generation reply or outstanding vendor dispatch moves or is reconstructed.
-            runtime
-                .enrollment()?
-                .renew_session(session.config.clone())?;
+            runtime.enrollment()?.renew_session(&session.config)?;
             self.enrollment_session = Some(session);
             return Ok(Response {
                 kind: 39,
@@ -87,9 +85,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                     let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
                         return Err(Failure::code(CONFLICT));
                     };
-                    runtime
-                        .enrollment()?
-                        .renew_session(renewed.config.clone())?;
+                    runtime.enrollment()?.renew_session(&renewed.config)?;
                     self.enrollment_session = Some(renewed);
                 }
                 return Ok(Response {
@@ -323,6 +319,12 @@ pub(crate) fn finish(id: u64, signature: &[u8]) -> Result<Response> {
     let owner = {
         let selected = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
         if let Some(owner) = selected.owners.get(&id) {
+            let owner = Arc::clone(owner);
+            drop(selected);
+            owner.closing.require_open()?;
+            // A failed spawn retains this admitted identity. Retry only its worker,
+            // without reopening custody or consuming account authorization again.
+            owner.background.start(&owner)?;
             owner.closing.require_open()?;
             return Ok(opened(id));
         }
@@ -349,6 +351,20 @@ fn finish_with(
     id: u64,
     signature: &[u8],
 ) -> Result<Response> {
+    finish_with_start(registry, owner, id, signature, |owner| {
+        owner.background.start(owner)
+    })
+}
+
+// The start seam keeps promotion/failure tests on this same ownership path. It never
+// substitutes custody, source observations or a monetary dispatch permit.
+fn finish_with_start(
+    registry: &Mutex<Registry>,
+    owner: Arc<RuntimeOwner>,
+    id: u64,
+    signature: &[u8],
+    start: impl FnOnce(&Arc<Owner>) -> Result<()>,
+) -> Result<Response> {
     let mut admission = owner
         .admission
         .lock()
@@ -358,13 +374,18 @@ fn finish_with(
     if retained.is_none() && admission.is_none() {
         // Another finish may have promoted this same runtime while this caller waited.
         let selected = registry.lock().map_err(|_| Failure::code(INTERNAL))?;
-        return match selected.owners.get(&id) {
-            Some(active) => {
-                active.closing.require_open()?;
-                Ok(opened(id))
-            }
-            None => Err(Failure::code(CLOSED)),
-        };
+        let active = selected
+            .owners
+            .get(&id)
+            .cloned()
+            .ok_or(Failure::code(CLOSED))?;
+        drop(selected);
+        drop(retained);
+        drop(admission);
+        active.closing.require_open()?;
+        start(&active)?;
+        active.closing.require_open()?;
+        return Ok(opened(id));
     }
     if retained.is_none() {
         // The owner is retained inside the custody transaction: its exit observation can refuse
@@ -393,15 +414,22 @@ fn finish_with(
     }
     let (wallet, scheduler) = retained.take().ok_or(Failure::code(INTERNAL))?;
     selected.runtimes.remove(&id);
-    selected.owners.insert(
-        id,
-        Arc::new(Owner {
-            background: background::Background::observing(&scheduler),
-            closing: Arc::clone(&owner.closing),
-            scheduler,
-            wallet: Mutex::new(Some(wallet)),
-        }),
-    );
+    let active = Arc::new(Owner {
+        background: background::Background::observing(&scheduler),
+        exchanges: Mutex::new(exchange::Tokens::default()),
+        closing: Arc::clone(&owner.closing),
+        scheduler,
+        wallet: Mutex::new(Some(wallet)),
+    });
+    selected.owners.insert(id, Arc::clone(&active));
+    drop(selected);
+    drop(retained);
+    drop(admission);
+    // Discovery is independent of activity. Failure keeps the exact promoted owner
+    // in the registry so a retry starts this worker without repeating admission.
+    active.closing.require_open()?;
+    start(&active)?;
+    active.closing.require_open()?;
     Ok(opened(id))
 }
 pub(crate) fn cancel(id: u64) -> Result<()> {
@@ -911,14 +939,77 @@ mod tests {
         let replay = finish_with(&registry, owner.clone(), 1, &[]).unwrap();
         assert_eq!((replay.kind, replay.sequence), (16, 1));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        let selected = registry.lock().unwrap().owners.remove(&1).unwrap();
-        drop(selected.wallet.lock().unwrap().take());
+        closing::close_with(&registry, 1).unwrap();
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert_eq!(
             finish_with(&registry, owner, 1, &[]).unwrap_err().status,
             CLOSED
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn worker_start_failure_keeps_promoted_custody_and_retries_the_same_owner() {
+        let (registry, runtime, calls, drops) = local_runtime(None);
+        let mut admitted = None;
+        let failure = finish_with_start(&registry, Arc::clone(&runtime), 1, &[1; 64], |owner| {
+            assert!(registry.try_lock().is_ok());
+            assert!(runtime.admission.try_lock().is_ok());
+            assert!(runtime.finished.try_lock().is_ok());
+            admitted = Some(Arc::clone(owner));
+            Err(Failure::code(RESOURCE))
+        })
+        .unwrap_err();
+        assert_eq!(failure.status, RESOURCE);
+        let admitted = admitted.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        {
+            let selected = registry.lock().unwrap();
+            assert!(selected.runtimes.is_empty());
+            assert!(Arc::ptr_eq(selected.owners.get(&1).unwrap(), &admitted));
+        }
+        assert!(runtime.admission.lock().unwrap().is_none());
+        assert!(runtime.finished.lock().unwrap().is_none());
+        let result = finish_with_start(&registry, Arc::clone(&runtime), 1, &[], |owner| {
+            assert!(Arc::ptr_eq(owner, &admitted));
+            assert!(registry.try_lock().is_ok());
+            assert!(runtime.admission.try_lock().is_ok());
+            assert!(runtime.finished.try_lock().is_ok());
+            owner.background.start(owner)
+        })
+        .unwrap();
+        assert_eq!((result.kind, result.sequence), (16, 1));
+        let status = admitted.background.status().unwrap();
+        assert_ne!(status.detail & 3, 0, "discovery starts without activity");
+        assert_eq!(status.detail & 4, 0, "fold eligibility stays inactive");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        closing::close_with(&registry, 1).unwrap();
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn already_promoted_finish_starts_discovery_without_readmitting_custody() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let id = install(
+            Box::new(super::super::tests::TestWallet {
+                calls: Arc::clone(&calls),
+                drops: Arc::clone(&drops),
+                expected_request: None,
+            }),
+            state::Scheduler::new(),
+        )
+        .unwrap();
+        let admitted = owner(id).unwrap();
+        assert_eq!(admitted.background.status().unwrap().detail, 0);
+        for _ in 0..2 {
+            let result = finish(id, &[]).unwrap();
+            assert_eq!((result.kind, result.sequence), (16, u128::from(id)));
+            assert!(Arc::ptr_eq(&owner(id).unwrap(), &admitted));
+            assert_ne!(admitted.background.status().unwrap().detail & 3, 0);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        crate::kagemusha_wallet_ffi::close(id).unwrap();
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn concurrent_close_cannot_resurrect_owner_after_account_finish() {

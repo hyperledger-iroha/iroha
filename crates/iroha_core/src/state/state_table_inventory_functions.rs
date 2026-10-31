@@ -32,6 +32,7 @@ const CERTIFIED_IDENTITY: &str = "Carries the certified block identity and R of 
 const ORIGINAL_WIRE_FENCE: &str = "Hashes or returns the exact original native block-wire prefix identity used only to invalidate a local finality-proof cursor; no State root or independent finality authority";
 const BLOCK_PROOF: &str =
     "Merkle proofs of a transaction entrypoint and its result inside their block: block content";
+const DEFERRED_CONSENT: &str = "Digests one captured deferred-consent expectation (the resolved bindings and transitive definitions a multisig occurrence or trigger incarnation relies on, with the installed executor's consent hash) that the deferred action stores and rechecks: no digest over a table or cell";
 const TABLE_ACCESSOR: &str = "Borrows a table whose key type is the content hash of one record (a pin manifest, contract bytecode): a table accessor that computes no digest";
 
 const fn function(
@@ -142,12 +143,6 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Roots(&["execution_witness_roots", "fee_evidence_record_root"]),
     ),
     function(
-        "crates/iroha_core/src/query/topology_authority.rs",
-        "digest",
-        1,
-        UseOwner::Other(Use::Record, RECORD_IDENTITY),
-    ),
-    function(
         "crates/iroha_core/src/retail_fee/native_maintenance.rs",
         "into_entries",
         1,
@@ -155,6 +150,21 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
             Use::Record,
             "Moves the original receipt identifiers and transfer transcripts after rechecking their retained source and exact receipt bytes. The separate private ordered receipt-byte digest is inventoried as retail_native_receipt_binding; it checks local preparation custody, is never returned or certified and grants no independent authority",
         ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/containment.rs",
+        "holding",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists the identities of the active containments that still hold a restriction they imposed, so block start can close their ratification cases after the height's change sets: record identifiers, no digest over a table or cell",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/expectation.rs",
+        "digest_owned",
+        1,
+        UseOwner::Other(Use::Record, DEFERRED_CONSENT),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/code.rs",
@@ -379,6 +389,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/runtime_expectation.rs",
+        "capture_trigger_runtime",
+        1,
+        UseOwner::Other(Use::Record, DEFERRED_CONSENT),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
         "contracts",
         2,
@@ -434,7 +450,7 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/smartcontracts/ivm.rs",
-        "active_runtime_abi_hash",
+        "active_host_abi_hashes",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
@@ -485,6 +501,15 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "block_proofs_for_entry",
         1,
         UseOwner::Other(Use::BlockContent, BLOCK_PROOF),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
+        "canonical_history_summary_source_token",
+        1,
+        UseOwner::Other(
+            Use::LocalArtifact,
+            "Returns Kura's original canonical block file and journal metadata fingerprint for derived-summary cache invalidation; no State root or body authority",
+        ),
     ),
     function(
         "crates/iroha_core/src/state.rs",
@@ -731,6 +756,21 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "verify_next_height_threshold_key_lifecycle_certificate_v1",
         1,
         UseOwner::Other(Use::Record, BLOCK_HASH),
+    ),
+    function(
+        "crates/iroha_core/src/state/asset_uid/binding_custody.rs",
+        "binding_uid_with_owner",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/state/asset_uid_reader/same_uid.rs",
+        "retail_uid",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Reads the retained nonzero retail UID after exact account, binding and policy membership checks and institutional exclusion; the equality query computes no digest or State root",
+        ),
     ),
     function(
         "crates/iroha_core/src/state/authority_registry/cell_snapshot.rs",
@@ -1100,6 +1140,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/native_execution_tip.rs",
+        "restored_successor_world_root",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/native_execution_tip.rs",
         "validate_native_execution_authorization",
         1,
         UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
@@ -1166,6 +1212,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "adopt_checkpoint_accumulator",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
         "apply_block",
         1,
         UseOwner::Roots(&["world_state_root"]),
@@ -1185,6 +1237,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
         "state_transition",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "verify_captured_accumulator",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "verify_state_accumulator",
         1,
         UseOwner::Roots(&["world_state_root"]),
     ),

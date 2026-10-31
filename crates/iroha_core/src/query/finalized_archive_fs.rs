@@ -103,7 +103,7 @@ pub(super) fn unix_staged_file_has_canonical_target(
         if candidate.st_dev == staged.st_dev && candidate.st_ino == staged.st_ino {
             if rustix::fs::FileType::from_raw_mode(candidate.st_mode)
                 != rustix::fs::FileType::RegularFile
-                || candidate.st_nlink as u64 != 2
+                || u64::from(candidate.st_nlink) != 2
                 || candidate.st_size != staged.st_size
             {
                 return Ok(false);
@@ -123,7 +123,7 @@ pub(super) fn unix_stat_matches_metadata(
     rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
         && crate::kura::unix_device_identity(entry.st_dev) == metadata.dev()
         && entry.st_ino == metadata.ino()
-        && entry.st_nlink as u64 == expected_links
+        && u64::from(entry.st_nlink) == expected_links
         && metadata.nlink() == expected_links
         && u64::try_from(entry.st_size).ok() == Some(metadata.len())
 }

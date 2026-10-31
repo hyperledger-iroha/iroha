@@ -6,7 +6,7 @@ use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 /// Fixed comparison receipt captured before the actual Queue selection begins.
 /// Copying it grants no custody; lease capture rechecks each row against its original high-water.
 #[derive(Clone, Copy)]
-pub(crate) struct PendingPayloadSelection {
+pub struct PendingPayloadSelection {
     queue_address: usize,
     state_address: usize,
     publication_generation: u64,
@@ -15,7 +15,7 @@ pub(crate) struct PendingPayloadSelection {
 
 /// Fixed original-queue identity and its finite physically funded selected-input table.
 /// This comparison-only local owner has no decoder or authority outside the original Queue.
-pub(crate) struct PendingPayloadLease {
+pub struct PendingPayloadLease {
     queue_address: usize,
     state_address: usize,
     publication_generation: u64,
@@ -85,29 +85,28 @@ impl Queue {
     /// Advance the non-reusable high-water under the original mutation fence.
     /// Overflow permanently refuses reuse and admission instead of reviving an old lease.
     pub(super) fn advance_pending_ownership_generation(&self, hash: EntrypointHash) -> Option<u64> {
-        match self.pending_ownership_generation.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |prior| {
+        if self
+            .pending_ownership_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
                 if cfg!(all(test, sumeragi_core_mutation = "HC145")) {
                     Some(prior.wrapping_add(1))
                 } else {
                     prior.checked_add(1)
                 }
-            },
-        ) {
+            })
+            .is_ok()
+        {
             // Every writer holds the original Queue fence; this is the exact value
             // just assigned, including in the deliberate overflow mutation control.
-            Ok(_) => Some(self.pending_ownership_generation.load(Ordering::Acquire)),
-            Err(_) => {
-                self.mark_accepted_work_validation_fault(
-                    hash,
-                    "pending_payload_ownership_generation",
-                    &"original Queue admission identity exhausted",
-                    None,
-                );
-                None
-            }
+            Some(self.pending_ownership_generation.load(Ordering::Acquire))
+        } else {
+            self.mark_accepted_work_validation_fault(
+                hash,
+                "pending_payload_ownership_generation",
+                &"original Queue admission identity exhausted",
+                None,
+            );
+            None
         }
     }
 
@@ -364,7 +363,11 @@ mod tests {
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 &time,
             )
             .unwrap()
@@ -411,7 +414,13 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            chain
+                .state()
+                .view()
+                .world()
+                .parameters()
+                .crypto_policy()
+                .expect("original committed admission policy"),
             &time,
         )
         .unwrap();
@@ -465,7 +474,11 @@ mod tests {
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 &time,
             )
             .unwrap()
@@ -535,7 +548,11 @@ mod tests {
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 &time,
             )
             .unwrap();
@@ -583,7 +600,11 @@ mod tests {
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 &time,
             )
             .unwrap()
@@ -616,7 +637,7 @@ mod tests {
         let chain = CertifiedTestChain::start(configuration).unwrap();
         let (clock, time) = TimeSource::new_mock(Duration::from_millis(2_001));
         let configuration = Config::default();
-        let queue = Queue::test(configuration.clone(), &time);
+        let queue = Queue::test(configuration, &time);
         let foreign = Queue::test(configuration, &time);
         let signed = signed_work(&chain, &key, 2_000);
         let accepted = AcceptedTransaction::accept_with_time_source(
@@ -624,7 +645,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -690,7 +715,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             view.world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -731,7 +760,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -793,7 +826,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -832,6 +869,8 @@ mod tests {
 
     #[test]
     fn pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap() {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let configuration = TestChainConfig::new(World::new(), 1_000);
         let key = configuration.genesis_key.clone();
         let chain = CertifiedTestChain::start(configuration).unwrap();
@@ -842,7 +881,11 @@ mod tests {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();

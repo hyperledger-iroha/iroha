@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for deterministic, fail-closed C# ABI-31 native NuGet packaging."""
+"""Tests for deterministic, fail-closed C# ABI-33 native NuGet packaging."""
 
 from __future__ import annotations
 
@@ -342,7 +342,7 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
         self.assertEqual(
             native_job.count(
-                "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+                "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
             ),
             2,
         )
@@ -443,14 +443,14 @@ class CSharpNativePackageTests(unittest.TestCase):
         )
         self.assertEqual(arm_cross_job.count("overwrite: true"), 1)
         for action in (
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-            "actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f",
         ):
             self.assertEqual(arm_cross_job.count(action), 1)
         self.assertEqual(
             arm_cross_job.count(
-                "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+                "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
             ),
             2,
         )
@@ -507,31 +507,31 @@ class CSharpNativePackageTests(unittest.TestCase):
             )
             self.assertEqual(
                 arm_job.count(
-                    "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+                    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
                 ),
                 1,
             )
             self.assertEqual(
                 arm_job.count(
-                    "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
+                    "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
                 ),
                 1,
             )
             self.assertEqual(
                 arm_job.count(
-                    "actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
+                    "actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f"
                 ),
                 0,
             )
             self.assertEqual(
                 arm_job.count(
-                    "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+                    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
                 ),
                 1,
             )
             self.assertEqual(
                 arm_job.count(
-                    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+                    "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
                 ),
                 2,
             )

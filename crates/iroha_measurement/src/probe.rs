@@ -316,6 +316,8 @@ mod instruction_tests {
     #[test]
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     fn process_instruction_probe_observes_worker_work() {
+        const ITERATIONS: u32 = 1 << 18;
+
         match ProcessInstructionSnapshot::capture() {
             Ok(_) => {}
             Err(error @ InstructionProbeError::CounterUnavailable) => {
@@ -334,7 +336,6 @@ mod instruction_tests {
         // iteration is a conservative sanity check, not exact calibration,
         // per-thread attribution or a performance threshold. Start and join
         // are outside both cuts; rendezvous and probe overhead remain inside.
-        const ITERATIONS: u32 = 1 << 18;
         let [control_delta, work_delta] = std::thread::scope(|scope| {
             let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
             let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);

@@ -336,12 +336,12 @@ pub(super) fn pin_created(
     state: &mut SumeragiLaneState,
     world: &impl WorldReadOnly,
     nexus: &Nexus,
-    network: &iroha_data_model::NetworkId,
-    chain_id: &str,
+    network_chain: (&iroha_data_model::NetworkId, &str),
     policy: Option<&SumeragiLanePolicy>,
     height: u64,
     budget: &AllocationBudget,
 ) -> Result<(), Attempt<CustodyViolation>> {
+    let (network, chain_id) = network_chain;
     let Some(parameters) = world
         .sumeragi_npos_parameters()
         .map_err(|error| error.map_rejection(|_| CustodyViolation::MissingPolicy))?
@@ -405,7 +405,7 @@ pub(super) fn pin_created(
 
 /// Retained obligations prohibit reuse of the exact registration, even after all stake is gone.
 /// Malformed authenticated custody fails closed. Ordinary global committee rules remain separate.
-pub(crate) fn retains_registration(
+pub fn retains_registration(
     world: &impl WorldReadOnly,
     record: &PublicLaneValidatorRecord,
     height: u64,
@@ -420,7 +420,7 @@ pub(crate) fn retains_registration(
 }
 
 /// Use one already decoded original policy for a complete retained-custody scan.
-pub(crate) fn retains_registration_with_parameters(
+pub fn retains_registration_with_parameters(
     world: &impl WorldReadOnly,
     record: &PublicLaneValidatorRecord,
     height: u64,
@@ -482,7 +482,7 @@ fn has_pending_evidence(world: &impl WorldReadOnly, obligation: &SumeragiLaneCus
 /// Copy the lane DTO while retaining/admitting original immutable signer and sample owners.
 /// The borrowed source survives every failure; partial copies refund on abandonment.
 /// This accounts for signer and sample backing/control, not the remaining outer lane graph.
-pub(crate) fn admit_state(
+pub fn admit_state(
     source: &SumeragiLaneState,
     budget: &AllocationBudget,
 ) -> Result<SumeragiLaneState, LaneStateAdmissionError> {
@@ -529,7 +529,7 @@ pub(super) fn retain_samples(
 
 /// Admit both original World generations before replacing either field.
 /// Fresh-State construction owns this World exclusively; admission grants no history authority.
-pub(crate) fn admit_world_state(
+pub fn admit_world_state(
     world: &mut crate::state::World,
     budget: &AllocationBudget,
 ) -> Result<(), LaneStateAdmissionError> {

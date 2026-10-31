@@ -505,11 +505,7 @@ pub(crate) fn validate_contract_lifecycle_call(
     let pending = pending_contract_lifecycle(world, contract_address)?;
     match (kind, pending) {
         (EntryPointKind::Hajimari, Some(pending @ PendingContractLifecycle::Hajimari { .. }))
-            if pending.code_hash() == executing_code_hash =>
-        {
-            Ok(Some(pending))
-        }
-        (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
+        | (EntryPointKind::Kaizen, Some(pending @ PendingContractLifecycle::Kaizen { .. }))
             if pending.code_hash() == executing_code_hash =>
         {
             Ok(Some(pending))
@@ -646,16 +642,18 @@ pub(crate) fn validate_contract_lifecycle_state_completion(
             .map_err(|error| {
                 ValidationFail::InternalError(format!("invalid upgraded state path: {error}"))
             })?;
-        let value = match overlay.get(&path) {
-            Some(value) => value.as_deref(),
-            None => world.smart_contract_state().get(&path).map(Vec::as_slice),
-        }
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!(
-                "kaizen/改善 did not initialize new scalar state `{}`",
-                state.name
-            ))
-        })?;
+        let value = overlay
+            .get(&path)
+            .map_or_else(
+                || world.smart_contract_state().get(&path).map(Vec::as_slice),
+                |value| value.as_deref(),
+            )
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "kaizen/改善 did not initialize new scalar state `{}`",
+                    state.name
+                ))
+            })?;
         ivm::host::validate_persisted_state_value_payload(&state.ty, value).map_err(|error| {
             ValidationFail::NotPermitted(format!(
                 "kaizen/改善 initialized new scalar state `{}` with an invalid value: {error}",
@@ -1093,6 +1091,11 @@ struct BorrowedBoundContractRecord<'a> {
     code_bytes: &'a [u8],
 }
 
+/// Borrow the complete bound record of one instance.
+///
+/// Its only fallible steps are artifact-scope checks, all of the artifact named
+/// by the instance's address and code hash; every other gap makes it absent.
+/// [`validate_bound_contract_records_by_subject`] relies on this shape.
 fn borrow_bound_contract_record<'a>(
     state: &'a impl StateReadOnly,
     contract_address: &'a ContractAddress,
@@ -1204,10 +1207,17 @@ pub fn snapshot_bound_contract_records_by_subject(
 /// Validate the ordered registry reads required by an owned contract snapshot.
 ///
 /// Hosts with a live query state resolve called contracts from that state and do
-/// not consume an eager snapshot. This retains the snapshot's setup-time scope
-/// checks and incomplete-read behavior without cloning any deployed bytecode,
-/// manifests, subjects or alias records. Incomplete bindings remain absent just
-/// as they do in [`snapshot_bound_contract_records_by_subject`].
+/// not consume an eager snapshot. This returns the snapshot's setup-time result
+/// without cloning any deployed bytecode, manifests, subjects or alias records.
+/// Incomplete bindings remain absent just as they do in
+/// [`snapshot_bound_contract_records_by_subject`], so they cannot fail it.
+///
+/// Only the artifact-scope checks of [`borrow_bound_contract_record`] can fail,
+/// and all checks of one instance name the same artifact, so its first check
+/// decides it. After an exact check reads a Global root, every remaining check
+/// is admitted. Under a private root only an instance of another dataspace can
+/// fail, and it repeats the exact check. Setup therefore no longer derives a
+/// subject or decodes the root once per deployed contract.
 ///
 /// # Errors
 /// Returns the first scope rejection or original local decode refusal in the
@@ -1215,8 +1225,30 @@ pub fn snapshot_bound_contract_records_by_subject(
 pub fn validate_bound_contract_records_by_subject(
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFail>> {
-    for (contract_address, _) in state.world().contract_instances().iter() {
-        let _ = borrow_bound_contract_record(state, contract_address)?;
+    use iroha_data_model::block::consensus::SumeragiRootScope;
+
+    let world = state.world();
+    // Dataspace of the private root that an earlier exact check admitted.
+    let mut private_root = None;
+    for (contract_address, code_hash) in world.contract_instances().iter() {
+        let Ok(artifact_id) = ContractArtifactId::for_address(contract_address, *code_hash) else {
+            continue;
+        };
+        if private_root == Some(artifact_id.dataspace_id) {
+            continue;
+        }
+        crate::executor::root_scope::ensure_committed_artifact_scope(world, &artifact_id)?;
+        if private_root.is_none() {
+            // The exact check above has just read this immutable root.
+            match crate::sumeragi::lanes::routing::read_routing_root_scope(world) {
+                Ok(Some(SumeragiRootScope::Global)) => return Ok(()),
+                Ok(Some(SumeragiRootScope::Dataspace { dataspace_id, .. })) => {
+                    private_root = Some(dataspace_id);
+                }
+                // A root that cannot be read again keeps every exact check.
+                Ok(None) | Err(_) => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1416,12 +1448,16 @@ mod tests {
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ))
-            .expect("valid fixture parameters");
+            ),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
         let mut permissions = permission::Permissions::new();
         assert!(
@@ -1453,8 +1489,7 @@ mod tests {
         let dataspace_id = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
         transaction
             .world
-            .parameters
-            .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                     parent_network_id: state.network_id,
                     dataspace_id,
@@ -1964,7 +1999,7 @@ seiyaku LifecycleTwo { permission CanRunLifecycleTwo;
             let (bytes, manifest) = lifecycle_contract(source);
             let hash = manifest.code_hash.unwrap();
             let id = ContractArtifactId::for_address(&address, hash).unwrap();
-            transaction.world.contract_code.insert(id.clone(), bytes);
+            transaction.world.contract_code.insert(id, bytes);
             transaction.world.contract_manifests.insert(id, manifest);
             hash
         };
@@ -2509,12 +2544,14 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
             iroha_data_model::pipeline_validity_policy::PipelineValidityPolicyV1::protocol_default(
             );
         policy.ivm_max_cycles_upper_bound = 1;
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                policy.into_custom_parameter(),
-            ))
-            .expect("valid committed admission ceiling");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded parameter fixture block");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter()),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid committed admission ceiling");
         parameters.commit();
         let mut block = state.block(default_header(1));
         assert_eq!(block.pipeline.ivm_max_cycles_upper_bound.get(), 1);
@@ -2894,5 +2931,203 @@ seiyaku LifecycleAba { permission CanRunLifecycleAba;
             "unexpected error: {error}"
         );
         assert!(world.contract_subject_addresses.view().is_empty());
+    }
+}
+
+/// The caller retains its query admission error separately from the native root owner.
+#[derive(Debug)]
+pub(crate) enum ContractObservationAttemptError<E> {
+    Admission(E),
+    Native(ExecutionAttemptError<ValidationFail>),
+}
+
+/// Observe one active native relationship without owning a derived key or authority.
+/// Broad resolver call sites are unchanged. The FI assertion and admitted FI query
+/// share this narrow observation path; the caller admits every hash-to-point attempt.
+pub(crate) fn try_borrow_active_contract_subject_for_observation<'a, E>(
+    world: &'a impl WorldReadOnly,
+    address: &ContractAddress,
+    height: u64,
+    mut admit_subject_attempt: impl FnMut(usize) -> Result<(), E>,
+) -> Result<Option<&'a AccountId>, ContractObservationAttemptError<E>> {
+    let Some(code_hash) = world.contract_instances().get(address) else {
+        return Ok(None);
+    };
+    crate::executor::root_scope::ensure_committed_address_artifact_scope(world, address)
+        .map_err(ContractObservationAttemptError::Native)?;
+    let Some(binding) = world.contract_subject_bindings().get(address) else {
+        return Ok(None);
+    };
+    let expected = address.try_subject_key_bytes(|bytes| {
+        admit_subject_attempt(bytes).map_err(ContractObservationAttemptError::Admission)
+    })?;
+    let subject_matches = binding
+        .subject
+        .try_signatory()
+        .and_then(|key| key.borrowed_parts().ok())
+        .is_some_and(|(algorithm, bytes)| {
+            algorithm == iroha_crypto::Algorithm::Ed25519 && bytes == expected
+        });
+    if !subject_matches
+        || binding.lifecycle.validate().is_err()
+        || binding.lifecycle.active_code_hash.as_ref() != Some(code_hash)
+        || binding.lifecycle.is_held_at(height)
+        || world.contract_subject_addresses().get(&binding.subject) != Some(address)
+        || world.accounts().get(&binding.subject).is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(&binding.subject))
+}
+
+#[cfg(test)]
+mod fi_context_observation_tests {
+    use super::*;
+    use crate::state::asset_fi::FiLinkReaderFixture;
+    use iroha_data_model::smart_contract::{ContractArtifactId, ContractEmergencyHoldV1};
+    fn legacy<'a>(
+        world: &'a impl WorldReadOnly,
+        address: &ContractAddress,
+        height: u64,
+    ) -> Option<&'a AccountId> {
+        try_borrow_bound_contract_subject_from_world(world, address)
+            .unwrap()
+            .filter(|subject| {
+                world.contract_subject_addresses().get(*subject) == Some(address)
+                    && ensure_contract_execution_allowed(world, address, height).is_ok()
+            })
+    }
+    #[test]
+    fn fi_context_controller_observation_preserves_active_held_corrupt_and_reverse_semantics() {
+        let (f, state) = FiLinkReaderFixture::new();
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            1_000,
+            0,
+        ));
+        let mut tx = block.transaction();
+        f.install(&mut tx);
+        let address = &f.context.contract_address;
+        let observe = |world: &crate::state::WorldTransaction<'_, '_>, height| {
+            try_borrow_active_contract_subject_for_observation(world, address, height, |_| {
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .unwrap()
+            .cloned()
+        };
+        assert_eq!(
+            observe(tx.world(), 1),
+            Some(f.context.contract_subject.clone())
+        );
+        assert_eq!(
+            observe(tx.world(), 1),
+            legacy(tx.world(), address, 1).cloned()
+        );
+        let original = tx
+            .world
+            .contract_subject_bindings
+            .get(address)
+            .unwrap()
+            .clone();
+        tx.world
+            .contract_subject_bindings
+            .get_mut(address)
+            .unwrap()
+            .lifecycle
+            .emergency_hold = Some(ContractEmergencyHoldV1 {
+            incident_digest: [1; 32],
+            proposal_content_id: [2; 32],
+            governance_attempt_id: [3; 32],
+            reason: "test containment".into(),
+            imposed_at_height: 1,
+            expires_at_height: 3,
+        });
+        for height in [0, 1, 2, 3] {
+            assert_eq!(
+                observe(tx.world(), height),
+                legacy(tx.world(), address, height).cloned()
+            );
+        }
+        tx.world
+            .contract_subject_bindings
+            .insert(address.clone(), original.clone());
+        tx.world
+            .contract_subject_bindings
+            .get_mut(address)
+            .unwrap()
+            .lifecycle
+            .active_code_hash = None;
+        assert!(observe(tx.world(), 1).is_none());
+        tx.world
+            .contract_subject_bindings
+            .insert(address.clone(), original.clone());
+        tx.world
+            .contract_subject_bindings
+            .get_mut(address)
+            .unwrap()
+            .lifecycle
+            .revision = 0;
+        assert!(observe(tx.world(), 1).is_none());
+        tx.world
+            .contract_subject_bindings
+            .insert(address.clone(), original.clone());
+        tx.world
+            .contract_subject_bindings
+            .get_mut(address)
+            .unwrap()
+            .subject = f.wallet.clone();
+        assert!(observe(tx.world(), 1).is_none());
+        tx.world
+            .contract_subject_bindings
+            .insert(address.clone(), original);
+        tx.world
+            .contract_subject_addresses
+            .remove(f.context.contract_subject.clone());
+        assert!(observe(tx.world(), 1).is_none());
+        tx.world
+            .contract_subject_addresses
+            .insert(f.context.contract_subject.clone(), address.clone());
+        tx.world.accounts.remove(f.context.contract_subject.clone());
+        assert!(observe(tx.world(), 1).is_none());
+    }
+    #[test]
+    fn fi_context_controller_observation_keeps_subject_and_root_admission_errors() {
+        let (f, state) = FiLinkReaderFixture::new();
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            1_000,
+            0,
+        ));
+        let mut tx = block.transaction();
+        f.install(&mut tx);
+        let address = &f.context.contract_address;
+        let refusal =
+            try_borrow_active_contract_subject_for_observation(tx.world(), address, 1, |_| {
+                Err("subject-work-refusal")
+            });
+        assert!(matches!(
+            refusal,
+            Err(ContractObservationAttemptError::Admission(
+                "subject-work-refusal"
+            ))
+        ));
+        let artifact =
+            ContractArtifactId::for_address(address, Hash::new("observation-root")).unwrap();
+        let limits = norito::DecodeLimits::new(0, 0, 0, 0, 0);
+        let original = norito::core::with_decode_limits_scope(limits, || {
+            crate::executor::root_scope::ensure_committed_artifact_scope(tx.world(), &artifact)
+        });
+        let borrowed = norito::core::with_decode_limits_scope(limits, || {
+            crate::executor::root_scope::ensure_committed_address_artifact_scope(
+                tx.world(),
+                address,
+            )
+        });
+        assert!(matches!(original, Err(ExecutionAttemptError::Deferred(_))));
+        assert!(matches!(borrowed, Err(ExecutionAttemptError::Deferred(_))));
     }
 }

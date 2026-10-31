@@ -425,7 +425,7 @@ fn assert_two_valid_certificates_of_one_block_give_one_consensus_receipt(
     assert_eq!(left.commitment(), right.commitment());
     assert_eq!(left.entry_anchor(&entry), right.entry_anchor(&entry));
     assert_eq!(left.block_time_ms(), right.block_time_ms());
-    for committed in [left, right] {
+    for committed in std::iter::once(left).chain(std::iter::once(right)) {
         assert_eq!(
             reader
                 .check_certificate(committed.block, committed.height)
@@ -1018,6 +1018,9 @@ fn durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm()
 
 #[test]
 fn signed_genesis_initialization_does_not_repeat_completed_scope_decode() {
+    // Keep retired genesis fixture cells fixed while checking the decoder's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     let budget = chain.state().ivm_execution_budget();
     let original = frame(&chain, 1);
@@ -1307,10 +1310,9 @@ fn authenticated_scope_rejects_active_non_global_without_redecoding_result() {
         root_scope: non_global,
     };
     let budget = iroha_allocation::AllocationBudget::new(0);
-    for (parent, current) in [
-        (chain.committed(2), retained.clone()),
-        (retained, chain.committed(4)),
-    ] {
+    for (parent, current) in std::iter::once((chain.committed(2), retained.clone()))
+        .chain(std::iter::once((retained, chain.committed(4))))
+    {
         let refused = context.verify_executed_successor(&parent, current, &budget);
         assert!(matches!(
             refused,

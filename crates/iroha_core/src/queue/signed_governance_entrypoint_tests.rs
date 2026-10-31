@@ -98,7 +98,11 @@ fn governance_manifest_checks_share_signed_body_for_external_and_sealed_reveal()
                     &queue_test_network_id(),
                     Duration::ZERO,
                     TransactionParameters::default(),
-                    &iroha_config::parameters::actual::Crypto::default(),
+                    &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                        iroha_crypto::Algorithm::Secp256k1,
+                    ])
+                    .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                     signed.creation_time(),
                 )
                 .expect("real signed Network entrypoint stateless admission"),
@@ -171,7 +175,9 @@ fn governed_queue_push_preserves_sealed_commitment_without_signed_body() {
     let (validator, _) = gen_account_in("governed-validator");
     register_test_authority(&state, &authority);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    queue
+        .reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None)
+        .expect("original State pool admits Queue privacy projection");
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
         LaneId::SINGLE,
         LaneManifestStatus {
@@ -199,7 +205,9 @@ fn governed_queue_push_preserves_sealed_commitment_without_signed_body() {
             privacy_commitments: Vec::new(),
         },
     )])));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     let signed = TransactionBuilder::new_with_time_source(
         state.network_id,
         authority.clone(),
@@ -227,7 +235,11 @@ fn governed_queue_push_preserves_sealed_commitment_without_signed_body() {
         &state.network_id,
         Duration::ZERO,
         TransactionParameters::default(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         signed.creation_time(),
     )
     .expect("real signed commitment passes stateless admission");

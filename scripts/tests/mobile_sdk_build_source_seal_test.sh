@@ -22,13 +22,13 @@ test_build_source_seal() {
     "$root/scripts/norito_bridge_apple_slice_handoff.py"
   cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
     "$root/scripts/norito_bridge_source_seal.py"
-  cp "$SCRIPT_DIR/normalize_pqcrypto_archive.py" \
-    "$root/scripts/normalize_pqcrypto_archive.py"
+  cp "$SCRIPT_DIR/audit_native_static_archive.py" \
+    "$root/scripts/audit_native_static_archive.py"
   cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
     "$root/scripts/run_mobile_hermetic_command.py"
   cp "$SCRIPT_DIR/../IrohaSwift/Package.resolved" \
     "$root/IrohaSwift/Package.resolved"
-  printf '[toolchain]\nchannel = "1.93.1"\n' >"$root/rust-toolchain.toml"
+  printf '[toolchain]\nchannel = "1.99.1"\n' >"$root/rust-toolchain.toml"
   printf '[workspace]\nmembers = ["crates/connect_norito_bridge", "crates/unrelated"]\nresolver = "2"\n' \
     >"$root/Cargo.toml"
   printf '[package]\nname = "connect_norito_bridge"\nversion = "0.1.0"\nedition = "2024"\n\n[features]\nprivacy-production-enabled = []\n' \
@@ -66,8 +66,8 @@ PYFIXTURE
   git -C "$root" -c user.name=test -c user.email=test@example.invalid \
     commit -qm source-seal-fixture
 
-  exact_rustc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
-  exact_rustdoc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
+  exact_rustc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.99.1 rustc)"
+  exact_rustdoc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.99.1 rustdoc)"
   export CARGO_BUILD_JOBS=1
   export CARGO_INCREMENTAL=0
   export CARGO_NET_OFFLINE=true

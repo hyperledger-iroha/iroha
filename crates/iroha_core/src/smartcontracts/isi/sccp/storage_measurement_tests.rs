@@ -15,7 +15,6 @@ use super::{
 use iroha_allocation::AllocationBudget;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    block::consensus::MAX_VALIDATORS_PER_HEIGHT,
     sccp::{
         generation::{
             SCCP_ANCHOR_CHUNK_SIZE_V1, SccpAnchorV1, SccpCommitteeGenerationV1,
@@ -29,7 +28,7 @@ use iroha_data_model::{
     },
     sumeragi_finality::certified_result::committee_root,
 };
-use iroha_model_base::topology::LaneId;
+use iroha_model_base::topology::{LaneId, MAX_VALIDATORS_PER_HEIGHT};
 use mv::storage::StorageReadOnly as _;
 use norito::{codec::Encode as _, json::Value};
 

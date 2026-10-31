@@ -337,7 +337,7 @@ class BeaconGateTests(unittest.TestCase):
             'sumeragi::lanes::store::refund_tests::batch_read_cancellation_after_cleanup_observation_cannot_be_lost',
             'sumeragi::lanes::registry::tests::isolation_tests::final_inflight_incoming_opening_cleans_cancelled_request_but_keeps_historical_recovery',
             'sumeragi::lanes::registry::tests::proposal_reads::cancelled_incoming_read_retires_request_only_opening_and_preserves_historical_join',
-            'sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening',
+            'sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening',
             'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner',
             'sumeragi::lanes::registry::tests::proposal_reads::exhausted_registration_identity_refuses_before_new_native_custody',
             'sumeragi::executor::proposal_read_tests::successful_parent_commit_cancels_proposal_read_only_after_original_publication',
@@ -647,6 +647,7 @@ class BeaconGateTests(unittest.TestCase):
             ("smartcontracts/isi/staking_monetary_fixture_tests.rs", "smartcontracts::isi::staking::tests", True, (
                 "registration_rejects_changed_signed_monetary_fields_without_custody_writes",
                 "genesis_monetary_scope_requires_exact_height_without_npos_parameters",
+                "prepared_optional_npos_removal_preserves_monetary_owners_and_exact_genesis_scope",
             )),
             ("executor_opaque_monetary_tests.rs", "executor::opaque_monetary_tests", True, (
                 "raw_ivm_staking_trigger_requires_signed_monetary_plan",
@@ -681,7 +682,7 @@ class BeaconGateTests(unittest.TestCase):
             for leaf in leaves:
                 self.assertEqual(names.count(leaf), 1, (relative, leaf))
                 expected.append(prefix + "::" + leaf)
-        self.assertEqual(len(expected), 16)
+        self.assertEqual(len(expected), 17)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("monetary_authority_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -761,9 +762,9 @@ class BeaconGateTests(unittest.TestCase):
                          r'#\[cfg\(test\)\]\s*mod native_fee_evidence_tests\s*\{')
         self.assertIn('#[path = "validation_fee/tests.rs"]\npub(crate) mod tests;',
                       (root / "validation_fee.rs").read_text())
-        self.assertIn('#[path = "runtime_wrapper_tests.rs"]\npub(crate) mod runtime_wrapper_tests;',
+        self.assertIn('#[path = "runtime_wrapper_tests.rs"]\npub mod runtime_wrapper_tests;',
                       (root / "validation_fee/tests.rs").read_text())
-        self.assertIn('#[path = "runtime_rewards_tests.rs"]\npub(crate) mod reward_tests;',
+        self.assertIn('#[path = "runtime_rewards_tests.rs"]\npub mod reward_tests;',
                       (root / "validation_fee/runtime_wrapper_tests.rs").read_text())
         self.assertIn('#[path = "runtime_reward_crash_tests.rs"]\nmod crash_tests;',
                       (root / "validation_fee/runtime_rewards_tests.rs").read_text())
@@ -1511,7 +1512,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "cell::aggregate_acquisition_tests::": 3,
             "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
-            "storage::admitted_tests::": 24,
+            "storage::admitted_tests::": 25,
+            "storage::current_reader_tests::": 1,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -1523,10 +1525,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 102)
+                self.assertEqual(len(library), 103)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("allocation", 39), ("allocation-shared", 1), ("mv", 102), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 131)):
+                for harness, count in (("allocation", 39), ("allocation-shared", 1), ("mv", 103), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 131)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -2373,10 +2375,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_generated_identity_custody_controls_are_required_and_focused(self):
         required = {
             "deploy": (
-                "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
-                "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-                "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-                "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+                "sora_network::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+                "sora_network::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+                "sora_network::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             ),
             "cli": (
                 "taira_public_reset::validator_config::tests::materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody",
@@ -2448,12 +2449,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             ),
             "deploy": (
                 "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-                "localnet::tests::localnet_assets_contain_only_explicit_requests",
-                "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
-                "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-                "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
-                "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
-                "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
+                "sora_network::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+                "sora_network::tests::private_dataspace_manifests_use_the_selected_lane_alias",
             ),
         }
         for scope in gate.QUALIFICATION_SCOPES:

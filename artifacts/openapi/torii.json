@@ -274,11 +274,11 @@
         "type": "object"
       },
       "AccountCapabilitiesV1": {
-        "additionalProperties": false,
-        "description": "Public account-bootstrap capability V1; no account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
+        "additionalProperties": true,
+        "description": "Public account-bootstrap capability V1. Clients validate the four required discovery fields and ignore unrelated metadata; metadata never selects a signer or supplies missing required fields. No account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
         "properties": {
           "allowed_signing": {
-            "description": "Current admitted signing algorithms. Ordering conveys no preference.",
+            "description": "Current admitted signing algorithms as unique canonical names. Array order conveys no preference and need not be canonical.",
             "items": {
               "enum": [
                 "ed25519",
@@ -300,11 +300,6 @@
             "type": "array",
             "uniqueItems": true
           },
-          "default_signing": {
-            "const": "ed25519",
-            "description": "Explicit first-release account-bootstrap default. Ed25519 is mandatory in admission configuration and supports canonical wallet request signing.",
-            "type": "string"
-          },
           "network_id": {
             "description": "Exact checksummed genesis-derived NetworkId; the hash marker bit and checksum must validate.",
             "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
@@ -324,8 +319,7 @@
           "schema_version",
           "network_id",
           "network_prefix",
-          "allowed_signing",
-          "default_signing"
+          "allowed_signing"
         ],
         "type": "object",
         "x-iroha-max-bytes": 4096
@@ -4371,6 +4365,112 @@
           }
         ]
       },
+      "AssetMovementPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssetMovementRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AssetMovementRow": {
+        "additionalProperties": false,
+        "description": "One committed movement of one asset definition. Without `select` every field is present; `select` may omit any field.",
+        "properties": {
+          "amount": {
+            "description": "Exact canonical decimal moved, formatted as account history formats amounts.",
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "description": "The asset definition of the path.",
+            "type": "string"
+          },
+          "authority": {
+            "description": "Signer of the transaction.",
+            "type": "string"
+          },
+          "block_height": {
+            "description": "Height of the block holding the transaction.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "block_index": {
+            "description": "Position of the transaction in its block.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_account_id": {
+            "description": "Debited account; null only for MINT.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`<tx_hash>:<movement_index>`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "TRANSFER, MINT and BURN: instruction legs, applied batch receipts and executed multisig transfers. OFFLINE_LOAD: a KAGEMUSHA Load, payer to reserve. OFFLINE_UNLOAD: a paid Unload, reserve to the unloading account. OFFLINE_FEE: a paid fee claim, reserve to the fee beneficiary. OFFLINE_CHARGE: the online charge of a Load (payer to the charge beneficiary) or of a paid Unload (reserve to the charge beneficiary).",
+            "enum": [
+              "TRANSFER",
+              "MINT",
+              "BURN",
+              "OFFLINE_LOAD",
+              "OFFLINE_UNLOAD",
+              "OFFLINE_FEE",
+              "OFFLINE_CHARGE"
+            ],
+            "type": "string"
+          },
+          "movement_index": {
+            "description": "Position among the transaction's movements: instruction legs in instruction order, then applied batch receipts and executed multisig movements, then KAGEMUSHA movements.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result_ok": {
+            "description": "false for an attempted movement of a failed transaction; KAGEMUSHA rows are always true.",
+            "type": "boolean"
+          },
+          "timestamp_ms": {
+            "description": "Creation time of the transaction in Unix milliseconds, as account history reports it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to_account_id": {
+            "description": "Credited account; null only for BURN.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tx_hash": {
+            "description": "Entrypoint hash of the transaction, as account history reports it.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AssetTransferIntent": {
         "additionalProperties": false,
         "properties": {
@@ -6231,7 +6331,7 @@
       },
       "BridgeFinalityAttestationTipMismatchV1": {
         "additionalProperties": false,
-        "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
+        "description": "Unsigned, selector-bound HTTP 503 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
         "properties": {
           "applied_height": {
             "description": "Applied immutable state-view tip.",
@@ -17647,122 +17747,182 @@
           }
         ]
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeChangeSetV1": {
         "additionalProperties": false,
-        "description": "Canonical first-release runtime-upgrade manifest. ABI delta lists are reserved and therefore empty.",
+        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1). Published definitions and transitions are internally tagged Norito JSON objects.",
         "properties": {
-          "abi_hash": {
-            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
-          },
-          "abi_version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          },
-          "added_pointer_types": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "added_syscalls": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "description": {
-            "type": "string"
-          },
-          "end_height": {
+          "effective_height": {
+            "description": "First height executed under the successor.",
             "format": "uint64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
-          "name": {
-            "minLength": 1,
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "predecessor": {
+            "description": "Identity of the selection the change starts from.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "provenance": {
+          "publish": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+              "type": "object"
             },
             "type": "array"
           },
-          "sbom_digests": {
-            "items": {
-              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1"
-            },
-            "type": "array"
-          },
-          "slsa_attestation": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "qualification": {
+            "description": "Digest of the qualification evidence for the successor composition.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "start_height": {
-            "format": "uint64",
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
+          "root": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Universal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "successor": {
+            "description": "Identity of the exact selection the change produces.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transitions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "name",
-          "description",
-          "abi_version",
-          "abi_hash",
-          "added_syscalls",
-          "added_pointer_types",
-          "start_height",
-          "end_height",
-          "sbom_digests",
-          "slsa_attestation",
-          "provenance"
+          "network",
+          "root",
+          "predecessor",
+          "successor",
+          "effective_height",
+          "publish",
+          "transitions",
+          "qualification"
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeNoticeV1": {
         "additionalProperties": false,
+        "description": "Minimum notice of a runtime change: blocks after approval and committed milliseconds after proposal and approval.",
         "properties": {
-          "algorithm": {
-            "minLength": 1,
-            "type": "string"
+          "approval_cushion_ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "digest": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
-            "type": "string"
+          "blocks": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "algorithm",
-          "digest"
+          "blocks",
+          "ms",
+          "approval_cushion_ms"
         ],
         "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1": {
+        "description": "Schedule a change set at its effective height, or withdraw a scheduled one.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+              },
+              "kind": {
+                "const": "Schedule",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Identity of the scheduled change set.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "GovernanceParliamentProposalPayloadRuntimeUpgradeV1": {
         "additionalProperties": false,
+        "description": "A runtime change-set action for SORA Parliament, with the notice policy frozen at proposal time (specs/live_runtime_upgrades.md section 6).",
         "properties": {
-          "manifest": {
-            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeNoticeV1"
           },
           "proposal_operator": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposed_ms": {
+            "description": "Committed time of the block that admitted the proposal.",
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "proposal_operator",
-          "manifest"
+          "action",
+          "notice",
+          "proposed_ms"
         ],
         "type": "object"
       },
@@ -23900,9 +24060,57 @@
         ],
         "type": "object"
       },
+      "MultisigProposalApproval": {
+        "additionalProperties": false,
+        "description": "When one signer's approval of a multisig proposal landed, as this node read it from committed blocks: the proposer's with its proposal, every other signer's with its first approval.",
+        "properties": {
+          "approved_at_ms": {
+            "description": "Creation time of the block holding the proposing or approving transaction, in Unix milliseconds; null when this node did not see it (an approval made inside another proposal's execution or by a contract, or a block not read yet).",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approver": {
+            "description": "Canonical AccountId of the signer whose approval is counted.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "block_height": {
+            "description": "Height of that block; null exactly when approved_at_ms is.",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "approver",
+          "approved_at_ms",
+          "block_height"
+        ],
+        "type": "object"
+      },
       "MultisigProposalEntry": {
         "additionalProperties": false,
         "properties": {
+          "approvals": {
+            "description": "Present only when the request set include_approvals: one entry per approver in proposal.approvals, in the order the approvals landed; untimed approvals last.",
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposalApproval"
+            },
+            "type": "array"
+          },
           "instructions_hash": {
             "maxLength": 64,
             "minLength": 64,
@@ -24029,6 +24237,13 @@
       "MultisigProposalResolveResponse": {
         "additionalProperties": false,
         "properties": {
+          "approvals": {
+            "description": "Present only when the request set include_approvals: one entry per approver in proposal.approvals, in the order the approvals landed; untimed approvals last.",
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposalApproval"
+            },
+            "type": "array"
+          },
           "instructions_hash": {
             "maxLength": 64,
             "minLength": 64,
@@ -24135,6 +24350,11 @@
               }
             ]
           },
+          "include_approvals": {
+            "default": false,
+            "description": "Also return `approvals`: when each approval of each returned proposal landed. Without it the response is unchanged.",
+            "type": "boolean"
+          },
           "limit": {
             "oneOf": [
               {
@@ -24231,6 +24451,11 @@
           }
         ],
         "properties": {
+          "include_approvals": {
+            "default": false,
+            "description": "Also return `approvals`: when each approval of each returned proposal landed. Without it the response is unchanged.",
+            "type": "boolean"
+          },
           "multisig_account_alias": {
             "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
             "maxLength": 512,
@@ -31365,7 +31590,7 @@
                 "type": "null"
               },
               "readiness": {
-                "const": "production-qualified",
+                "const": "available",
                 "type": "string"
               }
             },
@@ -31404,108 +31629,6 @@
               },
               "reason": {
                 "const": "compiled-profile",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "not-registered",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "missing-production-qualification",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "invalid-production-qualification",
                 "type": "string"
               }
             },
@@ -31577,7 +31700,7 @@
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
           },
           "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
           "statement_schema_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
@@ -31643,6 +31766,23 @@
               },
               "reason": {
                 "const": "statement-schema-invalid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "joint-security-reduction-incomplete",
                 "type": "string"
               }
             },
@@ -31742,7 +31882,7 @@
         ],
         "type": "object"
       },
-      "PrivacyConsensusPolicyTighteningV1": {
+      "PrivacyConsensusPolicyUpdateV1": {
         "additionalProperties": false,
         "properties": {
           "effective_at_height": {
@@ -31772,10 +31912,10 @@
           "current_limits": {
             "$ref": "#/components/schemas/PrivacyConsensusLimitsV1"
           },
-          "pending_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyConsensusPolicyTighteningV1"
+                "$ref": "#/components/schemas/PrivacyConsensusPolicyUpdateV1"
               },
               {
                 "type": "null"
@@ -31785,26 +31925,7 @@
         },
         "required": [
           "current_limits",
-          "pending_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyDeploymentActivationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "protocol_id": {
-            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          }
-        },
-        "required": [
-          "protocol_id",
-          "activation_height"
+          "pending_update"
         ],
         "type": "object"
       },
@@ -31939,6 +32060,9 @@
           },
           "manifest_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "protocols": {
             "items": false,
@@ -32812,17 +32936,6 @@
             ],
             "type": "array"
           },
-          "qualification": {
-            "description": "Explicitly null until complete native-validated release and deployment evidence is committed.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyExact12QualificationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "version": {
             "const": 1,
             "format": "uint32",
@@ -32831,9 +32944,9 @@
         },
         "required": [
           "version",
+          "network_id",
           "committed_height",
           "consensus_policy",
-          "qualification",
           "protocols",
           "manifest_digest"
         ],
@@ -32842,16 +32955,6 @@
       "PrivacyExact12CapabilityRowV1": {
         "additionalProperties": false,
         "properties": {
-          "activation": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "compiled_profile": {
             "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1"
           },
@@ -32860,6 +32963,16 @@
           },
           "operation_schema": {
             "$ref": "#/components/schemas/PrivacyOperationSchemaV1"
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "privacy_feature_mask": {
             "$ref": "#/components/schemas/PrivacyFeatureMaskV1"
@@ -32878,85 +32991,58 @@
           "privacy_feature_mask",
           "compiled_profile",
           "readiness",
-          "activation"
+          "policy"
         ],
         "type": "object"
       },
       "PrivacyExact12CatalogCommitmentV1": {
         "const": [
-          224,
-          55,
-          241,
-          57,
-          4,
-          160,
-          48,
-          124,
-          0,
-          219,
-          21,
-          216,
-          92,
-          251,
-          64,
-          107,
-          215,
-          151,
-          114,
-          210,
-          1,
-          68,
-          169,
-          73,
-          222,
-          240,
-          243,
-          253,
-          167,
-          142,
-          52,
+          91,
+          207,
+          54,
+          111,
+          177,
+          141,
           46,
-          116,
-          127,
-          101,
-          120,
-          124,
-          191,
-          191,
-          250,
-          201,
-          79,
-          17,
-          195,
-          105,
-          226,
-          187,
-          255
+          67,
+          97,
+          72,
+          108,
+          1,
+          93,
+          165,
+          180,
+          26,
+          63,
+          176,
+          14,
+          223,
+          5,
+          97,
+          16,
+          66,
+          204,
+          196,
+          82,
+          18,
+          13,
+          23,
+          110,
+          176
         ],
-        "description": "The sole pinned six-lane commitment to the ordered first-release Exact12 catalog.",
+        "description": "The sole pinned 32-byte native BLAKE3-256 commitment to the ordered first-release Exact12 catalog.",
         "items": {
           "maximum": 255,
           "minimum": 0,
           "type": "integer"
         },
-        "maxItems": 48,
-        "minItems": 48,
+        "maxItems": 32,
+        "minItems": 32,
         "type": "array"
       },
       "PrivacyExact12DeploymentQualificationV1": {
         "additionalProperties": false,
         "properties": {
-          "activation_transaction_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "activations": {
-            "items": {
-              "$ref": "#/components/schemas/PrivacyDeploymentActivationV1"
-            },
-            "maxItems": 12,
-            "minItems": 12,
-            "type": "array"
-          },
           "chain_id": {
             "maxLength": 128,
             "minLength": 1,
@@ -33023,8 +33109,6 @@
           "network_id",
           "genesis_hash",
           "release_manifest_digest",
-          "activation_transaction_digest",
-          "activations",
           "validator_roster_digest",
           "endpoint_version",
           "convergence_height",
@@ -33037,7 +33121,7 @@
       },
       "PrivacyExact12QualificationRecordV1": {
         "additionalProperties": false,
-        "description": "Complete portable release and target-network deployment evidence. Native admission additionally verifies signatures, exact ordering, nonzero digests, all cross-record identities and committed state. Schema conformance alone grants no production qualification.",
+        "description": "Portable release and target-network execution evidence for external diagnostics. Native validation checks signatures, exact ordering, nonzero digests, and cross-record identities; diagnostic tooling compares this evidence with independently observed committed state. This evidence is not protocol activation authority or a prerequisite for protocol use. Schema conformance alone grants no production qualification.",
         "properties": {
           "deployment_qualification": {
             "$ref": "#/components/schemas/PrivacyExact12DeploymentQualificationV1"
@@ -33278,7 +33362,61 @@
         ],
         "type": "object"
       },
-      "PrivacyProtocolActivationLimitsV1": {
+      "PrivacyProtocolIdV1": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "enum": [
+              "zk-ace-pq-authorization-v1",
+              "anonymous-pgc-k-out-of-n-v1",
+              "verange-transparent-range-v1",
+              "iroha-zk-ams-v1",
+              "vega-existing-credential-zk-v1",
+              "iroha-zk-x509-stark-p256-v1",
+              "iroha-jindo-polynomial-commitment-v1",
+              "iroha-bootle-lantern-anoncred-v1",
+              "orchard-halo2-actions-v1",
+              "monero-fcmp-plus-plus-v1",
+              "iroha-ivm-private-note-stark-v1",
+              "pq-masp-stark-v1"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "protocol",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsUpdateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsV1": {
         "oneOf": [
           {
             "additionalProperties": false,
@@ -33613,275 +33751,30 @@
           }
         ]
       },
-      "PrivacyProtocolActivationRecordV1": {
+      "PrivacyProtocolPolicyV1": {
         "additionalProperties": false,
         "properties": {
-          "engine_id": {
-            "$ref": "#/components/schemas/PrivacyEngineIdV1"
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
-          "engine_manifest_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/PrivacyProtocolLifecycleV1"
-          },
-          "parameter_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "parameter_id": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "pending_protocol_limits_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyProtocolLimitsTighteningV1"
+                "$ref": "#/components/schemas/PrivacyProtocolLimitsUpdateV1"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "proof_system_id": {
-            "$ref": "#/components/schemas/PrivacyProofSystemIdV1"
-          },
           "protocol_id": {
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          },
-          "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "statement_schema_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "verifier_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
           }
         },
         "required": [
           "protocol_id",
-          "proof_system_id",
-          "engine_id",
-          "parameter_id",
-          "parameter_digest",
-          "verifier_digest",
-          "statement_schema_digest",
-          "engine_manifest_digest",
-          "lifecycle",
-          "protocol_limits",
-          "pending_protocol_limits_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolIdV1": {
-        "additionalProperties": false,
-        "properties": {
-          "protocol": {
-            "enum": [
-              "zk-ace-pq-authorization-v1",
-              "anonymous-pgc-k-out-of-n-v1",
-              "verange-transparent-range-v1",
-              "iroha-zk-ams-v1",
-              "vega-existing-credential-zk-v1",
-              "iroha-zk-x509-stark-p256-v1",
-              "iroha-jindo-polynomial-commitment-v1",
-              "iroha-bootle-lantern-anoncred-v1",
-              "orchard-halo2-actions-v1",
-              "monero-fcmp-plus-plus-v1",
-              "iroha-ivm-private-note-stark-v1",
-              "pq-masp-stark-v1"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "protocol",
-          "value"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolLifecycleV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "active",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "oneOf": [
-                      {
-                        "format": "uint64",
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "PrivacyProtocolLimitsTighteningV1": {
-        "additionalProperties": false,
-        "properties": {
-          "effective_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "next_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "scheduled_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "scheduled_at_height",
-          "effective_at_height",
-          "next_limits"
+          "current_limits",
+          "pending_update"
         ],
         "type": "object"
       },
@@ -34976,7 +34869,7 @@
       },
       "PrivateSettlementContextProofV1": {
         "additionalProperties": false,
-        "description": "One selected context member. All batch members must carry identical complete World and native-lane preimages.",
+        "description": "One selected context member with the exact complete committed Parameters cell and native protocol row or complete-World absence proof at the same authenticated cut.",
         "properties": {
           "committee_keys": {
             "items": {
@@ -34991,12 +34884,29 @@
             "description": "Exact original canonical public SumeragiLaneState cell.",
             "x-iroha-norito-schema": "iroha_data_model::sumeragi_lanes::SumeragiLaneState"
           },
+          "parameters": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact complete original Parameters cell from the same World cut. Authenticate world.parameters before reading private_settlement_policy_v1 from custom; authenticated absence selects the immutable native V1 baseline, while malformed present payloads are refused.",
+            "x-iroha-norito-schema": "iroha_data_model::parameter::system::model::Parameters"
+          },
           "pool": {
             "$ref": "#/components/schemas/PrivateSettlementPoolCutProofV1"
+          },
+          "protocol_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "pool",
+          "parameters",
+          "protocol_policy",
           "lanes",
           "committee_keys"
         ],
@@ -35522,6 +35432,70 @@
           ]
         }
       },
+      "PrivateSettlementPolicyUpdateV1": {
+        "additionalProperties": false,
+        "description": "Private admission successor applied at the exact incoming effective height. Execution supplies scheduled_at_height and validates the original obligation drain before publication.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyUpdateV1"
+      },
+      "PrivateSettlementPolicyV1": {
+        "additionalProperties": false,
+        "description": "Canonical payload of custom parameter private_settlement_policy_v1, bounded to 4096 JSON bytes. Authenticated absence retains the immutable native V1 baseline; a present payload must be canonical and valid. Current limits and any original protocol drain cannot be rewritten by a scheduling request.",
+        "properties": {
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
+          "pending_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementPolicyUpdateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol_closure_drain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivateSettlementProtocolClosureDrainV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "current_limits",
+          "pending_update",
+          "protocol_closure_drain"
+        ],
+        "type": "object",
+        "x-iroha-custom-parameter-id": "private_settlement_policy_v1",
+        "x-iroha-max-json-bytes": 4096,
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementPolicyV1"
+      },
       "PrivateSettlementPoolCutProofV1": {
         "additionalProperties": false,
         "description": "Complete bounded World hash preimages and exact public selected pool/governance values; no restricted asset opening.",
@@ -35589,6 +35563,123 @@
           "logs_errors_events_must_use_public_allowlist": true,
           "plaintext_transaction_contents": "forbidden"
         }
+      },
+      "PrivateSettlementProtocolClosureDrainV1": {
+        "additionalProperties": false,
+        "description": "Execution-captured original expiry span bound to one exact native protocol-limit closure. The protocol identity, schedule heights and hash of the canonical next-limits frame must match its pending row. Later private-policy changes cannot reinterpret this original horizon.",
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "original_max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "protocol_id",
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits_hash",
+          "original_max_expiry_blocks"
+        ],
+        "type": "object",
+        "x-iroha-norito-schema": "iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1"
+      },
+      "PrivateSettlementValidityLimitsV1": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "capsule_padding_classes": {
+            "description": "Nonzero mask of the four fixed native padding classes.",
+            "format": "uint8",
+            "maximum": 15,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "commit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_capsule_bytes": {
+            "format": "uint64",
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_carrier_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_participants": {
+            "format": "uint16",
+            "maximum": 255,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "max_proof_bytes": {
+            "format": "uint64",
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_auditor_approvals": {
+            "format": "uint16",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prepare_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sidecar_retention_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_participants",
+          "max_expiry_blocks",
+          "audit_timeout_blocks",
+          "prepare_timeout_blocks",
+          "commit_timeout_blocks",
+          "capsule_padding_classes",
+          "max_proof_bytes",
+          "max_capsule_bytes",
+          "max_carrier_bytes",
+          "sidecar_retention_blocks",
+          "min_auditor_approvals"
+        ],
+        "type": "object"
       },
       "ProofAttachment": {
         "additionalProperties": false,
@@ -39016,6 +39107,51 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeChangeSetEndorsementV1": {
+        "additionalProperties": false,
+        "description": "A trusted release signer's endorsement of a change set's provenance (iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1): the signer's signature over the domain iroha:runtime:change-set-endorsement:v1 with its NUL terminator, followed by the 32-byte change-set identity. The committed runtime_provenance_policy_v1 decides which signers count.",
+        "properties": {
+          "change_set": {
+            "description": "Identity of the endorsed change set.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "change_set",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "RuntimeProposeUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeChangeSetEndorsementV1"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "provenance"
+        ],
+        "type": "object"
       },
       "RwaPage": {
         "additionalProperties": false,
@@ -64429,6 +64565,311 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/assets/{definition_id}/movements": {
+      "get": {
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Asset selector (unprefixed Base58 id or alias).",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMovementPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid query, or `asset_movements_not_retained`: the node dropped the movements below block `details.expected` to bound its index; add `block_height >= details.expected` to read the retained movements.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown asset definition, or one the caller may not read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`asset_movements_indexing`: this node has not yet folded the committed tip into its movement index (`details.actual` is the indexed height, `details.expected` the committed tip); retry after `Retry-After` seconds. `emergency_fast_history_unavailable` on a node started in emergency Fast mode.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; grows with the indexing gap, from 1 to 30.",
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List asset movements.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.assets_by_definition_id_movements_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/assets/{definition_id}/movements/query": {
+      "post": {
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Asset selector (unprefixed Base58 id or alias).",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMovementPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid query, or `asset_movements_not_retained`: the node dropped the movements below block `details.expected` to bound its index; add `block_height >= details.expected` to read the retained movements.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown asset definition, or one the caller may not read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`asset_movements_indexing`: this node has not yet folded the committed tip into its movement index (`details.actual` is the indexed height, `details.expected` the committed tip); retry after `Retry-After` seconds. `emergency_fast_history_unavailable` on a node started in emergency Fast mode.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; grows with the indexing gap, from 1 to 30.",
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query asset movements.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.assets_by_definition_id_movements_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/blocks/stream": {
       "get": {
         "description": "Upgrade to the ordered block stream WebSocket. Send exactly one framed Norito `BlockSubscriptionRequest`; its non-zero height is the supported replay/reconnect position.",
@@ -64790,7 +65231,7 @@
     },
     "/v1/bridge/finality/attestation/latest": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestationLatest",
         "parameters": [
           {
@@ -64959,7 +65400,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65035,7 +65476,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65082,7 +65523,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -65262,7 +65703,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65338,7 +65779,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -91862,7 +92303,7 @@
     },
     "/v1/privacy/capabilities": {
       "get": {
-        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation and production-qualification evidence, evidence-derived readiness, and singleton consensus policy from one authoritative committed state view.",
+        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, optional committed protocol limits, implementation readiness, and singleton consensus policy from one authoritative committed state view. Absent protocol policy selects compiled profile limits. The content digest does not authenticate the producer.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -93247,6 +93688,52 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/containments": {
+      "get": {
+        "description": "Every recorded emergency containment of runtime definitions, with its lease, the restrictions it imposed and its status, by authorization height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime containments.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.containment.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/metrics": {
       "get": {
         "description": "Return runtime metrics snapshot.",
@@ -93383,9 +93870,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/runtime/upgrades": {
+    "/v1/runtime/release": {
       "get": {
-        "description": "List proposed and activated runtime upgrades.",
+        "description": "This node's build and release digest, whether its release executes the committed runtime selection, and for each scheduled change set whether it executes the successor selection, naming the first definition the release lacks. A node whose release cannot execute the selection due at a height stops before that height.",
         "responses": {
           "200": {
             "content": {
@@ -93416,7 +93903,53 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "List runtime upgrades.",
+        "summary": "Report this release's runtime support.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.release"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades": {
+      "get": {
+        "description": "The committed runtime selection and its identity, the attesting committee and its digest, and every recorded change set by effective height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime change sets.",
         "tags": [
           "Runtime"
         ],
@@ -93429,12 +93962,12 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/runtime/upgrades/activate/{id}": {
+    "/v1/runtime/upgrades/attest/{id}": {
       "post": {
-        "description": "Activate a runtime upgrade by id.",
+        "description": "Sign, with this node's validator key, its attestation that its release executes the successor selection of the scheduled change set with the given 32-byte hex identity, bound to the current committee, and return the instruction that records it for an operator to submit. Refused when the change set is not scheduled, this node is not a committee member, or its release cannot execute the successor selection.",
         "parameters": [
           {
-            "description": "Upgrade identifier.",
+            "description": "Change-set identity, 32-byte hex.",
             "in": "path",
             "name": "id",
             "required": true,
@@ -93483,7 +94016,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Activate a runtime upgrade.",
+        "summary": "Draft this node's runtime support attestation.",
         "tags": [
           "Runtime"
         ],
@@ -93491,14 +94024,14 @@
           "admission": "operator",
           "authentication": "operator_signature",
           "schemaVersion": 1,
-          "stableRouteId": "operator.runtime.upgrade.activate"
+          "stableRouteId": "operator.runtime.upgrade.attest"
         },
         "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
       "post": {
-        "description": "Cancel a runtime upgrade by id.",
+        "description": "Draft the SORA Parliament proposal that withdraws the scheduled change set with the given 32-byte hex identity, for local signing.",
         "parameters": [
           {
             "description": "Upgrade identifier.",
@@ -93550,7 +94083,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Cancel a runtime upgrade.",
+        "summary": "Draft a runtime change-set withdrawal.",
         "tags": [
           "Runtime"
         ],
@@ -93565,12 +94098,12 @@
     },
     "/v1/runtime/upgrades/propose": {
       "post": {
-        "description": "Submit a runtime upgrade proposal.",
+        "description": "Draft the SORA Parliament proposal that schedules the change set in the body with its release signers' endorsements, for local signing. Admission, including the committed provenance check, happens when the signed proposal executes.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/RuntimeProposeUpgradeRequest"
               }
             }
           },
@@ -93606,7 +94139,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Propose a runtime upgrade.",
+        "summary": "Draft a runtime change-set proposal.",
         "tags": [
           "Runtime"
         ],

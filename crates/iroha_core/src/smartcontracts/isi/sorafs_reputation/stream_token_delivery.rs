@@ -42,7 +42,7 @@ use iroha_data_model::{
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_reputation::stream_token_delivery::Source"
 )]
-pub(crate) struct Source {
+pub struct Source {
     /// Exact original source, including the serving attempt.
     pub(crate) record: Record,
     /// Full original request commitment from the permanent context index.
@@ -67,7 +67,7 @@ pub(crate) struct Source {
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_reputation::stream_token_delivery::State"
 )]
-pub(crate) struct DeliveryState {
+pub struct DeliveryState {
     /// Exact immutable source commitment, not a caller-supplied claim of authority.
     pub(crate) source_digest: [u8; 32],
     /// Explicit current state. Only Pending may become one terminal fact.
@@ -75,7 +75,7 @@ pub(crate) struct DeliveryState {
 }
 /// Fully prepared native writes; publication has no fallible work or external callbacks.
 #[derive(Default)]
-pub(crate) struct Prepared {
+pub struct Prepared {
     writes: Vec<(StatePath, Vec<u8>)>,
 }
 impl Prepared {
@@ -140,7 +140,7 @@ fn source_digest(source: &Source) -> Result<[u8; 32], InstructionExecutionError>
     Ok(*Hash::new(material).as_ref())
 }
 /// The maximum observed source time is protocol State, never a daemon clock or file counter.
-pub(crate) fn source_time_watermark(
+pub fn source_time_watermark(
     world: &impl WorldReadOnly,
 ) -> Result<Option<u64>, InstructionExecutionError> {
     world
@@ -244,7 +244,7 @@ fn validate_terminal_execution(
     Ok(())
 }
 /// Load an immutable source-bound recorder policy for a bounded signed-history proof target.
-pub(crate) fn read_policy(
+pub fn read_policy(
     world: &impl WorldReadOnly,
     digest: [u8; 32],
 ) -> Result<ReputationJournalAuthorityPolicyRecordV1, InstructionExecutionError> {
@@ -257,7 +257,7 @@ pub(crate) fn read_policy(
     Ok(policy)
 }
 /// Read exact source/disposition and native journal association from one World; not a finality proof.
-pub(crate) fn read(
+pub fn read(
     world: &impl WorldReadOnly,
     network: &NetworkId,
     record: &Record,
@@ -315,18 +315,17 @@ pub(crate) fn read(
         return Err(corrupt_state("native delivery source digest mismatch"));
     }
     let entry = expected_entry(&source)?;
-    let journal_sequence = match &entry {
-        Some(entry) => exact_entry_replay(world, entry)?,
-        None => {
-            let source_id =
-                ReputationJournalPayloadV1::StreamTokenValidation(record.outcome).source_id();
-            if read_source_head(world, source_id)?.is_some() {
-                return Err(corrupt_state(
-                    "excluded source unexpectedly occupies the journal",
-                ));
-            }
-            None
+    let journal_sequence = if let Some(entry) = &entry {
+        exact_entry_replay(world, entry)?
+    } else {
+        let source_id =
+            ReputationJournalPayloadV1::StreamTokenValidation(record.outcome).source_id();
+        if read_source_head(world, source_id)?.is_some() {
+            return Err(corrupt_state(
+                "excluded source unexpectedly occupies the journal",
+            ));
         }
+        None
     };
     match (&state.disposition, entry.as_ref(), source.intent.as_ref()) {
         (Disposition::Pending, Some(_), Some(_)) if journal_sequence.is_none() => {}
@@ -410,16 +409,16 @@ pub(crate) fn read(
 }
 
 /// Prepare every new source and watermark before either gateway or reputation rows are published.
-pub(crate) fn prepare_admission(
+pub fn prepare_admission(
     tx: &StateTransaction<'_, '_>,
     delta: &TransitionDelta,
 ) -> Result<Prepared, InstructionExecutionError> {
     let mut prepared = Prepared::default();
-    if let TransitionResult::Admission(result) = &delta.result {
-        if delta.writes.is_empty() {
-            // Exact replay must retain the original source; absence never permits rebuilding it.
-            read(tx.world(), tx.network_id(), &result.record)?;
-        }
+    if let TransitionResult::Admission(result) = &delta.result
+        && delta.writes.is_empty()
+    {
+        // Exact replay must retain the original source; absence never permits rebuilding it.
+        read(tx.world(), tx.network_id(), &result.record)?;
     }
     let mut watermark = source_time_watermark(tx.world())?.unwrap_or(0);
     for write in &delta.writes {
@@ -529,7 +528,7 @@ pub(crate) fn prepare_admission(
 }
 
 /// Prepare exact ordered acknowledgement; only authenticated expiry may terminalize Pending.
-pub(crate) fn prepare_acknowledgement(
+pub fn prepare_acknowledgement(
     tx: &StateTransaction<'_, '_>,
     record: &Record,
     execution: &Execution,
@@ -564,7 +563,7 @@ pub(crate) fn prepare_acknowledgement(
 }
 
 /// Prepare an explicit current-policy-manager cancellation; an existing Delivered wins unchanged.
-pub(crate) fn prepare_cancellation(
+pub fn prepare_cancellation(
     tx: &StateTransaction<'_, '_>,
     authority: &AccountId,
     record: &Record,
@@ -616,10 +615,10 @@ pub(crate) fn prepare_cancellation(
 }
 
 /// Enforce one exact directly signed original append payload before native journal mutation.
-pub(crate) fn execute_append(
+pub fn execute_append(
     tx: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    entry: ReputationJournalEntryV1,
+    entry: &ReputationJournalEntryV1,
 ) -> Result<(), InstructionExecutionError> {
     let payload: TransactionPayload = tx
         .current_direct_stream_token_reputation_payload
@@ -648,7 +647,7 @@ pub(crate) fn execute_append(
         .intent
         .as_ref()
         .ok_or_else(|| invalid_parameter("excluded native source cannot append"))?;
-    if expected_entry(&source)?.as_ref() != Some(&entry)
+    if expected_entry(&source)?.as_ref() != Some(entry)
         || payload != intent.payload
         || &payload.authority != authority
     {
@@ -693,10 +692,10 @@ pub(crate) fn execute_append(
     validate_new_entry(
         tx,
         authority,
-        &entry,
+        entry,
         ReputationJournalSourceKindV1::StreamToken,
     )?;
-    let journal = prepare_validated_entry(tx, entry.clone())?;
+    let journal = prepare_validated_entry(tx, &(entry.clone()))?;
     state.disposition = Disposition::Delivered {
         journal_sequence: journal.sequence,
         event_id: entry.event_id,

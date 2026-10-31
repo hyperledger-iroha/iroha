@@ -76,6 +76,9 @@ fn release_of(error: PublicationError) -> crate::execution_attempt::ExecutionDef
 
 #[test]
 fn parent_service_validation_retains_original_receipts_without_waking_its_own_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -170,6 +173,9 @@ fn parent_service_validation_retains_original_receipts_without_waking_its_own_re
 
 #[test]
 fn parent_service_assembly_retains_original_parent_and_queue_before_capacity_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -188,7 +194,11 @@ fn parent_service_assembly_retains_original_parent_and_queue_before_capacity_ret
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("explicit current admission fixture policy"),
                 &time,
             )
             .unwrap();
@@ -299,6 +309,9 @@ fn parent_service_assembly_retains_original_parent_and_queue_before_capacity_ret
 
 #[test]
 fn parent_service_worker_cancellation_retires_the_same_original_partial_graph() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -485,6 +498,9 @@ fn parent_service_errors_keep_original_waiter_and_permanent_source_classificatio
 
 #[test]
 fn parent_service_worker_replacement_retires_only_the_superseded_original_attempt() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -612,7 +628,11 @@ fn queue_original_tick(chain: &CertifiedTestChain, worker: &mut Worker<'_>) {
         &chain.network_id(),
         Duration::from_secs(1),
         chain.state().view().world().parameters().transaction(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("explicit current admission fixture policy"),
         &time,
     )
     .unwrap();
@@ -846,6 +866,9 @@ fn parent_service_missing_predecessor_retries_original_tip_and_refuses_nontip_pr
 
 #[test]
 fn parent_service_validation_busy_view_retains_original_receipts_before_parent_lookup() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -1160,6 +1183,9 @@ fn parent_service_signer_worker_keeps_paid_prefix_before_overlay_and_external_re
 
 #[test]
 fn parent_service_producer_copy_refusal_precedes_queue_lease_and_retries_same_input() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         executed_chain,
         ConsensusMode::Permissioned,
@@ -1178,7 +1204,13 @@ fn parent_service_producer_copy_refusal_precedes_queue_lease_and_retries_same_in
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .parameters()
+                    .crypto_policy()
+                    .expect("original committed admission policy"),
                 &time,
             )
             .unwrap();

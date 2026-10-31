@@ -16,7 +16,7 @@ fn fixture(
         2,
         Hash32([1; 32]),
         Hash32([2; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     let chunk = PayloadChunk {
         instance: block.header().instance,
@@ -98,7 +98,7 @@ fn pending_remote_frame_preserves_original_backing_and_never_enters_core_early()
         2,
         Hash32([1; 32]),
         Hash32([2; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     let ordinary = WireMessage::Qc(tests::commit_qc(&block, Hash32([3; 32])));
     assert!(ordinary.owned_bytes_admitted_to(&budget));
@@ -167,7 +167,7 @@ fn closed_instance_releases_original_witnesses_even_with_a_retained_handle() {
         2,
         Hash32([1; 32]),
         Hash32([2; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
     );
     assert!(!handle.deliver_message(
         peer,

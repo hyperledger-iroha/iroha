@@ -290,6 +290,7 @@ fn capture_original_tail(
             genesis_block_hash: original.body.genesis_block_hash,
             genesis: original.body.genesis_finality_proof.clone(),
             tip: original.body.finality_proof.clone(),
+            admission: RetainedAdmission::CompleteWalk,
         },
     )
 }

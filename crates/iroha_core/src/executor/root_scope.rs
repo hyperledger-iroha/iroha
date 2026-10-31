@@ -8,13 +8,13 @@ use iroha_data_model::{
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
 use crate::{
-    state::{RootScopeDecodeRefusal, StateReadOnly, StateStorageAdmissionError, StateTransaction},
-    sumeragi::lanes::routing::read_committed_root_scope,
+    state::{StateReadOnly, StateStorageAdmissionError, StateTransaction},
+    sumeragi::lanes::routing::read_routing_root_scope,
 };
 
 /// Read execution authority from the original genesis capability or immutable committed metadata.
 /// A header-shaped bootstrap overlay has no authority on its own.
-pub(crate) fn execution_root_scope(
+pub fn execution_root_scope(
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<SumeragiRootScope, ValidationFail> {
     if let Some(genesis) = state.genesis_execution_scope.as_ref() {
@@ -27,52 +27,32 @@ pub(crate) fn execution_root_scope(
             "genesis instruction execution requires its authenticated source capability",
         ));
     }
-    match read_committed_root_scope(&state.world) {
+    match read_routing_root_scope(&state.world) {
         Ok(Some(scope)) => Ok(scope),
         Ok(None) => Err(denied(
             "instruction execution requires immutable root scope",
         )),
-        Err(error) => {
-            let refusal = match error {
-                norito::json::Error::DecodeResourceLimit
-                | norito::json::Error::DecodeResource(
-                    norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::SequenceLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::FieldLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::TotalElementsExceeded { .. }
-                    | norito::core::DecodeResourceError::TotalAllocationExceeded { .. },
-                ) => RootScopeDecodeRefusal::Budget,
-                norito::json::Error::AllocationFailed
-                | norito::json::Error::DecodeResource(
-                    norito::core::DecodeResourceError::AllocationFailed { .. },
-                ) => RootScopeDecodeRefusal::Allocator,
-                // Intrinsic malformed/depth errors are not a local retry policy.
-                _ => {
-                    return Err(denied(
-                        "instruction execution requires immutable root scope",
-                    ));
-                }
-            };
+        Err(refusal) => {
             if cfg!(all(test, sumeragi_core_mutation = "HC27")) {
                 return Err(ValidationFail::InternalError(
                     "local execution-root read did not complete".into(),
                 ));
             }
-            state.arm_local_storage_refusal(StateStorageAdmissionError::RootScopeDecode(refusal));
-            Err(state.defer_execution(match refusal {
-                RootScopeDecodeRefusal::Budget => {
-                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
-                }
-                RootScopeDecodeRefusal::Allocator => {
-                    ivm::error::ExecutionDeferral::AllocationUnavailable
-                }
-            }))
+            // The canonical root reader returns only original decoder refusals.
+            // Retain its opaque scope and exact resource values in both existing
+            // non-wire latches; never reconstruct a cause from its reason.
+            let original = refusal
+                .decode_refusal()
+                .expect("canonical root reader retains its original decoder refusal")
+                .clone();
+            state.arm_local_storage_refusal(StateStorageAdmissionError::RootScopeDecode(original));
+            Err(state.defer_execution(refusal))
         }
     }
 }
 
 /// Bind an unbound code hash to the actual source's already-captured execution dataspace.
-pub(crate) fn captured_artifact_id(
+pub fn captured_artifact_id(
     state: &mut StateTransaction<'_, '_>,
     code_hash: iroha_crypto::Hash,
 ) -> Result<iroha_data_model::smart_contract::ContractArtifactId, ValidationFail> {
@@ -83,7 +63,7 @@ pub(crate) fn captured_artifact_id(
 }
 
 /// Exact source-owned native execution dataspace, without an implicit universal default.
-pub(crate) fn captured_dataspace(
+pub fn captured_dataspace(
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<iroha_model_base::topology::DataSpaceId, ValidationFail> {
     let scope = execution_root_scope(state)?;
@@ -103,7 +83,7 @@ pub(crate) fn captured_dataspace(
 
 /// Private contracts execute through exact on-chain addresses, including atomic batches.
 /// Unbound raw IVM/proved overlays cannot acquire a root-local durable-state namespace.
-pub(crate) fn ensure_executable_scope(
+pub fn ensure_executable_scope(
     state: &mut StateTransaction<'_, '_>,
     executable: &iroha_data_model::transaction::Executable,
 ) -> Result<(), ValidationFail> {
@@ -123,7 +103,7 @@ pub(crate) fn ensure_executable_scope(
 }
 
 /// Require an address-bound call to stay in the signed private root, including its native route.
-pub(crate) fn ensure_contract_scope(
+pub fn ensure_contract_scope(
     state: &mut StateTransaction<'_, '_>,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), ValidationFail> {
@@ -141,30 +121,15 @@ pub(crate) fn ensure_contract_scope(
 }
 
 /// Check a live nested lookup or retained durable-effect authorization against immutable World.
-pub(crate) fn ensure_committed_contract_scope(
+pub fn ensure_committed_contract_scope(
     world: &impl crate::state::WorldReadOnly,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     use crate::execution_attempt::ExecutionAttemptError;
-    let scope = match read_committed_root_scope(world) {
+    let scope = match read_routing_root_scope(world) {
         Ok(Some(scope)) => scope,
-        Err(error) if !cfg!(all(test, sumeragi_core_mutation = "HC30")) => {
-            let reason = match error {
-                norito::json::Error::DecodeResourceLimit
-                | norito::json::Error::DecodeResource(
-                    norito::core::DecodeResourceError::ArchiveLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::SequenceLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::FieldLengthExceeded { .. }
-                    | norito::core::DecodeResourceError::TotalElementsExceeded { .. }
-                    | norito::core::DecodeResourceError::TotalAllocationExceeded { .. },
-                ) => ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
-                norito::json::Error::AllocationFailed
-                | norito::json::Error::DecodeResource(
-                    norito::core::DecodeResourceError::AllocationFailed { .. },
-                ) => ivm::error::ExecutionDeferral::AllocationUnavailable,
-                _ => return Err(denied("contract execution requires immutable root scope").into()),
-            };
-            return Err(ExecutionAttemptError::Deferred(reason.into()));
+        Err(refusal) if !cfg!(all(test, sumeragi_core_mutation = "HC30")) => {
+            return Err(ExecutionAttemptError::Deferred(refusal));
         }
         Ok(None) | Err(_) => {
             return Err(denied("contract execution requires immutable root scope").into());
@@ -175,14 +140,34 @@ pub(crate) fn ensure_committed_contract_scope(
 
 /// Require registry reads to belong to the immutable root's exact dataspace.
 /// Global roots may read any explicitly addressed artifact; scope is never inferred.
-pub(crate) fn ensure_committed_artifact_scope(
+pub fn ensure_committed_artifact_scope(
     world: &impl crate::state::WorldReadOnly,
     artifact: &iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    ensure_committed_artifact_scope_with(world, || Ok(artifact.dataspace_id))
+}
+
+/// Borrow the same root owner without allocating an artifact identifier on Global.
+/// Address dataspace derivation occurs only when the existing private scope needs it.
+pub fn ensure_committed_address_artifact_scope(
+    world: &impl crate::state::WorldReadOnly,
+    address: &iroha_data_model::smart_contract::ContractAddress,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    ensure_committed_artifact_scope_with(world, || {
+        address
+            .dataspace_id()
+            .map_err(|_| denied("artifact access requires an exact valid contract address"))
+    })
+}
+
+fn ensure_committed_artifact_scope_with(
+    world: &impl crate::state::WorldReadOnly,
+    artifact_dataspace: impl FnOnce() -> Result<iroha_model_base::topology::DataSpaceId, ValidationFail>,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     use crate::execution_attempt::ExecutionAttemptError;
-    let scope = match crate::sumeragi::lanes::routing::read_routing_root_scope(world) {
+    let scope = match read_routing_root_scope(world) {
         Ok(Some(scope)) => scope,
-        Err(original)
+        Err(refusal)
             if !cfg!(all(
                 test,
                 any(
@@ -191,20 +176,19 @@ pub(crate) fn ensure_committed_artifact_scope(
                 )
             )) =>
         {
-            return Err(ExecutionAttemptError::Deferred(original));
+            return Err(ExecutionAttemptError::Deferred(refusal));
         }
         Ok(None) | Err(_) => {
             return Err(denied("artifact access requires immutable root scope").into());
         }
     };
     if let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope
-        && artifact.dataspace_id != dataspace_id
+        && artifact_dataspace()? != dataspace_id
     {
         return Err(denied("private root cannot access a foreign artifact dataspace").into());
     }
     Ok(())
 }
-
 fn ensure_address_scope(
     scope: SumeragiRootScope,
     address: &iroha_data_model::smart_contract::ContractAddress,
@@ -221,7 +205,7 @@ fn ensure_address_scope(
 
 /// Enforce the signed root's authority on each actual instruction before native or custom execution.
 /// Static transaction routing is insufficient for generated instructions and deferred multisig.
-pub(crate) fn ensure_instruction_scope(
+pub fn ensure_instruction_scope(
     instruction: &InstructionBox,
     state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFail> {

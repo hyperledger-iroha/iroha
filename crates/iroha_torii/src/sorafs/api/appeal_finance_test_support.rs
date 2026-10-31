@@ -438,8 +438,8 @@ fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
     )
     .expect("appeal finance weekly rollup fixture")
 }
-fn appeal_finance_report_body(report: SoraFsAppealFinanceReportV1) -> Bytes {
-    Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
+fn appeal_finance_report_body(report: &SoraFsAppealFinanceReportV1) -> Bytes {
+    Bytes::from(norito::json::to_vec(report).expect("encode appeal finance report"))
 }
 fn assert_governance_publish_provenance(
     app: &SharedAppState,
@@ -511,10 +511,10 @@ fn privacy_aggregate_source_event_request_at(
     }
 }
 fn privacy_aggregate_source_event_body(
-    request: TransparencyPrivacyAggregateSourceEventRequestDto,
+    request: &TransparencyPrivacyAggregateSourceEventRequestDto,
 ) -> Bytes {
     Bytes::from(
-        norito::json::to_vec(&request).expect("encode privacy aggregate source event request"),
+        norito::json::to_vec(request).expect("encode privacy aggregate source event request"),
     )
 }
 fn privacy_aggregate_publish_due_request(
@@ -528,10 +528,10 @@ fn privacy_aggregate_publish_due_request(
     }
 }
 fn privacy_aggregate_publish_due_body(
-    request: TransparencyPrivacyAggregatePublishDueRequestDto,
+    request: &TransparencyPrivacyAggregatePublishDueRequestDto,
 ) -> Bytes {
     Bytes::from(
-        norito::json::to_vec(&request).expect("encode privacy aggregate publish due request"),
+        norito::json::to_vec(request).expect("encode privacy aggregate publish due request"),
     )
 }
 fn privacy_aggregate_api_cycle_config() -> sorafs_node::PrivacyAggregateCycleConfig {
@@ -581,8 +581,8 @@ fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregat
     )
     .expect("privacy API test policy")
 }
-fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
-    Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
+fn appeal_finance_weekly_rollup_body(rollup: &SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
+    Bytes::from(norito::json::to_vec(rollup).expect("encode appeal finance weekly rollup"))
 }
 fn appeal_finance_deposit_request(
     payer_account: &AccountId,
@@ -604,8 +604,8 @@ fn appeal_finance_deposit_request(
         evidence_hashes_hex: Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]),
     }
 }
-fn appeal_finance_deposit_body(req: AppealFinanceDepositRequestDto) -> Bytes {
-    Bytes::from(norito::json::to_vec(&req).expect("encode appeal finance deposit request"))
+fn appeal_finance_deposit_body(req: &AppealFinanceDepositRequestDto) -> Bytes {
+    Bytes::from(norito::json::to_vec(req).expect("encode appeal finance deposit request"))
 }
 fn appeal_finance_deposit_confirm_request(
     req: &AppealFinanceDepositRequestDto,
@@ -625,9 +625,9 @@ fn appeal_finance_deposit_confirm_request(
         evidence_hashes_hex: req.evidence_hashes_hex.clone(),
     }
 }
-fn appeal_finance_deposit_confirm_body(req: AppealFinanceDepositConfirmRequestDto) -> Bytes {
+fn appeal_finance_deposit_confirm_body(req: &AppealFinanceDepositConfirmRequestDto) -> Bytes {
     Bytes::from(
-        norito::json::to_vec(&req).expect("encode appeal finance deposit confirmation request"),
+        norito::json::to_vec(req).expect("encode appeal finance deposit confirmation request"),
     )
 }
 fn appeal_finance_deposit_settle_body(

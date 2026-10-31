@@ -611,7 +611,7 @@ impl SnapshotMerkleMetadata {
         let value = Self::expect_field(map, field)?;
         value
             .as_str()
-            .map(|raw| raw.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .ok_or_else(|| Self::parse_error(format!("`{field}` must be a string")))
     }
     fn parse_string_vec_field(
@@ -624,11 +624,13 @@ impl SnapshotMerkleMetadata {
                 .iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    item.as_str().map(|raw| raw.to_owned()).ok_or_else(|| {
-                        Self::parse_error(format!(
-                            "`{field}[{index}]` must be a string (hex digest)"
-                        ))
-                    })
+                    item.as_str()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .ok_or_else(|| {
+                            Self::parse_error(format!(
+                                "`{field}[{index}]` must be a string (hex digest)"
+                            ))
+                        })
                 })
                 .collect();
         }
@@ -636,7 +638,7 @@ impl SnapshotMerkleMetadata {
             "`{field}` must be an array of hex strings"
         )))
     }
-    fn from_json_value(value: norito::json::Value) -> Result<Self, SnapshotMerkleError> {
+    fn from_json_value(value: &norito::json::Value) -> Result<Self, SnapshotMerkleError> {
         let map = value
             .as_object()
             .ok_or_else(|| Self::parse_error("snapshot Merkle metadata must be a JSON object"))?;
@@ -818,7 +820,7 @@ impl SnapshotMerkleMetadata {
         };
         let value =
             json::from_slice::<norito::json::Value>(&bytes).map_err(SnapshotMerkleError::Parse)?;
-        let metadata = Self::from_json_value(value)?;
+        let metadata = Self::from_json_value(&(value))?;
         let canonical = json::to_json(&metadata).map_err(SnapshotMerkleError::Parse)?;
         if canonical.as_bytes() != bytes {
             return Err(Self::parse_error(
@@ -967,6 +969,19 @@ impl SnapshotMaker {
     }
     /// Invoke snapshot creation task
     fn create_snapshot(&mut self) {
+        // The predecessor release's snapshot is the World at the upgrade checkpoint; a snapshot of
+        // this release there cannot be authenticated before its successor block exists.
+        if self
+            .state
+            .kura()
+            .upgrade_checkpoint()
+            .is_some_and(|checkpoint| {
+                u64::try_from(self.state.committed_height())
+                    .is_ok_and(|height| height == checkpoint.height)
+            })
+        {
+            return;
+        }
         let store_dir = self.store_dir.clone();
         let latest_block_hash = self.state.latest_block_hash_fast();
         if latest_block_hash != self.latest_block_hash {
@@ -1618,25 +1633,29 @@ fn decode_emergency_fast_manifest(
     }
     Ok(manifest)
 }
+#[cfg(test)]
 fn bind_current_snapshot_generation(
     store_dir: &Path,
     payload_limit: u64,
     merkle_chunk_size: NonZeroUsize,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
-    bind_current_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, false)
+    bind_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, false, None)
 }
 fn bind_current_snapshot_generation_emergency_fast(
     store_dir: &Path,
     payload_limit: u64,
     merkle_chunk_size: NonZeroUsize,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
-    bind_current_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, true)
+    bind_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, true, None)
 }
-fn bind_current_snapshot_generation_with_mode(
+/// Bind the generation the current pointer names, or the explicitly `named` older generation.
+/// The pointer stays bound either way, so a concurrent publication is detected.
+fn bind_snapshot_generation_with_mode(
     store_dir: &Path,
     payload_limit: u64,
     merkle_chunk_size: NonZeroUsize,
     emergency_fast: bool,
+    named: Option<&str>,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
     let store_dir_identity = direct_snapshot_directory_identity(store_dir)?;
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
@@ -1650,7 +1669,8 @@ fn bind_current_snapshot_generation_with_mode(
     };
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
     let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
-    let digest_hex = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
+    let current = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
+    let digest_hex = named.map_or(current, str::to_owned);
     let snapshot_directory = generations_dir.join(&digest_hex);
     let snapshot_identity = direct_snapshot_directory_identity(&snapshot_directory)?;
     if !snapshot_generation_has_exact_artifact_inventory(&snapshot_directory)? {
@@ -1675,10 +1695,16 @@ fn bind_current_snapshot_generation_with_mode(
         &snapshot_directory.join(SNAPSHOT_DIGEST_FILE_NAME),
         SNAPSHOT_DIGEST_MAX_BYTES,
     )?;
-    if digest_bytes != pointer_bytes {
+    if named.is_none() && digest_bytes != pointer_bytes {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: digest.path.clone(),
             reason: "generation digest differs from the canonical current pointer".to_owned(),
+        });
+    }
+    if named.is_some() && digest_bytes != format!("{digest_hex}\n").as_bytes() {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: digest.path.clone(),
+            reason: "generation digest differs from its generation name".to_owned(),
         });
     }
     let (signature, signature_bytes) = bind_required_snapshot_file(
@@ -2306,10 +2332,10 @@ enum CanonicalWsvPath {
 #[derive(Clone, Copy, Default)]
 #[cfg(test)]
 struct CanonicalWsvOverrides<'a> {
-    committed_external_event_buf: Option<&'a str>,
-    committed_axt_replay_ledger: Option<&'a str>,
-    committed_smart_contract_state: Option<&'a str>,
-    committed_da_pin_indexes: [Option<&'a str>; 4],
+    external_event_buf: Option<&'a str>,
+    axt_replay_ledger: Option<&'a str>,
+    smart_contract_state: Option<&'a str>,
+    da_pin_indexes: [Option<&'a str>; 4],
 }
 #[cfg(test)]
 struct BorrowedJsonMember<'a> {
@@ -2481,7 +2507,7 @@ fn update_snapshot_wsv_object_hash<'a>(
         && !members
             .iter()
             .any(|member| member.key == "external_event_buf")
-        && let Some(value) = overrides.committed_external_event_buf
+        && let Some(value) = overrides.external_event_buf
     {
         // `WorldBlock` deliberately skips the process-owned event-buffer cell,
         // while committing the overlay leaves the live cell intact. Inject the
@@ -2515,13 +2541,13 @@ fn update_snapshot_wsv_object_hash<'a>(
         // omit them from the immutable pre-WSV recovery checkpoint.
         let serialized_value = if path == CanonicalWsvPath::World {
             match member.key.as_str() {
-                "external_event_buf" => overrides.committed_external_event_buf,
-                "axt_replay_ledger" => overrides.committed_axt_replay_ledger,
-                "smart_contract_state" => overrides.committed_smart_contract_state,
-                "da_pin_intents_by_ticket" => overrides.committed_da_pin_indexes[0],
-                "da_pin_intents_by_alias" => overrides.committed_da_pin_indexes[1],
-                "da_pin_intents_by_manifest" => overrides.committed_da_pin_indexes[2],
-                "da_pin_intents_by_lane_epoch" => overrides.committed_da_pin_indexes[3],
+                "external_event_buf" => overrides.external_event_buf,
+                "axt_replay_ledger" => overrides.axt_replay_ledger,
+                "smart_contract_state" => overrides.smart_contract_state,
+                "da_pin_intents_by_ticket" => overrides.da_pin_indexes[0],
+                "da_pin_intents_by_alias" => overrides.da_pin_indexes[1],
+                "da_pin_intents_by_manifest" => overrides.da_pin_indexes[2],
+                "da_pin_intents_by_lane_epoch" => overrides.da_pin_indexes[3],
 
                 _ => None,
             }
@@ -2770,7 +2796,9 @@ fn verify_snapshot_root_identity(
     )
 }
 
-/// A local snapshot signature authenticates cache bytes, not execution of its World.
+/// A local snapshot signature authenticates cache bytes, not execution of its World: the
+/// decoder authenticates a positive-height World against the certified parent World state
+/// root of its successor block before any caller can use it (E56).
 fn verify_snapshot_restore_preflight(
     input: &str,
     block_hash_count: Option<usize>,
@@ -2778,18 +2806,159 @@ fn verify_snapshot_restore_preflight(
     expected_network: NetworkId,
 ) -> Result<(), TryReadError> {
     verify_snapshot_root_identity(input, expected_chain, expected_network)?;
-    let height = block_hash_count
+    block_hash_count
         .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field("block_hashes")))?;
-    // TODO(S9): accelerated snapshot recovery must recompute the restored World's state
-    // accumulator by a cold capture and match it to the certified parent World state root of
-    // the successor block (with the native tip, CommitQC and retained headers, and separately
-    // authenticated State-level fields) before these decoded balances, custody or pending
-    // credentials are used. Until then Strict startup rebuilds them by replaying original
-    // signed genesis and every certified Kura block.
-    if height > 0 {
-        return Err(TryReadError::NativeExecutionReplayRequired);
+    Ok(())
+}
+
+/// Only the certified successor of a positive-height snapshot authenticates its World, so a
+/// snapshot at the Kura tip cannot be restored; refuse it before reading its payload. The
+/// upgrade checkpoint is the exception: its own certified result authenticates its World.
+fn require_certified_successor(
+    manifest: &EmergencyFastSnapshotManifestV1,
+    block_count: usize,
+    checkpoint: Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
+) -> Result<(), TryReadError> {
+    let height = manifest.committed_height;
+    if height > 0
+        && u64::try_from(block_count).is_ok_and(|count| height == count)
+        && checkpoint.is_none_or(|checkpoint| checkpoint.height != height)
+    {
+        return Err(TryReadError::SuccessorRequired {
+            snapshot_height: height,
+        });
     }
     Ok(())
+}
+
+/// Signed generations of this chain whose World the next Kura block certifies, newest first.
+struct RestorableGenerations {
+    /// Eligible generation names: this chain and network, an empty State, a committed height
+    /// below the Kura tip, or the upgrade checkpoint height.
+    names: Vec<String>,
+    /// Eligible generations signed by the upgrade checkpoint's signer instead of the node key.
+    checkpoint_signed: Vec<String>,
+    /// Signed height of the current generation when it is not eligible: the snapshot at the
+    /// Kura tip, or one above it after Kura lost its tail.
+    current_height: Option<u64>,
+}
+
+/// Select restore candidates from each generation's bounded signed recovery manifest, without
+/// reading any payload; the bundle reader then binds and authenticates a candidate in full.
+/// `None` means no snapshot was ever published. Unreadable, unsigned or foreign older
+/// generations are skipped, never repaired or removed.
+fn restorable_snapshot_generations(
+    store_dir: &Path,
+    block_count: usize,
+    verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
+    expected_network_id: NetworkId,
+    checkpoint: Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
+) -> Result<Option<RestorableGenerations>, TryReadError> {
+    let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
+    let Some((_, pointer_bytes)) = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
+    else {
+        return Ok(None);
+    };
+    let current = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
+    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
+    let entries = std::fs::read_dir(&generations_dir)
+        .map_err(|error| TryReadError::IO(error, generations_dir.clone()))?;
+    let mut eligible = Vec::new();
+    let mut checkpoint_signed = Vec::new();
+    let mut current_height = None;
+    let mut current_settled = false;
+    for (scanned, entry) in entries.enumerate() {
+        if scanned == SNAPSHOT_GENERATION_GC_MAX_ENTRIES {
+            return Err(TryReadError::SnapshotGenerationInvalid {
+                path: generations_dir,
+                reason: "generation entry count exceeds the hard scan bound".to_owned(),
+            });
+        }
+        let entry = entry.map_err(|error| TryReadError::IO(error, generations_dir.clone()))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !canonical_snapshot_digest_name(&name) {
+            continue;
+        }
+        // Another validator's snapshot is admitted only at the upgrade checkpoint, and only
+        // under the checkpoint's own signer; the restore still proves its World.
+        let (manifest, by_checkpoint_signer) =
+            match signed_generation_manifest(&entry.path(), verification_key) {
+                Some(manifest) => (manifest, false),
+                None => match checkpoint
+                    .and_then(|checkpoint| Some((checkpoint.height, checkpoint.signer.as_ref()?)))
+                    .and_then(|(height, signer)| {
+                        signed_generation_manifest(&entry.path(), signer)
+                            .filter(|manifest| manifest.committed_height == height)
+                    }) {
+                    Some(manifest) => (manifest, true),
+                    None => continue,
+                },
+            };
+        if manifest.chain_id != *expected_chain_id || manifest.network_id != expected_network_id {
+            continue;
+        }
+        let height = manifest.committed_height;
+        let is_current = name == current;
+        current_settled |= is_current;
+        // An empty State needs no certificate; a positive height needs its successor in Kura,
+        // except the upgrade checkpoint, which its own certified result authenticates.
+        let at_checkpoint = checkpoint.is_some_and(|checkpoint| checkpoint.height == height);
+        if height == 0
+            || u64::try_from(block_count)
+                .is_ok_and(|count| height < count || (at_checkpoint && height == count))
+        {
+            if by_checkpoint_signer {
+                checkpoint_signed.push(name.clone());
+            }
+            eligible.push((height, is_current, name));
+        } else if is_current {
+            current_height = Some(height);
+        }
+    }
+    // Newest first; at an equal height the current generation, then by name.
+    eligible.sort_unstable_by(|left, right| right.cmp(left));
+    // A current generation that no signed manifest of this chain settles (missing, unsigned,
+    // unreadable or foreign) is read first, so restore reports exactly why it is unusable.
+    let unsettled = (!current_settled).then_some(current);
+    Ok(Some(RestorableGenerations {
+        names: unsettled
+            .into_iter()
+            .chain(eligible.into_iter().map(|(_, _, name)| name))
+            .collect(),
+        checkpoint_signed,
+        current_height,
+    }))
+}
+
+/// A generation's signed recovery manifest, for selection only. The signature covers the
+/// manifest and the payload digest its sidecar names; the payload itself is not read here.
+fn signed_generation_manifest(
+    path: &Path,
+    verification_key: &PublicKey,
+) -> Option<EmergencyFastSnapshotManifestV1> {
+    let manifest_path = path.join(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let digest_path = path.join(SNAPSHOT_DIGEST_FILE_NAME);
+    let (_, manifest) =
+        bind_required_snapshot_file(&manifest_path, SNAPSHOT_FAST_MANIFEST_MAX_BYTES).ok()?;
+    let (_, digest) = bind_required_snapshot_file(&digest_path, SNAPSHOT_DIGEST_MAX_BYTES).ok()?;
+    let (_, signature) = bind_required_snapshot_file(
+        &path.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+        SNAPSHOT_SIGNATURE_MAX_BYTES,
+    )
+    .ok()?;
+    let decoded = decode_emergency_fast_manifest(&manifest, &manifest_path).ok()?;
+    let payload_digest = parse_snapshot_digest_bytes(&digest, &digest_path).ok()?;
+    let bundle_digest = snapshot_bundle_auth_digest(&payload_digest, &manifest);
+    verify_signature_hex(
+        std::str::from_utf8(&signature).ok()?,
+        &bundle_digest,
+        verification_key,
+    )
+    .ok()?;
+    Some(decoded)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2915,6 +3084,7 @@ where
         return Ok(SnapshotReadOutcome { state });
     }
     verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
+    require_certified_successor(&fast_manifest, block_count, kura.upgrade_checkpoint())?;
     let payload = read_bound_snapshot_payload(&generation.payload, read_buffer_budget)?.0;
     let bytes = payload.as_slice();
     let bytes_len = bytes.len();
@@ -2926,8 +3096,8 @@ where
         .join(SNAPSHOT_MERKLE_FILE_NAME);
     let merkle_value = json::from_slice::<json::Value>(&generation.bytes.merkle)
         .map_err(TryReadError::MerkleMetadata)?;
-    let merkle = SnapshotMerkleMetadata::from_json_value(merkle_value)
-        .map_err(|error| merkle_err_to_try_read(error, merkle_path.clone()))?;
+    let merkle = SnapshotMerkleMetadata::from_json_value(&(merkle_value))
+        .map_err(|error| merkle_err_to_try_read(error, &merkle_path))?;
     let canonical_merkle = json::to_json(&merkle).map_err(TryReadError::MerkleMetadata)?;
     if canonical_merkle.as_bytes() != generation.bytes.merkle {
         return Err(TryReadError::SnapshotGenerationInvalid {
@@ -2937,7 +3107,7 @@ where
     }
     merkle
         .verify_against_bytes(bytes, merkle_chunk_size)
-        .map_err(|error| merkle_err_to_try_read(error, generation.snapshot_directory.clone()))?;
+        .map_err(|error| merkle_err_to_try_read(error, &generation.snapshot_directory))?;
     let summary = match validate_snapshot_json_resources(bytes, resource_policy) {
         Ok(summary) => summary,
         Err(err) => {
@@ -3190,39 +3360,116 @@ where
                 .min(resource_policy.max_transient_bytes.get()),
         )
         .unwrap_or(u64::MAX);
-        let emergency_fast = kura.emergency_fast_startup_enabled();
-        let generation = if emergency_fast {
-            bind_current_snapshot_generation_emergency_fast(
+        if kura.emergency_fast_startup_enabled() {
+            let generation = bind_current_snapshot_generation_emergency_fast(
                 store_dir,
                 payload_limit,
                 merkle_chunk_size,
-            )?
-        } else {
-            bind_current_snapshot_generation(store_dir, payload_limit, merkle_chunk_size)?
-        };
-        let live_query_store = live_query_store_lazy();
-        let outcome = try_read_snapshot_bundle(
-            execution_budget,
-            &generation,
-            kura,
-            lane_manifests,
-            configured_nexus,
-            &live_query_store,
+            )?;
+            let live_query_store = live_query_store_lazy();
+            let outcome = try_read_snapshot_bundle(
+                execution_budget,
+                &generation,
+                kura,
+                lane_manifests,
+                configured_nexus,
+                &live_query_store,
+                block_count,
+                merkle_chunk_size,
+                resource_policy,
+                verification_key,
+                expected_chain_id,
+                expected_network_id,
+                initialize_state,
+                #[cfg(feature = "telemetry")]
+                telemetry,
+                read_buffer_budget,
+            )?;
+            return Ok(outcome.state);
+        }
+        // The newest signed generation below the Kura tip: the next Kura block certifies its
+        // World. The snapshot written at shutdown sits at the tip and waits for its successor.
+        let checkpoint = kura.upgrade_checkpoint();
+        let Some(restorable) = restorable_snapshot_generations(
+            store_dir,
             block_count,
-            merkle_chunk_size,
-            resource_policy,
             verification_key,
             expected_chain_id,
-            expected_network_id,
-            initialize_state,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-            read_buffer_budget,
-        )?;
-        if !emergency_fast {
-            generation.verify_generation_unchanged()?;
+            *expected_network_id,
+            checkpoint,
+        )?
+        else {
+            return Err(TryReadError::NotFound);
+        };
+        if let Some(snapshot_height) = restorable.current_height
+            && u64::try_from(block_count).is_ok_and(|count| snapshot_height > count)
+        {
+            // Kura lost blocks the current snapshot had seen. An older generation and the
+            // retained blocks restore the node, which then syncs the rest from its peers.
+            iroha_logger::warn!(
+                snapshot_height,
+                kura_height = block_count,
+                "The current snapshot is above the durable Kura tip"
+            );
         }
-        Ok(outcome.state)
+        let live_query_store = live_query_store_lazy();
+        let mut first_failure = None;
+        for name in &restorable.names {
+            let generation_key = match checkpoint.and_then(|checkpoint| checkpoint.signer.as_ref())
+            {
+                Some(signer) if restorable.checkpoint_signed.contains(name) => signer,
+                _ => verification_key,
+            };
+            let read = bind_snapshot_generation_with_mode(
+                store_dir,
+                payload_limit,
+                merkle_chunk_size,
+                false,
+                Some(name),
+            )
+            .and_then(|generation| {
+                let outcome = try_read_snapshot_bundle(
+                    execution_budget,
+                    &generation,
+                    kura,
+                    lane_manifests,
+                    configured_nexus,
+                    &live_query_store,
+                    block_count,
+                    merkle_chunk_size,
+                    resource_policy,
+                    generation_key,
+                    expected_chain_id,
+                    expected_network_id,
+                    initialize_state,
+                    #[cfg(feature = "telemetry")]
+                    telemetry.clone(),
+                    read_buffer_budget,
+                )?;
+                generation.verify_generation_unchanged()?;
+                Ok(outcome)
+            });
+            match read {
+                Ok(outcome) => return Ok(outcome.state),
+                // An older generation cannot resolve a local refusal or an identity conflict.
+                Err(error) if error.halts_restore() => return Err(error),
+                Err(error) => {
+                    iroha_logger::warn!(
+                        generation = %name,
+                        %error,
+                        "Skipping an unusable snapshot generation"
+                    );
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        Err(first_failure.unwrap_or(match restorable.current_height {
+            Some(snapshot_height) => TryReadError::SuccessorRequired { snapshot_height },
+            None => TryReadError::SnapshotGenerationInvalid {
+                path: store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME),
+                reason: "no signed generation of this chain lies below the Kura tip".to_owned(),
+            },
+        }))
     })
 }
 fn snapshot_publication_error(context: &str, error: impl std::fmt::Display) -> TryWriteError {
@@ -3399,7 +3646,7 @@ fn snapshot_generation_is_canonical_for_gc(
         let payload_digest = payload
             .bytes_sha256
             .expect("ordinary snapshot generation binding hashes its payload");
-        if hex::encode(&payload_digest) != generation_name
+        if hex::encode(payload_digest) != generation_name
             || digest_bytes != format!("{generation_name}\n").as_bytes()
         {
             return Err(TryReadError::SnapshotGenerationInvalid {
@@ -3414,8 +3661,8 @@ fn snapshot_generation_is_canonical_for_gc(
         verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
         let merkle_value =
             json::from_slice::<json::Value>(&merkle_bytes).map_err(TryReadError::MerkleMetadata)?;
-        let metadata = SnapshotMerkleMetadata::from_json_value(merkle_value)
-            .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
+        let metadata = SnapshotMerkleMetadata::from_json_value(&(merkle_value))
+            .map_err(|error| merkle_err_to_try_read(error, &merkle_file.path))?;
         let canonical_merkle = json::to_json(&metadata).map_err(TryReadError::MerkleMetadata)?;
         if canonical_merkle.as_bytes() != merkle_bytes {
             return Err(TryReadError::SnapshotGenerationInvalid {
@@ -3426,7 +3673,7 @@ fn snapshot_generation_is_canonical_for_gc(
         let payload_bytes = read_bound_snapshot_payload(&payload, read_buffer_budget)?.0;
         metadata
             .verify_against_bytes(payload_bytes.as_slice(), merkle_chunk_size)
-            .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
+            .map_err(|error| merkle_err_to_try_read(error, &merkle_file.path))?;
         if direct_snapshot_directory_identity(path)? != directory_identity
             || !snapshot_generation_has_exact_artifact_inventory(path)?
         {
@@ -3653,6 +3900,19 @@ fn plan_snapshot_generation_gc(
     read_buffer_budget: &AllocationBudget,
 ) -> Result<SnapshotGenerationGcPlan, TryWriteError> {
     generation.verify_unchanged()?;
+    // Retention ranks generations by signed height. Without the published generation's own
+    // manifest nothing can be ranked, so this round removes nothing.
+    let Some(published) =
+        signed_generation_manifest(&generation.snapshot_directory, verification_key)
+    else {
+        iroha_logger::warn!(
+            generation = %generation.name,
+            "Snapshot GC kept every generation: the published manifest could not be read back"
+        );
+        return Ok(SnapshotGenerationGcPlan {
+            removals: Vec::new(),
+        });
+    };
     let mut entries = Vec::with_capacity(SNAPSHOT_GENERATION_GC_MAX_ENTRIES.min(64));
     for entry in std::fs::read_dir(&generation.generations_dir)
         .map_err(|error| TryWriteError::IO(error, generation.generations_dir.clone()))?
@@ -3668,46 +3928,48 @@ fn plan_snapshot_generation_gc(
         );
     }
     entries.sort_by_key(std::fs::DirEntry::file_name);
+    // Every other authenticated generation of this chain with its signed height; heights
+    // order them, so no retention choice depends on directory order.
+    let mut authenticated = Vec::new();
+    for entry in &entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name == generation.name || !canonical_snapshot_digest_name(name) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        if snapshot_generation_is_canonical_for_gc(
+            &entry.path(),
+            name,
+            max_payload_bytes,
+            merkle_chunk_size,
+            verification_key,
+            read_buffer_budget,
+        )? && let Some(manifest) = signed_generation_manifest(&entry.path(), verification_key)
+            && manifest.chain_id == published.chain_id
+            && manifest.network_id == published.network_id
+        {
+            authenticated.push((manifest.committed_height, name.to_owned()));
+        }
+    }
+    // The restore anchor: the newest generation of this chain below the published height.
+    // When the published generation sits at the Kura tip, the next Kura block certifies it.
+    let anchor = authenticated
+        .iter()
+        .filter(|(height, _)| *height < published.committed_height)
+        .max()
+        .map(|(_, name)| name.clone());
+    // An idempotent publication records the current name as both the old and new pointer;
+    // its rollback predecessor is then the newest other authenticated generation.
     let fallback_previous = if previous_generation == Some(generation.name.as_str()) {
-        // An idempotent publication records the current name as both the old
-        // and new pointer. Under normal GC there is at most one other
-        // authenticated generation, which is therefore the rollback
-        // predecessor. If a crash or operator intervention left multiple
-        // authenticated extras, chronology is unknowable from the v1 pointer;
-        // preserve all of them and fail instead of selecting by directory order.
-        let mut authenticated_extras = Vec::new();
-        for entry in &entries {
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            if name == generation.name || !canonical_snapshot_digest_name(name) {
-                continue;
-            }
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() || file_type.is_symlink() {
-                continue;
-            }
-            if snapshot_generation_is_canonical_for_gc(
-                &entry.path(),
-                name,
-                max_payload_bytes,
-                merkle_chunk_size,
-                verification_key,
-                read_buffer_budget,
-            )? {
-                authenticated_extras.push(name.to_owned());
-            }
-        }
-        if authenticated_extras.len() > 1 {
-            return Err(snapshot_publication_error(
-                "snapshot generation GC",
-                "multiple authenticated rollback candidates make previous-generation chronology ambiguous",
-            ));
-        }
-        authenticated_extras.into_iter().next()
+        authenticated.iter().max().map(|(_, name)| name.clone())
     } else {
         None
     };
@@ -3719,6 +3981,7 @@ fn plan_snapshot_generation_gc(
         if name == generation.name
             || previous_generation == Some(name.as_str())
             || fallback_previous.as_deref() == Some(name.as_str())
+            || anchor.as_deref() == Some(name.as_str())
         {
             continue;
         }
@@ -3781,21 +4044,21 @@ fn execute_snapshot_generation_gc(
         ));
     }
     #[cfg(test)]
-    if failure_stage == 3 {
-        if let Some(removal) = plan.removals.first() {
-            let displaced = removal.path.with_extension("gc-displaced");
-            std::fs::rename(&removal.path, &displaced)
-                .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
-            std::fs::create_dir(&removal.path)
-                .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
-            for file in &removal.files {
-                let name = file
-                    .path
-                    .file_name()
-                    .expect("bound snapshot deletion artifact has a name");
-                std::fs::copy(displaced.join(name), removal.path.join(name))
-                    .map_err(|error| TryWriteError::IO(error, removal.path.join(name)))?;
-            }
+    if failure_stage == 3
+        && let Some(removal) = plan.removals.first()
+    {
+        let displaced = removal.path.with_extension("gc-displaced");
+        std::fs::rename(&removal.path, &displaced)
+            .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
+        std::fs::create_dir(&removal.path)
+            .map_err(|error| TryWriteError::IO(error, removal.path.clone()))?;
+        for file in &removal.files {
+            let name = file
+                .path
+                .file_name()
+                .expect("bound snapshot deletion artifact has a name");
+            std::fs::copy(displaced.join(name), removal.path.join(name))
+                .map_err(|error| TryWriteError::IO(error, removal.path.join(name)))?;
         }
     }
     generation.verify_unchanged()?;
@@ -4053,15 +4316,11 @@ fn bind_existing_snapshot_generation_for_write(
     published.verify_unchanged()?;
     Ok(published)
 }
+type SnapshotGenerationPayload<'a> = (&'a str, &'a [u8], &'a [u8], &'a [u8], &'a [u8], &'a [u8]);
 fn publish_immutable_snapshot_generation(
     store_dir: &Path,
     store_dir_identity: StableSnapshotFileIdentity,
-    digest_hex: &str,
-    payload: &[u8],
-    digest: &[u8],
-    signature: &[u8],
-    fast_manifest: &[u8],
-    merkle: &[u8],
+    (digest_hex, payload, digest, signature, fast_manifest, merkle): SnapshotGenerationPayload<'_>,
     merkle_limit: u64,
     verification_key: &PublicKey,
 ) -> Result<PublishedSnapshotGeneration, TryWriteError> {
@@ -4450,10 +4709,8 @@ fn try_write_snapshot_with_limit_and_policy(
                     state,
                     store_dir,
                     signing_key,
-                    merkle_chunk_size,
-                    max_payload_bytes,
-                    resource_policy,
-                    captured.json.into_bytes(),
+                    (merkle_chunk_size, max_payload_bytes, resource_policy),
+                    &(captured.json.into_bytes()),
                     captured.identity,
                     read_buffer_budget,
                 )
@@ -4468,7 +4725,7 @@ fn try_write_snapshot_payload_with_limit(
     signing_key: &KeyPair,
     merkle_chunk_size: NonZeroUsize,
     max_payload_bytes: NonZeroUsize,
-    snapshot_bytes: Vec<u8>,
+    snapshot_bytes: &[u8],
 ) -> Result<(), TryWriteError> {
     let read_buffer_budget = &AllocationBudget::new(
         iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
@@ -4477,7 +4734,7 @@ fn try_write_snapshot_payload_with_limit(
         // This test-only seam accepts caller-supplied bytes, unlike the production writer whose
         // payload is emitted directly from the typed State. Keep the full restart dry run here so
         // adversarial fixture bytes cannot exercise post-publication geometry compaction.
-        validate_generated_snapshot_for_restart(state, &snapshot_bytes)
+        validate_generated_snapshot_for_restart(state, snapshot_bytes)
             .map_err(TryWriteError::RestartValidation)?;
         let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
         let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
@@ -4485,9 +4742,11 @@ fn try_write_snapshot_payload_with_limit(
             state,
             store_dir,
             signing_key,
-            merkle_chunk_size,
-            max_payload_bytes,
-            SnapshotResourcePolicy::default(),
+            (
+                merkle_chunk_size,
+                max_payload_bytes,
+                SnapshotResourcePolicy::default(),
+            ),
             snapshot_bytes,
             captured.identity,
             read_buffer_budget,
@@ -4499,14 +4758,16 @@ fn try_write_snapshot_payload_with_limit_locked(
     state: &State,
     store_dir: impl AsRef<Path>,
     signing_key: &KeyPair,
-    merkle_chunk_size: NonZeroUsize,
-    max_payload_bytes: NonZeroUsize,
-    resource_policy: SnapshotResourcePolicy,
-    snapshot_bytes: Vec<u8>,
+    (merkle_chunk_size, max_payload_bytes, resource_policy): (
+        NonZeroUsize,
+        NonZeroUsize,
+        SnapshotResourcePolicy,
+    ),
+    snapshot_bytes: &[u8],
     identity: CapturedSnapshotIdentity,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
-    identity.validate_bytes(&snapshot_bytes)?;
+    identity.validate_bytes(snapshot_bytes)?;
     ensure_snapshot_identity_is_backed_by_kura(state, &identity)?;
     if snapshot_bytes.len() > max_payload_bytes.get() {
         return Err(TryWriteError::PayloadTooLarge {
@@ -4514,7 +4775,7 @@ fn try_write_snapshot_payload_with_limit_locked(
             maximum: max_payload_bytes,
         });
     }
-    let summary = validate_snapshot_json_resources(&snapshot_bytes, resource_policy)
+    let summary = validate_snapshot_json_resources(snapshot_bytes, resource_policy)
         .map_err(TryWriteError::RestartValidation)?;
     if !summary.has_space_directory_manifests {
         return Err(TryWriteError::RestartValidation(
@@ -4523,7 +4784,7 @@ fn try_write_snapshot_payload_with_limit_locked(
             },
         ));
     }
-    let geometry_checkpoint = geometry_checkpoint_from_snapshot(&snapshot_bytes)?;
+    let geometry_checkpoint = geometry_checkpoint_from_snapshot(snapshot_bytes)?;
     let state_height = u64::try_from(identity.height).map_err(|_| {
         TryWriteError::PublicationIntegrity(
             "State height exceeds the u64 manifest domain".to_owned(),
@@ -4553,10 +4814,10 @@ fn try_write_snapshot_payload_with_limit_locked(
     let store_dir = store_dir.as_ref();
     let directory_identity = direct_snapshot_directory_identity(store_dir)
         .map_err(|error| snapshot_publication_error("bind snapshot directory", error))?;
-    let digest_bytes: [u8; 32] = Sha256::digest(&snapshot_bytes).into();
+    let digest_bytes: [u8; 32] = Sha256::digest(snapshot_bytes).into();
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
-    let merkle = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, merkle_chunk_size);
+    let merkle = SnapshotMerkleMetadata::from_bytes(snapshot_bytes, merkle_chunk_size);
     let digest_line = format!("{digest_hex}\n").into_bytes();
     let fast_manifest = EmergencyFastSnapshotManifestV1 {
         version: SNAPSHOT_FAST_MANIFEST_VERSION,
@@ -4595,12 +4856,14 @@ fn try_write_snapshot_payload_with_limit_locked(
     let generation = publish_immutable_snapshot_generation(
         store_dir,
         directory_identity,
-        &digest_hex,
-        &snapshot_bytes,
-        &digest_line,
-        &signature_hex,
-        &fast_manifest_bytes,
-        &merkle_bytes,
+        (
+            &digest_hex,
+            snapshot_bytes,
+            &digest_line,
+            &signature_hex,
+            &fast_manifest_bytes,
+            &merkle_bytes,
+        ),
         merkle_limit,
         signing_key.public_key(),
     )?;
@@ -4998,21 +5261,18 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
 ) -> iroha_crypto::Hash {
     let mut snapshot_json = String::new();
     serialize_staged_state_snapshot(state_block, &mut snapshot_json);
-    let mut committed_external_event_buf = String::new();
-    state_block.json_serialize_committed_external_event_buffer(&mut committed_external_event_buf);
-    let committed_axt_replay_ledger = state_block.json_serialize_committed_axt_replay_ledger();
-    let committed_smart_contract_state =
-        state_block.json_serialize_committed_smart_contract_state();
-    let committed_da_pin_indexes = state_block.json_serialize_committed_da_pin_indexes();
+    let mut external_event_buf = String::new();
+    state_block.json_serialize_committed_external_event_buffer(&mut external_event_buf);
+    let axt_replay_ledger = state_block.json_serialize_committed_axt_replay_ledger();
+    let smart_contract_state = state_block.json_serialize_committed_smart_contract_state();
+    let da_pin_indexes = state_block.json_serialize_committed_da_pin_indexes();
     canonical_snapshot_wsv_hash_with_overrides(
         snapshot_json.as_bytes(),
         CanonicalWsvOverrides {
-            committed_external_event_buf: Some(&committed_external_event_buf),
-            committed_axt_replay_ledger: committed_axt_replay_ledger.as_deref(),
-            committed_smart_contract_state: committed_smart_contract_state.as_deref(),
-            committed_da_pin_indexes: committed_da_pin_indexes
-                .each_ref()
-                .map(|value| value.as_deref()),
+            external_event_buf: Some(&external_event_buf),
+            axt_replay_ledger: axt_replay_ledger.as_deref(),
+            smart_contract_state: smart_contract_state.as_deref(),
+            da_pin_indexes: da_pin_indexes.each_ref().map(|value| value.as_deref()),
         },
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
@@ -5117,14 +5377,14 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }
-fn merkle_err_to_try_read(err: SnapshotMerkleError, path: PathBuf) -> TryReadError {
+fn merkle_err_to_try_read(err: SnapshotMerkleError, path: &Path) -> TryReadError {
     #[cfg(not(test))]
     let _ = &path;
     match err {
         #[cfg(test)]
-        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(path),
+        SnapshotMerkleError::Missing => TryReadError::MerkleMissing(path.to_path_buf()),
         #[cfg(test)]
-        SnapshotMerkleError::Io(io) => TryReadError::IO(io, path),
+        SnapshotMerkleError::Io(io) => TryReadError::IO(io, path.to_path_buf()),
         SnapshotMerkleError::Parse(err) => TryReadError::MerkleMetadata(err),
         SnapshotMerkleError::ChunkSizeMismatch { expected, actual } => {
             TryReadError::MerkleChunkSizeMismatch { expected, actual }
@@ -5312,7 +5572,7 @@ mod native_snapshot_identity_tests {
     use super::*;
 
     #[test]
-    fn snapshot_cache_requires_original_replay_after_identity_validation() {
+    fn snapshot_preflight_checks_identity_and_cut_before_restore_authenticates_it() {
         let chain = ChainId::from("configured-native-chain");
         let network =
             NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"genesis")));
@@ -5324,10 +5584,10 @@ mod native_snapshot_identity_tests {
             Err(TryReadError::Serialization(_))
         ));
         for height in [1, 2, 100] {
-            assert!(matches!(
-                verify_snapshot_restore_preflight(&input, Some(height), &chain, network),
-                Err(TryReadError::NativeExecutionReplayRequired)
-            ));
+            // A positive-height World is authenticated later, against its certified successor.
+            assert!(
+                verify_snapshot_restore_preflight(&input, Some(height), &chain, network).is_ok()
+            );
             assert!(matches!(
                 verify_snapshot_restore_preflight(
                     &input,

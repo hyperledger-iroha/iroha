@@ -6,7 +6,11 @@ use super::{
 };
 use mv::storage::StorageReadOnly;
 
-/// Reject changing a relay's route while a live call still names its exact ID.
+/// Reject changing a relay's route while a live call's usable manifest names its exact ID.
+///
+/// An expired manifest cannot route traffic, so it stops pinning the relay: an
+/// abandoned call must not keep a compromised key or a retired relay in place. Its
+/// host has to set a fresh manifest, which is admitted only from live descriptors.
 ///
 /// The reverse index narrows the search to this relay, but each indexed call is
 /// decoded and checked against authoritative metadata before it can block the
@@ -24,6 +28,7 @@ pub(super) fn ensure_no_active_manifest_reference(
     else {
         return Ok(());
     };
+    let now_ms = state_transaction.block_unix_timestamp_ms();
     for dependency in dependencies {
         if dependency.0 != KAIGI_DEPENDENCY_ACTIVE_CALL {
             continue;
@@ -40,11 +45,9 @@ pub(super) fn ensure_no_active_manifest_reference(
                 "Kaigi active-call dependency changed kind during relay preflight".into(),
             ));
         };
-        if record
-            .relay_manifest
-            .as_ref()
-            .is_some_and(|manifest| manifest.hops.iter().any(|hop| &hop.relay_id == relay_id))
-        {
+        if record.relay_manifest.as_ref().is_some_and(|manifest| {
+            manifest.expiry_ms > now_ms && manifest.hops.iter().any(|hop| &hop.relay_id == relay_id)
+        }) {
             return Err(relay_error(format!(
                 "cannot {operation} relay {relay_id}: active Kaigi {} manifest still references its registered HPKE key",
                 record.id
@@ -56,10 +59,12 @@ pub(super) fn ensure_no_active_manifest_reference(
 
 #[cfg(test)]
 mod tests {
+    use super::super::store_kaigi_record_for_testing;
+    use super::super::test_relay_hpke_key;
     use super::super::tests::{
         assert_invariant_error, assert_smart_contract_error, load_call_record,
         load_relay_registration, register_manifest_relays, sample_ids, sample_manifest,
-        with_state_transaction,
+        with_state_transaction, with_state_transaction_at,
     };
     use super::*;
     use crate::smartcontracts::isi::Execute;
@@ -115,7 +120,7 @@ mod tests {
             let internal_events_before = stx.world.internal_event_buf.len();
 
             let mut rotated = registration.clone();
-            rotated.hpke_public_key = vec![0xAA, 0xBB];
+            rotated.hpke_public_key = test_relay_hpke_key(0xAB);
             let error = RegisterKaigiRelay {
                 relay: rotated.clone(),
             }
@@ -173,6 +178,63 @@ mod tests {
     }
 
     #[test]
+    fn expired_manifest_stops_pinning_its_relays() {
+        let (domain, host, _) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("abandoned-call").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let expiry_ms = manifest.expiry_ms;
+        let relay = manifest.hops[0].relay_id.clone();
+        let seed = |stx: &mut StateTransaction<'_, '_>| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register call and relay home domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            // The host has gone: the call stays live, and nothing refreshes its manifest.
+            store_kaigi_record_for_testing(stx, &KaigiRecord::from_new(&template, 0))
+                .expect("store the abandoned call");
+            load_relay_registration(stx, &domain, &relay).expect("relay registration")
+        };
+        // Up to the instant it expires, the manifest still protects its route.
+        with_state_transaction_at(expiry_ms - 1, |stx| {
+            let mut rotated = seed(stx);
+            rotated.hpke_public_key = test_relay_hpke_key(0xAB);
+            let error = RegisterKaigiRelay { relay: rotated }
+                .execute(&relay, stx)
+                .expect_err("a usable manifest pins the relay key");
+            assert_smart_contract_error(error, "active Kaigi");
+        });
+        with_state_transaction_at(expiry_ms, |stx| {
+            let mut rotated = seed(stx);
+            rotated.hpke_public_key = test_relay_hpke_key(0xAB);
+            RegisterKaigiRelay {
+                relay: rotated.clone(),
+            }
+            .execute(&relay, stx)
+            .expect("an expired manifest no longer pins the relay key");
+            assert_eq!(load_relay_registration(stx, &domain, &relay), Some(rotated));
+            UnregisterKaigiRelay {
+                relay_id: relay.clone(),
+            }
+            .execute(&relay, stx)
+            .expect("an expired manifest no longer blocks retirement");
+            assert!(load_relay_registration(stx, &domain, &relay).is_none());
+            // The retained call keeps its self-contained historical manifest.
+            assert_eq!(
+                load_call_record(stx, &call).relay_manifest.as_ref(),
+                Some(&manifest)
+            );
+        });
+    }
+
+    #[test]
     fn corrupt_active_call_locator_fails_closed_before_relay_update() {
         let (domain, host, _) = sample_ids();
         let call = KaigiId::new(
@@ -217,7 +279,7 @@ mod tests {
             let registration =
                 load_relay_registration(stx, &domain, &relay).expect("relay registration");
             let mut rotated = registration.clone();
-            rotated.hpke_public_key = vec![0xAA, 0xBB];
+            rotated.hpke_public_key = test_relay_hpke_key(0xAB);
             let internal_events_before = stx.world.internal_event_buf.len();
             let error = RegisterKaigiRelay { relay: rotated }
                 .execute(&relay, stx)

@@ -52,7 +52,7 @@ test("package browser field maps only the local crypto adapter", () => {
     "./dist/canonicalRequest.js",
   );
   assert.equal(packageJson.dependencies.buffer, "^6.0.3");
-  assert.equal(packageJson.dependencies["@noble/hashes"], "^1.5.0");
+  assert.equal(packageJson.dependencies["@noble/hashes"], "^2.4.0");
   const instructionBuilders = readFileSync(
     new URL("../src/instructionBuilders.js", import.meta.url),
     "utf8",

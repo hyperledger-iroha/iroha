@@ -1032,7 +1032,7 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     ) -> Result<super::cpk_relation::state_owned_secret_adapter_v1::ReopenedStateOwnedCpkRelationPrecursorV1<'a>, ZkAmsMkheErrorV1>
     where
         R: ProofRandomSource + MaskedRelaxedRandomSourceV1,
-    {
+{
         self.validate_state_owned_cpk_source_v1(roster, share)?;
         let payload = cpk_party_b_payload_blake3_v1(share.party_public_b())?;
         if party_b_pointer.payload_blake3() != payload {

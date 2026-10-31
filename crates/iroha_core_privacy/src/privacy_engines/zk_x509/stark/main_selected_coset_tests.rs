@@ -62,7 +62,7 @@ fn every_small_coset_selection_matches_horner_full_fft_and_worker_schedules() {
     for (native, common, mask_length) in [(2, 7, 81), (5, 12, 1816), (5, 15, 1816)] {
         let native_values = vec![F(17); 1usize << native];
         let mask = (0..mask_length)
-            .map(|i| F((i * 31 + 7) as u64))
+            .map(|i| F(u64::try_from(i * 31 + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
@@ -125,9 +125,7 @@ fn scratch_and_compact_coordinate_storage_clear_on_success_and_unwind() {
             std::panic::catch_unwind(|| {
                 evaluate_with_v1(&coefficients, 4, 6, &selected, |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("selected FFT after-scaling unwind");
-                    }
+                    assert!(!unwind, "selected FFT after-scaling unwind")
                 })
             })
         });
@@ -172,7 +170,7 @@ fn registered_native_domains_keep_high_mask_tail_and_all_selected_cut_rows() {
             .map(|i| F((i * 17 + 13) as u64))
             .collect::<Vec<_>>();
         let mask = (0..1816)
-            .map(|i| F((i * 29 + 7) as u64))
+            .map(|i| F(u64::try_from(i * 29 + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -309,9 +307,7 @@ fn full_compact_cost_oracle_preserves_geometry_parity_and_clearing() {
             std::panic::catch_unwind(|| {
                 full_compact_reference_v1(&coefficients, 4, 6, &[0, 7, 63], |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("full compact oracle after-transform unwind");
-                    }
+                    assert!(!unwind, "full compact oracle after-transform unwind")
                 })
             })
         });
@@ -447,7 +443,7 @@ fn selected_horner_matches_pruned_full_fft_and_public_worker_schedules() {
             .map(|row| F((17 * row + 3) as u64))
             .collect::<Vec<_>>();
         let mask = (0..mask_length)
-            .map(|degree| F((29 * degree + 7) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
@@ -524,9 +520,7 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
                         let values =
                             evaluate_horner_with_v1(&coefficients, 4, 10, &selected, |output| {
                                 assert!(output.iter().any(|value| *value != F::ZERO));
-                                if unwind {
-                                    panic!("after populated Horner output");
-                                }
+                                assert!(!unwind, "after populated Horner output")
                             })
                             .unwrap();
                         assert_eq!(values.len(), selected.len());
@@ -547,6 +541,75 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
             });
         }
     }
+}
+
+#[test]
+fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
+    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 2176);
+    for native in [5, 8] {
+        let maximum = (1usize << native) + MASK_DEGREE + 1;
+        for coefficients in [1, maximum - 1, maximum] {
+            for selected in [1, 127, 128, 2176] {
+                assert!(prefer_horner_v1(native, 22, coefficients, selected));
+            }
+        }
+        for (coefficients, selected) in [(0, 1), (maximum + 1, 1), (1, 0), (1, 2177)] {
+            assert!(!prefer_horner_v1(native, 22, coefficients, selected));
+        }
+        for common in [0, 14, 21, 23, u8::MAX] {
+            assert!(!prefer_horner_v1(native, common, maximum, 2176));
+        }
+    }
+    for native in [0, 4, 6, 15, 16, 18, 19, u8::MAX] {
+        assert!(!prefer_horner_v1(native, 22, 1, 1));
+    }
+}
+
+#[test]
+fn selected_pruned_fft_policy_keeps_only_measured_eight_column_query_geometry() {
+    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 272);
+    for native in [15, 16, 18, 19] {
+        let maximum = (1usize << native) + MASK_DEGREE + 1;
+        for coefficients in [1, maximum - 1, maximum] {
+            for selected in [1, 127, 128, 272] {
+                assert!(prefer_pruned_fft_v1(native, 22, coefficients, selected, 8));
+            }
+        }
+        for width in [0, 1, 2, 4, 7, 9] {
+            assert!(!prefer_pruned_fft_v1(native, 22, maximum, 272, width));
+        }
+        for (coefficients, selected) in [(0, 1), (maximum + 1, 1), (1, 0), (1, 273)] {
+            assert!(!prefer_pruned_fft_v1(native, 22, coefficients, selected, 8));
+        }
+        for common in [0, 14, 21, 23, u8::MAX] {
+            assert!(!prefer_pruned_fft_v1(native, common, maximum, 272, 8));
+        }
+    }
+    for native in [0, 5, 8, 14, 17, 20, u8::MAX] {
+        assert!(!prefer_pruned_fft_v1(native, 22, 1, 1, 8));
+    }
+}
+
+#[test]
+fn selected_horner_common22_erases_populated_output_on_unwind() {
+    let mut coefficients = vec![F::ZERO; (1 << 8) + MASK_DEGREE + 1];
+    *coefficients.last_mut().unwrap() = F(GOLDILOCKS_MODULUS_V1 - 1);
+    let selected = (0..2176).collect::<Vec<_>>();
+    assert!(prefer_horner_v1(8, 22, coefficients.len(), selected.len()));
+    let (result, erased) = inspection::observe_v1(|| {
+        std::panic::catch_unwind(|| {
+            let _output = evaluate_horner_with_v1(&coefficients, 8, 22, &selected, |output| {
+                assert_eq!(output.len(), selected.len());
+                assert!(output.iter().all(|&value| value != F::ZERO));
+                panic!("after selected common22 Horner evaluation");
+            });
+        })
+    });
+    assert!(result.is_err());
+    assert_eq!(erased.len(), 1);
+    assert_eq!(erased[0].cells, selected.len());
+    assert_eq!(erased[0].nonzero_before, selected.len());
+    assert_eq!(erased[0].nonzero_after, 0);
 }
 
 /// Count only public butterfly positions; this is a cost model, not timing.
@@ -695,13 +758,231 @@ fn selected_cpu_horner_pruned_full_cost_uses_public_geometry() {
 }
 
 #[test]
+#[ignore = "isolated common22 low-degree selected-row Metal/CPU comparison; component evidence only"]
+fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+        "this comparison requires the actual admitted Metal backend"
+    );
+    let common = 22;
+    let rows = 1usize << common;
+    let selected = (0..136)
+        .flat_map(|query| {
+            let block = (query * 1_729 + 17) % (rows / 16);
+            block * 16..block * 16 + 16
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2176);
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for native in [5, 8] {
+        for width in [1, 8] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..MASK_DEGREE + 1)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = columns
+                .iter()
+                .map(|column| {
+                    full_compact_reference_v1(column, native, common, &selected, |_| {}).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut metal = MainTraceCosetEvaluatorV1::new_v1(&layout, 0).unwrap();
+            assert!(metal.device_columns > 0);
+            for round in 0..3 {
+                for offset in 0..3 {
+                    let path = (round + offset) % 3;
+                    let started = Instant::now();
+                    let actual = if path == 2 {
+                        let before = metal.receipt.metal_columns;
+                        assert!(!fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1());
+                        let output = metal
+                            .evaluate_selected_policy_with_v1::<false>(
+                                &columns,
+                                native,
+                                common,
+                                Some(&selected),
+                                |batch, root| {
+                                    transform_goldilocks_columns_v1(
+                                        batch,
+                                        root,
+                                        Direction::Forward,
+                                        fastpq_prover::ExecutionMode::Auto,
+                                    )
+                                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(metal.receipt.metal_columns - before, width);
+                        output
+                    } else {
+                        columns
+                            .par_iter()
+                            .map(|column| {
+                                if path == 0 {
+                                    evaluate_horner_v1(column, native, common, &selected)
+                                } else {
+                                    evaluate_v1(column, native, common, &selected)
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap()
+                    };
+                    let transform_ns = started.elapsed().as_nanos();
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        assert_eq!(actual.as_ref(), expected.as_ref());
+                    }
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let compact_clear_ns = clear_started.elapsed().as_nanos();
+                    let path_name = ["horner", "pruned", "metal"][path];
+                    println!(
+                        "x509_selected_low_degree native_log={native} common_log={common} width={width} workers={} selected_rows={} coefficient_count={} round={round} path={path_name} transform_gather_scratch_clear_ns={transform_ns} compact_clear_ns={compact_clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                        selected.len(),
+                        columns[0].len(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "isolated current-cut common22 CPU/actual Metal timing; component evidence only"]
+fn selected_current_cut_cpu_and_metal_cost_keep_every_registered_domain() {
+    use fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1;
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+    );
+    let common = 22;
+    let rows = 1usize << common;
+    let cut_rows = 1 << aggregate::retained_commitment::CUT_LEVEL_V1;
+    let selected = (0..QUERY_COUNT)
+        .flat_map(|query| {
+            let block = (query * 1_729 + 17) % (rows / cut_rows);
+            block * cut_rows..(block + 1) * cut_rows
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), QUERY_COUNT * cut_rows);
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let cap = usize::try_from(
+        crate::privacy_engines::zk_x509::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+    )
+    .unwrap();
+    let available = cap - plan.joined_transform_admission_v1(0).unwrap();
+    assert!(metal_goldilocks_transform_extra_payload_v1(rows, 8).unwrap() <= available);
+    for native in [5, 8, 15, 16, 18, 19] {
+        for width in [1, 8] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..MASK_DEGREE + 1)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = columns
+                .iter()
+                .map(|column| {
+                    full_compact_reference_v1(column, native, common, &selected, |_| {}).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut metal = MainTraceCosetEvaluatorV1::new_v1(&layout, 0).unwrap();
+            assert!(metal.device_columns > 0);
+            for round in 0..3 {
+                for offset in 0..3 {
+                    let device_columns = [0, 4, 8][(round + offset) % 3];
+                    let started = Instant::now();
+                    let actual = if device_columns != 0 {
+                        // Test only: both shapes passed the exact joined admission above.
+                        metal.device_columns = device_columns;
+                        let before = metal.receipt.metal_columns;
+                        let result = metal
+                            .evaluate_selected_policy_with_v1::<false>(
+                                &columns,
+                                native,
+                                common,
+                                Some(&selected),
+                                |batch, root| {
+                                    let backend = transform_goldilocks_columns_v1(
+                                        batch,
+                                        root,
+                                        Direction::Forward,
+                                        fastpq_prover::ExecutionMode::Gpu,
+                                    )
+                                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                                    assert_eq!(backend, Backend::Metal);
+                                    Ok(backend)
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(metal.receipt.metal_columns - before, width);
+                        result
+                    } else {
+                        columns
+                            .par_iter()
+                            .map(|column| {
+                                if prefer_horner_v1(native, common, column.len(), selected.len()) {
+                                    evaluate_horner_v1(column, native, common, &selected)
+                                } else {
+                                    evaluate_v1(column, native, common, &selected)
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap()
+                    };
+                    let transform_ns = started.elapsed().as_nanos();
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        assert_eq!(actual.as_ref(), expected.as_ref());
+                    }
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let clear_ns = clear_started.elapsed().as_nanos();
+                    println!(
+                        "x509_selected_current_cut native_log={native} common_log={common} width={width} workers={} selected_rows={} coefficient_count={} round={round} device_columns={device_columns} transform_gather_scratch_clear_ns={transform_ns} compact_clear_ns={clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                        selected.len(),
+                        columns[0].len(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
     for (native, common, mask_length) in [(2, 7, 81), (5, 15, 1816), (8, 16, 1816)] {
         let values = (0..1usize << native)
             .map(|row| F((17 * row + 3) as u64))
             .collect::<Vec<_>>();
         let mask = (0..mask_length)
-            .map(|degree| F((29 * degree + 7) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 7).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -770,9 +1051,7 @@ fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
             std::panic::catch_unwind(|| {
                 evaluate_scheduled_with_v1::<false>(&coefficients, 4, 6, &[0, 7, 63], |scratch| {
                     assert!(scratch.iter().any(|value| *value != F::ZERO));
-                    if unwind {
-                        panic!("coarse selected transform after-scale unwind");
-                    }
+                    assert!(!unwind, "coarse selected transform after-scale unwind")
                 })
             })
         });
@@ -1069,7 +1348,7 @@ fn selected_production_coarse_schedule_matches_original_and_full_domain_oracle()
             .map(|row| F((17 * row + 1) as u64))
             .collect::<Vec<_>>();
         let mask = (0..1816)
-            .map(|degree| F((29 * degree + 3) as u64))
+            .map(|degree| F(u64::try_from(29 * degree + 3).expect("fixture value fits u64")))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
@@ -1136,9 +1415,7 @@ fn selected_production_coarse_schedule_retains_validation_and_full_scratch_erasu
                     |scratch| {
                         assert_eq!(scratch.len(), rows);
                         assert!(scratch.iter().any(|value| *value != F::ZERO));
-                        if unwind {
-                            panic!("production coarse transform after-scale unwind");
-                        }
+                        assert!(!unwind, "production coarse transform after-scale unwind")
                     },
                 )
             })

@@ -1,8 +1,6 @@
 //! Secret-free composition of the exact first-release Taira privacy inputs.
 use super::{
-    MAX_INSTRUCTIONS_JSON_BYTES_V1, MAX_REPORT_JSON_BYTES_V1, create_new_file, read_bounded,
-    remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
-    validate_taira_privacy_bootstrap_v1,
+    create_new_file, read_bounded, remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
 };
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
@@ -16,13 +14,7 @@ use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
     account::address::ChainDiscriminantGuard,
-    isi::{
-        InstructionBox,
-        privacy::{
-            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
-            TransitionPrivacyProtocolLifecycleV1,
-        },
-    },
+    isi::{InstructionBox, privacy::RegisterPrivacyBootleLanternIssuerPolicyV1},
     privacy::{
         BootleLanternIssuerPolicyLifecycleV1, PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
@@ -54,7 +46,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "7cde3248ec1c88819590bd8846b04e31d8f45f86a08b081ce602f1a964f345b2";
+    "9997dfeb6c511130341a586a1065edd429b62f62acad8f995483d2458083230d";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -89,12 +81,6 @@ pub(super) struct ValidateTairaNevoReviewV1Args {
 /// Inputs and fresh output paths for one complete Taira privacy release set.
 #[derive(Debug, ClapArgs)]
 pub(super) struct RenderTairaReleaseV1Args {
-    /// Exact-12 instruction JSON emitted by `emit-taira-v1`.
-    #[arg(long)]
-    activation_instructions: PathBuf,
-    /// Digest report emitted together with the exact-12 instructions.
-    #[arg(long)]
-    activation_report: PathBuf,
     /// Canonical public JSON emitted by the qualified peer-1 broker.
     #[arg(long)]
     broker_public_export: PathBuf,
@@ -184,16 +170,6 @@ pub(super) fn render_taira_release_v1<T: Write>(
             bail!("{label} must use the `.template.json` suffix");
         }
     }
-    let activation_instructions = read_bounded(
-        &args.activation_instructions,
-        MAX_INSTRUCTIONS_JSON_BYTES_V1,
-        "Taira privacy activation instructions",
-    )?;
-    let activation_report = read_bounded(
-        &args.activation_report,
-        MAX_REPORT_JSON_BYTES_V1,
-        "Taira privacy activation report",
-    )?;
     let broker_export = read_bounded(
         &args.broker_public_export,
         MAX_BROKER_EXPORT_BYTES_V1,
@@ -220,8 +196,6 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "Taira NEVO reset review",
     )?;
     let artifacts = compose_release_artifacts_v1(
-        &activation_instructions,
-        &activation_report,
         &broker_export,
         &plan_template,
         &config_template,
@@ -261,8 +235,6 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
-        "qualification_activation_protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
-        "qualification_activation_instruction_count": (super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
         "genesis_privacy_instruction_count": 0_u64,
         "rollout_state": "not-executed",
     });
@@ -270,15 +242,12 @@ pub(super) fn render_taira_release_v1<T: Write>(
     Ok(())
 }
 fn compose_release_artifacts_v1(
-    activation_instructions: &[u8],
-    activation_report: &[u8],
     broker_export: &[u8],
     plan_template: &[u8],
     config_template: &[u8],
     genesis_template: &[u8],
     nevo_review: Option<&[u8]>,
 ) -> color_eyre::Result<ReleaseArtifactsV1> {
-    validate_taira_privacy_bootstrap_v1(activation_instructions, activation_report)?;
     let broker = parse_broker_public_export_v1(broker_export)?;
     let plan = render_release_plan_v1(plan_template, &broker)?;
     let config = render_release_config_v1(config_template, &broker)?;
@@ -950,7 +919,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "chain_discriminant",
             "chain_id",
             "genesis_authority",
-            "governance_rollout",
+            "network_rollout",
             "governance_permission",
             "network_id",
             "privacy_catalog",
@@ -988,60 +957,41 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "CanEnactGovernance",
         "privacy plan",
     )?;
-    let rollout = object_field_v1(root, "governance_rollout", "privacy plan")?;
+    let rollout = object_field_v1(root, "network_rollout", "privacy plan")?;
     expect_exact_keys_v1(
         rollout,
         &[
-            "activation_state",
+            "state",
             "controller_observation_required",
-            "execution_height",
-            "instruction_count",
             "mode",
             "rollout_plan_path",
             "rollout_plan_sha256",
         ],
-        "governance rollout",
+        "network rollout",
     )?;
-    expect_string_v1(
-        rollout,
-        "activation_state",
-        "not-executed",
-        "governance rollout",
-    )?;
+    expect_string_v1(rollout, "state", "not-executed", "network rollout")?;
     expect_string_v1(
         rollout,
         "mode",
-        "explicit-register-then-activate",
-        "governance rollout",
-    )?;
-    expect_u64_v1(
-        rollout,
-        "execution_height",
-        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
-        "governance rollout",
-    )?;
-    expect_u64_v1(
-        rollout,
-        "instruction_count",
-        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
-        "governance rollout",
+        "ordered-restart-canary-convergence",
+        "network rollout",
     )?;
     expect_string_v1(
         rollout,
         "rollout_plan_path",
         ROLLOUT_PLAN_PATH_V1,
-        "governance rollout",
+        "network rollout",
     )?;
     expect_string_v1(
         rollout,
         "rollout_plan_sha256",
         ROLLOUT_PLAN_SHA256_V1,
-        "governance rollout",
+        "network rollout",
     )?;
     let actual_rollout_plan_sha256 = hex::encode(sha256(CANONICAL_ROLLOUT_PLAN_V1));
     if actual_rollout_plan_sha256 != ROLLOUT_PLAN_SHA256_V1 {
         bail!(
-            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
+            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}; run scripts/update_taira_privacy_rollout_pins.py"
         );
     }
     validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)?;
@@ -1051,7 +1001,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         != Some(true)
     {
         bail!(
-            "privacy plan template must require authenticated controller observation after explicit activation"
+            "privacy plan template must require authenticated controller observation of real network rollout"
         );
     }
     validate_catalog_inventory_v1(object_field_v1(root, "privacy_catalog", "privacy plan")?)?;
@@ -1206,9 +1156,8 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
     expect_exact_keys_v1(
         root,
         &[
-            "activation_contract",
             "canary_contract",
-            "capability_gate",
+            "capability_observation",
             "cargo_lock_sha256",
             "chain_id",
             "endpoints",
@@ -1239,6 +1188,9 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         "cargo_lock_sha256",
         &hex::encode(sha256(CANONICAL_CARGO_LOCK_V1)),
         "privacy rollout plan",
+    )
+    .wrap_err(
+        "privacy rollout plan `cargo_lock_sha256` differs from the compiled Cargo.lock; run scripts/update_taira_privacy_rollout_pins.py",
     )?;
     let matrix = privacy_exact12_matrix_bytes_v1()
         .map_err(|source| eyre!("failed to derive the native exact-12 matrix: {source}"))?;
@@ -1253,7 +1205,7 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
     expect_exact_keys_v1(
         wire,
         &[
-            "catalog_commitment_le_hex",
+            "catalog_commitment_hex",
             "catalog_size",
             "proof_envelope_magic_hex",
         ],
@@ -1267,8 +1219,8 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
     )?;
     expect_string_v1(
         wire,
-        "catalog_commitment_le_hex",
-        "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
+        "catalog_commitment_hex",
+        &hex::encode(iroha_data_model::privacy::PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1),
         "privacy rollout wire contract",
     )?;
     expect_string_v1(
@@ -1278,37 +1230,30 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         "privacy rollout wire contract",
     )?;
 
-    let gate = object_field_v1(root, "capability_gate", "privacy rollout plan")?;
+    let gate = object_field_v1(root, "capability_observation", "privacy rollout plan")?;
     expect_exact_keys_v1(
         gate,
         &[
             "all_exact12_rows_required",
             "authenticated_committed_state_required",
             "authoritative_route",
-            "caller_asserted_readiness_forbidden",
-            "required_readiness",
+            "caller_asserted_availability_forbidden",
         ],
-        "privacy rollout capability gate",
+        "privacy rollout capability observation",
     )?;
     expect_string_v1(
         gate,
         "authoritative_route",
         "/v1/privacy/capabilities",
-        "privacy rollout capability gate",
-    )?;
-    expect_string_v1(
-        gate,
-        "required_readiness",
-        "production-qualified",
-        "privacy rollout capability gate",
+        "privacy rollout capability observation",
     )?;
     for flag in [
         "all_exact12_rows_required",
         "authenticated_committed_state_required",
-        "caller_asserted_readiness_forbidden",
+        "caller_asserted_availability_forbidden",
     ] {
         if gate.get(flag).and_then(JsonValue::as_bool) != Some(true) {
-            bail!("privacy rollout capability gate `{flag}` must be true");
+            bail!("privacy rollout capability observation `{flag}` must be true");
         }
     }
 
@@ -1341,63 +1286,6 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         )?;
     }
 
-    let activation = object_field_v1(root, "activation_contract", "privacy rollout plan")?;
-    expect_exact_keys_v1(
-        activation,
-        &[
-            "mode",
-            "execution_height",
-            "proposed_lifecycle",
-            "active_lifecycle",
-            "ordered_instruction_count",
-            "protocol_count",
-            "one_governed_instruction_batch",
-        ],
-        "privacy activation contract",
-    )?;
-    expect_string_v1(
-        activation,
-        "mode",
-        "explicit-register-then-activate",
-        "privacy activation contract",
-    )?;
-    expect_string_v1(
-        activation,
-        "proposed_lifecycle",
-        "Proposed",
-        "privacy activation contract",
-    )?;
-    expect_string_v1(
-        activation,
-        "active_lifecycle",
-        "Active",
-        "privacy activation contract",
-    )?;
-    expect_u64_v1(
-        activation,
-        "execution_height",
-        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
-        "privacy activation contract",
-    )?;
-    expect_u64_v1(
-        activation,
-        "ordered_instruction_count",
-        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
-        "privacy activation contract",
-    )?;
-    expect_u64_v1(
-        activation,
-        "protocol_count",
-        PrivacyProtocolIdV1::COUNT as u64,
-        "privacy activation contract",
-    )?;
-    if activation
-        .get("one_governed_instruction_batch")
-        .and_then(JsonValue::as_bool)
-        != Some(true)
-    {
-        bail!("privacy activation must preserve the complete ordered instruction batch");
-    }
     Ok(())
 }
 fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
@@ -1751,16 +1639,8 @@ fn render_release_genesis_v1(
         for instruction in decoded {
             if instruction
                 .as_any()
-                .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+                .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
                 .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
-                    .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
-                    .is_some()
             {
                 bail!(
                     "Taira genesis staging template already contains a privacy bootstrap instruction"
@@ -2031,12 +1911,8 @@ fn write_new_artifact_set_v1<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_bootstrap::build_taira_privacy_bootstrap_v1;
-    use iroha_core_privacy::{
-        privacy_engines::bootle_lantern::issuer::{
-            BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-        },
-        privacy_profiles::compiled_privacy_profile_v1,
+    use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
+        BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -2047,8 +1923,7 @@ mod tests {
         permission::Permission,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolLifecycleV1,
+            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
         },
     };
     use iroha_executor_data_model::permission::{
@@ -2222,36 +2097,9 @@ mod tests {
         .into_bytes()
     }
     #[test]
-    fn complete_release_composition_is_native_deterministic_or_fails_closed_at_source() {
+    fn complete_release_composition_is_native_deterministic_and_unexecuted() {
         let export = broker_export_fixture_v1();
-        if let Some((protocol_id, source)) =
-            PrivacyProtocolIdV1::ALL
-                .into_iter()
-                .find_map(|protocol_id| {
-                    compiled_privacy_profile_v1(protocol_id)
-                        .err()
-                        .map(|source| (protocol_id, source))
-                })
-        {
-            let error = build_taira_privacy_bootstrap_v1()
-                .expect_err("an unavailable compiled profile must prevent partial emission");
-            let error = error.to_string();
-            assert!(
-                error.contains(protocol_id.canonical_label()),
-                "closed source gate did not identify `{}`: {error}",
-                protocol_id.canonical_label()
-            );
-            assert!(
-                error.contains(&source.to_string()),
-                "closed source gate did not retain the native error `{source}`: {error}"
-            );
-            return;
-        }
-        let activations = build_taira_privacy_bootstrap_v1()
-            .expect("derive the complete exact-12 release-composer source set");
         let first = compose_release_artifacts_v1(
-            &activations.instructions_json,
-            &activations.report_json,
             &export,
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
@@ -2260,8 +2108,6 @@ mod tests {
         )
         .expect("compose complete release");
         let second = compose_release_artifacts_v1(
-            &activations.instructions_json,
-            &activations.report_json,
             &export,
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
@@ -2283,7 +2129,7 @@ mod tests {
             "rendered plan must bind the authenticated broker NetworkId"
         );
         assert_eq!(
-            plan.pointer("/governance_rollout/activation_state")
+            plan.pointer("/network_rollout/state")
                 .and_then(JsonValue::as_str),
             Some("not-executed")
         );
@@ -2310,7 +2156,7 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
     }
     #[test]
-    fn rollout_plan_binds_the_hard_cut_catalog_and_evidence_derived_gate() {
+    fn rollout_plan_binds_the_native_catalog_and_real_network_observations() {
         let bootstrap: JsonValue =
             norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
         validate_staging_plan_v1(&bootstrap)
@@ -2351,16 +2197,50 @@ mod tests {
                 Some(protocol.security_model().canonical_label())
             );
         }
-        assert_eq!(
-            rollout
-                .pointer("/capability_gate/required_readiness")
-                .and_then(JsonValue::as_str),
-            Some("production-qualified")
+        for field in [
+            "all_exact12_rows_required",
+            "authenticated_committed_state_required",
+            "caller_asserted_availability_forbidden",
+        ] {
+            assert_eq!(
+                rollout
+                    .pointer(&format!("/capability_observation/{field}"))
+                    .and_then(JsonValue::as_bool),
+                Some(true)
+            );
+        }
+        let mut obsolete = rollout.clone();
+        obsolete
+            .as_object_mut()
+            .unwrap()
+            .insert("activation_contract".to_owned(), norito::json!({}));
+        assert!(
+            validate_rollout_plan_v1(&json_pretty_bytes_v1(&obsolete, "obsolete rollout").unwrap())
+                .is_err()
+        );
+        let mut unauthenticated = rollout.clone();
+        unauthenticated
+            .get_mut("capability_observation")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "authenticated_committed_state_required".to_owned(),
+                JsonValue::Bool(false),
+            );
+        assert!(
+            validate_rollout_plan_v1(
+                &json_pretty_bytes_v1(&unauthenticated, "unauthenticated rollout").unwrap()
+            )
+            .is_err()
         );
         let rollout_text = std::str::from_utf8(CANONICAL_ROLLOUT_PLAN_V1)
             .expect("canonical rollout plan must be UTF-8");
         for removed in [
             "available-experimental",
+            "activation_contract",
+            "required_readiness",
+            "production-qualified",
             "assurance",
             "legacy_policy",
             "missing_evidence",
@@ -2946,33 +2826,18 @@ mod tests {
     }
     #[test]
     fn decoded_privacy_bootstrap_in_genesis_template_is_rejected() {
-        let profile = PrivacyProtocolIdV1::ALL
-            .into_iter()
-            .find_map(|protocol_id| compiled_privacy_profile_v1(protocol_id).ok())
-            .expect("at least one native privacy profile must be governance-available");
-        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-            PrivacyProposedLifecycleV1 {
-                proposed_at_height: 1,
-            },
-        ));
-        for instruction in [
-            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation)),
-            InstructionBox::from(TransitionPrivacyProtocolLifecycleV1::new(
-                profile.protocol_id,
-                super::super::bootstrap_active_lifecycle_v1(),
-            )),
-        ] {
+        for instruction in [InstructionBox::from(policy_registration_fixture_v1())] {
             let mut genesis: JsonValue =
                 norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
             let mut one = String::new();
             iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
             let mut decoded: JsonValue =
-                norito::json::from_str(&one).expect("parse decoded activation JSON");
+                norito::json::from_str(&one).expect("parse decoded issuer-policy JSON");
             let injected = decoded
                 .as_array_mut()
-                .expect("activation array")
+                .expect("instruction array")
                 .pop()
-                .expect("one activation");
+                .expect("one issuer policy");
             genesis
                 .get_mut("transactions")
                 .and_then(JsonValue::as_array_mut)

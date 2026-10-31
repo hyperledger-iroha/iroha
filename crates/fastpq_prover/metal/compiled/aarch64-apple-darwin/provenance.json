@@ -5,10 +5,10 @@
   "language": "macos-metal2.4",
   "library": {
     "path": "fastpq.metallib",
-    "bytes": 141566,
-    "sha256": "83dcd29444a84b2fed58da786cac7282c9b8183fbccac957da987d84ddb61051"
+    "bytes": 145070,
+    "sha256": "16efe2d21b3a865de8a0cb094910aebd1b68a3319063a96b93c16d635c10f140"
   },
-  "source_sha256": "c54c6343b6b79b54cc5d0c6c62f11c81f79d1671dfc2853594edb4e7e6cb3d9e",
+  "source_sha256": "bba20561bc225f0725ab725391af7ebbc7b86c466f0fac4f8bb2d19a756f0249",
   "sources": [
     {
       "path": "crates/fastpq_prover/metal/include/params.h",
@@ -27,8 +27,8 @@
     },
     {
       "path": "crates/fastpq_prover/metal/kernels/exact_root.metal",
-      "bytes": 5313,
-      "sha256": "76fee7330040fbec7eb10b3a422dab91a9f2bc3acf272f2a583c878521f7462c"
+      "bytes": 9397,
+      "sha256": "e3349ad6dd785b550dbe1189f09c7589df4ed5c2f198a83daa08b3fc0900c9d9"
     },
     {
       "path": "crates/fastpq_prover/metal/kernels/poseidon.metal",
@@ -99,15 +99,12 @@
       "help_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   },
-  "source_receipt_sha256": "1d1204ddbd7c105ee2c3f94ab98eee3d1c380ab41e768dfff908852b3304a4eb",
   "generation_records_sha256": [
-    "b110d7bd4ceaf2d94c923736cbc84cd146bd7eaa679685ed3ace204fe2eab806",
-    "14ef23411c03ef31a35ed7618ff10550ead77a96a9565182bc6b861fb0253c03"
-  ],
-  "original_guarded_result_sha256": [
-    "111c95a3e839c891a540b193ca78850372d938d1629872027454c361432dd3fc",
-    "d47afc5cf19c04d8ab996c6ac170098a7c43e739cb52bb12c58a9982512d608d"
+    "2040482c19b7dd11df6879a1456661a9f0eb055e44b933b697e3873196539803",
+    "0266f312729511f1488c799cafe0c4d09376fe9a7f3e0022f2589390a3b55af2"
   ],
   "repeated_original_library_bytes_equal": true,
+  "signed_provenance": false,
+  "hardware_qualification": false,
   "scope": "Source and compiled-byte integrity only. No signed provenance, GPU numerical qualification, measured cost, driver allocation custody, settlement authority, or release qualification is established by this record."
 }

@@ -1111,7 +1111,7 @@ class FakeRuntime:
                 "\n".join(sorted(self.help_options)),
                 "",
             )
-        if "localnet" in values:
+        if "sora-network" in values:
             target = Path(values[values.index("--out-dir") + 1])
             api_port = int(values[values.index("--base-api-port") + 1])
             self.api_port = api_port
@@ -1581,7 +1581,7 @@ class TairaDevnetTests(unittest.TestCase):
         module.generate_network(target, kagami, 18080, 18337, 1000, run)
         run.assert_called_once()
         command = run.call_args.args[0]
-        self.assertEqual(command[:3], [str(kagami), "localnet", "generate"])
+        self.assertEqual(command[:3], [str(kagami), "sora-network", "generate"])
         self.assertEqual(command[command.index("--peers") + 1], "4")
         self.assertEqual(command[command.index("--out-dir") + 1], str(target))
         self.assertNotIn("--seed", command)
@@ -1894,7 +1894,7 @@ class TairaDevnetTests(unittest.TestCase):
         def old_storage_profile(command, **kwargs):
             result = runtime.run(command, **kwargs)
             values = [str(value) for value in command]
-            if "localnet" in values and "--out-dir" in values:
+            if "sora-network" in values and "--out-dir" in values:
                 target = Path(values[values.index("--out-dir") + 1])
                 config = target / "peer0.toml"
                 text = config.read_text(encoding="utf-8")
@@ -2596,12 +2596,12 @@ class TairaDevnetTests(unittest.TestCase):
         kagami = next(
             command
             for command in runtime.commands
-            if "localnet" in command and "--out-dir" in command
+            if "sora-network" in command and "--out-dir" in command
         )
         self.assertNotIn("--seed", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
-        self.assertEqual(kagami[kagami.index("--sora-profile") + 1], "nexus")
-        self.assertEqual(kagami[kagami.index("--consensus-mode") + 1], "npos")
+        self.assertEqual(kagami[kagami.index("--profile") + 1], "nexus")
+        self.assertNotIn("--consensus-mode", kagami)
         self.assertEqual(
             kagami[kagami.index("--block-cadence-ms") + 1],
             str(module.DEFAULT_BLOCK_CADENCE_MS),
@@ -2994,7 +2994,7 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_kagami_taira_lifecycle_source_is_pidfd_only_and_linux_only(self) -> None:
         source = (
-            REPO_ROOT / "crates" / "iroha_deploy" / "src" / "localnet.rs"
+            REPO_ROOT / "crates" / "iroha_deploy" / "src" / "sora_network.rs"
         ).read_text(encoding="utf-8")
         embedded_match = re.search(
             r'const TAIRA_PROCESS_IDENTITY_PY: &str = r#"(.*?)"#;',
@@ -5481,7 +5481,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(sentinel.read_bytes(), b"existing cohort\n")
         self.assertFalse(
             any(
-                "localnet" in command and "--out-dir" in command
+                "sora-network" in command and "--out-dir" in command
                 for command in runtime.commands
             )
         )
@@ -6291,7 +6291,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "http://127.0.0.1:29080/", invalid_tool_cache_hints
             )
 
-    def test_help_exposes_only_up_check_down_and_citizens(self) -> None:
+    def test_help_exposes_only_managed_devnet_operations(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--help"],
             check=False,
@@ -6299,7 +6299,7 @@ class TairaDevnetTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("{up,check,down,citizens}", completed.stdout)
+        self.assertIn("{up,check,down,governance-drive,citizens}", completed.stdout)
         self.assertNotIn("promote", completed.stdout.lower())
         self.assertNotIn("publish", completed.stdout.lower())
         up_help = subprocess.run(
@@ -6310,6 +6310,17 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(up_help.returncode, 0)
         self.assertIn("--inrou-canary-dir", up_help.stdout)
+        drive_help = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "governance-drive", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(drive_help.returncode, 0)
+        self.assertIn("fee-paying governance transactions", drive_help.stdout)
+        self.assertIn("managed disposable devnet", drive_help.stdout)
+        self.assertIn("--citizen", drive_help.stdout)
+        self.assertNotIn("--polls", drive_help.stdout)
 
     def test_retired_taira_orchestration_does_not_reappear(self) -> None:
         def names(directory: Path, pattern: str = "*taira*") -> set[str]:

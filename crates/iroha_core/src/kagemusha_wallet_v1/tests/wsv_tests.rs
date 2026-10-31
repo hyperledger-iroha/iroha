@@ -98,7 +98,7 @@ fn transact<T>(
     action: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T>,
 ) -> Result<T> {
     let header = BlockHeader::new(height.try_into().unwrap(), None, None, height * 1_000, 0);
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let invocation = Hash::new(height.to_le_bytes());
     let mut tx = block.transaction_for_fastpq_testing(invocation);
     // Explicit local fixture binding: this is not network/finality qualification.
@@ -117,7 +117,7 @@ fn transact<T>(
 }
 fn register(state: &mut State, memory: &Memory, height: u64) -> Result<()> {
     transact(state, height, |tx| {
-        wsv::WsvLedger::new(tx, &memory.registration.reserve)?.register(memory.registration.clone())
+        wsv::WsvLedger::new(tx, &memory.registration.reserve)?.register(&memory.registration)
     })
 }
 fn balance(state: &State, memory: &Memory, owner: &AccountId) -> Quantity {
@@ -129,8 +129,7 @@ fn balance(state: &State, memory: &Memory, owner: &AccountId) -> Quantity {
             memory.registration.asset.asset.clone(),
             owner.clone(),
         ))
-        .map(|v| v.as_ref().clone())
-        .unwrap_or_else(Quantity::zero)
+        .map_or_else(Quantity::zero, |v| v.as_ref().clone())
 }
 #[test]
 fn registration_requires_dedicated_asset_permission_and_reserve_consent() {
@@ -152,7 +151,7 @@ fn registration_requires_dedicated_asset_permission_and_reserve_consent() {
             tx,
             &memory.authority
         )?
-        .register(memory.registration.clone()))
+        .register(&memory.registration))
         .is_err()
     );
     transact(&mut state, 1, |tx| {
@@ -1302,10 +1301,12 @@ fn real_fee_payout_requires_retained_history_and_never_requires_receive() {
     let history = memory.fee_inputs(&claim).unwrap();
     transact(&mut state, 2, |tx| {
         let mut ledger = wsv::WsvLedger::new(tx, &memory.authority)?;
-        ledger.retain_credential(CredentialRecord {
-            credential: history.payer,
-            certificates: history.certificates.clone(),
-        })?;
+        ledger.retain_credential(
+            &(CredentialRecord {
+                credential: history.payer,
+                certificates: history.certificates.clone(),
+            }),
+        )?;
         ledger.retain_request(history.request.clone())
     })
     .unwrap();
@@ -1357,7 +1358,7 @@ fn corrupted_reserve_owner_and_mutated_registration_are_rejected() {
             tx,
             &memory.registration.reserve
         )?
-        .register(changed))
+        .register(&changed))
         .is_err()
     );
     transact(&mut state, 2, |tx| {
@@ -1604,7 +1605,7 @@ fn private_root_load_rejects_before_debit_or_receipt_creation() {
         )));
         wsv::WsvLedger::new(tx, &memory.registration.reserve)
             .unwrap()
-            .register(memory.registration.clone())
+            .register(&memory.registration)
             .unwrap();
         tx.world.kagemusha_wallet_ledger.insert(
             storage::key(storage::WALLET, scheme, wallet),
@@ -1719,7 +1720,7 @@ fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
         )));
         wsv::WsvLedger::new(tx, &memory.registration.reserve)
             .unwrap()
-            .register(memory.registration.clone())
+            .register(&memory.registration)
             .unwrap();
         tx.world.kagemusha_wallet_ledger.insert(
             storage::key(storage::WALLET, scheme, wallet),

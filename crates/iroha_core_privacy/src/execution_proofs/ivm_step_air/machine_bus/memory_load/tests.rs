@@ -24,13 +24,8 @@ fn phase(instruction: u32, address: u64) -> ReadPhase {
         address,
         7,
         [10, 11, 12, 13, 14],
-        100,
-        32,
-        4,
-        Memory::STACK_START + Memory::MIN_STACK_SIZE,
-        true,
-        true,
-        false,
+        (100, 32, 4, Memory::STACK_START + Memory::MIN_STACK_SIZE),
+        (true, true, false),
     )
     .unwrap()
 }
@@ -88,7 +83,11 @@ impl Fixture {
             space: Space::Memory,
             vm: phase.vm,
             generation: 0,
-            index: (phase.address >> 4) as u32,
+            index: u32::from_le_bytes(
+                u64::to_le_bytes(phase.address >> 4)[..4]
+                    .try_into()
+                    .expect("low-byte width"),
+            ),
             write: false,
             before: payload,
             after: payload,
@@ -97,7 +96,7 @@ impl Fixture {
         }
         .fields(phase.clocks[0] as usize);
         let mut writes = [[F::ZERO; packet::WIDTH]; 4];
-        for slot in 0..4 {
+        for (slot, write) in writes.iter_mut().enumerate() {
             let operand = slot % 2;
             let destination = phase.destinations[operand];
             if !ok || destination == 0 || (operand == 1 && !phase.wide) {
@@ -114,11 +113,11 @@ impl Fixture {
             } else {
                 tags[destination] = tag;
             }
-            writes[slot] = Event {
+            *write = Event {
                 space: Space::Register,
                 vm: phase.vm,
                 generation: 0,
-                index: destination as u32,
+                index: u32::try_from(destination).expect("bounded fixture value"),
                 write: true,
                 before: bytes(old_value, 0),
                 after: bytes(registers[destination], 0),
@@ -336,13 +335,8 @@ fn boundary_excludes_known_earlier_failures_without_inventing_owner_permission()
             address,
             1,
             clocks,
-            gas,
-            0,
-            cycles,
-            Memory::STACK_START + Memory::MIN_STACK_SIZE,
-            zk,
-            vector,
-            private,
+            (gas, 0, cycles, Memory::STACK_START + Memory::MIN_STACK_SIZE),
+            (zk, vector, private),
         )
     };
     assert!(
@@ -504,7 +498,7 @@ fn assert_native_writes(vm: &IVM, fixture: &Fixture) {
         .filter(|p| p[ENABLED] == F::ONE)
         .map(|p| {
             (
-                p[packet::INDEX].0 as usize,
+                usize::try_from(p[packet::INDEX].0).expect("bounded fixture value"),
                 packet::half(p, AFTER, 0),
                 p[AFTER_TAG] == F::ONE,
             )
@@ -540,9 +534,9 @@ fn load_ports_match_native_aliases_halves_and_read_ranges() {
             p.cycles = 0;
             let f = Fixture::with_registers(p, 0, [LOW, HIGH], expected, tags);
             assert!(f.accepts());
-            for slot in 0..4 {
-                if f.writes[slot][ENABLED] == F::ONE {
-                    expected[p.destinations[slot % 2]] = packet::half(&f.writes[slot], AFTER, 0);
+            for (slot, write) in f.writes.iter().enumerate() {
+                if write[ENABLED] == F::ONE {
+                    expected[p.destinations[slot % 2]] = packet::half(write, AFTER, 0);
                 }
             }
             vm.memory.clear_tracking();
@@ -574,7 +568,7 @@ fn load_ports_match_native_aliases_halves_and_read_ranges() {
                 .unwrap();
             vm.set_register(3, address);
             vm.registers.set_tag(1, true);
-            let mut p = scalar(address + half as u64, destination);
+            let mut p = scalar(address + i64::from(half).cast_unsigned(), destination);
             p.pc = 0;
             p.cycles = 0;
             let f = Fixture::with_registers(
@@ -597,7 +591,7 @@ fn load_ports_match_native_aliases_halves_and_read_ranges() {
                     .try_read_log_snapshot()
                     .unwrap()
                     .iter()
-                    .any(|r| (r.addr, r.len) == (address + half as u64, 8))
+                    .any(|r| (r.addr, r.len) == (address + i64::from(half).cast_unsigned(), 8))
             );
             assert_eq!(
                 (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
@@ -758,8 +752,8 @@ fn load_transition_has_eighteen_auxiliary_fields_and_dynamic_degree_four() {
                     let high_start = low_start + packet::WIDTH;
                     let tag_low_start = high_start + packet::WIDTH;
                     let tag_high_start = tag_low_start + packet::WIDTH;
-                    let log_start = tag_high_start + packet::WIDTH;
-                    let control_start = log_start + READ_LOG_WIDTH;
+                    let write_log_start = tag_high_start + packet::WIDTH;
+                    let control_start = write_log_start + READ_LOG_WIDTH;
                     let mut out = Vec::new();
                     append_residues(
                         &mut out,
@@ -770,9 +764,9 @@ fn load_transition_has_eighteen_auxiliary_fields_and_dynamic_degree_four() {
                             row[low_start..high_start].try_into().unwrap(),
                             row[high_start..tag_low_start].try_into().unwrap(),
                             row[tag_low_start..tag_high_start].try_into().unwrap(),
-                            row[tag_high_start..log_start].try_into().unwrap(),
+                            row[tag_high_start..write_log_start].try_into().unwrap(),
                         ],
-                        row[log_start..control_start].try_into().unwrap(),
+                        row[write_log_start..control_start].try_into().unwrap(),
                         row[control_start..].try_into().unwrap(),
                     );
                     Ok::<_, core::convert::Infallible>(out)
@@ -798,7 +792,11 @@ fn derived_zero_and_full_flags_require_canonical_inverses_at_every_private_count
         ] {
             let selected = p.selected_bits();
             for count in 0..=selected.len() {
-                let mask = (((1_u32 << count) - 1) << selected.start) as u16;
+                let mask = u16::from_le_bytes(
+                    u32::to_le_bytes(((1_u32 << count) - 1) << selected.start)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                );
                 let fixture = Fixture::new(p, mask, [LOW, HIGH]);
                 assert!(fixture.accepts());
                 assert_eq!(

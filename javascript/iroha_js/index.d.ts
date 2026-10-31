@@ -45,6 +45,7 @@ export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./atomic-private-settlement.js";
+export * from "./private-settlement.js";
 export * from "./dist/blockProofTypes.js";
 export type * from "./dist/explorerTransactionProofTypes.js";
 export * from "./dist/toriiBrowserExplorerTypes.js";
@@ -106,33 +107,24 @@ export type {
   PrivacyCompiledProfileBindingsV1,
   PrivacyCompiledProfileResultV1,
   PrivacyConsensusLimitsV1,
-  PrivacyConsensusPolicyTighteningV1,
+  PrivacyConsensusPolicyUpdateV1,
   PrivacyConsensusPolicyV1,
   PrivacyEngineIdV1,
   PrivacyEngineTagV1,
-  PrivacyExact12DeploymentQualificationV1,
   PrivacyExact12CapabilityAdmissionV1,
   PrivacyExact12CapabilityManifestNodeClientV1,
   PrivacyExact12CapabilityManifestRequestOptions,
   PrivacyExact12CapabilityRowV1,
-  PrivacyExact12QualificationRecordV1,
-  PrivacyExact12ReleaseManifestV1,
   PrivacyExecutionModeV1,
   PrivacyFixed32BytesV1,
-  PrivacyFixed48BytesV1,
   PrivacyOperationSchemaV1,
   PrivacyProofSystemIdV1,
   PrivacyProofSystemTagV1,
-  PrivacyProtocolActivationRecordV1,
+  PrivacyProtocolPolicyV1,
   PrivacyProtocolIdV1,
-  PrivacyProtocolLifecycleV1,
+  PrivacyProtocolLimitsUpdateV1,
   PrivacyProtocolLimitsV1,
-  PrivacyReleaseProtocolBindingV1,
   PrivacyProtocolTagV1,
-  PrivacyDeploymentActivationV1,
-  PrivacySecurityClaimV1,
-  PrivacySecurityModelTagV1,
-  PrivacySecurityModelV1,
   PrivacyTaggedUnitV1,
   PrivacyU64V1,
 } from "./privacy-capabilities.js";
@@ -164,7 +156,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 31;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 33;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -179,7 +171,9 @@ export type VersionedSignedTransactionV1 =
   | ArrayBufferView;
 
 export const AccountAddressErrorCode: {
-  readonly UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM";
+  readonly DECODE_RESOURCE_LIMIT: "ERR_DECODE_RESOURCE_LIMIT";
+  readonly UNKNOWN_ALGORITHM: "ERR_UNKNOWN_ALGORITHM";
+  readonly UNSUPPORTED_IMPLEMENTATION: "ERR_UNSUPPORTED_IMPLEMENTATION";
   readonly KEY_PAYLOAD_TOO_LONG: "ERR_KEY_PAYLOAD_TOO_LONG";
   readonly INVALID_HEADER_VERSION: "ERR_INVALID_HEADER_VERSION";
   readonly INVALID_NORM_VERSION: "ERR_INVALID_NORM_VERSION";
@@ -430,10 +424,14 @@ export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
+  /** Also return `approvals`, when each approval of each proposal landed. */
+  includeApprovals?: boolean;
 }
 
 export interface MultisigProposalsResolveRequest extends MultisigAccountSelector {
   proposalId: string;
+  /** Also return `approvals`, when each approval landed. */
+  includeApprovals?: boolean;
 }
 
 export type MultisigProposeInstructionInput =
@@ -599,12 +597,25 @@ export interface MultisigSpecResponse {
   spec: JsonValue;
 }
 
+/**
+ * When one signer's approval of a multisig proposal landed, as the node read it from committed
+ * blocks: the proposer's with its proposal, every other signer's with its first approval.
+ */
+export interface MultisigProposalApproval {
+  approver: string;
+  /** Block creation time in Unix milliseconds; null when the node did not see the approval. */
+  approved_at_ms: number | null;
+  block_height: number | null;
+}
+
 export interface MultisigProposalEntry {
   proposal_id: string;
   instructions_hash: string;
   operation_type: string;
   intent: JsonValue | null;
   proposal: JsonValue;
+  /** One per approver in `proposal.approvals`, in landing order; only when `includeApprovals` was set. */
+  approvals?: ReadonlyArray<MultisigProposalApproval>;
   status: MultisigProposalStatus;
   terminal_at_ms: number | null;
 }
@@ -3309,6 +3320,10 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiStreamGapError"
   | "ListQueryError"
   | "FilterSyntaxError"
+  | "ACCOUNT_ALIAS_FIELDS"
+  | "ACCOUNT_ALIAS_ROW_FIELDS"
+  | "ASSET_MOVEMENT_KINDS"
+  | "ASSET_MOVEMENT_ROW_FIELDS"
   | "AGGREGATE_FUNCTIONS"
   | "CURSOR_MAX_BYTES"
   | "FIELD_PATH_MAX_BYTES"
@@ -3327,6 +3342,12 @@ type ToriiRuntimeNamespaceExport =
   | "ListQuery"
   | "SortKey"
   | "ToriiCollection"
+  | "accountAliasScope"
+  | "accountsInAliasScope"
+  | "decodeAccountAliasRows"
+  | "decodeAccountAliases"
+  | "decodeAssetMovementRow"
+  | "decodeAssetMovementRows"
   | "decodePage"
   | "field"
   | "isDecimalText"
@@ -3408,8 +3429,10 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
+  | "KAIGI_EMPTY_ROSTER_ROOT_HEX_V1"
   | "buildKaigiAuthorizationProofV1"
   | "buildKaigiUsageProofV1"
+  | "generateKaigiBlindingV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -4155,28 +4178,48 @@ export interface ToriiGovernanceManifestProvenance {
   signature: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeSbomDigest {
-  algorithm: string;
-  digest: string;
+/** Execution root of a runtime change set; this release implements the universal root only. */
+export type ToriiRuntimeRootScope = Readonly<{ kind: "Universal"; content: null }>;
+
+/**
+ * Canonical `ChangeSetV1` JSON object: a governed change from one selection of the universal
+ * root to the next (`specs/live_runtime_upgrades.md` §6). Identities and the qualification
+ * digest are 32-byte lowercase hex; `network` is the exact NetworkId literal. Published
+ * definitions and transitions keep their `{kind, content}` envelopes with opaque content.
+ */
+export interface ToriiRuntimeChangeSet {
+  network: string;
+  root: ToriiRuntimeRootScope;
+  /** Selection the change starts from. */
+  predecessor: string;
+  /** Exact selection the change produces. */
+  successor: string;
+  /** First height executed under the successor; at most `Number.MAX_SAFE_INTEGER`. */
+  effective_height: number;
+  publish: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  transitions: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  qualification: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abi_version: 1;
-  abi_hash: ReadonlyArray<number>;
-  added_syscalls: readonly [];
-  added_pointer_types: readonly [];
-  start_height: number;
-  end_height: number;
-  sbom_digests: ReadonlyArray<ToriiGovernanceRuntimeUpgradeSbomDigest>;
-  slsa_attestation: string;
-  provenance: ReadonlyArray<ToriiGovernanceManifestProvenance>;
+/** Minimum notice of a runtime change: blocks and committed milliseconds. */
+export interface ToriiGovernanceRuntimeUpgradeNotice {
+  blocks: number;
+  ms: number;
+  approval_cushion_ms: number;
 }
+
+/** Schedule a change set, or withdraw a scheduled one by its 32-byte lowercase hex id. */
+export type ToriiGovernanceRuntimeUpgradeAction =
+  | Readonly<{ kind: "Schedule"; content: ToriiRuntimeChangeSet }>
+  | Readonly<{ kind: "Cancel"; content: string }>;
 
 export interface ToriiGovernanceRuntimeUpgradeProposal {
   proposal_operator: string;
-  manifest: ToriiGovernanceRuntimeUpgradeManifest;
+  action: ToriiGovernanceRuntimeUpgradeAction;
+  /** Notice the committed policy required when the proposal was admitted, frozen for it. */
+  notice: ToriiGovernanceRuntimeUpgradeNotice;
+  /** Committed time of the block that admitted the proposal. */
+  proposed_ms: number;
 }
 
 export interface ToriiGovernanceSccpRouteProposal {
@@ -5312,13 +5355,12 @@ export interface ToriiNetworkTimeStatus {
   note: string | null;
 }
 
-/** Public, account-free V1 bootstrap policy; the default is explicit and unrelated to list order. */
+/** Validated public V1 discovery fields; algorithm order conveys no signing preference. */
 export interface AccountCapabilitiesV1 {
   readonly schema_version: 1;
   readonly network_id: string;
   readonly network_prefix: number;
   readonly allowed_signing: readonly CryptoAlgorithm[];
-  readonly default_signing: "ed25519";
 }
 
 export interface ToriiNodeCapabilities {
@@ -5391,9 +5433,12 @@ export interface ToriiRuntimeMetrics {
   upgradeEventsTotal: ToriiRuntimeMetricsCounters;
 }
 
+/** Recorded runtime change sets counted by lifecycle status. */
 export interface ToriiRuntimeMetricsCounters {
-  proposed: number;
+  scheduled: number;
   activated: number;
+  lapsed: number;
+  /** Change sets whose status is `Cancelled`. */
   canceled: number;
 }
 
@@ -5408,53 +5453,134 @@ export interface ToriiConfigurationTransportNoritoRpc {
   canaryAllowlistSize: number;
 }
 
-export interface ToriiRuntimeUpgradeManifestInput {
-  name: string;
-  description: string;
-  abiVersion: number | string | bigint;
-  abiHash: string | BinaryLike;
-  startHeight: number | string | bigint;
-  endHeight: number | string | bigint;
-  addedSyscalls?: ReadonlyArray<number | string | bigint>;
-  addedPointerTypes?: ReadonlyArray<number | string | bigint>;
-}
-
+/** The SORA Parliament proposal instruction Torii drafts for local signing. */
 export interface ToriiRuntimeUpgradeInstruction {
-  wire_id: string;
-  payload_hex?: string | null;
+  wire_id: "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
 }
 
+/**
+ * A trusted release signer's `ChangeSetEndorsementV1` (`iroha runtime upgrade endorse` prints
+ * one): its signature over the change-set identity, which the committed provenance policy counts.
+ */
+export interface ToriiRuntimeChangeSetEndorsement {
+  /** Identity of the endorsed change set, 32 lowercase hexadecimal bytes. */
+  change_set: string;
+  /** The release signer's canonical public-key multihash. */
+  signer: string;
+  /** The signature, uppercase hexadecimal. */
+  signature: string;
+}
+
+/** Draft returned by `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade`. */
 export interface ToriiRuntimeUpgradeTxResponse {
-  ok: boolean;
-  tx_instructions: ReadonlyArray<ToriiRuntimeUpgradeInstruction>;
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeUpgradeInstruction];
 }
 
-export interface ToriiRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abiVersion: number;
-  abiHashHex: string;
-  addedSyscalls: ReadonlyArray<number>;
-  addedPointerTypes: ReadonlyArray<number>;
-  startHeight: number;
-  endHeight: number;
+/** The support attestation a node signs with its own validator key, drafted for submission. */
+export interface ToriiRuntimeAttestationInstruction {
+  wire_id: "iroha.runtime.support.attest.v1";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
 }
 
-export type ToriiRuntimeUpgradeStatus =
-  | { kind: "Proposed" }
-  | { kind: "Canceled" }
-  | { kind: "ActivatedAt"; activatedHeight: number };
-
-export interface ToriiRuntimeUpgradeRecord {
-  manifest: ToriiRuntimeUpgradeManifest;
-  status: ToriiRuntimeUpgradeStatus;
-  proposer: string;
-  createdHeight: number;
+/** Draft returned by `attestRuntimeUpgrade`. */
+export interface ToriiRuntimeAttestationTxResponse {
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeAttestationInstruction];
 }
 
-export interface ToriiRuntimeUpgradeListItem {
+/** Whether the node's release executes one runtime selection. */
+export interface ToriiRuntimeSelectionSupport {
+  /** Selection identity, 32-byte lowercase hex. */
+  selectionIdHex: string;
+  supported: boolean;
+  /** The first definition the selection relies on that the release lacks; `null` when supported. */
+  missingDefinitionHex: string | null;
+}
+
+/** Whether the node's release executes the successor of one scheduled change set. */
+export interface ToriiRuntimeChangeSetSupport {
+  /** Change-set identity, 32-byte lowercase hex. */
   idHex: string;
-  record: ToriiRuntimeUpgradeRecord;
+  effectiveHeight: number;
+  /** `null` when the change set no longer applies to the selection it will meet. */
+  successor: ToriiRuntimeSelectionSupport | null;
+  /** Why the successor cannot be resolved; `null` when it resolves. */
+  unresolved: string | null;
+}
+
+/** The node's build and the runtime selections its release executes (`GET /v1/runtime/release`). */
+export interface ToriiRuntimeReleaseSupport {
+  build: {
+    version: string;
+    gitCommitSha: string;
+    dpnValidatorReleaseCommit: string;
+    cargoFeatures: string;
+    targetTriple: string;
+    wireSchemaHash: string;
+  };
+  /** Digest of the release the node's support attestations bind, 32-byte lowercase hex. */
+  releaseDigestHex: string;
+  selection: ToriiRuntimeSelectionSupport;
+  /** Scheduled change sets by effective height, then identity. */
+  scheduled: ToriiRuntimeChangeSetSupport[];
+}
+
+/**
+ * Where a change set stands. `Scheduled` waits for its effective height; `Activated`, `Lapsed`
+ * (the effective height passed without complete, current support or notice) and `Cancelled`
+ * (withdrawn by governance) record the height at which that happened.
+ */
+export type ToriiRuntimeChangeSetStatus =
+  | Readonly<{ kind: "Scheduled" }>
+  | Readonly<{ kind: "Activated"; height: number }>
+  | Readonly<{ kind: "Lapsed"; height: number }>
+  | Readonly<{ kind: "Cancelled"; height: number }>;
+
+/** Notice policy frozen for a change set when its proposal was admitted. */
+export interface ToriiRuntimeNotice {
+  blocks: number;
+  ms: number;
+  approvalCushionMs: number;
+}
+
+/** One recorded change set with the fields callers act on typed. */
+export interface ToriiRuntimeChangeSetListItem {
+  /** Change-set identity, 32-byte lowercase hex. */
+  idHex: string;
+  effectiveHeight: number;
+  /** Selection the change set starts from, 32-byte lowercase hex. */
+  predecessorHex: string;
+  /** Selection the change set produces, 32-byte lowercase hex. */
+  successorHex: string;
+  status: ToriiRuntimeChangeSetStatus;
+  notice: ToriiRuntimeNotice;
+  /**
+   * The complete `ChangeSetRecordV1` JSON object (`change_set`, `status`, `proposed_ms`,
+   * `approved_height`, `approved_ms`, `notice`, `attestations`); integers above
+   * `Number.MAX_SAFE_INTEGER` are bigint.
+   */
+  record: Readonly<Record<string, unknown>>;
+}
+
+/** `GET /v1/runtime/upgrades`: the committed selection, its attesting committee and change sets. */
+export interface ToriiRuntimeUpgradesSnapshot {
+  /**
+   * Identity of the committed selection. A new change set names the selection it will meet:
+   * this one, advanced by every change set scheduled to take effect before it.
+   */
+  selectionIdHex: string;
+  /** The committed `RootSelectionV1` JSON object; integers above the safe range are bigint. */
+  selection: Readonly<Record<string, unknown>>;
+  /** Public keys (multihash) of the validators that attest a change set before it activates. */
+  committee: ReadonlyArray<string>;
+  /** Committee digest an attestation binds, 32-byte lowercase hex. */
+  committeeDigestHex: string;
+  /** Recorded change sets by effective height, then identity. */
+  items: ReadonlyArray<ToriiRuntimeChangeSetListItem>;
 }
 
 export interface ToriiPipelineDagSnapshot {
@@ -5810,6 +5936,8 @@ export type KaigiRelayEventPayload =
   | KaigiRelayHealthEvent;
 
 export interface KaigiRelayEventsOptions {
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
   domain?: string;
   relay?: string;
   kind?: string | ReadonlyArray<string>;
@@ -5901,14 +6029,53 @@ export interface KaigiCallEndedEvent {
   ended_at_ms: ToriiU64;
 }
 
+export interface KaigiCallRelayManifestUpdatedEvent {
+  kind: "relay_manifest_updated";
+  call: KaigiCallEventRef;
+  hop_count: number;
+  expiry_ms: ToriiU64;
+}
+
+export interface KaigiCallUsageUpdatedEvent {
+  kind: "usage_updated";
+  call: KaigiCallEventRef;
+  total_duration_ms: ToriiU64;
+  total_billed_gas: ToriiU64;
+  segments_recorded: number;
+}
+
 export type KaigiCallEventPayload =
   | KaigiCallRosterUpdatedEvent
-  | KaigiCallEndedEvent;
+  | KaigiCallEndedEvent
+  | KaigiCallRelayManifestUpdatedEvent
+  | KaigiCallUsageUpdatedEvent;
 
 export interface KaigiCallEventsOptions {
   kind?: string | ReadonlyArray<string>;
   lastEventId?: string;
   signal?: AbortSignal;
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
+}
+
+/** The signed account's own standing in one call, from a single committed state. */
+export interface KaigiCallParticipation {
+  call_id: string;
+  privacy_mode: "transparent" | "private";
+  status: "active" | "ended";
+  is_host: boolean;
+  /** Whether the account is the host or currently holds roster membership. */
+  active: boolean;
+  /** Retained subject that the next authorization proof must bind. */
+  original_account_id: string;
+  /** Returned only to the host and to retained participants. */
+  host_account_id?: string;
+  /** Private calls only: zero for the host, else the live or next-join sequence. */
+  sequence?: ToriiU64;
+  /** Private calls only: the stored host or live participant commitment. */
+  active_commitment_hex?: string;
+  roster_root_hex: string;
+  segments_recorded: number;
 }
 
 type ExclusiveSingleOrMany<
@@ -6649,6 +6816,16 @@ export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 
 /** Maximum decoded bytes accepted for a Kaigi HPKE public key. */
 export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
+/** HPKE suites a Kaigi relay key may use, with the transport's suite identifiers. */
+export declare const KAIGI_RELAY_HPKE_SUITES_V1: Readonly<{
+  mlKem768AuthPsk: Readonly<{ suiteId: 1; publicKeyBytes: 1184 }>;
+  mlKem1024AuthPsk: Readonly<{ suiteId: 2; publicKeyBytes: 1568 }>;
+}>;
+/** Frame a raw public key as the descriptor a relay registers and a manifest hop carries. */
+export declare function buildKaigiRelayHpkeKeyV1(
+  suite: keyof typeof KAIGI_RELAY_HPKE_SUITES_V1,
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
 
 export interface KaigiParticipantCommitmentInput {
   /** Exact canonical Pasta Fp bytes, without a hash marker. */
@@ -9455,6 +9632,148 @@ export interface Page<T> {
 /** Decode a `{"items", "next_cursor", "total"}` page envelope. */
 export declare function decodePage<T = ToriiJsonValue>(value: unknown, context?: string): Page<T>;
 
+/**
+ * Account rows can join the alias bindings the caller may read. Torii computes the two fields
+ * only for queries that mention them; every other accounts read keeps today's rows.
+ */
+export declare const ACCOUNT_ALIAS_FIELDS: readonly ["alias_scopes", "aliases"];
+
+/** Fields `accountsInAliasScope` selects; `decodeAccountAliasRows` requires exactly these. */
+export declare const ACCOUNT_ALIAS_ROW_FIELDS: readonly ["id", "uaid", "aliases"];
+
+/** One active alias binding of an account, as `POST /v1/aliases/by-account` lists it. */
+export interface ToriiAccountAliasBinding {
+  readonly alias: string;
+  readonly dataspace: string;
+  readonly domain: string | null;
+  readonly is_primary: boolean;
+}
+
+/** One account row read by `accountsInAliasScope`. */
+export interface ToriiAccountAliasRow {
+  readonly id: string;
+  readonly uaid: string | null;
+  readonly aliases: ReadonlyArray<ToriiAccountAliasBinding>;
+}
+
+export interface AccountsInAliasScopeOptions {
+  limit?: number;
+  cursor?: string;
+  /** Read this one account (a point lookup) instead of the whole scope. */
+  accountId?: string;
+}
+
+/** The text after `@` of an alias literal: `domain.dataspace`, or `dataspace`. */
+export declare function accountAliasScope(alias: string): string;
+
+/**
+ * Query for the accounts holding an active alias in `scope` (`domain.dataspace`, or
+ * `dataspace`), selecting `id`, `uaid` and `aliases`. Page it with `torii.accounts.pages(query)`
+ * or a signed `GET` of `query.toQueryPairs()`, then decode `page.items` with
+ * `decodeAccountAliasRows`.
+ */
+export declare function accountsInAliasScope(
+  scope: string,
+  options?: AccountsInAliasScopeOptions,
+): ListQuery;
+
+/** Decode an `aliases` field exactly; unknown members and wrong types are `invalid_response`. */
+export declare function decodeAccountAliases(
+  value: unknown,
+  context?: string,
+): ToriiAccountAliasBinding[];
+
+/** Decode the items of a page read with `accountsInAliasScope`. */
+export declare function decodeAccountAliasRows(
+  items: unknown,
+  context?: string,
+): ToriiAccountAliasRow[];
+
+/** What one asset movement moved (`/v1/assets/{definition_id}/movements`). */
+export type ToriiAssetMovementKind =
+  | "TRANSFER"
+  | "MINT"
+  | "BURN"
+  | "OFFLINE_LOAD"
+  | "OFFLINE_UNLOAD"
+  | "OFFLINE_FEE"
+  | "OFFLINE_CHARGE";
+
+/** Every movement kind, in the order Torii documents them. */
+export declare const ASSET_MOVEMENT_KINDS: readonly [
+  "TRANSFER",
+  "MINT",
+  "BURN",
+  "OFFLINE_LOAD",
+  "OFFLINE_UNLOAD",
+  "OFFLINE_FEE",
+  "OFFLINE_CHARGE",
+];
+
+/** Fields of a complete movement row; `decodeAssetMovementRow` requires every one. */
+export declare const ASSET_MOVEMENT_ROW_FIELDS: readonly [
+  "id",
+  "kind",
+  "timestamp_ms",
+  "from_account_id",
+  "to_account_id",
+  "asset_definition_id",
+  "amount",
+  "tx_hash",
+  "authority",
+  "block_height",
+  "block_index",
+  "movement_index",
+  "result_ok",
+];
+
+/**
+ * One committed movement of an asset definition, from the node's movement index. `TRANSFER`,
+ * `MINT` and `BURN` are instruction legs, applied batch receipts and executed multisig transfers;
+ * `OFFLINE_LOAD`, `OFFLINE_UNLOAD` and `OFFLINE_FEE` are KAGEMUSHA Loads (payer to reserve),
+ * paid Unloads (reserve to the unloading account) and paid fee claims; `OFFLINE_CHARGE` is the
+ * online charge of a Load or an Unload, paid to the charge beneficiary. A failed transaction's
+ * attempted movement has `result_ok: false`.
+ */
+export interface ToriiAssetMovementRow {
+  /** `<tx_hash>:<movement_index>`. */
+  readonly id: string;
+  readonly kind: ToriiAssetMovementKind;
+  /** Creation time of the transaction, Unix milliseconds. */
+  readonly timestamp_ms: number;
+  /** Null only for `MINT`. */
+  readonly from_account_id: string | null;
+  /** Null only for `BURN`. */
+  readonly to_account_id: string | null;
+  readonly asset_definition_id: string;
+  /** Exact canonical decimal text. */
+  readonly amount: string;
+  readonly tx_hash: string;
+  /** Signer of the transaction. */
+  readonly authority: string;
+  readonly block_height: number;
+  readonly block_index: number;
+  /** Position among the transaction's movements. */
+  readonly movement_index: number;
+  readonly result_ok: boolean;
+}
+
+/**
+ * Decode one complete movement row exactly: unknown kinds, non-canonical amounts, a null
+ * account outside `MINT`/`BURN`, non-integer coordinates and a failed KAGEMUSHA row are
+ * `invalid_response`; fields Torii adds later are ignored.
+ */
+export declare function decodeAssetMovementRow(
+  row: unknown,
+  context?: string,
+): ToriiAssetMovementRow;
+
+/** Decode the items of an asset movement page read without `select`. */
+export declare function decodeAssetMovementRows(
+  items: unknown,
+  context?: string,
+): ToriiAssetMovementRow[];
+
 export interface CollectionRequestOptions {
   /** Abort the request (and, for `pages()`/`iterate()`, further paging). */
   signal?: AbortSignal;
@@ -10006,6 +10325,8 @@ export declare class ToriiBrowserClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiBrowserCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiBrowserCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiBrowserCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiBrowserCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
@@ -10318,6 +10639,8 @@ export declare class ToriiClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
@@ -10719,21 +11042,33 @@ export declare class ToriiClient {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeAbiHashResponse>;
   getRuntimeMetrics(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeMetrics>;
+  /** Operator-signed read of the committed selection, committee and recorded change sets. */
   listRuntimeUpgrades(options?: {
     signal?: AbortSignal;
-  }): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
+  }): Promise<ToriiRuntimeUpgradesSnapshot>;
+  /**
+   * Operator-signed draft of the Parliament proposal that schedules `changeSet`, carrying the
+   * trusted release signers' endorsements the committed provenance policy requires.
+   */
   proposeRuntimeUpgrade(
-    manifest: ToriiRuntimeUpgradeManifestInput,
-    options?: { signal?: AbortSignal },
+    changeSet: ToriiRuntimeChangeSet,
+    options?: {
+      signal?: AbortSignal;
+      provenance?: ReadonlyArray<ToriiRuntimeChangeSetEndorsement>;
+    },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
-  activateRuntimeUpgrade(
-    idHex: string | BinaryLike,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed draft of the Parliament proposal that withdraws a scheduled change set. */
   cancelRuntimeUpgrade(
     idHex: string | BinaryLike,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed request that the node sign its support for a scheduled change set. */
+  attestRuntimeUpgrade(
+    idHex: string | BinaryLike,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiRuntimeAttestationTxResponse>;
+  /** Operator-signed report of the runtime selections the node's release executes. */
+  getRuntimeRelease(options?: { signal?: AbortSignal }): Promise<ToriiRuntimeReleaseSupport>;
   listPeers(options?: {
     signal?: AbortSignal;
   }): Promise<Array<Record<string, unknown>>>;
@@ -10950,6 +11285,10 @@ export declare class ToriiClient {
     callId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KaigiCallView | null>;
+  getKaigiCallParticipation(
+    callId: string,
+    options?: { signal?: AbortSignal; canonicalAuth?: CanonicalRequestAuth },
+  ): Promise<KaigiCallParticipation | null>;
   listKaigiCallSignals(
     callId: string,
     options?: KaigiCallSignalsOptions,
@@ -11329,6 +11668,15 @@ export function verifySm2(
   distid?: string,
 ): boolean;
 
+/** Pre-action roster root a private `CreateKaigi` proof must bind, as lowercase hex. */
+export const KAIGI_EMPTY_ROSTER_ROOT_HEX_V1: string;
+
+/**
+ * Sample a new private Kaigi blinding. Keep it under owner-only custody: every proof
+ * for the same participation needs its own copy, because each proof clears its input.
+ */
+export function generateKaigiBlindingV1(): Uint8Array;
+
 export function buildKaigiAuthorizationProofV1(
   options: KaigiAuthorizationProofOptionsV1,
 ): KaigiAuthorizationProofV1;
@@ -11576,7 +11924,7 @@ export interface PrivacyExact12TypedFixtureRowV1 {
   protocolId: PrivacyExact12ProtocolIdV1;
   statementNorito: Uint8Array;
   envelopeNorito: Uint8Array;
-  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofWireId: "iroha.privacy.submit_proof.v1" | "iroha.privacy.submit_zk_x509_certificate.v1";
   submitProofInstructionNorito: Uint8Array;
   transactionIntentProjectionNorito: Uint8Array;
   transactionIntentDigest: Uint8Array;
@@ -11588,7 +11936,7 @@ export interface PrivacyExact12TypedFixtureRowInputV1 {
   protocolId: PrivacyExact12ProtocolIdV1;
   statementNorito: BinaryLike;
   envelopeNorito: BinaryLike;
-  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofWireId: "iroha.privacy.submit_proof.v1" | "iroha.privacy.submit_zk_x509_certificate.v1";
   submitProofInstructionNorito: BinaryLike;
   transactionIntentProjectionNorito: BinaryLike;
   transactionIntentDigest: BinaryLike;
@@ -11998,7 +12346,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 31;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 33;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -14565,3 +14913,6 @@ export function inspectToriiAccountIdentityViaNativeTransport(
   input: { networkId: NetworkId; baseUrl: string; accountId: string },
   transport: (request: Readonly<{ requestId: string; body: string }>) => Promise<unknown>,
 ): Promise<NativeAccountIdentity>;
+
+export { PrivacyX509DirectTransactionV1, preparePrivacyX509DirectTransactionV1, buildPrivacyX509DirectTransactionV1 } from "./privacy-x509.js";
+export type { PrivacyX509DirectTransactionInputV1, PrivacyX509BytesV1 } from "./privacy-x509.js";

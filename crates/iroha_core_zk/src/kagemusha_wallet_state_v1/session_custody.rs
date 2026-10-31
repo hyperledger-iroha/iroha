@@ -4,7 +4,7 @@
 //! after their exact signed bytes are durably selected. Clock tokens are
 //! native, single-use and intentionally not serializable: restart requires a new exchange.
 
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use super::{preparation_custody::IssuedRequestCustodyV1, *};
 use crate::kagemusha_wallet_advance_v1::{
@@ -122,7 +122,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, N: NativeProofs>
         let mut nonce = [0; 32];
         // This is an unrestricted nonzero 256-bit session nonce, not a state field.
         for _ in 0..128 {
-            rand::rngs::OsRng
+            rand::rngs::SysRng
                 .try_fill_bytes(&mut nonce)
                 .map_err(|_| unavailable())?;
             if nonce != [0; 32] {

@@ -21,6 +21,17 @@ PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1: Final = (
     "iroha.privacy.exact12-typed-fixture-bundle.v1"
 )
 PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1: Final = "iroha.privacy.submit_proof.v1"
+PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1: Final = "iroha.privacy.submit_zk_x509_certificate.v1"
+_X509_REQUEST_SCHEMA_V1: Final = "iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1"
+_X509_CONCRETE_SCHEMA_V1: Final = "iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1"
+_X509_ACTION_SCHEMA_V1: Final = "iroha_data_model::transaction::signed_attachments::ActionStatementV1"
+
+
+def _submit_wire_id_v1(protocol: str) -> str:
+    return (PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1
+            if protocol == "iroha-zk-x509-stark-p256-v1"
+            else PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1)
+
 PRIVACY_EXACT12_FIXTURE_BUNDLE_VERSION_V1: Final = 1
 PRIVACY_EXACT12_FIXTURE_BUNDLE_ROW_COUNT_V1: Final = 12
 PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: Final = 2 * 1024 * 1024
@@ -52,8 +63,7 @@ _STATEMENT_DIGEST_DOMAIN_V1: Final = b"iroha:privacy:statement:v1"
 _INTENT_DIGEST_DOMAIN_V1: Final = b"iroha.privacy.transaction-intent-digest.v1"
 _PROOF_WIRE_MAGIC_V1: Final = b"IRHZK1\xa5\x5a"
 _CATALOG_COMMITMENT_V1: Final = bytes.fromhex(
-    "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e"
-    "747f65787cbfbffac94f11c369e2bbff"
+    "5bcf366fb18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb0"
 )
 _BASE64_RE_V1: Final = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
 
@@ -144,9 +154,9 @@ class PrivacyExact12TypedFixtureRowV1:
             raise PrivacyExact12FixtureErrorV1("protocol_id is not in the closed Exact12 registry")
         if type(self.submit_proof_wire_id) is not str:
             raise TypeError("submit_proof_wire_id must be a string")
-        if self.submit_proof_wire_id != PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1:
+        if self.submit_proof_wire_id != _submit_wire_id_v1(self.protocol_id):
             raise PrivacyExact12FixtureErrorV1(
-                "submit_proof_wire_id must use the sole first-release wire identifier"
+                "submit_proof_wire_id must match its protocol's sole first-release route"
             )
         limits = {
             "statement_norito": PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
@@ -825,6 +835,80 @@ def _validate_signed_transaction_v1(signed: bytes, unsigned: bytes, context: str
         raise PrivacyExact12FixtureErrorV1(f"{context} must not carry multisig signatures")
 
 
+def _validate_x509_row_v1(
+    row: PrivacyExact12TypedFixtureRowV1,
+    statement_fields: tuple[bytes, ...],
+    statement_context: tuple[bytes, ...],
+    envelope_fields: tuple[bytes, ...],
+    context: str,
+) -> None:
+    """Check the model-owned direct fixture bytes; this grants no execution authority."""
+    fields = _encode_fields_v1
+    u32 = lambda value: struct.pack("<I", value)
+    u64 = lambda value: struct.pack("<Q", value)
+    tagged = lambda tag, payload: u32(tag) + fields((payload,))
+    sequence = lambda values: u64(len(values)) + fields(values)
+    wrapped = lambda digest: fields((digest,))
+    domain_hash = lambda domain, payload: blake3(domain + u64(len(payload)) + payload).digest()
+    wire = _encode_field_v1(PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1.encode("utf-8"))
+    zero = bytes(32)
+    reference = fields((u32(0), u32(0)))
+    request_limit = (
+        PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1
+        - len(_encode_frame_v1(b"", _STATEMENT_SCHEMA_NAME_V1, 8)) - 4
+        + len(fields((reference,))) + len(_encode_frame_v1(b"", _X509_REQUEST_SCHEMA_V1, 0))
+    )
+    request_payload = _decode_frame_v1(
+        row.submit_proof_instruction_norito, schema_name=_X509_REQUEST_SCHEMA_V1,
+        expected_padding=0, maximum=request_limit, context=f"{context}.request",
+    )
+    request_fields = _decode_fields_v1(request_payload, 2, f"{context}.request", request_limit)
+    zero_context = list(statement_context)
+    zero_context[2] = wrapped(zero)
+    zero_statement = list(statement_fields)
+    zero_statement[0] = fields(zero_context)
+    if request_fields != (fields(zero_statement), reference):
+        raise PrivacyExact12FixtureErrorV1("X509 request must retain the exact ZERO-intent statement and slot zero")
+    unsigned = list(_decode_fields_v1(
+        row.unsigned_transaction_payload_norito, 9, f"{context}.unsigned",
+        PRIVACY_EXACT12_MAX_UNSIGNED_TRANSACTION_BYTES_V1,
+    ))
+    boxed = fields((wire, u64(len(row.submit_proof_instruction_norito)) + row.submit_proof_instruction_norito))
+    if (unsigned[0] != tagged(0, statement_context[0])
+            or unsigned[1] != statement_fields[17]
+            or unsigned[3] != tagged(0, sequence((boxed,)))
+            or unsigned[2] != u64(1_700_000_000_005)
+            or _decode_option_v1(unsigned[4], 8, "X509 TTL") != 60_000
+            or _decode_option_v1(unsigned[5], 4, "X509 nonce") != 6):
+        raise PrivacyExact12FixtureErrorV1("X509 original network, authority, executable or fixture timing differs")
+    proof = _decode_proof_bytes_v1(
+        envelope_fields[12], 5, normalized=False, expected_zk_ams_action_tag=None,
+        context=f"{context}.proof",
+    )
+    public_inputs = domain_hash(
+        b"iroha.privacy.zk-x509-request-public-inputs.v1",
+        _encode_frame_v1(fields(zero_statement), _X509_CONCRETE_SCHEMA_V1, 0),
+    )
+    action = (u32(0), tagged(0, wire), u32(0), u32(0), tagged(1, u32(0)), wrapped(public_inputs))
+
+    def attachments(action_digest: bytes, raw_proof: bytes, proof_hash: bytes) -> bytes:
+        descriptor_ref = fields((u32(0), u32(0), u32(0), u64(len(raw_proof)), wrapped(proof_hash)))
+        descriptor = fields((*action, wrapped(action_digest), sequence((descriptor_ref,))))
+        occurrence = fields((u32(0), u32(0), u64(len(raw_proof)), wrapped(proof_hash), u64(len(raw_proof)) + raw_proof))
+        return b"\x01" + fields((fields((sequence((descriptor,)), sequence((occurrence,)))),))
+
+    original_attachments = unsigned[8]
+    unsigned[8] = attachments(zero, b"", zero)
+    ordered = domain_hash(b"iroha.transaction.ordered-intent-digest.v1",
+                          _encode_frame_v1(fields(unsigned), _TRANSACTION_PAYLOAD_SCHEMA_NAME_V1, 0))
+    action_statement = _encode_frame_v1(fields((wrapped(ordered), *action)), _X509_ACTION_SCHEMA_V1, 0)
+    action_digest = domain_hash(b"iroha.transaction.action-statement-digest.v1", action_statement)
+    if (row.transaction_intent_projection_norito != action_statement
+            or row.transaction_intent_digest != action_digest
+            or original_attachments != attachments(action_digest, proof, blake3(proof).digest())):
+        raise PrivacyExact12FixtureErrorV1("X509 original occurrence or ActionStatement binding differs")
+
+
 def _validate_row_bindings_v1(row: PrivacyExact12TypedFixtureRowV1, row_index: int) -> None:
     context = f"PrivacyExact12FixtureBundleV1.rows[{row_index}]"
     statement_payload = _decode_frame_v1(
@@ -866,6 +950,10 @@ def _validate_row_bindings_v1(row: PrivacyExact12TypedFixtureRowV1, row_index: i
         raise PrivacyExact12FixtureErrorV1(
             f"{context}.envelope_norito changed the decoded statement"
         )
+    if row_index == 5:
+        _validate_x509_row_v1(row, statement_fields, statement_context, envelope_fields, context)
+        _validate_signed_row_v1(row, context)
+        return
     instruction_payload = _decode_frame_v1(
         row.submit_proof_instruction_norito,
         schema_name=_SUBMIT_PROOF_SCHEMA_NAME_V1,
@@ -988,6 +1076,10 @@ def _validate_row_bindings_v1(row: PrivacyExact12TypedFixtureRowV1, row_index: i
         raise PrivacyExact12FixtureErrorV1(
             f"{context}.transaction_intent_digest does not match its projection"
         )
+    _validate_signed_row_v1(row, context)
+
+
+def _validate_signed_row_v1(row: PrivacyExact12TypedFixtureRowV1, context: str) -> None:
     _validate_signed_transaction_v1(
         row.signed_transaction_versioned_norito,
         row.unsigned_transaction_payload_norito,
@@ -1070,7 +1162,7 @@ def _decode_row_v1(
     wire_id = _read_string_field_v1(
         reader, budget=budget, context=f"{context}.submit_proof_wire_id"
     )
-    if wire_id != PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1:
+    if wire_id != _submit_wire_id_v1(PRIVACY_PROTOCOL_IDS_V1[row_index]):
         raise PrivacyExact12FixtureErrorV1(f"{context} uses a retired submit-proof wire id")
     instruction = _read_raw_vector_field_v1(
         reader,
@@ -1354,6 +1446,7 @@ class PrivacyExact12FixtureCodecV1:
 __all__ = [
     "PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1",
     "PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1",
+    "PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1",
     "PRIVACY_EXACT12_FIXTURE_BUNDLE_VERSION_V1",
     "PRIVACY_EXACT12_FIXTURE_BUNDLE_ROW_COUNT_V1",
     "PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1",

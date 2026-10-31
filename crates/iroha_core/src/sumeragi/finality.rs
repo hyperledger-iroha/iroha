@@ -5,7 +5,10 @@ mod cursor;
 pub(crate) use cursor::NativeGenesisExecutionV1;
 mod interval;
 mod interval_budget;
+mod profile;
+pub use profile::native_finality_frame_budget_bytes;
 mod proof_destination;
+mod retained;
 pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
@@ -18,9 +21,15 @@ pub use interval::{
     NativeFinalityProofIntervalLimits, NativeFinalityProofRefusal, NativeFinalityProofSource,
     build_proof_interval,
 };
-pub(crate) use interval_budget::FinalityDecodeWorkspace;
-pub use interval_budget::NativeFinalityProofBudget;
+pub(crate) use interval_budget::{FinalityDecodeWorkspace, metadata_generation_bytes};
+pub use interval_budget::{NativeFinalityProofBudget, native_finality_graph_floor_bytes};
 pub use proof_destination::ProofDestinationError;
+use retained::RetainedAdmission;
+pub(crate) use retained::RetainedAttestation;
+pub use retained::{
+    AttestationRelease, RetainedAttestationProducer, RetainedAttestationProducerAttached,
+    RetainedUnavailable, retained_attestation_releasable,
+};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -63,6 +72,9 @@ pub enum ProofError {
     /// Original local history acquisition has not completed.
     #[error(transparent)]
     Deferred(crate::execution_attempt::ExecutionDeferred),
+    /// The attached retained authority cannot serve this current attestation yet.
+    #[error(transparent)]
+    RetainedUnavailable(#[from] RetainedUnavailable),
 }
 
 impl From<crate::execution_attempt::ExecutionAttemptError<ChainReadError>> for ProofError {
@@ -155,17 +167,16 @@ impl<V: StateReadOnly> FinalityProofReader<'_, V> {
         if let Some(change_original) = self.before_verified.take() {
             change_original();
         }
-        let result = match self.chain.as_ref() {
-            Some(chain) => proof_from_chain(chain, height),
-            None => {
-                let mut chain = CertifiedChain::new(self.view)?;
-                chain.enable_proof_source_cut();
-                let result = proof_from_chain(&chain, height);
-                if result.is_ok() {
-                    self.chain = Some(chain);
-                }
-                result
+        let result = if let Some(chain) = self.chain.as_ref() {
+            proof_from_chain(chain, height)
+        } else {
+            let mut chain = CertifiedChain::new(self.view)?;
+            chain.enable_proof_source_cut();
+            let result = proof_from_chain(&chain, height);
+            if result.is_ok() {
+                self.chain = Some(chain);
             }
+            result
         };
         match result {
             Err(error) => {
@@ -235,6 +246,10 @@ fn proof_from_chain<V: StateReadOnly>(
     proof_from_certified(chain.certified(height)?, height)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Consume the authenticated receipt so its retained native storage retires before the caller continues."
+)]
 fn proof_from_certified(
     certified: CertifiedBlock,
     height: u64,
@@ -411,6 +426,38 @@ pub fn build_attestation(
     challenge: [u8; 32],
     signer: &KeyPair,
 ) -> Result<SumeragiFinalityAttestation, AttestationBuildError> {
+    let (attestation, release) = build_attestation_with_release(
+        view,
+        status,
+        identity,
+        build_fingerprint,
+        height,
+        challenge,
+        signer,
+    )?;
+    // An in-process caller holds the statement at once, so it is released here.
+    view.kura()
+        .retained_attestation()
+        .check(release.admission())
+        .map_err(AttestationBuildError::FinalityProof)?;
+    Ok(attestation)
+}
+
+/// [`build_attestation`] for a route that encodes and sends the statement later. The
+/// route passes the returned release to [`retained_attestation_releasable`] immediately
+/// before the response leaves the node, and sends nothing when it refuses.
+///
+/// # Errors
+/// As [`build_attestation`].
+pub fn build_attestation_with_release(
+    view: &impl StateReadOnly,
+    status: SumeragiStatus,
+    identity: &NodeIdentity,
+    build_fingerprint: Hash,
+    height: u64,
+    challenge: [u8; 32],
+    signer: &KeyPair,
+) -> Result<(SumeragiFinalityAttestation, AttestationRelease), AttestationBuildError> {
     use AttestationBuildError as Error;
     if signer.algorithm() != Algorithm::BlsNormal
         || identity.node_id.public_key() != signer.public_key()
@@ -441,12 +488,13 @@ pub fn build_attestation(
         });
     }
     // The active caller keeps its original full-prefix recipe and cumulative charges.
-    // Ordinary current captures use this same State generation's original execution tip.
-    // One reverse source walk joins the target to H2 and genesis, checking both
-    // selected QCs/availability and the exact separately projected genesis result.
-    // No producer cursor, source verdict or challenge is retained across calls.
-    let (genesis_finality_proof, finality_proof) = attestation_proofs(view, height)?;
-    finish_attestation(
+    // Ordinary current captures use this same State generation's original execution tip:
+    // one reverse source walk joins the target to H2 and genesis, checking both selected
+    // QCs/availability and the exact separately projected genesis result, unless an
+    // attached retained authority admits this exact view. Its admission travels with the
+    // statement through signing and release; no challenge is retained across calls.
+    let (genesis_finality_proof, finality_proof, admission) = attestation_proofs(view, height)?;
+    let attestation = finish_attestation(
         view,
         status,
         identity,
@@ -458,8 +506,10 @@ pub fn build_attestation(
             genesis_block_hash,
             genesis: genesis_finality_proof,
             tip: finality_proof,
+            admission,
         },
-    )
+    )?;
+    Ok((attestation, AttestationRelease::new(height, admission)))
 }
 
 // Retire the independent certificate reader and all of its construction slots before
@@ -468,25 +518,65 @@ pub fn build_attestation(
 fn attestation_proofs(
     view: &impl StateReadOnly,
     height: u64,
-) -> Result<(SumeragiFinalityProof, SumeragiFinalityProof), AttestationBuildError> {
+) -> Result<
+    (
+        SumeragiFinalityProof,
+        SumeragiFinalityProof,
+        RetainedAdmission,
+    ),
+    AttestationBuildError,
+> {
     use AttestationBuildError as Error;
     let proof_chain =
         CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
     let (genesis_decision, genesis) =
         attestation_genesis_proof(&proof_chain).map_err(Error::GenesisFinalityProof)?;
-    let tip = if height == 1 {
-        genesis.clone()
+    let (tip, admission) = if height == 1 {
+        (genesis.clone(), RetainedAdmission::CompleteWalk)
     } else if height > 2 && !norito::core::decode_limits_active() {
-        current_execution_proof(&proof_chain, height, genesis_decision)
-            .map_err(Error::FinalityProof)?
+        let admission = view
+            .kura()
+            .retained_attestation()
+            .admit(view, height, &genesis_decision)
+            .map_err(Error::FinalityProof)?;
+        let tip = if admission == RetainedAdmission::CompleteWalk {
+            current_execution_proof(&proof_chain, height, genesis_decision)
+                .map_err(Error::FinalityProof)?
+        } else {
+            // The retained authority's producer authenticated every frame below the
+            // target (see `retained`), and admission read any lead above it. Verify the
+            // exact target quorum and signed availability through its parent only.
+            let target = usize::try_from(height)
+                .ok()
+                .and_then(std::num::NonZeroUsize::new)
+                .ok_or_else(|| Error::FinalityProof(ChainReadError::NotInView { height }.into()))?;
+            let certified = proof_chain
+                .certified_from_execution(target, |_, _| Ok(()))
+                .map_err(|error| {
+                    Error::FinalityProof(match error {
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            ProofError::NativeExecution(error)
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                            ProofError::Deferred(local)
+                        }
+                    })
+                })?;
+            proof_from_certified(certified, height).map_err(Error::FinalityProof)?
+        };
+        (tip, admission)
     } else {
-        proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
+        (
+            proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?,
+            RetainedAdmission::CompleteWalk,
+        )
     };
-    Ok((genesis, tip))
+    Ok((genesis, tip, admission))
 }
 
 // Coordinates of the exact native receipt projected into the returned genesis proof.
 // A signed genesis proposal alone never authenticates its attached execution R.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GenesisDecision {
     block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     core_hash: iroha_sumeragi::types::Hash32,
@@ -564,14 +654,16 @@ fn finish_current_execution_proof(
     proof_from_certified(tip, height)
 }
 
-// Only the two genuinely produced portable proofs and Copy source projections leave
-// the producer phase. No native prefix, authority or source guard crosses this seam.
+// Only the two genuinely produced portable proofs, Copy source projections and the
+// Copy retained admission leave the producer phase. No native prefix, authority or
+// source guard crosses this seam.
 struct AttestationProofs {
     committed: u64,
     genesis_block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     // Match the original local proof drop order on an early tail refusal.
     tip: SumeragiFinalityProof,
     genesis: SumeragiFinalityProof,
+    admission: RetainedAdmission,
 }
 
 // The fresh source/instance fence and its native owner retain their original lifetime
@@ -617,6 +709,11 @@ fn finish_attestation(
     };
     body.validate_consistency(chain.root_scope().into())
         .map_err(attestation_body_read_error)?;
+    // The authority this capture was admitted under must still hold when it is signed.
+    view.kura()
+        .retained_attestation()
+        .check(proofs.admission)
+        .map_err(Error::FinalityProof)?;
     let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
         .map_err(|error| Error::Signing(error.to_string()))?;
     let attestation = SumeragiFinalityAttestation { body, signature };

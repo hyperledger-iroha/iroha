@@ -1,11 +1,11 @@
 name: Native Kagami and Mochi developer bundle
 
-# Manual: native runners need at least 13 GiB RAM, 50 GiB free build storage and OpenSSL.
+# Manual: native runners need at least 13 GiB RAM, 50 GiB free build storage.
 # Select existing runner labels with those resources; no paid runner is implicitly selected.
 # Hosted runner references:
 # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 # https://docs.github.com/en/actions/reference/runners/larger-runners
-# This gate exercises local native behavior. Official Taira publication and the
+# This gate exercises local native behavior. Live Taira attachment and the
 # twenty-run reference-host latency campaign are separate acceptance requirements.
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_TARGET_DIR: ${{ github.workspace }}/target
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.93.1
+  RUSTUP_TOOLCHAIN: 1.99.1
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: "false"
@@ -76,7 +76,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -100,11 +100,11 @@ jobs:
           test "$(git hash-object --no-filters -- "$profile")" = "$(git rev-parse "HEAD:$profile")"
           # Native packaging performs the bounded canonical/Taira validation before its build.
           # No key or URL can be supplied by this workflow or by an HTTP response.
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Check native host and resource floor
@@ -160,10 +160,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
-      - name: Check disposable TLS fixture controller tools
+      - name: Check disposable loopback fixture controller tools
         run: |
-          python -c 'import ssl, sys; assert sys.version_info >= (3, 10)'
-          openssl version
+          python -c 'import sys; assert sys.version_info >= (3, 10)'
       - name: Test native filesystem, wallet, environment and contract deployment owners
         run: cargo test --locked --release -p iroha_fs -p iroha_wallet -p iroha_deploy -p iroha_contract_deploy --lib -- --test-threads=1
       - name: Test native Musubi publication, recovery and workspace execution
@@ -175,9 +174,11 @@ jobs:
       - name: Exercise standalone Kagami installed flows
         env:
           IROHA_DEVEX_BUNDLE_BIN: ${{ github.workspace }}/target/devex-kagami-native/kagami-${{ matrix.bundle_host }}-release/bin
+          IROHA_TEST_RUNTIME_DIRECTORY: ${{ github.workspace }}/target/devex-kagami-native/kagami-${{ matrix.bundle_host }}-release/bin
         run: |
           cargo test --locked --release -p xtask --features dev-tools --bin xtask mochi::developer_smoke::tests::installed_runtime_without_configuration -- --exact --ignored --test-threads=1 --nocapture
           cargo test --locked --release -p xtask --features dev-tools --bin xtask mochi::developer_smoke::cold_start_smoke::tests::installed_bytecode_and_package_start_without_configuration -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --locked --release -p iroha_deploy --lib managed::tests::attachment_installed::installed_parent_attachment_private_contracts_and_payload_isolation -- --exact --ignored --test-threads=1 --nocapture
       - name: Build complete release bundle and exercise all deployment inputs
         run: cargo run --locked --release -p xtask --features dev-tools --bin xtask -- mochi-bundle --profile release --out target/devex-native --matrix target/devex-native/matrix.json --smoke
       - name: Extract the Mochi deliverable into a fresh installed directory
@@ -207,19 +208,27 @@ jobs:
         run: |
           cargo test --locked --release -p xtask --features dev-tools --bin xtask mochi::developer_smoke::tests::installed_runtime_without_configuration -- --exact --ignored --test-threads=1 --nocapture
           cargo test --locked --release -p xtask --features dev-tools --bin xtask mochi::developer_smoke::cold_start_smoke::tests::installed_bytecode_and_package_start_without_configuration -- --exact --ignored --test-threads=1 --nocapture
+      - name: Exercise real Mochi desktop actions against the extracted runtime
+        env:
+          MOCHI_PREVIEW_OUT: ${{ github.workspace }}/target/devex-native/mochi-preview
+        run: |
+          set -euo pipefail
+          export MOCHI_PREVIEW_RUNTIME="$IROHA_DEVEX_BUNDLE_BIN"
+          cargo test --locked --release -p mochi-ui --features gui --bin mochi gui::preview_tests::live_walkthrough_with_a_real_generation -- --exact --ignored --test-threads=1 --nocapture
       - name: Exercise native private validators, persistence and listener isolation
         run: cargo test --locked --release -p iroha_deploy --lib managed::tests::installed::installed_private_root_lifecycle_and_listener_isolation -- --exact --ignored --test-threads=1 --nocapture
       - name: Exercise disposable parent attachment and private payload isolation
         run: cargo test --locked --release -p iroha_deploy --lib managed::tests::attachment_installed::installed_parent_attachment_private_contracts_and_payload_isolation -- --exact --ignored --test-threads=1 --nocapture
       - name: Retain public bundle inventory and host report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: devex-native-${{ matrix.target }}-${{ github.sha }}
           path: |
             target/devex-native/host.json
             target/devex-native/matrix.json
             target/devex-native/mochi-*/manifest.json
+            target/devex-native/mochi-preview/live/*.ppm
             target/devex-kagami-native/kagami-*/manifest.json
             target/devex-native/*.tar.gz
             target/devex-native/*.zip

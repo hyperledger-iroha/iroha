@@ -19,8 +19,8 @@ fn keccak_parity_cuda_vs_scalar() {
         return;
     }
     let mut s_cpu = [0u64; 25];
-    for i in 0..25 {
-        s_cpu[i] = (i as u64) * 0x0101_0101_0101_0101u64;
+    for (i, word) in s_cpu.iter_mut().enumerate() {
+        *word = (i as u64) * 0x0101_0101_0101_0101u64;
     }
     let mut s_cuda = s_cpu;
     ivm::keccak_f1600(&mut s_cpu);

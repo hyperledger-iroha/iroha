@@ -5,7 +5,7 @@ use std::fs::File;
 
 /// A raw file identity, distinct from Iroha's typed hash and from proof authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RawFileIdentity {
+pub struct RawFileIdentity {
     pub(crate) raw_sha256: [u8; 32],
     pub(crate) byte_length: u64,
 }
@@ -25,7 +25,7 @@ fn read_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> Result<()> {
 pub(super) fn raw_digest(file: &File, length: u64) -> Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     let mut offset = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     while offset < length {
         let count = usize::try_from((length - offset).min(buffer.len() as u64))?;
         read_at(file, &mut buffer[..count], offset)?;

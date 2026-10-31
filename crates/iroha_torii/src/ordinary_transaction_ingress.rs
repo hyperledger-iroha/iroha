@@ -212,8 +212,8 @@ pub async fn submit(
                 return validate_retry_route(&worker_app, &accepted, &routing_plan);
             }
             routing::push_accepted_transaction_for_ingress_with_routing_plan(
-                worker_app.queue.clone(),
-                worker_app.state.clone(),
+                &(worker_app.queue),
+                &(worker_app.state),
                 accepted,
                 Some(routing_plan),
             )

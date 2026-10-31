@@ -29,7 +29,7 @@ mod sealed {
 /// Callers cannot supply an ad hoc row iterator through this interface. Owning a
 /// native map still does not establish State provenance: each consumer must retain
 /// and authenticate its actual source separately, including after snapshot decode.
-pub(crate) trait RawStorageImages<K: Key, V: Value>: sealed::Sealed {
+pub trait RawStorageImages<K: Key, V: Value>: sealed::Sealed {
     /// Borrow every original current row without a lookup or fresh read.
     fn current_entries(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator;
     /// Borrow every physical undo row, including explicit absent/no-op preimages.

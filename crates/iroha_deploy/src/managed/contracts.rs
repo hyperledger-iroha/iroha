@@ -30,6 +30,29 @@ pub struct ManagedContractViewRequest {
     pub gas_limit: NonZeroU64,
 }
 
+impl ManagedContractViewRequest {
+    /// Parse an exact selector, named JSON arguments and a gas budget, as frontends accept them.
+    ///
+    /// # Errors
+    /// Rejects an empty or padded selector, arguments over 64 KiB, malformed JSON or zero gas.
+    pub fn parse(entrypoint: String, arguments: &str, gas_limit: u64) -> Result<Self> {
+        if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+            return Err(invalid("entrypoint must use its exact public selector"));
+        }
+        if arguments.len() > 64 * 1024 {
+            return Err(invalid("contract arguments exceed the 64 KiB bound"));
+        }
+        let arguments =
+            iroha_contract_deploy::call::parse_contract_arguments(arguments).map_err(invalid)?;
+        Ok(Self {
+            entrypoint,
+            arguments,
+            gas_limit: NonZeroU64::new(gas_limit)
+                .ok_or_else(|| invalid("gas limit must be positive"))?,
+        })
+    }
+}
+
 /// Authenticated selected-root view result, without any mutation or parent inclusion claim.
 #[derive(Debug, JsonSerialize)]
 pub struct ManagedContractView {
@@ -80,6 +103,14 @@ pub struct ManagedContractCallReport {
     pub readback_failure: Option<String>,
     /// Separate historical parent observation; this is not proof of the call's parent inclusion.
     pub parent: Option<ManagedParentReport>,
+}
+
+/// Make a printed recovery command runnable by naming this context's client configuration.
+fn with_client_config(message: &str, selected: &ManagedContext) -> String {
+    message.replace(
+        iroha_contract_deploy::call::CLIENT_CONFIG_PLACEHOLDER,
+        &format!("'{}'", selected.client_config.display()),
+    )
 }
 
 fn invalid(error: impl std::fmt::Display) -> Error {
@@ -305,7 +336,7 @@ impl ManagedStore {
                     max_total_fees: BTreeMap::from([(target.fee_asset()?, options.max_fee)]),
                 },
             })
-            .map_err(invalid)?;
+            .map_err(|error| invalid(with_client_config(&error.to_string(), selected)))?;
         target.revalidate_generation(self)?;
         let id = prepared.operation_id().map_err(invalid)?;
         journal_id(&id)?;

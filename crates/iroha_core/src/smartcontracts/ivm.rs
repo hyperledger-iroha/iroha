@@ -16,7 +16,6 @@ use iroha_data_model::{
         ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
         MaxCyclesExceedsUpperBoundInfo,
     },
-    runtime::{RuntimeUpgradeManifest, RuntimeUpgradeStatus},
     smart_contract::manifest::ContractManifest,
 };
 use iroha_model_base::metadata::Metadata;
@@ -119,86 +118,30 @@ pub(crate) fn validate_generic_execution_context(
     }
     Ok(())
 }
-/// Validate the first-release runtime-upgrade ABI surface against this binary.
+/// ABI hashes of the host profiles the root's selection activates (`live_runtime_upgrades.md`
+/// §3.1): a contract executes only under a host profile its root selected, so admission compares
+/// its ABI hash with these. The baseline activates exactly the ABI V1 host profile.
 ///
-/// Runtime records are persisted consensus state. A node must fail closed when that state selects
-/// an ABI descriptor different from the one compiled into the process; interpreting a block under a
-/// substituted local surface would fork consensus.
-pub(crate) fn validate_runtime_upgrade_manifest_abi(
-    manifest: &RuntimeUpgradeManifest,
-) -> Result<Hash, IvmAdmissionError> {
-    if manifest.abi_version != 1 {
-        let version =
-            u8::try_from(manifest.abi_version).map_err(|_| IvmAdmissionError::ManifestMalformed)?;
-        return Err(IvmAdmissionError::UnsupportedAbiVersion(version));
-    }
-    if !manifest.added_syscalls.is_empty() || !manifest.added_pointer_types.is_empty() {
-        return Err(IvmAdmissionError::ManifestMalformed);
-    }
-    let local_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let local = Hash::prehashed(local_bytes);
-    if manifest.abi_hash != local_bytes {
-        let selected = Hash::prehashed(manifest.abi_hash);
-        return Err(IvmAdmissionError::ManifestAbiHashMismatch(
-            ManifestAbiHashMismatchInfo {
-                expected: selected,
-                actual: local,
-            },
-        ));
-    }
-    Ok(local)
-}
-/// Return the ABI hash selected by the latest effective runtime upgrade.
-///
-/// Equal-height active records are invalid even if their payloads happen to
-/// match: consensus must have one unambiguous active runtime selection.
-pub(crate) fn active_runtime_abi_hash(
+/// # Errors
+/// The selection names a host profile its World has not published.
+pub(crate) fn active_host_abi_hashes(
     world: &impl WorldReadOnly,
-    height: u64,
-) -> Result<Option<Hash>, IvmAdmissionError> {
-    let mut active = None;
-    let mut activation_heights = BTreeSet::new();
-    for (id, record) in world.runtime_upgrades().iter() {
-        let manifest = &record.manifest;
-        if manifest.start_height >= manifest.end_height {
-            return Err(IvmAdmissionError::ManifestMalformed);
-        }
-        let abi_hash = match record.status {
-            RuntimeUpgradeStatus::Canceled => continue,
-            RuntimeUpgradeStatus::Proposed => {
-                // Proposed records can auto-activate at the start height, so
-                // persisted corruption must fail before that transition.
-                validate_runtime_upgrade_manifest_abi(manifest)?;
-                continue;
+) -> Result<BTreeSet<Hash>, IvmAdmissionError> {
+    let selection = world.runtime_selection();
+    let definitions = world.runtime_definitions();
+    let mut hashes = BTreeSet::new();
+    for id in &selection.active {
+        match definitions.get(id) {
+            Some(iroha_data_model::runtime::definition::DefinitionDescriptorV1::HostProfile(
+                profile,
+            )) => {
+                hashes.insert(Hash::prehashed(profile.abi_hash));
             }
-            RuntimeUpgradeStatus::ActivatedAt(activated_at) => {
-                if activated_at < manifest.start_height || activated_at >= manifest.end_height {
-                    return Err(IvmAdmissionError::ManifestMalformed);
-                }
-                if !activation_heights.insert(activated_at) {
-                    return Err(IvmAdmissionError::ManifestMalformed);
-                }
-                // Validate every activated record, including future records. A
-                // newer valid record must never mask an older incompatible one.
-                (
-                    activated_at,
-                    validate_runtime_upgrade_manifest_abi(manifest)?,
-                )
-            }
-        };
-        let (activated_at, abi_hash) = abi_hash;
-        if activated_at > height {
-            continue;
-        }
-        match active {
-            Some((best_height, _, _)) if activated_at < best_height => continue,
-            Some((best_height, _, _)) if activated_at == best_height => {
-                unreachable!("duplicate activation heights were rejected above")
-            }
-            _ => active = Some((activated_at, *id, abi_hash)),
+            Some(_) => {}
+            None => return Err(IvmAdmissionError::ManifestMalformed),
         }
     }
-    Ok(active.map(|(_, _, abi_hash)| abi_hash))
+    Ok(hashes)
 }
 /// Validate the consensus-binding hashes carried by a contract manifest.
 ///
@@ -350,10 +293,10 @@ pub fn map_vm_error_with_context_to_validation(
                 message,
             });
         }
-        match fault {
-            Some(fault) => ValidationFail::IvmFault(fault),
-            None => program_admission_error(error.into_unmetered()),
-        }
+        fault.map_or_else(
+            || program_admission_error(error.into_unmetered()),
+            ValidationFail::IvmFault,
+        )
     })
 }
 #[cfg(test)]
@@ -362,12 +305,7 @@ mod diagnostic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
-        },
-        smart_contract::manifest::ContractManifest,
-    };
+    use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
@@ -388,21 +326,6 @@ mod tests {
             error_messages: None,
             error_types: None,
             provenance: None,
-        }
-    }
-    fn runtime_manifest() -> RuntimeUpgradeManifest {
-        RuntimeUpgradeManifest {
-            name: "numeric-v1".to_owned(),
-            description: "first-release ABI".to_owned(),
-            abi_version: 1,
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            added_syscalls: Vec::new(),
-            added_pointer_types: Vec::new(),
-            start_height: 1,
-            end_height: 100,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
         }
     }
     #[test]
@@ -480,121 +403,15 @@ mod tests {
         assert!(validate_generic_execution_context(&private.view(), &metadata, own).is_err());
     }
     #[test]
-    fn runtime_upgrade_manifest_abi_validation_fails_closed() {
-        let valid = runtime_manifest();
+    fn active_host_abi_hashes_come_from_the_committed_selection() {
+        let world = crate::state::World::new();
         assert_eq!(
-            validate_runtime_upgrade_manifest_abi(&valid),
-            Ok(Hash::prehashed(valid.abi_hash))
+            active_host_abi_hashes(&world.view()),
+            Ok(BTreeSet::from([Hash::prehashed(
+                ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
+            )])),
+            "the baseline selection activates exactly the first-release host profile"
         );
-        let mut stale = valid.clone();
-        stale.abi_hash[0] ^= 0x80;
-        assert!(matches!(
-            validate_runtime_upgrade_manifest_abi(&stale),
-            Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
-        ));
-        let mut normalized_alias = valid.clone();
-        normalized_alias.abi_hash[31] ^= 1;
-        assert_eq!(
-            Hash::prehashed(normalized_alias.abi_hash),
-            Hash::prehashed(valid.abi_hash),
-            "Hash normalization must not erase an ABI descriptor mismatch"
-        );
-        assert!(matches!(
-            validate_runtime_upgrade_manifest_abi(&normalized_alias),
-            Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
-        ));
-        let mut delta = valid.clone();
-        delta.added_syscalls.push(7);
-        assert!(matches!(
-            validate_runtime_upgrade_manifest_abi(&delta),
-            Err(IvmAdmissionError::ManifestMalformed)
-        ));
-        let mut unsupported = valid;
-        unsupported.abi_version = 2;
-        assert!(matches!(
-            validate_runtime_upgrade_manifest_abi(&unsupported),
-            Err(IvmAdmissionError::UnsupportedAbiVersion(2))
-        ));
-    }
-    #[test]
-    fn active_runtime_selection_validates_all_records_and_rejects_ties() {
-        let mut world = crate::state::World::new();
-        let proposer = iroha_test_samples::ALICE_ID.clone();
-        let valid = runtime_manifest();
-        let mut stale = valid.clone();
-        stale.abi_hash[0] ^= 0x40;
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([1; 32]),
-            RuntimeUpgradeRecord {
-                manifest: stale,
-                status: RuntimeUpgradeStatus::ActivatedAt(2),
-                proposer: proposer.clone(),
-                created_height: 1,
-            },
-        );
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([2; 32]),
-            RuntimeUpgradeRecord {
-                manifest: valid.clone(),
-                status: RuntimeUpgradeStatus::ActivatedAt(3),
-                proposer: proposer.clone(),
-                created_height: 2,
-            },
-        );
-        assert!(matches!(
-            active_runtime_abi_hash(&world.view(), 3),
-            Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
-        ));
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([1; 32]),
-            RuntimeUpgradeRecord {
-                manifest: valid.clone(),
-                status: RuntimeUpgradeStatus::ActivatedAt(2),
-                proposer: proposer.clone(),
-                created_height: 1,
-            },
-        );
-        assert_eq!(
-            active_runtime_abi_hash(&world.view(), 3),
-            Ok(Some(Hash::prehashed(valid.abi_hash)))
-        );
-        let mut future_stale = valid.clone();
-        future_stale.abi_hash[0] ^= 0x20;
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([4; 32]),
-            RuntimeUpgradeRecord {
-                manifest: future_stale,
-                status: RuntimeUpgradeStatus::ActivatedAt(99),
-                proposer: proposer.clone(),
-                created_height: 3,
-            },
-        );
-        assert!(matches!(
-            active_runtime_abi_hash(&world.view(), 3),
-            Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
-        ));
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([4; 32]),
-            RuntimeUpgradeRecord {
-                manifest: valid.clone(),
-                status: RuntimeUpgradeStatus::ActivatedAt(99),
-                proposer: proposer.clone(),
-                created_height: 3,
-            },
-        );
-        world.runtime_upgrades.insert(
-            RuntimeUpgradeId([3; 32]),
-            RuntimeUpgradeRecord {
-                manifest: valid,
-                status: RuntimeUpgradeStatus::ActivatedAt(3),
-                proposer,
-                created_height: 2,
-            },
-        );
-        assert!(matches!(
-            active_runtime_abi_hash(&world.view(), 3),
-            Err(IvmAdmissionError::ManifestMalformed)
-        ));
     }
     #[test]
     fn manifest_hash_validation_is_complete_and_has_stable_precedence() {

@@ -26,26 +26,31 @@ env:
   IROHA_MUSL_RUNTIME_IMAGE: ${{ vars.IROHA_MUSL_RUNTIME_IMAGE }}
 
 jobs:
+  ci_image:
+    uses: ./.github/workflows/ci_image_preflight.yml
+    permissions:
+      contents: read
+
   release-feature-graph:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
       - name: Enforce reviewed shipping feature graphs
         run: python3 -I -S scripts/check_release_feature_graph.py
 
   image:
-    needs: release-feature-graph
+    needs: [release-feature-graph, ci_image]
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: ${{ vars.IROHA_CI_IMAGE }}
+      image: ${{ needs.ci_image.outputs.image }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
       - name: Validate digest-pinned Docker base images
@@ -71,12 +76,12 @@ jobs:
           if git_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
             echo "tag=$git_tag" >>"$GITHUB_OUTPUT"
           fi
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Login to Soramitsu Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
         with:
           registry: docker.soramitsu.co.jp
           username: ${{ secrets.HARBOR_USERNAME }}
@@ -84,14 +89,13 @@ jobs:
       - name: Set up Docker Buildx
         id: buildx
         if: always()
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           version: v0.34.1
-          install: true
 
       # glibc
       - name: Build and push iroha:glibc image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
@@ -117,7 +121,7 @@ jobs:
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
       - name: Build and push iroha:profiling-tag-sha image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         if: ${{ inputs.image_type == 'profiling' }}
         with:
           push: true
@@ -135,7 +139,7 @@ jobs:
       # Alpine (difference from glibc is the use of Dockerfile.musl)
       - name: Build and push iroha:alpine-sha image
         if: ${{ inputs.image_type == 'alpine' }}
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           push: true
           tags: docker.soramitsu.co.jp/iroha3/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}

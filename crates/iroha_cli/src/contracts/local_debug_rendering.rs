@@ -36,7 +36,7 @@ pub(super) fn render_queued_instructions(queued: &[InstructionBox]) -> Result<no
 /// Render the durable-state overlay using canonical state paths and hex values.
 pub(super) fn render_durable_state_overlay(
     overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
-) -> Result<norito::json::Value> {
+) -> norito::json::Value {
     let mut object = norito::json::Map::new();
     for (path, value) in overlay {
         object.insert(
@@ -46,5 +46,5 @@ pub(super) fn render_durable_state_overlay(
             }),
         );
     }
-    Ok(norito::json::Value::Object(object))
+    norito::json::Value::Object(object)
 }

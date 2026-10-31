@@ -212,7 +212,7 @@ fn actual_python_canonical_budget_receipt_decodes_against_independent_rust_sha25
         Some("one_lane")
     );
     let mut bound = expected();
-    bound.digest = format!("{:x}", Sha256::digest(public_inputs));
+    bound.digest = hex::encode(Sha256::digest(public_inputs));
     let allocated = parse(&bound, reply).unwrap();
     assert_eq!(allocated.journal.max_bytes, 4096);
     assert_eq!(allocated.trace.max_bytes, 8192);

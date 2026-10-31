@@ -8,7 +8,7 @@ fn record_report_original(
     let hash = "13".repeat(32);
     let mut metadata = inbound_metadata(original_id, "pacs.008");
     metadata.payload_hash = Some(sha256_hex(original_id.as_bytes()));
-    assert!(runtime.check_and_record_inbound(original_id, metadata));
+    assert!(runtime.check_and_record_inbound(original_id, &(metadata)));
     assert!(runtime.update_message_context(
         original_id,
         IsoMessageContext {
@@ -347,7 +347,9 @@ fn reported_return_pending_pins_original_through_retention_and_restart() {
     let store = TempDir::new().unwrap();
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    config.store_retention_secs = 1;
+    // The original is explicitly aged to the Unix epoch below. Keep the newly
+    // finalized report within retention while real durable writes complete.
+    config.store_retention_secs = 3_600;
     config.store_max_records = 2;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .unwrap()
@@ -369,7 +371,7 @@ fn reported_return_pending_pins_original_through_retention_and_restart() {
     assert!(matches!(
         runtime.admit_inbound(
             "over-capacity",
-            inbound_metadata("over-capacity", "pacs.008"),
+            &(inbound_metadata("over-capacity", "pacs.008")),
             runtime.compatibility_test_parties(&inbound_metadata("over-capacity", "pacs.008")),
             false
         ),
@@ -413,7 +415,7 @@ async fn reported_return_before_carrier_assignment_retains_binding_and_wakes_pro
     let runtime = sample_runtime();
     let mut metadata = inbound_metadata("early-original", "pacs.008");
     metadata.payload_hash = Some(sha256_hex(b"early original exact XML"));
-    assert!(runtime.check_and_record_inbound("early-original", metadata));
+    assert!(runtime.check_and_record_inbound("early-original", &(metadata)));
     record_lifecycle(&runtime, "early-report", "pacs.004");
     let parsed = reported_return_message("early-original", "early-report", "5", "USD");
     let (_, report) = runtime
@@ -560,7 +562,7 @@ fn reported_return_authorization_survives_same_original_carrier_assignment() {
     let runtime = sample_runtime();
     let mut metadata = inbound_metadata("assigned-original", "pacs.008");
     metadata.payload_hash = Some(sha256_hex(b"immutable assigned original"));
-    assert!(runtime.check_and_record_inbound("assigned-original", metadata));
+    assert!(runtime.check_and_record_inbound("assigned-original", &(metadata)));
     let parsed = reported_return_message("assigned-original", "assigned-report", "5", "USD");
     let authorization = runtime
         .compatibility_lifecycle_authorization("pacs.004", &parsed)
@@ -615,7 +617,7 @@ async fn reported_return_pre_carrier_rejection_recovers_as_local_observation_onl
             .unwrap();
         let mut metadata = inbound_metadata("unsubmitted-original", "pacs.008");
         metadata.payload_hash = Some(sha256_hex(b"exact unsubmitted original"));
-        assert!(runtime.check_and_record_inbound("unsubmitted-original", metadata));
+        assert!(runtime.check_and_record_inbound("unsubmitted-original", &(metadata)));
         record_lifecycle(&runtime, "unsubmitted-report", "pacs.004");
         runtime
             .apply_inbound_lifecycle_message(

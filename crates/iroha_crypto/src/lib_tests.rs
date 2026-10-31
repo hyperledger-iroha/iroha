@@ -45,6 +45,7 @@ mod tests {
     #[cfg(feature = "pqc")]
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     #[cfg(feature = "pqc")]
     impl core::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -54,7 +55,7 @@ mod tests {
     #[cfg(feature = "pqc")]
     struct FailingTryRng;
     #[cfg(feature = "pqc")]
-    impl rand_core::TryRngCore for FailingTryRng {
+    impl rand_core::TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -73,7 +74,7 @@ mod tests {
         byte: u8,
     }
     #[cfg(feature = "pqc")]
-    impl rand_core::TryRngCore for FixedTryRng {
+    impl rand_core::TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
@@ -90,10 +91,9 @@ mod tests {
     impl rand_core::TryCryptoRng for FixedTryRng {}
     #[cfg(feature = "pqc")]
     fn seeded_ml_dsa_secret(seed: &[u8]) -> (PublicKey, MlDsaSecretKey) {
-        use pqcrypto_traits::sign::SecretKey as _;
         let (public, private) =
             mldsa_seed::mldsa65::keypair_from_seed(seed).expect("seeded ML-DSA keypair");
-        let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+        let raw_secret = <[u8; 4032]>::try_from(private.to_bytes().1.as_slice())
             .expect("valid ML-DSA secret bytes");
         (public, MlDsaSecretKey::new(&raw_secret))
     }
@@ -145,15 +145,11 @@ mod tests {
     #[cfg(feature = "pqc")]
     #[test]
     fn mldsa_shared_verifier_preserves_signature_and_batch_admission() {
-        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
         let keypair = checked_seed_keypair(&[0x53; 32], Algorithm::MlDsa);
         let message = b"ML-DSA shared verifier admission";
         let signature = checked_signature(keypair.private_key(), message);
         let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
-        let typed_key = pqcrypto_mldsa::mldsa65::PublicKey::from_bytes(public_key).unwrap();
-        let typed_signature =
-            pqcrypto_mldsa::mldsa65::DetachedSignature::from_bytes(signature.payload()).unwrap();
-        verify_mldsa65_detached(&typed_signature, message, &typed_key)
+        verify_mldsa65_detached(signature.payload(), message, public_key)
             .expect("shared typed verifier");
         signature
             .verify(keypair.public_key(), message)
@@ -853,10 +849,9 @@ mod tests {
     #[cfg(feature = "pqc")]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
         use crate::mldsa_seed::mldsa65 as seeded;
-        use pqcrypto_traits::sign::SecretKey as _;
         let (public, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
-        let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+        let raw_secret = <[u8; 4032]>::try_from(private.to_bytes().1.as_slice())
             .expect("valid ML-DSA secret bytes");
         let key = MlDsaSecretKey::new(&raw_secret);
         assert_eq!(key.strong_count(), 1, "initial strong count must be 1");
@@ -877,18 +872,16 @@ mod tests {
     #[test]
     #[cfg(feature = "pqc")]
     fn ml_dsa_secret_key_zeroizer_overwrites_the_full_backend_payload() {
-        use pqcrypto_traits::sign::SecretKey as _;
-
         let (_, private) =
             mldsa_seed::mldsa65::keypair_from_seed(b"iroha:ml-dsa:volatile-secret-zeroization")
                 .expect("seeded ML-DSA keypair");
-        let mut raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+        let mut raw_secret = <[u8; 4032]>::try_from(private.to_bytes().1.as_slice())
             .expect("valid ML-DSA secret bytes");
-        assert!(raw_secret.as_bytes().iter().any(|byte| *byte != 0));
+        assert!(raw_secret.as_slice().iter().any(|byte| *byte != 0));
 
         zeroize_mldsa_secret_key(&mut raw_secret);
 
-        assert!(raw_secret.as_bytes().iter().all(|byte| *byte == 0));
+        assert!(raw_secret.as_slice().iter().all(|byte| *byte == 0));
     }
     #[test]
     #[cfg(feature = "pqc")]
@@ -947,7 +940,7 @@ mod tests {
     #[test]
     #[cfg(feature = "pqc")]
     fn ml_dsa_private_key_parse_rejects_all_zero_material() {
-        let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::secret_key_bytes()];
+        let all_zero = vec![0u8; ML_DSA_65_SECRET_KEY_BYTES];
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA private key material must fail closed");
         let rendered = err.to_string();
@@ -986,14 +979,14 @@ mod tests {
         bad.push(0x00);
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
         assert!(
-            err.0.contains("invalid ML-DSA public key length"),
+            err.to_string().contains("invalid ML-DSA public key length"),
             "unexpected error: {err:?}"
         );
     }
     #[test]
     #[cfg(feature = "pqc")]
     fn ml_dsa_public_key_parse_rejects_all_zero_material() {
-        let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::public_key_bytes()];
+        let all_zero = vec![0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA public key material must fail closed");
         assert!(
@@ -1637,7 +1630,7 @@ mod tests {
     }
 
     #[test]
-    fn public_key_structural_envelope_covers_every_compiled_algorithm() {
+    fn public_key_structural_envelope_covers_every_canonical_algorithm() {
         fn accepted(algorithm: Algorithm, payload: Vec<u8>) {
             validate_public_key_structural_envelope(algorithm, &payload)
                 .unwrap_or_else(|error| panic!("valid {algorithm:?} envelope failed: {error}"));
@@ -1662,12 +1655,10 @@ mod tests {
         secp[0] = 0x04;
         assert!(validate_public_key_structural_envelope(Algorithm::Secp256k1, &secp).is_err());
         accepted(Algorithm::MlDsa, vec![1; ML_DSA_65_PUBLIC_KEY_BYTES]);
-        #[cfg(feature = "bls")]
         {
             accepted(Algorithm::BlsNormal, vec![1; 48]);
             accepted(Algorithm::BlsSmall, vec![1; 96]);
         }
-        #[cfg(feature = "gost")]
         {
             accepted(Algorithm::Gost3410_2012_256ParamSetA, vec![1; 64]);
             accepted(Algorithm::Gost3410_2012_256ParamSetB, vec![1; 64]);
@@ -1675,7 +1666,6 @@ mod tests {
             accepted(Algorithm::Gost3410_2012_512ParamSetA, vec![1; 128]);
             accepted(Algorithm::Gost3410_2012_512ParamSetB, vec![1; 128]);
         }
-        #[cfg(feature = "sm")]
         {
             let mut sm2 = vec![0, 3];
             sm2.extend_from_slice(b"abc");

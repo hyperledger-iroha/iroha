@@ -455,13 +455,34 @@ mod tests {
     }
 
     fn configured_root_fixture() -> Result<TempDir> {
+        const FIXTURE_RANDOM_BYTES: usize = 6;
         // A short checkout-local parent also leaves room for the full canonical
-        // Unix socket basename on macOS; no home or system-temp file is created.
+        // Unix socket basename on macOS. A deep worktree, or one under a shared
+        // temporary directory, cannot hold a broker root, so it uses the default
+        // home parent instead; no system-temp file is created.
+        let checkout = repo_root().join("target");
+        let endpoint = checkout
+            .join("x".repeat(FIXTURE_RANDOM_BYTES))
+            .join(format!(
+                "{PRIVATE_DIRECTORY_PREFIX}{}",
+                "x".repeat(PRIVATE_DIRECTORY_RANDOM_BYTES)
+            ))
+            .join(BROKER_SOCKET_BASENAME);
+        let uid = nix::unistd::Uid::effective();
+        let parent = if RuntimeProviderBrokerEndpointPath::try_new(endpoint).is_ok()
+            && verify_trusted_directory_chain(&checkout, uid.as_raw()).is_ok()
+        {
+            checkout
+        } else {
+            nix::unistd::User::from_uid(uid)?
+                .ok_or_else(|| eyre!("cannot resolve current service UID for broker custody"))?
+                .dir
+        };
         Ok(tempfile::Builder::new()
             .prefix("")
-            .rand_bytes(6)
+            .rand_bytes(FIXTURE_RANDOM_BYTES)
             .permissions(Permissions::from_mode(0o700))
-            .tempdir_in(repo_root().join("target"))?)
+            .tempdir_in(parent)?)
     }
 
     #[test]

@@ -15080,7 +15080,7 @@ where
     R: rand::rand_core::TryCryptoRng + ?Sized,
 {
     let mut nonce = [0_u8; 12];
-    rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut nonce)
+    rand::rand_core::TryRng::try_fill_bytes(rng, &mut nonce)
         .map_err(|_| "OS RNG failed while signing reputation request".to_owned())?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(nonce))
 }
@@ -15114,7 +15114,7 @@ fn reputation_request_headers<'a>(
         auth,
         endpoint,
         SystemTime::now(),
-        &mut rand::rngs::OsRng,
+        &mut rand::rngs::SysRng,
     )
 }
 fn reputation_http_client() -> Result<HttpClient, String> {
@@ -19960,7 +19960,7 @@ mod tests {
     struct IncrementingReputationRng {
         next: u8,
     }
-    impl rand::rand_core::TryRngCore for IncrementingReputationRng {
+    impl rand::rand_core::TryRng for IncrementingReputationRng {
         type Error = ReputationTestRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let value = self.next;
@@ -19980,7 +19980,7 @@ mod tests {
     }
     impl rand::rand_core::TryCryptoRng for IncrementingReputationRng {}
     struct FailingReputationRng;
-    impl rand::rand_core::TryRngCore for FailingReputationRng {
+    impl rand::rand_core::TryRng for FailingReputationRng {
         type Error = ReputationTestRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(ReputationTestRngError)

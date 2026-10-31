@@ -6,8 +6,7 @@
 //! every integer residue is below `2^43`, so equality in Goldilocks is equality over the integers
 //! rather than a field-wrap shortcut.
 use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1 as F, PolynomialAirFieldV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
+use p256::elliptic_curve::bigint::{NonZero, U256, U512};
 use thiserror::Error;
 /// P-256 coordinate-field modulus in canonical big-endian form.
 pub const P256_BASE_MODULUS_BE_V1: [u8; 32] = [
@@ -39,7 +38,6 @@ pub const P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 const LIMB_BITS: usize = 16;
 const CARRY_BITS: usize = 25;
 const CARRY_BIAS: i64 = 1 << 24;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const CARRY_ABSOLUTE_BOUND: i64 = 1 << 22;
 const RADIX: i64 = 1 << 16;
 const A_START: usize = 0;
@@ -119,7 +117,6 @@ pub struct ZkX509P256ArithmeticTopologyV1 {
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
 /// One canonical arithmetic operation before row expansion.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509P256ArithmeticOperationV1 {
     /// Relation kind.
@@ -134,7 +131,6 @@ pub struct ZkX509P256ArithmeticOperationV1 {
     pub(crate) c: [u8; 32],
 }
 /// Verifier-regenerated row location and selectors.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkX509P256ArithmeticFixedRowV1 {
     /// Sequential operation index.
@@ -146,7 +142,6 @@ pub struct ZkX509P256ArithmeticFixedRowV1 {
     /// Selected modulus.
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticFixedRowV1 {
     const fn is_first(self) -> bool {
         self.coefficient == 0
@@ -162,7 +157,6 @@ impl ZkX509P256ArithmeticFixedRowV1 {
     }
 }
 /// Complete exact arithmetic trace.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkX509P256ArithmeticTraceV1 {
     /// Verifier-regenerated fixed topology.
@@ -170,20 +164,17 @@ pub struct ZkX509P256ArithmeticTraceV1 {
     /// Committed base rows.
     pub(crate) base: Vec<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509P256ArithmeticTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509P256ArithmeticTraceV1 { <private trace redacted> }")
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509P256ArithmeticTraceV1 {
     fn drop(&mut self) {
         super::private_table::zeroize_field_rows_v1(&mut self.base);
     }
 }
 /// Clear private operation words held by temporary operation batches.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn zeroize_p256_operations_v1(operations: &mut [ZkX509P256ArithmeticOperationV1]) {
     for operation in operations {
         super::private_table::zeroize_words_v1(&mut operation.a);
@@ -196,7 +187,6 @@ pub fn zeroize_p256_operations_v1(operations: &mut [ZkX509P256ArithmeticOperatio
 /// The coefficient fixed columns determine which limb this row represents. This helper deliberately
 /// performs no native row decoding: source-product evaluators consume these sixteen committed cells
 /// directly on the extension domain.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_arithmetic_opened_c_limb_bits_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
 ) -> [F; LIMB_BITS] {
@@ -233,7 +223,6 @@ pub fn p256_arithmetic_opened_operand_limbs_v1<A: PolynomialAirFieldV1>(
         })
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticTraceV1 {
     /// Number of logical rows.
     pub(crate) fn rows(&self) -> usize {
@@ -286,7 +275,6 @@ pub struct P256ArithmeticStarkFixedProviderV1 {
 }
 impl P256ArithmeticStarkFixedProviderV1 {
     /// Allocated compact verifier topology payload.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
         super::allocation_payload::vector_v1(&self.operations)
     }
@@ -370,15 +358,12 @@ pub enum ZkX509P256AirErrorV1 {
     #[error("zk-X509 P-256 arithmetic topology is invalid")]
     Topology,
     /// An operand or result is not below its selected modulus.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 integer is non-canonical")]
     NonCanonicalInteger,
     /// The claimed modular result is false.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 modular operation is invalid")]
     InvalidOperation,
     /// A carry escaped the proved fixed signed range.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 arithmetic carry is out of range")]
     CarryRange,
     /// A range, comparison, transition, or coefficient identity failed.
@@ -388,7 +373,6 @@ pub enum ZkX509P256AirErrorV1 {
     #[error("zk-X509 P-256 arithmetic allocation failed")]
     Allocation,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ExpandedOperationV1 {
     a: [u16; LIMBS],
@@ -403,7 +387,6 @@ struct ExpandedOperationV1 {
     c_borrow: [u8; LIMBS + 1],
     carries: [i64; P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + 1],
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpandedOperationV1 {
     fn base_row(
         &self,
@@ -461,7 +444,6 @@ impl ExpandedOperationV1 {
     }
 }
 /// Expand a non-empty fixed operation batch into exact coefficient rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn build_zk_x509_p256_arithmetic_trace_v1(
     operations: &[ZkX509P256ArithmeticOperationV1],
 ) -> Result<ZkX509P256ArithmeticTraceV1, ZkX509P256AirErrorV1> {
@@ -489,7 +471,7 @@ pub fn build_zk_x509_p256_arithmetic_trace_v1(
         for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
             let fixed = ZkX509P256ArithmeticFixedRowV1 {
                 operation: operation_number,
-                coefficient: coefficient as u8,
+                coefficient: u8::try_from(coefficient).expect("arithmetic coefficient fits u8"),
                 kind: operation.kind,
                 modulus: operation.modulus,
             };
@@ -508,7 +490,6 @@ pub fn build_zk_x509_p256_arithmetic_trace_v1(
 ///
 /// This is the narrow source-binding surface used by value-copy buses.  It
 /// deliberately keeps the arithmetic column layout private.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_arithmetic_operand_limbs_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
     operation: usize,
@@ -536,7 +517,6 @@ pub fn p256_arithmetic_operand_limbs_v1(
 ///
 /// This is the narrow source-binding surface used by the scalar-bit copy bus. It deliberately
 /// exposes the constrained bit cells without exposing their private column offsets.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn p256_arithmetic_c_limb_bits_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
     operation: usize,
@@ -556,7 +536,6 @@ pub fn p256_arithmetic_c_limb_bits_v1(
     }
     Ok(core::array::from_fn(|bit| base[C_BITS + bit]))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expand_operation_v1(
     operation: ZkX509P256ArithmeticOperationV1,
 ) -> Result<ExpandedOperationV1, ZkX509P256AirErrorV1> {
@@ -604,7 +583,6 @@ fn expand_operation_v1(
 ///
 /// Every returned expression is degree at most two.  `next_base` is required
 /// inside an operation and ignored on its final row.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn evaluate_p256_arithmetic_row_constraints_v1(
     fixed: ZkX509P256ArithmeticFixedRowV1,
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
@@ -813,15 +791,15 @@ fn push_stark_range_residues_v1<A: PolynomialAirFieldV1>(
 pub fn evaluate_p256_arithmetic_stark_residues_v1(
     current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
-    current_aux: &[F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    current_aux: [F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    next_aux: [F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, ZkX509P256AirErrorV1> {
     evaluate_p256_arithmetic_stark_residues_over_field_v1(
         current,
         next,
-        current_aux,
-        next_aux,
+        &current_aux,
+        &next_aux,
         fixed,
     )
 }
@@ -1007,7 +985,6 @@ pub fn evaluate_p256_arithmetic_stark_residues_over_field_v1<A: PolynomialAirFie
     }
     Ok(residues)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
     let mut packed = F::ZERO;
     for (index, bit) in bits.iter().copied().enumerate() {
@@ -1019,7 +996,6 @@ fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
 fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
     value.mul(value.sub(A::ONE))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_carries_v1(
     kind: ZkX509P256ArithmeticKindV1,
     a: [u16; LIMBS],
@@ -1076,7 +1052,6 @@ fn arithmetic_carries_v1(
     }
     Ok(carries)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
     modulus: [u16; LIMBS],
@@ -1086,10 +1061,12 @@ fn less_than_witness_v1(
     for index in 0..LIMBS {
         let raw = i32::from(value[index]) - i32::from(modulus[index]) - i32::from(borrow[index]);
         if raw < 0 {
-            difference[index] = (raw + RADIX as i32) as u16;
+            difference[index] =
+                u16::try_from(raw + i32::try_from(RADIX).expect("16-bit radix fits i32"))
+                    .expect("borrow-adjusted difference is a limb");
             borrow[index + 1] = 1;
         } else {
-            difference[index] = raw as u16;
+            difference[index] = u16::try_from(raw).expect("nonnegative difference is a limb");
         }
     }
     if borrow[LIMBS] != 1 {
@@ -1097,15 +1074,15 @@ fn less_than_witness_v1(
     }
     Ok((difference, borrow))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_multiplication_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
     c: [u8; 32],
     modulus: [u8; 32],
 ) -> Result<[u8; 32], ZkX509P256AirErrorV1> {
-    let product: U512 = U256::from_be_slice(&a).mul(&U256::from_be_slice(&b));
-    let wide_modulus = U256::ZERO.concat(&U256::from_be_slice(&modulus));
+    let product: U512 = U256::from_be_slice(&a).concatenating_mul(&U256::from_be_slice(&b));
+    // Widen the numeric modulus, keeping its bytes in the low half.
+    let wide_modulus: U512 = U256::from_be_slice(&modulus).resize();
     let divisor = NonZero::new(wide_modulus).unwrap();
     let (quotient, remainder) = product.div_rem(&divisor);
     let quotient = quotient.to_be_bytes();
@@ -1120,7 +1097,6 @@ fn exact_multiplication_quotient_v1(
     result.copy_from_slice(&quotient[32..]);
     Ok(result)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_addition_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
@@ -1140,7 +1116,6 @@ fn exact_addition_quotient_v1(
     result[31] = quotient;
     Ok(result)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_subtraction_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
@@ -1160,31 +1135,28 @@ fn exact_subtraction_quotient_v1(
     result[31] = quotient;
     Ok(result)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn widen_be_v1(value: [u8; 32]) -> [u8; 33] {
     let mut wide = [0_u8; 33];
     wide[1..].copy_from_slice(&value);
     wide
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     let mut result = [0_u8; 33];
     let mut carry = 0_u16;
     for index in (0..32).rev() {
         let value = u16::from(left[index]) + u16::from(right[index]) + carry;
-        result[index + 1] = value as u8;
+        result[index + 1] = u8::try_from(value & 0xff).expect("masked byte");
         carry = value >> 8;
     }
-    result[0] = carry as u8;
+    result[0] = u8::try_from(carry).expect("byte addition carry is at most one");
     result
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     let mut result = [0_u8; 33];
     let mut carry = 0_u16;
     for index in (0..33).rev() {
         let value = u16::from(left[index]) + u16::from(right[index]) + carry;
-        result[index] = value as u8;
+        result[index] = u8::try_from(value & 0xff).expect("masked byte");
         carry = value >> 8;
     }
     if carry != 0 {
@@ -1192,7 +1164,6 @@ fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P25
     }
     Ok(result)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     if left < right {
         return Err(ZkX509P256AirErrorV1::InvalidOperation);
@@ -1202,10 +1173,11 @@ fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX5
     for index in (0..33).rev() {
         let value = i16::from(left[index]) - i16::from(right[index]) - borrow;
         if value < 0 {
-            result[index] = (value + 256) as u8;
+            result[index] =
+                u8::try_from(value + 256).expect("borrow-adjusted difference is a byte");
             borrow = 1;
         } else {
-            result[index] = value as u8;
+            result[index] = u8::try_from(value & 0xff).expect("masked byte");
             borrow = 0;
         }
     }
@@ -1220,13 +1192,11 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_limbs_v1(target: &mut [F], limbs: &[u16; LIMBS]) {
     for (target, limb) in target.iter_mut().zip(limbs.iter().copied()) {
         *target = F(u64::from(limb));
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, target) in target.iter_mut().enumerate() {
         *target = F(u64::from((value >> bit) & 1));
@@ -1324,13 +1294,36 @@ mod tests {
         value
     }
     fn bigint_multiply_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
-        let product: U512 = U256::from_be_slice(&left).mul(&U256::from_be_slice(&right));
-        let divisor = NonZero::new(U256::ZERO.concat(&U256::from_be_slice(&modulus))).unwrap();
+        let product: U512 =
+            U256::from_be_slice(&left).concatenating_mul(&U256::from_be_slice(&right));
+        let wide_modulus: U512 = U256::from_be_slice(&modulus).resize();
+        let divisor = NonZero::new(wide_modulus).unwrap();
         let remainder = product.div_rem(&divisor).1.to_be_bytes();
         assert!(remainder[..32].iter().all(|byte| *byte == 0));
         let mut result = [0_u8; 32];
         result.copy_from_slice(&remainder[32..]);
         result
+    }
+    #[test]
+    fn wide_multiplication_preserves_low_modulus_and_high_product_limbs() {
+        for modulus in [P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1] {
+            // (m - 1)^2 = (m - 2) * m + 1, independently of bigint limb order.
+            let operand = minus_one(modulus);
+            assert_eq!(bigint_multiply_mod(operand, operand, modulus), one());
+            assert_eq!(
+                exact_multiplication_quotient_v1(operand, operand, one(), modulus),
+                Ok(subtract_small(modulus, 2))
+            );
+            assert_eq!(bigint_multiply_mod(small(2), small(3), modulus), small(6));
+            assert_eq!(
+                exact_multiplication_quotient_v1(small(2), small(3), small(6), modulus),
+                Ok(zero())
+            );
+            assert_eq!(
+                exact_multiplication_quotient_v1(operand, operand, zero(), modulus),
+                Err(ZkX509P256AirErrorV1::InvalidOperation)
+            );
+        }
     }
     fn bigint_add_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
         let sum = add_be_v1(left, right);
@@ -1341,10 +1334,11 @@ mod tests {
             for index in (0..33).rev() {
                 let value = i16::from(sum[index]) - i16::from(modulus[index]) - borrow;
                 if value < 0 {
-                    result[index] = (value + 256) as u8;
+                    result[index] =
+                        u8::try_from(value + 256).expect("borrow-adjusted difference is a byte");
                     borrow = 1;
                 } else {
-                    result[index] = value as u8;
+                    result[index] = u8::try_from(value & 0xff).expect("masked byte");
                     borrow = 0;
                 }
             }
@@ -1524,16 +1518,12 @@ mod tests {
     fn arithmetic_is_differential_against_rustcrypto_p256() {
         let mut operations = Vec::new();
         for index in 1_u64..=48 {
-            let first_small = small(
-                index
-                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                    .rotate_left(index as u32 % 63),
-            );
-            let second_small = small(
-                index
-                    .wrapping_mul(0xd1b5_4a32_d192_ed03)
-                    .rotate_right(index as u32 % 61),
-            );
+            let first_small = small(index.wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(
+                u32::try_from(index & u64::from(u32::MAX)).expect("masked word") % 63,
+            ));
+            let second_small = small(index.wrapping_mul(0xd1b5_4a32_d192_ed03).rotate_right(
+                u32::try_from(index & u64::from(u32::MAX)).expect("masked word") % 61,
+            ));
             let first_base = if index % 3 == 0 {
                 subtract_small(P256_BASE_MODULUS_BE_V1, index)
             } else {
@@ -1743,7 +1733,7 @@ mod tests {
         let mut quotient = trace.clone();
         for row in &mut quotient.base {
             row[Q_START] = row[Q_START].add(F::ONE);
-            let value = row[Q_START].value() as u16;
+            let value = u16::try_from(row[Q_START].value() & 0xffff).expect("masked limb");
             write_bits_v1(&mut row[Q_BITS..Q_BITS + LIMB_BITS], value);
         }
         assert!(quotient.validate().is_err());
@@ -1775,8 +1765,8 @@ mod tests {
             let residues = evaluate_p256_arithmetic_stark_residues_v1(
                 &base[row],
                 &base[next],
-                &aux[row],
-                &aux[next],
+                aux[row],
+                aux[next],
                 &fixed[row],
             )?;
             if residues.len() != P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1
@@ -1846,9 +1836,9 @@ mod tests {
         let topology = arithmetic_topology(&operations);
         let mut different_private_values = operations.clone();
         for (index, operation) in different_private_values.iter_mut().enumerate() {
-            operation.a = [index as u8; 32];
-            operation.b = [index.wrapping_mul(17) as u8; 32];
-            operation.c = [index.wrapping_mul(31) as u8; 32];
+            operation.a = [u8::try_from(index & 0xff).expect("masked byte"); 32];
+            operation.b = [u8::try_from(index.wrapping_mul(17) & 0xff).expect("masked byte"); 32];
+            operation.c = [u8::try_from(index.wrapping_mul(31) & 0xff).expect("masked byte"); 32];
         }
         let changed_topology = arithmetic_topology(&different_private_values);
         assert_eq!(topology, changed_topology);
@@ -1873,16 +1863,16 @@ mod tests {
         let rejects = |base: &[[F; P256_ARITHMETIC_BASE_WIDTH_V1]]| {
             (0..trace_size).any(|row| {
                 let next = (row + 1) % trace_size;
-                match evaluate_p256_arithmetic_stark_residues_v1(
+                evaluate_p256_arithmetic_stark_residues_v1(
                     &base[row],
                     &base[next],
-                    &aux[row],
-                    &aux[next],
+                    aux[row],
+                    aux[next],
                     &fixed[row],
-                ) {
-                    Ok(residues) => residues.iter().any(|residue| *residue != F::ZERO),
-                    Err(_) => true,
-                }
+                )
+                .map_or(true, |residues| {
+                    residues.iter().any(|residue| *residue != F::ZERO)
+                })
             })
         };
         for column in 0..P256_ARITHMETIC_BASE_WIDTH_V1 {
@@ -1908,7 +1898,7 @@ mod tests {
         let mut bad_aux = zero_aux;
         bad_aux[0] = F::ONE;
         let residues = evaluate_p256_arithmetic_stark_residues_v1(
-            &base[0], &base[1], &bad_aux, &zero_aux, &fixed[0],
+            &base[0], &base[1], bad_aux, zero_aux, &fixed[0],
         )
         .expect("canonical nonzero auxiliary field");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
@@ -1918,8 +1908,8 @@ mod tests {
             evaluate_p256_arithmetic_stark_residues_v1(
                 &noncanonical,
                 &base[1],
-                &zero_aux,
-                &zero_aux,
+                zero_aux,
+                zero_aux,
                 &fixed[0],
             ),
             Err(ZkX509P256AirErrorV1::Constraint)
@@ -1927,6 +1917,5 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "p256_compact_arithmetic.rs"]
 pub(super) mod compact_arithmetic;

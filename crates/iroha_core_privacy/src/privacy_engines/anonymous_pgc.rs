@@ -15,11 +15,11 @@ use super::p256::{
 };
 #[cfg(test)]
 use super::p256::{TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar};
-use once_cell::sync::Lazy;
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use thiserror::Error;
 #[cfg(test)]
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
@@ -48,6 +48,21 @@ pub const MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1: usize = 1024;
 fn fixed_pgc_decode_limits(payload_len: usize, byte_cap: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(0, payload_len, 0, byte_cap.saturating_mul(4), 8)
 }
+/// A native PGC proof read preserves the original codec or relation refusal.
+///
+/// Codec limits intrinsic to the wire remain rejection. Only an authenticated
+/// enclosing/allocator refusal carries a local retry cause; no numeric error is
+/// relabeled as unavailable capacity.
+#[derive(Debug, thiserror::Error)]
+pub enum AnonymousPgcReadError {
+    /// The original decoder or streaming canonical-authentication error.
+    #[error(transparent)]
+    Codec(#[from] norito::core::DecodeAttemptError),
+    /// A completed native structural or equation rejection.
+    #[error(transparent)]
+    Relation(#[from] AnonymousPgcError),
+}
+
 /// Fixed baby-step table bound for wallet-side 32-bit decryption.
 pub const PGC_DECRYPTION_BABY_STEP_BOUND_V1: usize = 1 << 16;
 /// Fixed giant-step search bound for wallet-side 32-bit decryption.
@@ -207,8 +222,8 @@ impl AnonymousPgcParametersV1 {
         })
     }
 }
-static PGC_PARAMETERS: Lazy<Result<AnonymousPgcParametersV1, AnonymousPgcError>> =
-    Lazy::new(AnonymousPgcParametersV1::derive);
+static PGC_PARAMETERS: LazyLock<Result<AnonymousPgcParametersV1, AnonymousPgcError>> =
+    LazyLock::new(AnonymousPgcParametersV1::derive);
 struct PgcDecryptionTableV1 {
     baby_steps: BTreeMap<[u8; 33], u16>,
     giant_stride: ProjectivePoint,
@@ -242,8 +257,8 @@ impl PgcDecryptionTableV1 {
         })
     }
 }
-static PGC_DECRYPTION_TABLE: Lazy<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
-    Lazy::new(PgcDecryptionTableV1::derive);
+static PGC_DECRYPTION_TABLE: LazyLock<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
+    LazyLock::new(PgcDecryptionTableV1::derive);
 /// Canonical non-identity Twisted-ElGamal public key `pk = g·sk`.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalPublicKeyV1")]
@@ -394,7 +409,7 @@ impl TwistedElGamalKeyPairV1 {
     /// Returns an error if scalar sampling or fixed parameter derivation fails.
     pub fn generate<R>(rng: &mut R) -> Result<Self, AnonymousPgcError>
     where
-        R: CryptoRng + RngCore,
+        R: TryCryptoRng + TryRng,
     {
         let secret = SecretScalarV1::generate(rng)?;
         Self::from_secret(secret)
@@ -690,13 +705,13 @@ pub fn encrypt<R>(
     rng: &mut R,
 ) -> Result<(TwistedElGamalCiphertextV1, SecretScalarV1), AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     for _ in 0..MAX_PROVER_RESTARTS {
         let randomness = SecretScalarV1::generate(rng)?;
         match encrypt_with_randomness(public_key, message, &randomness) {
             Ok(ciphertext) => return Ok((ciphertext, randomness)),
-            Err(AnonymousPgcError::P256(P256EngineError::IdentityPoint)) => continue,
+            Err(AnonymousPgcError::P256(P256EngineError::IdentityPoint)) => {}
             Err(error) => return Err(error),
         }
     }
@@ -801,13 +816,13 @@ impl<'a> PgcKeyPossessionStatementV1<'a> {
     /// Returns an error for an invalid key or mismatched governed parameters.
     pub fn new(
         public_key: TwistedElGamalPublicKeyV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
-        validate_binding(&transcript_binding)?;
+        validate_binding(transcript_binding)?;
         let _ = public_key.point.to_projective()?;
         Ok(Self {
             public_key,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
         })
     }
     /// Return the registered public key.
@@ -885,7 +900,7 @@ pub fn prove_key_possession<R>(
     rng: &mut R,
 ) -> Result<PgcKeyPossessionProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     if CompressedPointV1::from_projective(parameters.g * secret.expose_scalar())?
@@ -954,15 +969,15 @@ impl<'a> PgcCiphertextOpeningStatementV1<'a> {
     pub fn new(
         public_key: TwistedElGamalPublicKeyV1,
         ciphertext: TwistedElGamalCiphertextV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
-        validate_binding(&transcript_binding)?;
+        validate_binding(transcript_binding)?;
         let _ = public_key.point.to_projective()?;
         ciphertext.validate()?;
         Ok(Self {
             public_key,
             ciphertext,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
         })
     }
     /// Return the public key.
@@ -1050,7 +1065,7 @@ pub fn prove_ciphertext_opening<R>(
     rng: &mut R,
 ) -> Result<PgcCiphertextOpeningProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if encrypt_with_randomness(statement.public_key, message, randomness)? != statement.ciphertext {
         return Err(AnonymousPgcError::CiphertextOpeningMismatch);
@@ -1187,7 +1202,7 @@ fn ciphertext_opening_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1197,37 +1212,42 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            let mut offset = 0;
-            while offset < destination.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.anonymous-pgc.kat.rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (destination.len() - offset).min(block.len());
-                destination[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < destination.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.anonymous-pgc.kat.rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (destination.len() - offset).min(block.len());
+                    destination[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     #[derive(Clone, Copy)]
     enum AdversarialRngMode {
         Periodic,
@@ -1235,29 +1255,31 @@ mod tests {
         Panic,
     }
     struct AdversarialRng(AdversarialRngMode);
-    impl RngCore for AdversarialRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for AdversarialRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("Anonymous-PGC must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("Anonymous-PGC must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("Anonymous-PGC must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 AdversarialRngMode::Periodic => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % 4) as u8).wrapping_mul(53).wrapping_add(3);
+                        *byte = u8::try_from(index % 4)
+                            .expect("sample lane")
+                            .wrapping_mul(53)
+                            .wrapping_add(3);
                     }
                     Ok(())
                 }
                 AdversarialRngMode::PartialFailure => {
                     for (index, byte) in destination.iter_mut().take(23).enumerate() {
-                        *byte = index as u8;
+                        *byte = index.to_le_bytes()[0];
                     }
-                    Err(RngError::new(
+                    Err(RngError::other(
                         "injected partial Anonymous-PGC entropy failure",
                     ))
                 }
@@ -1267,7 +1289,7 @@ mod tests {
             }
         }
     }
-    impl CryptoRng for AdversarialRng {}
+    impl rand::TryCryptoRng for AdversarialRng {}
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;
@@ -1300,7 +1322,7 @@ mod tests {
         let ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &randomness).expect("ciphertext");
         let statement =
-            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, binding())
+            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, &binding())
                 .expect("statement");
         let mut rng = KatRng::new([0x41; 32]);
         let proof = prove_ciphertext_opening(&statement, 42, &randomness, &mut rng).expect("proof");
@@ -1326,7 +1348,7 @@ mod tests {
     fn key_possession_proof_verifies_and_rejects_wrong_secret() {
         let key_pair = TwistedElGamalKeyPairV1::from_secret(scalar(9)).expect("key pair");
         let statement =
-            PgcKeyPossessionStatementV1::new(key_pair.public_key(), binding()).expect("statement");
+            PgcKeyPossessionStatementV1::new(key_pair.public_key(), &binding()).expect("statement");
         let mut rng = KatRng::new([0x55; 32]);
         let proof =
             prove_key_possession(&statement, key_pair.secret_scalar(), &mut rng).expect("proof");
@@ -1373,7 +1395,7 @@ mod tests {
     fn prover_entropy_failures_are_typed_and_follow_witness_checks() {
         let key_pair = TwistedElGamalKeyPairV1::from_secret(scalar(9)).expect("key pair");
         let possession =
-            PgcKeyPossessionStatementV1::new(key_pair.public_key(), binding()).expect("statement");
+            PgcKeyPossessionStatementV1::new(key_pair.public_key(), &binding()).expect("statement");
         assert!(matches!(
             prove_key_possession(
                 &possession,
@@ -1396,7 +1418,7 @@ mod tests {
         let ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &randomness).expect("ciphertext");
         let opening =
-            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, binding())
+            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, &binding())
                 .expect("opening statement");
         assert!(matches!(
             prove_ciphertext_opening(
@@ -1630,14 +1652,14 @@ mod tests {
             .expect("other key")
             .public_key();
         let wrong_key =
-            PgcCiphertextOpeningStatementV1::new(other_key, ciphertext, binding()).expect("wrong");
+            PgcCiphertextOpeningStatementV1::new(other_key, ciphertext, &binding()).expect("wrong");
         assert!(verify_ciphertext_opening(&wrong_key, &proof).is_err());
         let other_ciphertext =
             encrypt_with_randomness(key_pair.public_key(), 42, &scalar(12)).expect("other");
         let wrong_ciphertext = PgcCiphertextOpeningStatementV1::new(
             key_pair.public_key(),
             other_ciphertext,
-            binding(),
+            &binding(),
         )
         .expect("wrong");
         assert!(verify_ciphertext_opening(&wrong_ciphertext, &proof).is_err());
@@ -1680,7 +1702,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                changed
+                &changed
             )
             .is_err(),
             "network/genesis disagreement must reject before proof evaluation"
@@ -1707,7 +1729,7 @@ mod tests {
             let changed = PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                binding,
+                &binding,
             )
             .expect("binding remains structurally valid");
             assert!(verify_ciphertext_opening(&changed, &proof).is_err());
@@ -1718,7 +1740,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                wrong_parameter
+                &wrong_parameter
             ),
             Err(AnonymousPgcError::ParameterDigestMismatch)
         ));
@@ -1728,7 +1750,7 @@ mod tests {
             PgcCiphertextOpeningStatementV1::new(
                 statement.public_key,
                 statement.ciphertext,
-                wrong_generator
+                &wrong_generator
             ),
             Err(AnonymousPgcError::GeneratorDigestMismatch)
         ));

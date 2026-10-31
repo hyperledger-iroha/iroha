@@ -36,143 +36,18 @@ public enum PrivacyExecutionModeV1 : uint
     NoteAction = 5,
 }
 
-/// <summary>Evidence-derived readiness projected from compiled and committed governance state.</summary>
+/// <summary>Runtime availability projected from the actual compiled implementation.</summary>
 public enum PrivacyCapabilityReadinessV1
 {
-    ProductionQualified,
-    Unavailable,
+    Available = 0,
+    Unavailable = 1,
 }
 
-/// <summary>Evidence-derived reason why an Exact12 protocol is unavailable.</summary>
+/// <summary>Typed runtime reason why an Exact12 protocol is unavailable.</summary>
 public enum PrivacyCapabilityUnavailableReasonV1
 {
     CompiledProfile,
-    NotRegistered,
-    Proposed,
-    Suspended,
-    Retired,
-    MissingProductionQualification,
-    InvalidProductionQualification,
 }
-
-/// <summary>Exact portable release tuple for one retained protocol.</summary>
-public sealed class PrivacyReleaseProtocolBindingV1
-{
-    private readonly byte[] parameterId;
-    private readonly byte[] parameterDigest;
-    private readonly byte[] verifierDigest;
-    private readonly byte[] statementSchemaDigest;
-    private readonly byte[] engineManifestDigest;
-    private readonly byte[] securityClaimDigest;
-
-    internal PrivacyReleaseProtocolBindingV1(
-        PrivacyProtocolIdV1 protocolId,
-        uint proofSystemId,
-        uint engineId,
-        byte[] parameterId,
-        byte[] parameterDigest,
-        byte[] verifierDigest,
-        byte[] statementSchemaDigest,
-        byte[] engineManifestDigest,
-        byte[] securityClaimDigest)
-    {
-        ProtocolId = protocolId;
-        ProofSystemId = proofSystemId;
-        EngineId = engineId;
-        this.parameterId = (byte[])parameterId.Clone();
-        this.parameterDigest = (byte[])parameterDigest.Clone();
-        this.verifierDigest = (byte[])verifierDigest.Clone();
-        this.statementSchemaDigest = (byte[])statementSchemaDigest.Clone();
-        this.engineManifestDigest = (byte[])engineManifestDigest.Clone();
-        this.securityClaimDigest = (byte[])securityClaimDigest.Clone();
-    }
-
-    public PrivacyProtocolIdV1 ProtocolId { get; }
-    public uint ProofSystemId { get; }
-    public uint EngineId { get; }
-    public byte[] ParameterId => (byte[])parameterId.Clone();
-    public byte[] ParameterDigest => (byte[])parameterDigest.Clone();
-    public byte[] VerifierDigest => (byte[])verifierDigest.Clone();
-    public byte[] StatementSchemaDigest => (byte[])statementSchemaDigest.Clone();
-    public byte[] EngineManifestDigest => (byte[])engineManifestDigest.Clone();
-    public byte[] SecurityClaimDigest => (byte[])securityClaimDigest.Clone();
-}
-
-/// <summary>Full portable release evidence retained from native-validated bytes.</summary>
-public sealed class PrivacyExact12ReleaseManifestV1
-{
-    private readonly byte[] catalogCommitment;
-    private readonly byte[] manifestDigest;
-    private readonly byte[] canonicalBytes;
-
-    internal PrivacyExact12ReleaseManifestV1(
-        ushort version,
-        byte[] catalogCommitment,
-        ushort abiVersion,
-        IReadOnlyList<PrivacyReleaseProtocolBindingV1> protocols,
-        byte[] manifestDigest,
-        byte[] canonicalBytes)
-    {
-        Version = version;
-        this.catalogCommitment = (byte[])catalogCommitment.Clone();
-        AbiVersion = abiVersion;
-        Protocols = new ReadOnlyCollection<PrivacyReleaseProtocolBindingV1>(protocols.ToArray());
-        this.manifestDigest = (byte[])manifestDigest.Clone();
-        this.canonicalBytes = (byte[])canonicalBytes.Clone();
-    }
-
-    public ushort Version { get; }
-    public byte[] CatalogCommitment => (byte[])catalogCommitment.Clone();
-    public ushort AbiVersion { get; }
-    public IReadOnlyList<PrivacyReleaseProtocolBindingV1> Protocols { get; }
-    public byte[] ManifestDigest => (byte[])manifestDigest.Clone();
-    public byte[] CanonicalBytes => (byte[])canonicalBytes.Clone();
-}
-
-/// <summary>One protocol activation height bound by deployment evidence.</summary>
-public sealed record PrivacyDeploymentActivationV1(
-    PrivacyProtocolIdV1 ProtocolId,
-    ulong ActivationHeight);
-
-/// <summary>Full network deployment evidence retained from native-validated bytes.</summary>
-public sealed class PrivacyExact12DeploymentQualificationV1
-{
-    private readonly byte[] releaseManifestDigest;
-    private readonly byte[] qualificationDigest;
-    private readonly byte[] canonicalBytes;
-
-    internal PrivacyExact12DeploymentQualificationV1(
-        ushort version,
-        NetworkId networkId,
-        byte[] releaseManifestDigest,
-        IReadOnlyList<PrivacyDeploymentActivationV1> activations,
-        ulong convergenceHeight,
-        byte[] qualificationDigest,
-        byte[] canonicalBytes)
-    {
-        Version = version;
-        NetworkId = networkId;
-        this.releaseManifestDigest = (byte[])releaseManifestDigest.Clone();
-        Activations = new ReadOnlyCollection<PrivacyDeploymentActivationV1>(activations.ToArray());
-        ConvergenceHeight = convergenceHeight;
-        this.qualificationDigest = (byte[])qualificationDigest.Clone();
-        this.canonicalBytes = (byte[])canonicalBytes.Clone();
-    }
-
-    public ushort Version { get; }
-    /// <summary>Exact genesis-derived network authenticated by the deployment evidence.</summary>
-    public NetworkId NetworkId { get; }
-    public byte[] ReleaseManifestDigest => (byte[])releaseManifestDigest.Clone();
-    public IReadOnlyList<PrivacyDeploymentActivationV1> Activations { get; }
-    public ulong ConvergenceHeight { get; }
-    public byte[] QualificationDigest => (byte[])qualificationDigest.Clone();
-    public byte[] CanonicalBytes => (byte[])canonicalBytes.Clone();
-}
-
-/// <summary>Singleton release and target-network evidence from committed state.</summary>
-public sealed record PrivacyExact12QualificationRecordV1(
-    PrivacyExact12ReleaseManifestV1 ReleaseManifest,
-    PrivacyExact12DeploymentQualificationV1 DeploymentQualification);
 
 /// <summary>Typed reason why this binary has no complete executable profile.</summary>
 public enum PrivacyCompiledProfileUnavailableReasonV1
@@ -180,6 +55,7 @@ public enum PrivacyCompiledProfileUnavailableReasonV1
     EngineUnavailable,
     ProfileInitializationFailed,
     StatementSchemaInvalid,
+    JointSecurityReductionIncomplete,
 }
 
 /// <summary>Typed failure while canonicalizing a compiled public-statement schema.</summary>
@@ -197,7 +73,6 @@ public enum PrivacyExact12CapabilityManifestValidationStatusV1
     ArchiveTooLarge = 2,
     NativeUnavailable = 3,
     InvalidManifest = 4,
-    LocalCompiledTupleMismatch = 5,
 }
 
 /// <summary>Strict canonical or semantic manifest validation failure.</summary>
@@ -213,7 +88,7 @@ public class PrivacyExact12CapabilityManifestException : IOException
 public sealed class PrivacyExact12CapabilityRowV1
 {
     private readonly byte[] compiledProfile;
-    private readonly byte[] activation;
+    private readonly byte[] policy;
 
     internal PrivacyExact12CapabilityRowV1(
         PrivacyProtocolIdV1 protocolId,
@@ -225,7 +100,7 @@ public sealed class PrivacyExact12CapabilityRowV1
         PrivacyCompiledProfileUnavailableReasonV1? compiledProfileUnavailableReason,
         PrivacyCompiledStatementSchemaErrorV1? compiledStatementSchemaError,
         byte[] compiledProfile,
-        byte[] activation,
+        byte[] policy,
         bool localCompiledTupleMatches)
     {
         ProtocolId = protocolId;
@@ -237,7 +112,7 @@ public sealed class PrivacyExact12CapabilityRowV1
         CompiledProfileUnavailableReason = compiledProfileUnavailableReason;
         CompiledStatementSchemaError = compiledStatementSchemaError;
         this.compiledProfile = (byte[])compiledProfile.Clone();
-        this.activation = (byte[])activation.Clone();
+        this.policy = (byte[])policy.Clone();
         LocalCompiledTupleMatches = localCompiledTupleMatches;
     }
 
@@ -269,18 +144,17 @@ public sealed class PrivacyExact12CapabilityRowV1
     public byte[] CompiledProfileCanonicalBytes => (byte[])compiledProfile.Clone();
 
     /// <summary>
-    /// Defensive copy of the complete canonical committed activation option, including immutable
-    /// profile bindings, lifecycle, and current and pending limits.
+    /// Defensive copy of the optional ordinary protocol policy with current limits and pending update.
     /// </summary>
-    public byte[] ActivationCanonicalBytes => (byte[])activation.Clone();
+    public byte[] PolicyCanonicalBytes => (byte[])policy.Clone();
 
-    /// <summary>Network availability is exactly committed production qualification.</summary>
+    /// <summary>Availability is derived from the actual compiled implementation; policy registration is optional.</summary>
     public bool IsNetworkAvailable =>
-        Readiness == PrivacyCapabilityReadinessV1.ProductionQualified;
+        Readiness == PrivacyCapabilityReadinessV1.Available;
 }
 
 /// <summary>
-/// Native-tuple-matched canonical manifest obtained from authenticated Torii transport.
+/// Canonical manifest obtained from authenticated Torii transport with local tuple comparisons.
 /// </summary>
 /// <remarks>
 /// <see cref="ManifestDigest"/> is content identity, not producer authentication. Public instances
@@ -302,7 +176,6 @@ public sealed class PrivacyExact12CapabilityManifestV1
         uint version,
         ulong committedHeight,
         byte[] consensusPolicy,
-        PrivacyExact12QualificationRecordV1? qualification,
         IReadOnlyList<PrivacyExact12CapabilityRowV1> protocols,
         byte[] manifestDigest,
         byte[] canonicalArchive,
@@ -312,7 +185,6 @@ public sealed class PrivacyExact12CapabilityManifestV1
         Version = version;
         CommittedHeight = committedHeight;
         this.consensusPolicy = (byte[])consensusPolicy.Clone();
-        Qualification = qualification;
         Protocols = new ReadOnlyCollection<PrivacyExact12CapabilityRowV1>(protocols.ToArray());
         this.manifestDigest = (byte[])manifestDigest.Clone();
         this.canonicalArchive = (byte[])canonicalArchive.Clone();
@@ -320,12 +192,11 @@ public sealed class PrivacyExact12CapabilityManifestV1
 
     public uint Version { get; }
 
-    /// <summary>Immutable expected network from the authenticated Torii client.</summary>
+    /// <summary>Exact manifest network, checked against the authenticated Torii client.</summary>
     public NetworkId NetworkId { get; }
 
     public ulong CommittedHeight { get; }
 
-    public PrivacyExact12QualificationRecordV1? Qualification { get; }
 
     public IReadOnlyList<PrivacyExact12CapabilityRowV1> Protocols { get; }
 
@@ -394,13 +265,12 @@ public sealed class PrivacyExact12CapabilityManifestV1
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
             archive,
             localCatalog);
-        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-            decoded.Qualification, expectedNetworkId);
+        PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(
+            decoded.NetworkId, expectedNetworkId);
         return new PrivacyExact12CapabilityManifestV1(
             decoded.Version,
             decoded.CommittedHeight,
             decoded.ConsensusPolicy,
-            decoded.Qualification,
             decoded.Protocols,
             decoded.ManifestDigest,
             decoded.CanonicalArchive,
@@ -502,19 +372,10 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
         PrivacyNative.RequireValidCapabilityArchive(manifest.CanonicalBytes);
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
             manifest.CanonicalBytes, PrivacyNative.CompiledProfileCatalogV1().NoritoBytes);
-        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-            decoded.Qualification, manifest.NetworkId, requireQualification: true);
+        PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(
+            decoded.NetworkId, manifest.NetworkId);
         var row = decoded.Protocols[checked((int)protocol)];
-        if (!row.IsNetworkAvailable)
-        {
-            throw new InvalidOperationException(
-                $"Exact12 protocol {protocol.CanonicalLabel()} is not active and ready.");
-        }
-        if (!row.LocalCompiledTupleMatches)
-        {
-            throw new InvalidOperationException(
-                "Exact12 committed profile differs from CompiledProfileCatalogV1.");
-        }
+        PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(row);
         return new PrivacyExact12CapabilityTupleAdmissionV1(
             row.ProtocolId,
             manifest.CommittedHeight,
@@ -522,6 +383,12 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
             row.OperationSchema,
             manifest.NetworkId,
             manifest.CanonicalBytes);
+    }
+
+    internal byte[] CopyAuthenticatedArchive(PrivacyProtocolIdV1 protocol, NetworkId expectedNetworkId)
+    {
+        RequireAuthentic(protocol, expectedNetworkId);
+        return (byte[])manifestArchive.Clone();
     }
 
     internal void RequireAuthentic(PrivacyProtocolIdV1 protocol, NetworkId expectedNetworkId)
@@ -535,12 +402,12 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
         PrivacyNative.RequireValidCapabilityArchive(manifestArchive);
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
             manifestArchive, PrivacyNative.CompiledProfileCatalogV1().NoritoBytes);
-        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-            decoded.Qualification, expectedNetworkId, requireQualification: true);
+        PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(
+            decoded.NetworkId, expectedNetworkId);
         var row = decoded.Protocols[checked((int)protocol)];
+        PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(row);
         if (decoded.CommittedHeight != CommittedHeight
-            || !decoded.ManifestDigest.AsSpan().SequenceEqual(manifestDigest)
-            || !row.IsNetworkAvailable || !row.LocalCompiledTupleMatches)
+            || !decoded.ManifestDigest.AsSpan().SequenceEqual(manifestDigest))
         {
             throw new InvalidOperationException("Exact12 capability admission no longer validates.");
         }
@@ -550,7 +417,7 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
 /// <summary>Fail-closed bridge from authenticated committed state to privacy construction.</summary>
 public static class PrivacyExact12CapabilityAdmissionV1
 {
-    /// <summary>Require active committed readiness and the exact local native tuple.</summary>
+    /// <summary>Require actual implementation availability and the exact selected local native tuple.</summary>
     public static PrivacyExact12CapabilityTupleAdmissionV1 RequireExact12CapabilityTupleV1(
         PrivacyExact12CapabilityManifestV1 manifest,
         PrivacyProtocolIdV1 protocol)
@@ -576,8 +443,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         "iroha.privacy.exact12-capability-manifest.v1";
     internal const string CatalogSchemaName =
         "iroha.privacy.compiled-profile-catalog.v1";
-    private const string SecurityClaimSchemaName =
-        "iroha_data_model::privacy::protocol::PrivacySecurityClaimV1";
 
     private const byte CanonicalFlags = NoritoCodec.CanonicalLayoutFlags;
     private const int RowCount = 12;
@@ -585,12 +450,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
     private static readonly byte[] DigestDomain =
         Encoding.UTF8.GetBytes("iroha:privacy:exact12-capability-manifest:v1");
 
-    private static readonly byte[] SecurityClaimDigestDomain =
-        Encoding.UTF8.GetBytes("iroha:privacy:security-claim:v1");
 
-    private static readonly byte[] Exact12CatalogCommitment = Convert.FromHexString(
-        "E037F13904A0307C00DB15D85CFB406BD79772D20144A949" +
-        "DEF0F3FDA78E342E747F65787CBFBFFAC94F11C369E2BBFF");
 
     private static readonly PrivacyExecutionModeV1[] ExpectedExecutionModes =
     [
@@ -656,21 +516,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         0,
     ];
 
-    private static readonly uint[] ExpectedSecurityModels =
-    [
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        0,
-        1,
-        1,
-        0,
-        0,
-    ];
 
     internal static void Validate(byte[] archive, byte[] nativeValidatedCatalog) =>
         _ = Decode(archive, nativeValidatedCatalog);
@@ -696,14 +541,14 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         {
             throw Invalid("Exact12 capability manifest version must be 1.");
         }
+        NetworkId networkId;
+        try { networkId = NetworkId.FromBytes(reader.ReadField("manifest.network_id", out _)); }
+        catch (ArgumentException error) { throw Invalid($"Invalid Exact12 network identity: {error.Message}"); }
         var committedHeight = ReadUInt64Field(ref reader, "manifest.committed_height");
         var consensusPolicy = reader.ReadField(
             "manifest.consensus_policy",
             out _).ToArray();
         ValidateConsensusPolicy(consensusPolicy, committedHeight);
-
-        var qualification = ParseQualificationOption(
-            reader.ReadField("manifest.qualification", out _));
 
         var protocolSequence = reader.ReadField("manifest.protocols", out _);
         var protocolReader = new FrameReader(protocolSequence);
@@ -720,7 +565,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
                 row,
                 index,
                 committedHeight,
-                qualification,
                 localProfiles[index]);
         }
         protocolReader.RequireEnd("manifest.protocols");
@@ -758,9 +602,9 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
         return new DecodedManifest(
             version,
+            networkId,
             committedHeight,
             consensusPolicy,
-            qualification,
             rows,
             digest.ToArray(),
             (byte[])archive.Clone());
@@ -807,7 +651,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         ReadOnlySpan<byte> encoded,
         int index,
         ulong committedHeight,
-        PrivacyExact12QualificationRecordV1? qualification,
         byte[] localCompiledProfile)
     {
         var reader = new FrameReader(encoded);
@@ -844,21 +687,16 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         var compiledProfile = reader.ReadField(
             $"row[{index}].compiled_profile",
             out _).ToArray();
-        if (!compiledProfile.AsSpan().SequenceEqual(localCompiledProfile))
-        {
-            throw new LocalTupleMismatchException(
-                $"Exact12 row {index} differs from the native compiled-profile catalog.");
-        }
+        var localCompiledTupleMatches = compiledProfile.AsSpan().SequenceEqual(localCompiledProfile);
         var compiled = ParseCompiledResult(compiledProfile, protocol, index);
 
         var readiness = ParseReadiness(
             reader.ReadField($"row[{index}].readiness", out _),
             index);
 
-        var activation = reader.ReadField($"row[{index}].activation", out _).ToArray();
-        var activationProjection = ParseActivation(
-            activation,
-            compiled,
+        var policy = reader.ReadField($"row[{index}].policy", out _).ToArray();
+        ParsePolicy(
+            policy,
             protocol,
             committedHeight,
             index);
@@ -866,9 +704,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         ValidateProjectedReadiness(
             readiness,
             compiled,
-            activationProjection,
-            qualification,
-            committedHeight,
             index);
 
         return new PrivacyExact12CapabilityRowV1(
@@ -881,8 +716,8 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             readiness.CompiledProfileUnavailableReason,
             readiness.CompiledStatementSchemaError,
             compiledProfile,
-            activation,
-            localCompiledTupleMatches: true);
+            policy,
+            localCompiledTupleMatches);
     }
 
     private static CompiledResult ParseCompiledResult(
@@ -949,7 +784,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         {
             reader.RequireEnd($"row[{index}].readiness");
             return new ReadinessProjection(
-                PrivacyCapabilityReadinessV1.ProductionQualified,
+                PrivacyCapabilityReadinessV1.Available,
                 null,
                 null,
                 null,
@@ -979,23 +814,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
                 compiledReasonBytes);
         }
 
-        reasonReader.RequireEnd($"row[{index}].readiness.reason");
-        var reason = reasonTag switch
-        {
-            1 => PrivacyCapabilityUnavailableReasonV1.NotRegistered,
-            2 => PrivacyCapabilityUnavailableReasonV1.Proposed,
-            3 => PrivacyCapabilityUnavailableReasonV1.Suspended,
-            4 => PrivacyCapabilityUnavailableReasonV1.Retired,
-            5 => PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-            6 => PrivacyCapabilityUnavailableReasonV1.InvalidProductionQualification,
-            _ => throw Invalid($"Exact12 row {index} readiness reason is unknown."),
-        };
-        return new ReadinessProjection(
-            PrivacyCapabilityReadinessV1.Unavailable,
-            reason,
-            null,
-            null,
-            null);
+        throw Invalid($"Exact12 row {index} readiness reason is retired or unknown.");
     }
 
     private static CompiledUnavailableReason ParseCompiledProfileUnavailableReason(
@@ -1004,6 +823,12 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
     {
         var reader = new FrameReader(encoded);
         var tag = reader.ReadUInt32Raw($"row[{index}].compiled_profile.reason.tag");
+        if (tag == 3)
+        {
+            reader.RequireEnd($"row[{index}].compiled_profile.reason");
+            return new CompiledUnavailableReason(
+                PrivacyCompiledProfileUnavailableReasonV1.JointSecurityReductionIncomplete, null);
+        }
         if (tag <= 1)
         {
             reader.RequireEnd($"row[{index}].compiled_profile.reason");
@@ -1036,604 +861,52 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             parsedSchemaError);
     }
 
-    private static void ValidateProjectedReadiness(
-        ReadinessProjection readiness,
-        CompiledResult compiled,
-        ActivationProjection? activation,
-        PrivacyExact12QualificationRecordV1? qualification,
-        ulong committedHeight,
-        int index)
+    private static void ValidateProjectedReadiness(ReadinessProjection readiness, CompiledResult compiled, int index)
     {
-        PrivacyCapabilityReadinessV1 expectedReadiness;
-        PrivacyCapabilityUnavailableReasonV1? expectedReason;
-        if (!compiled.IsAvailable)
-        {
-            expectedReadiness = PrivacyCapabilityReadinessV1.Unavailable;
-            expectedReason = PrivacyCapabilityUnavailableReasonV1.CompiledProfile;
-            if (activation is not null
-                || readiness.CompiledProfileReasonCanonical is null
-                || compiled.UnavailableReason is null
-                || !readiness.CompiledProfileReasonCanonical.AsSpan().SequenceEqual(
-                    compiled.UnavailableReason))
-            {
-                throw Invalid($"Exact12 row {index} readiness differs from its compiled failure.");
-            }
-        }
-        else if (activation is null)
-        {
-            expectedReadiness = PrivacyCapabilityReadinessV1.Unavailable;
-            expectedReason = PrivacyCapabilityUnavailableReasonV1.NotRegistered;
-        }
-        else
-        {
-            expectedReason = activation.Lifecycle switch
-            {
-                ProtocolLifecycle.Proposed => PrivacyCapabilityUnavailableReasonV1.Proposed,
-                ProtocolLifecycle.Suspended => PrivacyCapabilityUnavailableReasonV1.Suspended,
-                ProtocolLifecycle.Retired => PrivacyCapabilityUnavailableReasonV1.Retired,
-                ProtocolLifecycle.Active when qualification is null =>
-                    PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-                ProtocolLifecycle.Active when !QualificationMatches(
-                    qualification,
-                    compiled,
-                    activation,
-                    committedHeight,
-                    index) => PrivacyCapabilityUnavailableReasonV1.InvalidProductionQualification,
-                ProtocolLifecycle.Active => null,
-                _ => throw Invalid($"Exact12 row {index} lifecycle projection is unknown."),
-            };
-            expectedReadiness = expectedReason is null
-                ? PrivacyCapabilityReadinessV1.ProductionQualified
-                : PrivacyCapabilityReadinessV1.Unavailable;
-        }
-
-        if (readiness.Readiness != expectedReadiness
-            || readiness.UnavailableReason != expectedReason)
-        {
-            throw Invalid(
-                $"Exact12 row {index} readiness was not derived from compiled, lifecycle, and qualification evidence.");
-        }
+        var expected = compiled.IsAvailable ? PrivacyCapabilityReadinessV1.Available : PrivacyCapabilityReadinessV1.Unavailable;
+        if (readiness.Readiness != expected || (!compiled.IsAvailable &&
+            (readiness.UnavailableReason != PrivacyCapabilityUnavailableReasonV1.CompiledProfile
+             || readiness.CompiledProfileReasonCanonical is null || compiled.UnavailableReason is null
+             || !readiness.CompiledProfileReasonCanonical.AsSpan().SequenceEqual(compiled.UnavailableReason))))
+            throw Invalid($"Exact12 row {index} readiness differs from its actual compiled result.");
     }
 
-    private static ActivationProjection? ParseActivation(
-        ReadOnlySpan<byte> encoded,
-        CompiledResult compiled,
-        PrivacyProtocolIdV1 protocol,
-        ulong committedHeight,
-        int index)
+    private static void ParsePolicy(ReadOnlySpan<byte> encoded,
+        PrivacyProtocolIdV1 protocol, ulong committedHeight, int index)
     {
         var option = new FrameReader(encoded);
-        var optionTag = option.ReadByteRaw($"row[{index}].activation.option");
-        if (optionTag == 0)
-        {
-            option.RequireEnd($"row[{index}].activation");
-            return null;
-        }
-        if (optionTag != 1)
-        {
-            throw Invalid($"Exact12 row {index} activation option tag is unknown.");
-        }
-        if (!compiled.IsAvailable || compiled.AvailableFields is null)
-        {
-            throw Invalid($"Exact12 row {index} cannot activate an unavailable profile.");
-        }
-
-        var activation = option.ReadField($"row[{index}].activation.value", out _);
-        option.RequireEnd($"row[{index}].activation");
-        var reader = new FrameReader(activation);
-        var fields = new byte[11][];
-        for (var field = 0; field < fields.Length; field++)
-        {
-            fields[field] = reader.ReadField(
-                $"row[{index}].activation.value.field[{field}]",
-                out _).ToArray();
-        }
-        reader.RequireEnd($"row[{index}].activation.value");
-        for (var field = 0; field <= 7; field++)
-        {
-            if (!fields[field].AsSpan().SequenceEqual(compiled.AvailableFields[field]))
-            {
-                throw Invalid($"Exact12 row {index} activation binding field {field} drifted.");
-            }
-        }
-
-        var ceiling = ParseProtocolLimits(
-            compiled.AvailableFields[8],
-            protocol,
-            $"row[{index}].compiled_profile.protocol_limits");
-        var current = ParseProtocolLimits(
-            fields[9],
-            protocol,
-            $"row[{index}].activation.protocol_limits");
-        RequireLimitCeiling(current, ceiling, $"row[{index}].activation.protocol_limits");
-        ValidatePendingProtocolLimits(fields[10], current, protocol, committedHeight, index);
-        var lifecycle = ParseLifecycle(fields[8], committedHeight, index);
-        return new ActivationProjection(lifecycle.Lifecycle, lifecycle.ActivatedAtHeight);
+        var tag = option.ReadByteRaw($"row[{index}].policy.option");
+        if (tag == 0) { option.RequireEnd($"row[{index}].policy"); return; }
+        if (tag != 1) throw Invalid($"Exact12 row {index} policy option tag is unknown.");
+        var value = option.ReadField($"row[{index}].policy.value", out _);
+        option.RequireEnd($"row[{index}].policy");
+        var reader = new FrameReader(value);
+        RequireUnitEnum(reader.ReadField($"row[{index}].policy.protocol_id", out _), (uint)protocol, $"row[{index}].policy.protocol_id");
+        var current = ParseProtocolLimits(reader.ReadField($"row[{index}].policy.current_limits", out _), protocol, $"row[{index}].policy.current_limits");
+        var pending = reader.ReadField($"row[{index}].policy.pending_update", out _);
+        reader.RequireEnd($"row[{index}].policy");
+        // Policies are ordinary bounded values, including for currently unavailable engines.
+        // The selected native admission owner enforces this binary's supported limits.
+        ValidatePendingProtocolLimits(pending, current, protocol, committedHeight, index);
     }
 
-    private static LifecycleProjection ParseLifecycle(
-        ReadOnlySpan<byte> encoded,
-        ulong committedHeight,
-        int index)
+    // This checks one selected row only; it does not create authenticated origin or an admission token.
+    internal static void RequireSelectedRuntimeProfile(PrivacyExact12CapabilityRowV1 row)
     {
-        var reader = new FrameReader(encoded);
-        var tag = reader.ReadUInt32Raw($"row[{index}].activation.lifecycle.state");
-        if (tag > 3)
-        {
-            throw Invalid($"Exact12 row {index} lifecycle state is unknown.");
-        }
-        var record = reader.ReadField($"row[{index}].activation.lifecycle.record", out _);
-        reader.RequireEnd($"row[{index}].activation.lifecycle");
-        var fields = new FrameReader(record);
-        var proposed = ReadUInt64Field(ref fields, $"row[{index}].lifecycle.proposed_at_height");
-        if (proposed == 0 || proposed > committedHeight)
-        {
-            throw Invalid($"Exact12 row {index} lifecycle proposal height is invalid.");
-        }
-
-        if (tag == 0)
-        {
-            fields.RequireEnd($"row[{index}].lifecycle");
-            return new LifecycleProjection(ProtocolLifecycle.Proposed, null);
-        }
-
-        ulong? activated;
-        if (tag == 3)
-        {
-            activated = ReadOptionalUInt64Field(
-                ref fields,
-                $"row[{index}].lifecycle.activated_at_height");
-        }
-        else
-        {
-            activated = ReadUInt64Field(
-                ref fields,
-                $"row[{index}].lifecycle.activated_at_height");
-        }
-        var stateSince = ReadUInt64Field(ref fields, $"row[{index}].lifecycle.state_since_height");
-        fields.RequireEnd($"row[{index}].lifecycle");
-        if (stateSince == 0 || stateSince > committedHeight)
-        {
-            throw Invalid($"Exact12 row {index} lifecycle state height is invalid.");
-        }
-        if (activated.HasValue)
-        {
-            if (activated.Value < proposed || activated.Value > committedHeight)
-            {
-                throw Invalid($"Exact12 row {index} activation height is invalid.");
-            }
-            var validStateOrder = tag == 1
-                ? stateSince >= activated.Value
-                : stateSince > activated.Value;
-            if (!validStateOrder)
-            {
-                throw Invalid($"Exact12 row {index} lifecycle state ordering is invalid.");
-            }
-        }
-        else if (tag != 3 || stateSince <= proposed)
-        {
-            throw Invalid($"Exact12 row {index} retired lifecycle ordering is invalid.");
-        }
-
-        var lifecycle = tag switch
-        {
-            1 => ProtocolLifecycle.Active,
-            2 => ProtocolLifecycle.Suspended,
-            _ => ProtocolLifecycle.Retired,
-        };
-        return new LifecycleProjection(lifecycle, activated);
+        if (!row.IsNetworkAvailable)
+            throw new PrivacyCapabilityUnavailableException(row);
+        if (!row.LocalCompiledTupleMatches)
+            throw new LocalTupleMismatchException("Exact12 selected profile differs from CompiledProfileCatalogV1.");
     }
 
-    private static PrivacyExact12QualificationRecordV1? ParseQualificationOption(
-        ReadOnlySpan<byte> encoded)
+    internal static void RequireManifestNetwork(NetworkId manifestNetworkId, NetworkId expectedNetworkId)
     {
-        var option = new FrameReader(encoded);
-        var tag = option.ReadByteRaw("manifest.qualification.option");
-        if (tag == 0)
-        {
-            option.RequireEnd("manifest.qualification");
-            return null;
-        }
-        if (tag != 1)
-        {
-            throw Invalid("Exact12 qualification option tag is unknown.");
-        }
-        var value = option.ReadField("manifest.qualification.value", out _).ToArray();
-        option.RequireEnd("manifest.qualification");
-        return ParseQualification(value);
-    }
-
-    private static PrivacyExact12QualificationRecordV1 ParseQualification(byte[] encoded)
-    {
-        var record = new FrameReader(encoded);
-        var releaseBytes = record.ReadField("qualification.release_manifest", out _).ToArray();
-        var deploymentBytes = record.ReadField(
-            "qualification.deployment_qualification",
-            out _).ToArray();
-        record.RequireEnd("qualification");
-        var release = ParseReleaseManifest(releaseBytes);
-        var deployment = ParseDeploymentQualification(deploymentBytes);
-        if (!CryptographicOperations.FixedTimeEquals(
-            release.ManifestDigest,
-            deployment.ReleaseManifestDigest))
-        {
-            throw Invalid("Deployment qualification names a different release manifest.");
-        }
-        return new PrivacyExact12QualificationRecordV1(release, deployment);
-    }
-
-    private static PrivacyExact12ReleaseManifestV1 ParseReleaseManifest(byte[] encoded)
-    {
-        var reader = new FrameReader(encoded);
-        var version = ReadUInt16Field(ref reader, "qualification.release.version");
-        if (version != 1)
-        {
-            throw Invalid("Exact12 release version must be 1.");
-        }
-        var catalogIdBytes = reader.ReadField("qualification.release.catalog_id", out _);
-        var catalogIdReader = new FrameReader(catalogIdBytes);
-        var catalogId = catalogIdReader.ReadCompactString("qualification.release.catalog_id");
-        catalogIdReader.RequireEnd("qualification.release.catalog_id");
-        if (!string.Equals(catalogId, "iroha-privacy-exact12-v1", StringComparison.Ordinal))
-        {
-            throw Invalid("Exact12 release catalog id is unknown.");
-        }
-        var catalogCommitment = reader.ReadField(
-            "qualification.release.catalog_commitment",
-            out _).ToArray();
-        if (!catalogCommitment.AsSpan().SequenceEqual(Exact12CatalogCommitment))
-        {
-            throw Invalid("Exact12 release catalog commitment is unknown.");
-        }
-        _ = reader.ReadField("qualification.release.source", out _);
-        var abiVersion = ReadUInt16Field(ref reader, "qualification.release.abi_version");
-        if (abiVersion != 1)
-        {
-            throw Invalid("Exact12 release ABI version must be 1.");
-        }
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.release.abi_hash", out _),
-            "qualification.release.abi_hash");
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.release.syscall_list_digest", out _),
-            "qualification.release.syscall_list_digest");
-        _ = reader.ReadField("qualification.release.executables", out _);
-        var protocolsBytes = reader.ReadField(
-            "qualification.release.protocols",
-            out _).ToArray();
-        _ = reader.ReadField("qualification.release.stage_receipts", out _);
-        _ = reader.ReadField("qualification.release.proof_artifacts", out _);
-        _ = reader.ReadField("qualification.release.sdk_packages", out _);
-        _ = reader.ReadField("qualification.release.hardware_results", out _);
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.release.release_artifact_set_digest", out _),
-            "qualification.release.release_artifact_set_digest");
-        _ = reader.ReadField("qualification.release.audits", out _);
-        var auditBundleDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.release.audit_bundle_digest", out _),
-            "qualification.release.audit_bundle_digest");
-        _ = reader.ReadField("qualification.release.release_signatures", out _);
-        var manifestDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.release.manifest_digest", out _),
-            "qualification.release.manifest_digest");
-        reader.RequireEnd("qualification.release");
-
-        var protocolsReader = new FrameReader(protocolsBytes);
-        if (protocolsReader.ReadUInt64Raw("qualification.release.protocols.length") != RowCount)
-        {
-            throw Invalid("Exact12 release must bind exactly twelve protocols.");
-        }
-        var protocols = new PrivacyReleaseProtocolBindingV1[RowCount];
-        for (var index = 0; index < RowCount; index++)
-        {
-            protocols[index] = ParseReleaseBinding(
-                protocolsReader.ReadField(
-                    $"qualification.release.protocols[{index}]",
-                    out _),
-                index,
-                auditBundleDigest);
-        }
-        protocolsReader.RequireEnd("qualification.release.protocols");
-        return new PrivacyExact12ReleaseManifestV1(
-            version,
-            catalogCommitment,
-            abiVersion,
-            protocols,
-            manifestDigest,
-            encoded);
-    }
-
-    private static PrivacyReleaseProtocolBindingV1 ParseReleaseBinding(
-        ReadOnlySpan<byte> encoded,
-        int index,
-        byte[] auditBundleDigest)
-    {
-        var reader = new FrameReader(encoded);
-        var protocol = (PrivacyProtocolIdV1)checked((uint)index);
-        RequireUnitEnum(
-            reader.ReadField($"qualification.release.protocols[{index}].protocol_id", out _),
-            checked((uint)index),
-            $"qualification.release.protocols[{index}].protocol_id");
-        var proofSystemId = ReadUnitEnum(
-            reader.ReadField($"qualification.release.protocols[{index}].proof_system_id", out _),
-            $"qualification.release.protocols[{index}].proof_system_id");
-        var engineId = ReadUnitEnum(
-            reader.ReadField($"qualification.release.protocols[{index}].engine_id", out _),
-            $"qualification.release.protocols[{index}].engine_id");
-        if (proofSystemId != ExpectedProofSystems[index] || engineId != ExpectedEngines[index])
-        {
-            throw Invalid($"Exact12 release protocol {index} differs from the final tuple.");
-        }
-        var parameterId = ReadNonzeroDigestNewtype(
-            reader.ReadField($"qualification.release.protocols[{index}].parameter_id", out _),
-            $"qualification.release.protocols[{index}].parameter_id");
-        var parameterDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField($"qualification.release.protocols[{index}].parameter_digest", out _),
-            $"qualification.release.protocols[{index}].parameter_digest");
-        var verifierDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField($"qualification.release.protocols[{index}].verifier_digest", out _),
-            $"qualification.release.protocols[{index}].verifier_digest");
-        var statementSchemaDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField(
-                $"qualification.release.protocols[{index}].statement_schema_digest",
-                out _),
-            $"qualification.release.protocols[{index}].statement_schema_digest");
-        var engineManifestDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField(
-                $"qualification.release.protocols[{index}].engine_manifest_digest",
-                out _),
-            $"qualification.release.protocols[{index}].engine_manifest_digest");
-        var claim = reader.ReadField(
-            $"qualification.release.protocols[{index}].security_claim",
-            out _).ToArray();
-        var claimAuditDigest = ValidateSecurityClaim(
-            claim,
-            protocol,
-            parameterDigest,
-            verifierDigest,
-            index);
-        if (!CryptographicOperations.FixedTimeEquals(claimAuditDigest, auditBundleDigest))
-        {
-            throw Invalid($"Exact12 release protocol {index} names another audit bundle.");
-        }
-        var securityClaimDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField(
-                $"qualification.release.protocols[{index}].security_claim_digest",
-                out _),
-            $"qualification.release.protocols[{index}].security_claim_digest");
-        reader.RequireEnd($"qualification.release.protocols[{index}]");
-        var canonicalClaim = NoritoCodec.Encode(SecurityClaimSchemaName, claim, CanonicalFlags);
-        var digestInput = new byte[
-            SecurityClaimDigestDomain.Length + sizeof(ulong) + canonicalClaim.Length];
-        SecurityClaimDigestDomain.CopyTo(digestInput, 0);
-        BinaryPrimitives.WriteUInt64LittleEndian(
-            digestInput.AsSpan(SecurityClaimDigestDomain.Length, sizeof(ulong)),
-            checked((ulong)canonicalClaim.Length));
-        canonicalClaim.CopyTo(
-            digestInput,
-            SecurityClaimDigestDomain.Length + sizeof(ulong));
-        if (!CryptographicOperations.FixedTimeEquals(
-            SHA256.HashData(digestInput),
-            securityClaimDigest))
-        {
-            throw Invalid($"Exact12 release protocol {index} security-claim digest is invalid.");
-        }
-        return new PrivacyReleaseProtocolBindingV1(
-            protocol,
-            proofSystemId,
-            engineId,
-            parameterId,
-            parameterDigest,
-            verifierDigest,
-            statementSchemaDigest,
-            engineManifestDigest,
-            securityClaimDigest);
-    }
-
-    private static PrivacyExact12DeploymentQualificationV1 ParseDeploymentQualification(
-        byte[] encoded)
-    {
-        var reader = new FrameReader(encoded);
-        var version = ReadUInt16Field(ref reader, "qualification.deployment.version");
-        if (version != 1)
-        {
-            throw Invalid("Exact12 deployment version must be 1.");
-        }
-        _ = reader.ReadField("qualification.deployment.chain_id", out _);
-        NetworkId networkId;
-        try
-        {
-            networkId = NetworkId.FromBytes(
-                reader.ReadField("qualification.deployment.network_id", out _));
-        }
-        catch (ArgumentException)
-        {
-            throw Invalid("Deployment network id must be exactly 32 marked hash bytes.");
-        }
-        var genesisHash = reader.ReadField("qualification.deployment.genesis_hash", out _);
-        if (!genesisHash.SequenceEqual(networkId.AsSpan()))
-        {
-            throw Invalid("Deployment genesis hash differs from its exact network identity.");
-        }
-        var releaseManifestDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.release_manifest_digest", out _),
-            "qualification.deployment.release_manifest_digest");
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.activation_transaction_digest", out _),
-            "qualification.deployment.activation_transaction_digest");
-        var activationsBytes = reader.ReadField(
-            "qualification.deployment.activations",
-            out _).ToArray();
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.validator_roster_digest", out _),
-            "qualification.deployment.validator_roster_digest");
-        _ = reader.ReadField("qualification.deployment.endpoint_version", out _);
-        var convergenceHeight = ReadUInt64Field(
-            ref reader,
-            "qualification.deployment.convergence_height");
-        if (convergenceHeight == 0)
-        {
-            throw Invalid("Exact12 deployment convergence height must be nonzero.");
-        }
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.converged_state_digest", out _),
-            "qualification.deployment.converged_state_digest");
-        _ = reader.ReadField("qualification.deployment.validator_canaries", out _);
-        _ = reader.ReadField("qualification.deployment.validator_signatures", out _);
-        var qualificationDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField("qualification.deployment.qualification_digest", out _),
-            "qualification.deployment.qualification_digest");
-        reader.RequireEnd("qualification.deployment");
-
-        var activationsReader = new FrameReader(activationsBytes);
-        if (activationsReader.ReadUInt64Raw("qualification.deployment.activations.length") != RowCount)
-        {
-            throw Invalid("Exact12 deployment must bind exactly twelve activations.");
-        }
-        var activations = new PrivacyDeploymentActivationV1[RowCount];
-        for (var index = 0; index < RowCount; index++)
-        {
-            var activation = new FrameReader(activationsReader.ReadField(
-                $"qualification.deployment.activations[{index}]",
-                out _));
-            RequireUnitEnum(
-                activation.ReadField(
-                    $"qualification.deployment.activations[{index}].protocol_id",
-                    out _),
-                checked((uint)index),
-                $"qualification.deployment.activations[{index}].protocol_id");
-            var height = ReadUInt64Field(
-                ref activation,
-                $"qualification.deployment.activations[{index}].activation_height");
-            activation.RequireEnd($"qualification.deployment.activations[{index}]");
-            if (height == 0 || height >= convergenceHeight)
-            {
-                throw Invalid($"Exact12 deployment activation {index} must precede convergence.");
-            }
-            activations[index] = new PrivacyDeploymentActivationV1(
-                (PrivacyProtocolIdV1)checked((uint)index),
-                height);
-        }
-        activationsReader.RequireEnd("qualification.deployment.activations");
-        return new PrivacyExact12DeploymentQualificationV1(
-            version,
-            networkId,
-            releaseManifestDigest,
-            activations,
-            convergenceHeight,
-            qualificationDigest,
-            encoded);
-    }
-
-    internal static void RequireDeploymentNetwork(
-        PrivacyExact12QualificationRecordV1? qualification,
-        NetworkId expectedNetworkId,
-        bool requireQualification = false)
-    {
+        ArgumentNullException.ThrowIfNull(manifestNetworkId);
         ArgumentNullException.ThrowIfNull(expectedNetworkId);
-        if (qualification is null)
+        if (!manifestNetworkId.Equals(expectedNetworkId))
         {
-            if (requireQualification)
-            {
-                throw Invalid("Exact12 admission requires network deployment qualification.");
-            }
-            return;
+            throw Invalid("Exact12 capability manifest differs from the configured network identity.");
         }
-        if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))
-        {
-            throw Invalid("Exact12 deployment differs from the configured network identity.");
-        }
-    }
-
-    private static bool QualificationMatches(
-        PrivacyExact12QualificationRecordV1? qualification,
-        CompiledResult compiled,
-        ActivationProjection activation,
-        ulong committedHeight,
-        int index)
-    {
-        if (qualification is null
-            || qualification.DeploymentQualification.ConvergenceHeight > committedHeight
-            || compiled.AvailableFields is null
-            || activation.ActivatedAtHeight is null)
-        {
-            return false;
-        }
-        var release = qualification.ReleaseManifest.Protocols[index];
-        var deployment = qualification.DeploymentQualification.Activations[index];
-        var fields = compiled.AvailableFields;
-        return release.ProtocolId == (PrivacyProtocolIdV1)checked((uint)index)
-            && deployment.ProtocolId == release.ProtocolId
-            && release.ProofSystemId == ReadUnitEnum(fields[1], "qualified proof system")
-            && release.EngineId == ReadUnitEnum(fields[2], "qualified engine")
-            && release.ParameterId.AsSpan().SequenceEqual(
-                ReadNonzeroDigestNewtype(fields[3], "qualified parameter id"))
-            && release.ParameterDigest.AsSpan().SequenceEqual(
-                ReadNonzeroDigestNewtype(fields[4], "qualified parameter digest"))
-            && release.VerifierDigest.AsSpan().SequenceEqual(
-                ReadNonzeroDigestNewtype(fields[5], "qualified verifier digest"))
-            && release.StatementSchemaDigest.AsSpan().SequenceEqual(
-                ReadNonzeroDigestNewtype(fields[6], "qualified statement-schema digest"))
-            && release.EngineManifestDigest.AsSpan().SequenceEqual(
-                ReadNonzeroDigestNewtype(fields[7], "qualified engine-manifest digest"))
-            && deployment.ActivationHeight == activation.ActivatedAtHeight.Value;
-    }
-
-    private static byte[] ValidateSecurityClaim(
-        ReadOnlySpan<byte> encoded,
-        PrivacyProtocolIdV1 protocol,
-        byte[] parameterDigest,
-        byte[] verifierDigest,
-        int index)
-    {
-        var reader = new FrameReader(encoded);
-        var catalogCommitment = reader.ReadField(
-            $"row[{index}].security_claim.catalog_commitment",
-            out _);
-        if (!catalogCommitment.SequenceEqual(Exact12CatalogCommitment))
-        {
-            throw Invalid($"Exact12 row {index} security claim has an unknown catalog commitment.");
-        }
-        RequireUnitEnum(
-            reader.ReadField($"row[{index}].security_claim.protocol_id", out _),
-            (uint)protocol,
-            $"row[{index}].security_claim.protocol_id");
-        RequireUnitEnum(
-            reader.ReadField($"row[{index}].security_claim.security_model", out _),
-            ExpectedSecurityModels[index],
-            $"row[{index}].security_claim.security_model");
-        var targetSecurityBits = ReadUInt16Field(
-            ref reader,
-            $"row[{index}].security_claim.target_security_bits");
-        var achievedSecurityBits = ReadUInt16Field(
-            ref reader,
-            $"row[{index}].security_claim.achieved_security_bits");
-        if (targetSecurityBits != 128 || achievedSecurityBits < targetSecurityBits)
-        {
-            throw Invalid($"Exact12 row {index} security claim does not establish 128 bits.");
-        }
-        var claimedParameterDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField($"row[{index}].security_claim.parameter_digest", out _),
-            $"row[{index}].security_claim.parameter_digest");
-        if (!claimedParameterDigest.AsSpan().SequenceEqual(parameterDigest))
-        {
-            throw Invalid($"Exact12 row {index} security-claim parameter digest drifted.");
-        }
-        var claimedVerifierDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField($"row[{index}].security_claim.verifier_digest", out _),
-            $"row[{index}].security_claim.verifier_digest");
-        if (!claimedVerifierDigest.AsSpan().SequenceEqual(verifierDigest))
-        {
-            throw Invalid($"Exact12 row {index} security-claim verifier digest drifted.");
-        }
-        _ = ReadNonzeroDigestNewtype(
-            reader.ReadField($"row[{index}].security_claim.reduction_digest", out _),
-            $"row[{index}].security_claim.reduction_digest");
-        var auditBundleDigest = ReadNonzeroDigestNewtype(
-            reader.ReadField($"row[{index}].security_claim.audit_bundle_digest", out _),
-            $"row[{index}].security_claim.audit_bundle_digest");
-        reader.RequireEnd($"row[{index}].security_claim");
-        return auditBundleDigest;
     }
 
     private static void ValidateConsensusPolicy(ReadOnlySpan<byte> encoded, ulong committedHeight)
@@ -1642,33 +915,32 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         var current = ParseConsensusLimits(
             reader.ReadField("manifest.consensus_policy.current_limits", out _),
             "manifest.consensus_policy.current_limits");
-        var pending = reader.ReadField("manifest.consensus_policy.pending_tightening", out _);
+        var pending = reader.ReadField("manifest.consensus_policy.pending_update", out _);
         reader.RequireEnd("manifest.consensus_policy");
         var option = new FrameReader(pending);
-        var tag = option.ReadByteRaw("manifest.consensus_policy.pending_tightening.option");
+        var tag = option.ReadByteRaw("manifest.consensus_policy.pending_update.option");
         if (tag == 0)
         {
-            option.RequireEnd("manifest.consensus_policy.pending_tightening");
+            option.RequireEnd("manifest.consensus_policy.pending_update");
             return;
         }
         if (tag != 1)
         {
-            throw Invalid("Privacy consensus pending-tightening option tag is unknown.");
+            throw Invalid("Privacy consensus pending-update option tag is unknown.");
         }
-        var value = option.ReadField("manifest.consensus_policy.pending_tightening.value", out _);
-        option.RequireEnd("manifest.consensus_policy.pending_tightening");
-        var tightening = new FrameReader(value);
-        var scheduled = ReadUInt64Field(ref tightening, "privacy policy scheduled_at_height");
-        var effective = ReadUInt64Field(ref tightening, "privacy policy effective_at_height");
+        var value = option.ReadField("manifest.consensus_policy.pending_update.value", out _);
+        option.RequireEnd("manifest.consensus_policy.pending_update");
+        var update = new FrameReader(value);
+        var scheduled = ReadUInt64Field(ref update, "privacy policy scheduled_at_height");
+        var effective = ReadUInt64Field(ref update, "privacy policy effective_at_height");
         var next = ParseConsensusLimits(
-            tightening.ReadField("privacy policy next_limits", out _),
+            update.ReadField("privacy policy next_limits", out _),
             "privacy policy next_limits");
-        tightening.RequireEnd("privacy policy tightening");
-        RequireSchedule(scheduled, effective, committedHeight, "privacy policy tightening");
-        RequireLimitCeiling(next, current, "privacy policy tightening");
+        update.RequireEnd("privacy policy update");
+        RequireSchedule(scheduled, effective, committedHeight, "privacy policy update");
         if (next.Values.SequenceEqual(current.Values))
         {
-            throw Invalid("Privacy policy tightening must not be a no-op.");
+            throw Invalid("Privacy policy update must not be a no-op.");
         }
     }
 
@@ -1747,7 +1019,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         uint[] maxima = tag switch
         {
             1 => [64, 8],
-            2 => [16],
+            2 => [8],
             3 => [8, 64],
             6 => [4],
             8 => [2],
@@ -1782,28 +1054,27 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         int index)
     {
         var option = new FrameReader(encoded);
-        var tag = option.ReadByteRaw($"row[{index}].activation.pending_limits.option");
+        var tag = option.ReadByteRaw($"row[{index}].policy.pending_update.option");
         if (tag == 0)
         {
-            option.RequireEnd($"row[{index}].activation.pending_limits");
+            option.RequireEnd($"row[{index}].policy.pending_update");
             return;
         }
         if (tag != 1)
         {
             throw Invalid($"Exact12 row {index} pending-limit option tag is unknown.");
         }
-        var value = option.ReadField($"row[{index}].activation.pending_limits.value", out _);
-        option.RequireEnd($"row[{index}].activation.pending_limits");
+        var value = option.ReadField($"row[{index}].policy.pending_update.value", out _);
+        option.RequireEnd($"row[{index}].policy.pending_update");
         var reader = new FrameReader(value);
-        var scheduled = ReadUInt64Field(ref reader, $"row[{index}].pending_limits.scheduled_at_height");
-        var effective = ReadUInt64Field(ref reader, $"row[{index}].pending_limits.effective_at_height");
+        var scheduled = ReadUInt64Field(ref reader, $"row[{index}].pending_update.scheduled_at_height");
+        var effective = ReadUInt64Field(ref reader, $"row[{index}].pending_update.effective_at_height");
         var next = ParseProtocolLimits(
-            reader.ReadField($"row[{index}].pending_limits.next_limits", out _),
+            reader.ReadField($"row[{index}].pending_update.next_limits", out _),
             protocol,
-            $"row[{index}].pending_limits.next_limits");
-        reader.RequireEnd($"row[{index}].pending_limits");
-        RequireSchedule(scheduled, effective, committedHeight, $"row[{index}].pending_limits");
-        RequireLimitCeiling(next, current, $"row[{index}].pending_limits");
+            $"row[{index}].pending_update.next_limits");
+        reader.RequireEnd($"row[{index}].pending_update");
+        RequireSchedule(scheduled, effective, committedHeight, $"row[{index}].pending_update");
         if (next.Values.SequenceEqual(current.Values))
         {
             throw Invalid($"Exact12 row {index} pending protocol limits are a no-op.");
@@ -1822,21 +1093,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             || effective <= scheduled)
         {
             throw Invalid($"{context} has invalid future or committed-height binding.");
-        }
-    }
-
-    private static void RequireLimitCeiling(LimitSet value, LimitSet ceiling, string context)
-    {
-        if (value.ProtocolTag != ceiling.ProtocolTag || value.Values.Length != ceiling.Values.Length)
-        {
-            throw Invalid($"{context} has a mismatched protocol-limit shape.");
-        }
-        for (var index = 0; index < value.Values.Length; index++)
-        {
-            if (value.Values[index] > ceiling.Values[index])
-            {
-                throw Invalid($"{context}.field[{index}] exceeds its compiled ceiling.");
-            }
         }
     }
 
@@ -1915,29 +1171,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         return BinaryPrimitives.ReadUInt64LittleEndian(field);
     }
 
-    private static ulong? ReadOptionalUInt64Field(ref FrameReader reader, string context)
-    {
-        var encoded = reader.ReadField(context, out _);
-        var option = new FrameReader(encoded);
-        var tag = option.ReadByteRaw($"{context}.option");
-        if (tag == 0)
-        {
-            option.RequireEnd(context);
-            return null;
-        }
-        if (tag != 1)
-        {
-            throw Invalid($"{context} has an unknown option tag.");
-        }
-        var value = option.ReadField($"{context}.value", out _);
-        option.RequireEnd(context);
-        if (value.Length != sizeof(ulong))
-        {
-            throw Invalid($"{context} must contain one UInt64.");
-        }
-        return BinaryPrimitives.ReadUInt64LittleEndian(value);
-    }
-
     private static byte[] DecodeExactArchive(string schemaName, byte[] archive)
     {
         byte[] payload;
@@ -1963,9 +1196,9 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
     internal sealed record DecodedManifest(
         uint Version,
+        NetworkId NetworkId,
         ulong CommittedHeight,
         byte[] ConsensusPolicy,
-        PrivacyExact12QualificationRecordV1? Qualification,
         IReadOnlyList<PrivacyExact12CapabilityRowV1> Protocols,
         byte[] ManifestDigest,
         byte[] CanonicalArchive);
@@ -1987,22 +1220,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         PrivacyCompiledProfileUnavailableReasonV1? CompiledProfileUnavailableReason,
         PrivacyCompiledStatementSchemaErrorV1? CompiledStatementSchemaError,
         byte[]? CompiledProfileReasonCanonical);
-
-    private sealed record ActivationProjection(
-        ProtocolLifecycle Lifecycle,
-        ulong? ActivatedAtHeight);
-
-    private sealed record LifecycleProjection(
-        ProtocolLifecycle Lifecycle,
-        ulong? ActivatedAtHeight);
-
-    private enum ProtocolLifecycle
-    {
-        Proposed,
-        Active,
-        Suspended,
-        Retired,
-    }
 
     private sealed record LimitSet(uint ProtocolTag, uint[] Values);
 

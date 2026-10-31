@@ -14,19 +14,42 @@ import org.hyperledger.iroha.sdk.json.JsonObject
 /** Worker-only genuine SDK lifecycle. No direct adapter hooks, synthetic evidence or account keys. */
 internal class EnrollmentDeviceDriver(
     private val config: EnrollmentProbeConfiguration, private val platform: KagemushaWalletAndroidPlatformV1,
+    private val bindActivity: (KagemushaWalletV1, Long) -> KagemushaProbeActivityControl,
 ) : AutoCloseable {
     private var attempt: KagemushaWalletInstallationAttemptV1? = null
     private var installed: KagemushaWalletInstalledRuntimeV1? = null
     private var enrollment: KagemushaWalletEnrollmentV1? = null
     private var wallet: KagemushaWalletV1? = null
+    private var activity: KagemushaProbeActivityControl? = null
+    private var activityGeneration = 0L
+    private var walletCloseAttempted = false
+    private var exchange: KagemushaWalletExchangeV1? = null
     private var dispatch: ByteArray? = null
+    private val reviews = KagemushaProbeReviewHolder()
     private val monetary = KagemushaWalletDeviceStages(config,
-        { wallet ?: throw EnrollmentProbeFailure("lifecycle") }, ::output, ::requireLive)
+        { wallet ?: throw EnrollmentProbeFailure("lifecycle") }, ::exchangeOwner, ::output, ::requireWalletLive, reviews)
     private val nearby = KagemushaNearbyDeviceStages(config,
-        { wallet ?: throw EnrollmentProbeFailure("lifecycle") }, ::output, ::requireLive)
+        { wallet ?: throw EnrollmentProbeFailure("lifecycle") }, ::exchangeOwner, ::output, ::requireWalletLive, reviews)
     private val live = AtomicBoolean(true)
     private var closed = false
     private fun requireLive() { probeRequire(live.get(), "lifecycle") }
+    private fun requireWalletLive() { requireLive(); checkActivity() }
+    /** Surface callback/control failures even when the mailbox has no next command yet. */
+    fun checkActivity() {
+        if (wallet != null) (activity ?: throw EnrollmentProbeFailure("activity-unbound")).checkHealthy()
+    }
+    private fun exchangeOwner() = exchange ?: throw EnrollmentProbeFailure("exchange-required")
+    private fun endExchange(): KagemushaWalletExchangeEndV1 {
+        val owner = exchangeOwner()
+        owner.requestEnd()
+        reviews.endRequested(owner)?.let { pending ->
+            try { owner.discardReview(pending.review) }
+            catch (failure: KagemushaWalletExceptionV1) { if (failure.status != -2) throw failure }
+        }
+        val result = owner.end()
+        if (result != KagemushaWalletExchangeEndV1.ENDING) exchange = null
+        return result
+    }
     private fun owner() = enrollment ?: throw EnrollmentProbeFailure("lifecycle")
     private fun seqName(value: Int) = value.toString().padStart(4, '0')
     fun output(name: String, bytes: ByteArray, sequence: Int) {
@@ -63,9 +86,17 @@ internal class EnrollmentDeviceDriver(
     }
     fun execute(command: EnrollmentProbeCommand, sequence: Int): String {
         requireLive(); probeRequire(!closed, "lifecycle")
-        if (command.action in KagemushaNearbyProbeManifest.schemas) return nearby.execute(command, sequence)
-        if (command.action in KagemushaMonetaryProbeManifest.schemas) return monetary.execute(command, sequence)
-        return when (command.action) {
+        val cleanup = command.action in setOf("release-wallet", "stop", "end-exchange", "discard-review", "cancel-time")
+        if (!cleanup) checkActivity()
+        if (command.action in KagemushaNearbyProbeManifest.schemas) return nearby.execute(command, sequence).also { checkActivity() }
+        if (command.action in KagemushaMonetaryProbeManifest.schemas) return monetary.execute(command, sequence).also { checkActivity() }
+        val outcome = when (command.action) {
+            "begin-exchange" -> {
+                probeRequire(exchange == null, "exchange-retained")
+                exchange = (wallet ?: throw EnrollmentProbeFailure("lifecycle")).beginExchange()
+                "native-exchange-open"
+            }
+            "end-exchange" -> "native-exchange-${endExchange().name.lowercase()}"
             "install" -> {
                 probeRequire(enrollment == null && wallet == null, "lifecycle")
                 if (installed != null) "installed-owner-retained" else {
@@ -185,6 +216,18 @@ internal class EnrollmentDeviceDriver(
                 } catch (failure: ExecutionException) { throw failure.cause ?: failure }
                 wallet = opened; installed = null
                 val returned = SystemClock.elapsedRealtimeNanos()
+                try {
+                    activityGeneration = Math.addExact(activityGeneration, 1L)
+                    val binding = bindActivity(opened, activityGeneration)
+                    activity = binding
+                    binding.start()
+                } catch (failure: Throwable) {
+                    // Initial activity failure is visible. Retain any failed cleanup owner for retry.
+                    try { releaseWallet() } catch (cleanupFailure: Throwable) {
+                        if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+                    }
+                    throw failure
+                }
                 val metadata = opened.metadata()
                 probeRequire(metadata.accountOriginal().contentEquals(config.account), "collision")
                 output("native-account.norito", metadata.accountOriginal(), sequence)
@@ -209,12 +252,14 @@ internal class EnrollmentDeviceDriver(
                 output(name, bytes, sequence)
             }
             "release-wallet" -> {
-                probeRequire(wallet != null, "lifecycle"); wallet!!.close(); wallet = null; monetary.released()
+                probeRequire(wallet != null, "lifecycle"); releaseWallet()
                 "wallet-released-custody-retained"
             }
             "stop" -> { close(); "closed-with-custody-retained" }
             else -> throw EnrollmentProbeFailure("input")
         }
+        if (!cleanup) checkActivity()
+        return outcome
     }
     /** Callback runs on the SDK admission worker; it performs no signing and no additional JNI. */
     private fun signOpen(challenge: ByteArray, sequence: Int): CompletableFuture<ByteArray> {
@@ -246,10 +291,46 @@ internal class EnrollmentDeviceDriver(
         nearby.close()
         if (closed) return
         live.set(false)
-        wallet?.let { it.close(); wallet = null; monetary.released() }
+        releaseWallet()
         enrollment?.let { it.close(); enrollment = null }
         installed?.let { it.close(); installed = null }
         attempt?.let { it.close(); attempt = null }
         closed = true
     }
+
+    private fun releaseWallet() {
+        val owner = wallet ?: return
+        cleanupAfterExchangeFence(end = {
+            // end() drains local tasks before its Native result. A failed Native end must
+            // not prevent exact-wallet close/retry, including SDK-retired wallet cleanup.
+            if (exchange != null) probeRequire(endExchange() != KagemushaWalletExchangeEndV1.ENDING, "exchange-ending")
+        }, release = {
+            val binding = activity
+            if (binding != null) {
+                try { binding.close() } finally {
+                    if (binding.released) {
+                        wallet = null; exchange = null; activity = null
+                        monetary.released(); walletCloseAttempted = false
+                    }
+                }
+            } else {
+                // Binding construction can fail before a control executor owns the wallet.
+                val retry = walletCloseAttempted; walletCloseAttempted = true
+                if (retry) owner.retryCleanup() else owner.close()
+                wallet = null; exchange = null; monetary.released(); walletCloseAttempted = false
+            }
+        })
+    }
+}
+
+/** Worker-only cleanup ordering after accepted command calls finished. Preserve every failure. */
+internal fun cleanupAfterExchangeFence(end: () -> Unit, release: () -> Unit) {
+    var failure: Throwable? = null
+    try { end() } catch (problem: Throwable) { failure = problem }
+    try { release() } catch (problem: Throwable) {
+        val previous = failure
+        if (previous == null) failure = problem
+        else if (previous !== problem) previous.addSuppressed(problem)
+    }
+    failure?.let { throw it }
 }

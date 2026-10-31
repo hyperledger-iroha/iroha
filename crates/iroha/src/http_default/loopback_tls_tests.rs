@@ -1,4 +1,4 @@
-//! Cleartext loopback pools avoid root loading while ordinary TLS keeps its roots.
+//! Cleartext pools stay direct while ordinary TLS authenticates server certificates.
 
 use super::*;
 use std::{
@@ -9,33 +9,104 @@ use std::{
 };
 
 #[test]
-fn cleartext_pools_skip_native_roots_and_ordinary_tls_keeps_them() {
+fn cleartext_pools_remain_direct_and_ordinary_tls_rejects_untrusted_servers() {
     const CHILD: &str = "IROHA_LOOPBACK_TLS_ROOTS_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
         // Select rustls explicitly so dependency feature unification cannot make the
-        // native-TLS backend bypass this deliberately malformed native-root fixture.
+        // native-TLS backend change the verifier under test.
         let blocking = direct_loopback_http_client_builder()
-            .use_rustls_tls()
+            .tls_backend_rustls()
             .build()
             .expect("cleartext blocking pool must not load native roots");
         let asynchronous = direct_loopback_async_http_client_builder()
-            .use_rustls_tls()
+            .tls_backend_rustls()
             .build()
             .expect("cleartext async pool must not load native roots");
-        assert!(
-            blocking_http_client_builder()
-                .use_rustls_tls()
-                .build()
-                .expect_err("ordinary blocking TLS must still load native roots")
-                .is_builder()
-        );
-        assert!(
-            async_http_client_builder()
-                .use_rustls_tls()
-                .build()
-                .expect_err("ordinary async TLS must still load native roots")
-                .is_builder()
-        );
+        // Platform verification no longer reads SSL_CERT_FILE during construction.
+        // Exercise certificate authentication with a real, untrusted local server.
+        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+            .expect("self-signed TLS fixture");
+        let configuration = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der())
+                .into(),
+        )
+        .unwrap();
+        let tls_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tls_address = tls_listener.local_addr().unwrap();
+        let tls_url = format!("https://localhost:{}/", tls_address.port());
+        tls_listener.set_nonblocking(true).unwrap();
+        let tls_server = thread::spawn(move || {
+            for _ in 0..2 {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let socket = loop {
+                    match tls_listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "TLS connection acceptance deadline"
+                            );
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        Err(error) => panic!("TLS fixture listener: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let session =
+                    rustls::ServerConnection::new(Arc::new(configuration.clone())).unwrap();
+                let mut stream = rustls::StreamOwned::new(session, socket);
+                let mut request = [0; 1];
+                assert!(
+                    stream.read(&mut request).is_err(),
+                    "untrusted TLS handshake must fail"
+                );
+            }
+        });
+        let blocking_error = blocking_http_client_builder()
+            .tls_backend_rustls()
+            .no_proxy()
+            .resolve("localhost", tls_address)
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get(&tls_url)
+            .send()
+            .expect_err("ordinary blocking TLS must reject an untrusted server");
+        assert_certificate_refusal(&blocking_error);
+        let asynchronous_error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                async_http_client_builder()
+                    .tls_backend_rustls()
+                    .no_proxy()
+                    .resolve("localhost", tls_address)
+                    .connect_timeout(Duration::from_secs(2))
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap()
+                    .get(&tls_url)
+                    .send()
+                    .await
+            })
+            .expect_err("ordinary asynchronous TLS must reject an untrusted server");
+        assert_certificate_refusal(&asynchronous_error);
+        tls_server.join().unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("cleartext listener");
         let url = format!(
@@ -151,24 +222,13 @@ fn cleartext_pools_skip_native_roots_and_ordinary_tls_keeps_them() {
         return;
     }
 
-    let directory = tempfile::tempdir().expect("isolated root-store directory");
-    let roots = directory.path().join("invalid-der.pem");
-    // Valid PEM framing with invalid certificate DER forces rustls root insertion
-    // to fail; an empty/missing PEM would not exercise reqwest's error branch.
-    std::fs::write(
-        &roots,
-        b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
-    )
-    .expect("invalid root fixture");
     let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
-            "http_default::loopback_tls_tests::cleartext_pools_skip_native_roots_and_ordinary_tls_keeps_them",
+            "http_default::loopback_tls_tests::cleartext_pools_remain_direct_and_ordinary_tls_rejects_untrusted_servers",
             "--nocapture",
         ])
         .env(CHILD, "1")
-        .env("SSL_CERT_FILE", &roots)
-        .env_remove("SSL_CERT_DIR")
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .env("HTTPS_PROXY", "http://127.0.0.1:1")
         .env("ALL_PROXY", "http://127.0.0.1:1")
@@ -178,11 +238,34 @@ fn cleartext_pools_skip_native_roots_and_ordinary_tls_keeps_them() {
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
         .output()
-        .expect("isolated root-store child");
+        .expect("isolated proxy-policy child");
     assert!(
         child.status.success(),
-        "root-store child failed:\n{}\n{}",
+        "TLS and loopback child failed:\n{}\n{}",
         String::from_utf8_lossy(&child.stdout),
         String::from_utf8_lossy(&child.stderr)
     );
+}
+
+// Require a certificate-validation cause; DNS, TCP, timeout and EOF failures do
+// not establish that ordinary HTTPS still authenticates its peer.
+fn assert_certificate_refusal(error: &reqwest::Error) {
+    assert!(error.is_connect(), "TLS connection failure: {error:?}");
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if matches!(
+            current.downcast_ref::<rustls::Error>(),
+            Some(rustls::Error::InvalidCertificate(_))
+        ) {
+            return;
+        }
+        // io::Error can retain the Rustls error as its custom payload rather than
+        // exposing that payload itself through Error::source().
+        cause = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| -> &(dyn std::error::Error + 'static) { inner })
+            .or_else(|| current.source());
+    }
+    panic!("expected certificate-validation refusal, got {error:?}");
 }

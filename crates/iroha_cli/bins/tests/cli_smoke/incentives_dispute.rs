@@ -3,6 +3,7 @@
 use iroha_data_model::soranet::incentives::{
     RelayRewardDisputeStatusV1, RelayRewardDisputeV1, RelayRewardInstructionV1,
 };
+use iroha_model_base::metadata::Metadata;
 
 use super::{account_id, account_literal, command, fs, torii_mock_support::TempDir, xor_asset_id};
 
@@ -19,7 +20,7 @@ fn authors_dispute_from_public_instruction_without_unused_treasury() {
         payout_amount: 10_u64.into(),
         reward_score: 1_000,
         budget_approval_id: None,
-        metadata: Default::default(),
+        metadata: Metadata::default(),
     };
     fs::write(&instruction_path, norito::to_bytes(&instruction).unwrap()).unwrap();
     let submitter = account_id("operator");

@@ -482,10 +482,10 @@ pub(crate) fn honest_accumulator<C: PastaCurve>(
 
 #[cfg(test)]
 mod tests {
-    use group::{Curve, prime::PrimeCurveAffine};
+    use group::{Curve, CurveAffine};
     use iroha_pasta::{Ep, Eq, Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::transcript::{Blake2bHash, TranscriptWriter};

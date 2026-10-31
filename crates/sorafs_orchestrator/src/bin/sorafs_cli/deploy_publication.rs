@@ -129,7 +129,7 @@ pub(super) fn quote_and_sign(
     })
     .map_err(|_| "publication fee quote encoding failed".to_owned())?;
     let timestamp = reputation_request_timestamp_ms_at(SystemTime::now())?;
-    let nonce = reputation_request_nonce_with_rng(&mut rand::rngs::OsRng)?;
+    let nonce = reputation_request_nonce_with_rng(&mut rand::rngs::SysRng)?;
     let signature = Signature::try_new(
         private_key,
         &request_message(network, &url, &bytes, timestamp, &nonce)?,
@@ -188,7 +188,7 @@ fn post(
 ) -> Result<reqwest::blocking::Response, String> {
     let authority = AccountId::new(config.public_key.clone());
     let timestamp = reputation_request_timestamp_ms_at(SystemTime::now())?;
-    let nonce = reputation_request_nonce_with_rng(&mut rand::rngs::OsRng)?;
+    let nonce = reputation_request_nonce_with_rng(&mut rand::rngs::SysRng)?;
     let message = request_message(&config.network_id, &url, &bytes, timestamp, &nonce)?;
     let signature = Signature::try_new(&config.private_key, &message)
         .map_err(|_| "failed to authenticate publication request".to_owned())?;
@@ -321,7 +321,7 @@ fn assert_and_verify(
     } = session;
     ensure_live(started)?;
     let mut challenge = [0; 32];
-    rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut challenge)
+    rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut challenge)
         .map_err(|_| "publication challenge entropy unavailable".to_owned())?;
     if challenge == [0; 32] {
         return Err("publication challenge entropy invalid".to_owned());

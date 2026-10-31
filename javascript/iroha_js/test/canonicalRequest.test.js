@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import {
   CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,

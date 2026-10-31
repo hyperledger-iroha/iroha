@@ -24,6 +24,8 @@ updates:
     directories:
       - /pytests/*
       - /scripts
+      - /.github/scripts/ci_test
+      - /python/*
     schedule:
       interval: "daily"
     commit-message:
@@ -38,8 +40,65 @@ updates:
     target-branch: "main"
     directories:
       - /
+      - /fuzz
+      - /crates/fastpq_prover/fuzz
+      - /crates/iroha_parliament_ballot_proof/fuzz
+      - /crates/ivm/fuzz
+      - /crates/norito/fuzz
+      - /tools/soranet-handshake-harness/fuzz
+      - /scripts/native-source-snapshot
+      - /scripts/fastpq
+      - /scripts/regenerate_norito_goldens
     schedule:
       interval: "daily"
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: "npm"
+    target-branch: "main"
+    directories:
+      - /javascript/iroha_js
+      - /scripts/contract_tooling/evm-runtime
+      - /tools/kotodama_linguist/grammar-repo
+      - /tools/openapi
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: "gradle"
+    target-branch: "main"
+    directories:
+      - /kotlin
+      - /java/iroha_android
+      - /java/norito_java
+      - /examples/android
+      - /examples/android/attestation-probe
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: "swift"
+    target-branch: "main"
+    directories:
+      - /IrohaSwift
+      - /tools/connect-cli
+      - /examples/ios/ConnectMinimalApp
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: "nuget"
+    target-branch: "main"
+    directory: "/csharp"
+    schedule:
+      interval: "weekly"
     commit-message:
       prefix: chore
       include: scope

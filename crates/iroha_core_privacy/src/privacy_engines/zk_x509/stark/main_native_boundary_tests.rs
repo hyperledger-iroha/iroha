@@ -210,7 +210,9 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x81; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| digest(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -229,7 +231,7 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let mut source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -239,11 +241,11 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
     )
     .unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
     let mut io =
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     assert_eq!(
         super::main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)
             .unwrap()
@@ -259,12 +261,11 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
         192,
     );
     let p256_fixed = P256MainVerifierFixedSourceV1::new_v1().unwrap();
-    let p256_challenges = p256_aggregate_challenges_from_post_base_v1(source.post_base).unwrap();
+    let p256_challenges = p256_aggregate_challenges_from_post_base_v1(&source.post_base).unwrap();
     let projection_fixed =
         compile_zk_x509_projection_stark_fixed_rows_v1(&fixture.statement).unwrap();
-    let rfc_counts = build_zk_x509_rfc5280_stark_shape_v1(&assembly.rfc_trace)
-        .unwrap()
-        .family_counts();
+    build_zk_x509_rfc5280_stark_shape_v1(&assembly.rfc_trace).unwrap();
+    let rfc_counts = ZkX509Rfc5280StarkShapeV1::family_counts();
     let mut failures = Vec::new();
     let mut checked = 0;
     let mut registration_ids = BTreeSet::new();
@@ -463,10 +464,8 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
                 SegmentAdapterIdV1::ByteMemory => io_constraint_residues_v1(
                     registration.segment,
                     assembly.io.logical_active_rows,
-                    opening.base_current,
-                    opening.base_next,
-                    opening.aux_current,
-                    opening.aux_next,
+                    (opening.base_current, opening.base_next),
+                    (opening.aux_current, opening.aux_next),
                     &rows.fixed[current],
                     source.post_base.io(),
                 )
@@ -483,7 +482,7 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
                     registration,
                     opening,
                     &rows.fixed[current],
-                    p256_challenges,
+                    &p256_challenges,
                 )
                 .unwrap(),
             };

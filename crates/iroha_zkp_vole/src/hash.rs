@@ -298,7 +298,7 @@ impl Xof {
             xor_into(&mut self.state, self.pos, head);
             self.pos += take;
             if self.pos == self.rate {
-                keccak::f1600(&mut self.state);
+                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
                 self.pos = 0;
             }
             data = tail;
@@ -314,7 +314,7 @@ impl Xof {
     pub fn finalize(mut self) -> XofOutput {
         xor_into(&mut self.state, self.pos, &[SHAKE_PADDING]);
         xor_into(&mut self.state, self.rate - 1, &[0x80]);
-        keccak::f1600(&mut self.state);
+        keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
         XofOutput {
             state: self.state,
             rate: self.rate,
@@ -359,7 +359,7 @@ impl XofOutput {
     pub fn squeeze(&mut self, mut out: &mut [u8]) {
         while !out.is_empty() {
             if self.pos == self.rate {
-                keccak::f1600(&mut self.state);
+                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
                 self.pos = 0;
             }
             let take = (self.rate - self.pos).min(out.len());
@@ -435,7 +435,7 @@ impl Sha3_512 {
             xor_into(&mut self.state, self.pos, head);
             self.pos += take;
             if self.pos == SHA3_512_RATE {
-                keccak::f1600(&mut self.state);
+                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
                 self.pos = 0;
             }
             data = tail;
@@ -446,7 +446,7 @@ impl Sha3_512 {
     pub fn finalize(mut self) -> [u8; SHA3_512_BYTES] {
         xor_into(&mut self.state, self.pos, &[SHA3_PADDING]);
         xor_into(&mut self.state, SHA3_512_RATE - 1, &[0x80]);
-        keccak::f1600(&mut self.state);
+        keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
         let mut digest = [0u8; SHA3_512_BYTES];
         read_from(&self.state, 0, &mut digest);
         digest
@@ -725,12 +725,12 @@ mod tests {
         let mut out = vec![0u8; len];
         match level {
             SecurityLevel::L128 => {
-                let mut sponge = sha3::Shake128::default();
+                let mut sponge = shake::Shake128::default();
                 sponge.update(message);
                 sponge.finalize_xof().read(&mut out);
             }
             SecurityLevel::L192 | SecurityLevel::L256 => {
-                let mut sponge = sha3::Shake256::default();
+                let mut sponge = shake::Shake256::default();
                 sponge.update(message);
                 sponge.finalize_xof().read(&mut out);
             }

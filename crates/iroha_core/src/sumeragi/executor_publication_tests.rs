@@ -192,8 +192,17 @@ pub(super) fn with_worker_chain_and_clock(
     );
 }
 
+type WorkerChainCallback<'a> = &'a mut (
+            dyn FnMut(
+    &CertifiedTestChain,
+    &mut Worker<'_>,
+    &KuraBlockStore,
+    &mut tokio::sync::broadcast::Receiver<EventBox>,
+) + 'a
+        );
+
 /// Construct the same signed fixture once per binary rather than per callback type.
-/// The borrowed adapter retains each original FnOnce closure without another allocation.
+/// The borrowed adapter retains each original `FnOnce` closure without another allocation.
 #[inline(never)]
 fn with_worker_chain_erased(
     chain: &CertifiedTestChain,
@@ -201,12 +210,7 @@ fn with_worker_chain_erased(
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
     time_source: iroha_primitives::time::TimeSource,
     isolated_source: bool,
-    test: &mut dyn FnMut(
-        &CertifiedTestChain,
-        &mut Worker<'_>,
-        &KuraBlockStore,
-        &mut tokio::sync::broadcast::Receiver<EventBox>,
-    ),
+    test: WorkerChainCallback<'_>,
 ) {
     assert_eq!(chain.validators().len(), 4);
     let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
@@ -486,7 +490,11 @@ fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry()
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap();
@@ -666,7 +674,11 @@ pub(super) fn proposal_with_transactions(
                 &chain.network_id(),
                 Duration::from_secs(1),
                 view.world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap()
@@ -1707,6 +1719,9 @@ fn state_busy_retry_retains_original_metadata_snapshot_certificate_and_pool_cust
 
 #[test]
 fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -1806,6 +1821,9 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
 
 #[test]
 fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custody() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -1952,6 +1970,9 @@ fn assert_certificate_allocation_retry(
     make_chain: fn() -> CertifiedTestChain,
     consensus_mode: ConsensusMode,
 ) {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker_from(
         make_chain,
         consensus_mode,
@@ -2265,7 +2286,11 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
             &chain.network_id(),
             Duration::from_secs(1),
             chain.state().view().world().parameters().transaction(),
-            &iroha_config::parameters::actual::Crypto::default(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time,
         )
         .unwrap();
@@ -2629,7 +2654,7 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
     }
 }
 
-/// Every certificate allocation boundary also preserves the genuine NPoS boundary execution.
+/// Every certificate allocation boundary also preserves the genuine `NPoS` boundary execution.
 #[test]
 fn boundary_certificate_refusals_retain_original_preimage_authority_and_exact_quorum() {
     for part in 1..=3 {
@@ -2643,6 +2668,9 @@ fn boundary_certificate_refusals_retain_original_preimage_authority_and_exact_qu
 
 #[test]
 fn boundary_certificate_read_refusal_retains_original_source_and_availability_until_publication() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker_from(
         CertifiedTestChain::npos_boundary_fixture,
         ConsensusMode::Npos,
@@ -3296,6 +3324,9 @@ fn native_context_archive_corrupt_commitment_remains_sticky_recovery() {
 
 #[test]
 fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -3712,7 +3743,11 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
                 &chain.network_id(),
                 Duration::from_secs(1),
                 chain.state().view().world().parameters().transaction(),
-                &iroha_config::parameters::actual::Crypto::default(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time,
             )
             .unwrap();
@@ -3815,6 +3850,9 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
 
 #[test]
 fn beacon_startup_retains_original_capacity_through_worker_channel_and_node() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, _, _| {
         use crate::sumeragi::node::NodeError;
         use iroha_allocation::AllocationRefusal;
@@ -4124,7 +4162,7 @@ fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
             world.privacy_consensus_policy =
                 mv::cell::Cell::new(iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
                     current_limits: limits,
-                    pending_tightening: None,
+                    pending_update: None,
                 });
             let mut config = TestChainConfig::new(world, 1_000);
             config
@@ -4165,7 +4203,11 @@ fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
                     &chain.network_id(),
                     Duration::from_secs(1),
                     chain.state().view().world().parameters().transaction(),
-                    &iroha_config::parameters::actual::Crypto::default(),
+                    &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                        iroha_crypto::Algorithm::Ed25519,
+                        iroha_crypto::Algorithm::Secp256k1,
+                    ])
+                    .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                     &time,
                 )
                 .expect("within the transaction cap")

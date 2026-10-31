@@ -64,6 +64,20 @@ pub enum EvmError {
     UnsupportedNetwork(SccpNetworkV1),
     /// `maxPriorityFeePerGas > maxFeePerGas`.
     PriorityFeeAboveMaxFee,
+    /// `maxFeePerGas` exceeds its network's configured cap.
+    FeePerGasAboveCap {
+        /// The quoted `maxFeePerGas` (wei).
+        max_fee_per_gas: u128,
+        /// The configured cap (wei).
+        cap: u128,
+    },
+    /// `gasLimit × maxFeePerGas` exceeds its network's configured cap.
+    TotalFeeAboveCap {
+        /// The quoted worst-case fee (wei); `None` when it overflows `u128`.
+        total: Option<u128>,
+        /// The configured cap (wei).
+        cap: u128,
+    },
     /// A zero gas limit.
     ZeroGasLimit,
     /// The bytes are not a canonical EIP-1559 transaction encoding.
@@ -102,6 +116,24 @@ impl fmt::Display for EvmError {
             Self::PriorityFeeAboveMaxFee => {
                 formatter.write_str("maxPriorityFeePerGas exceeds maxFeePerGas")
             }
+            Self::FeePerGasAboveCap {
+                max_fee_per_gas,
+                cap,
+            } => write!(
+                formatter,
+                "the quoted maxFeePerGas of {max_fee_per_gas} wei exceeds the configured cap of {cap} wei"
+            ),
+            Self::TotalFeeAboveCap {
+                total: Some(total),
+                cap,
+            } => write!(
+                formatter,
+                "the quoted fee of up to {total} wei (gasLimit × maxFeePerGas) exceeds the configured cap of {cap} wei"
+            ),
+            Self::TotalFeeAboveCap { total: None, cap } => write!(
+                formatter,
+                "the quoted gasLimit × maxFeePerGas overflows the configured cap of {cap} wei"
+            ),
             Self::ZeroGasLimit => formatter.write_str("the gas limit must be nonzero"),
             Self::Rlp(reason) => write!(formatter, "invalid EIP-1559 encoding: {reason}"),
             Self::Signature(error) => write!(formatter, "transaction signature: {error}"),
@@ -405,6 +437,19 @@ pub fn eip1559_chain_id(network: SccpNetworkV1) -> Result<u64, EvmError> {
     }
 }
 
+/// The most one EIP-1559 transaction may charge its payer on one network, in wei.
+///
+/// The fees and the gas estimate of a wallet transaction come from one public endpoint. A
+/// compromised endpoint could otherwise turn any wallet call into a large tip, so a quote above
+/// either cap is refused before anything is signed or journaled (§7.1 step 7, §7.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EvmFeeCapsV1 {
+    /// Highest `maxFeePerGas`.
+    pub max_fee_per_gas: u128,
+    /// Highest `gasLimit × maxFeePerGas`: the most a call can be charged in fees.
+    pub max_total_fee: u128,
+}
+
 /// An unsigned EIP-1559 transaction with an empty access list.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Eip1559TransactionV1 {
@@ -467,6 +512,35 @@ impl Eip1559TransactionV1 {
         }
         if self.gas_limit == 0 {
             return Err(EvmError::ZeroGasLimit);
+        }
+        Ok(())
+    }
+
+    /// The most this transaction can be charged in fees: `gasLimit × maxFeePerGas`, or `None`
+    /// when that overflows `u128`.
+    #[must_use]
+    pub fn max_total_fee(&self) -> Option<u128> {
+        u128::from(self.gas_limit).checked_mul(self.max_fee_per_gas)
+    }
+
+    /// Refuse fees above the payer's caps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvmError::FeePerGasAboveCap`] or [`EvmError::TotalFeeAboveCap`].
+    pub fn check_fee_caps(&self, caps: &EvmFeeCapsV1) -> Result<(), EvmError> {
+        if self.max_fee_per_gas > caps.max_fee_per_gas {
+            return Err(EvmError::FeePerGasAboveCap {
+                max_fee_per_gas: self.max_fee_per_gas,
+                cap: caps.max_fee_per_gas,
+            });
+        }
+        let total = self.max_total_fee();
+        if total.is_none_or(|total| total > caps.max_total_fee) {
+            return Err(EvmError::TotalFeeAboveCap {
+                total,
+                cap: caps.max_total_fee,
+            });
         }
         Ok(())
     }
@@ -1395,6 +1469,92 @@ mod tests {
         assert_eq!(
             EvmError::from(KeyFileError::BadFormat),
             EvmError::KeyFile(KeyFileError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn fee_caps_refuse_an_endpoint_quoted_tip_and_an_inflated_gas_limit() {
+        let caps = EvmFeeCapsV1 {
+            max_fee_per_gas: 200_000_000_000,
+            max_total_fee: 250_000_000_000_000_000,
+        };
+        let quoted = |priority: u128, base: u128, gas_limit: u64| Eip1559TransactionV1 {
+            chain_id: ETHEREUM_CHAIN_ID,
+            nonce: 0,
+            max_priority_fee_per_gas: priority,
+            max_fee_per_gas: base.saturating_mul(2).saturating_add(priority),
+            gas_limit,
+            to: Some([0x22; 20]),
+            value: 0,
+            data: vec![0xde, 0xad],
+        };
+        let ordinary = quoted(2_000_000_000, 10_000_000_000, 90_000);
+        assert_eq!(ordinary.max_total_fee(), Some(90_000 * 22_000_000_000));
+        assert_eq!(ordinary.check_fee_caps(&caps), Ok(()));
+        // A compromised endpoint quotes a 10^15 wei tip per gas.
+        let tip = quoted(1_000_000_000_000_000, 10_000_000_000, 90_000);
+        assert_eq!(
+            tip.check_fee_caps(&caps),
+            Err(EvmError::FeePerGasAboveCap {
+                max_fee_per_gas: 1_000_020_000_000_000,
+                cap: caps.max_fee_per_gas,
+            })
+        );
+        assert!(
+            tip.check_fee_caps(&caps)
+                .unwrap_err()
+                .to_string()
+                .contains("configured cap")
+        );
+        // A fee per gas at the cap is accepted; one wei more is refused.
+        let mut at_cap = ordinary.clone();
+        at_cap.max_fee_per_gas = caps.max_fee_per_gas;
+        assert_eq!(at_cap.check_fee_caps(&caps), Ok(()));
+        at_cap.max_fee_per_gas += 1;
+        assert!(matches!(
+            at_cap.check_fee_caps(&caps),
+            Err(EvmError::FeePerGasAboveCap { .. })
+        ));
+        // An inflated gas estimate is bounded by the total even at an ordinary fee per gas.
+        let inflated = quoted(2_000_000_000, 10_000_000_000, 30_000_000);
+        assert_eq!(
+            inflated.check_fee_caps(&caps),
+            Err(EvmError::TotalFeeAboveCap {
+                total: Some(30_000_000 * 22_000_000_000),
+                cap: caps.max_total_fee,
+            })
+        );
+        let mut exact = ordinary.clone();
+        exact.gas_limit = 2_000_000;
+        exact.max_fee_per_gas = caps.max_total_fee / 2_000_000;
+        exact.max_priority_fee_per_gas = 0;
+        assert_eq!(exact.max_total_fee(), Some(caps.max_total_fee));
+        assert_eq!(exact.check_fee_caps(&caps), Ok(()));
+        exact.gas_limit += 1;
+        assert!(matches!(
+            exact.check_fee_caps(&caps),
+            Err(EvmError::TotalFeeAboveCap { .. })
+        ));
+        let overflowing = EvmFeeCapsV1 {
+            max_fee_per_gas: u128::MAX,
+            max_total_fee: u128::MAX,
+        };
+        let mut huge = ordinary;
+        huge.gas_limit = u64::MAX;
+        huge.max_fee_per_gas = u128::MAX;
+        assert_eq!(huge.max_total_fee(), None);
+        assert_eq!(
+            huge.check_fee_caps(&overflowing),
+            Err(EvmError::TotalFeeAboveCap {
+                total: None,
+                cap: u128::MAX,
+            })
+        );
+        assert!(
+            huge.check_fee_caps(&overflowing)
+                .unwrap_err()
+                .to_string()
+                .contains("overflows")
         );
     }
 }

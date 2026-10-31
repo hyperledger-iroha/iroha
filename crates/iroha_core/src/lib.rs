@@ -3,143 +3,220 @@
 //! Framed Core records declare their protocol identity with `NoritoSchema`.
 //! Borrowed query views retain distinct nominal identities and explicitly project
 //! to the owned result's frame; payload serialization does not choose an identity.
+// The compiler-generated test table exceeds Clippy's stack-array threshold.
+// Source items below restore the denial so this covers only the generated harness.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::large_stack_arrays,
+        reason = "the compiler-generated test table exceeds the array threshold; source items retain the denial"
+    )
+)]
 #![allow(unexpected_cfgs)]
 #[cfg(not(feature = "zk-ipa-native"))]
 compile_error!(
     "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"
 );
 // Test-only Core mutation controls must never enter a shipping library.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod mutation_guard;
 
 /// Randomness beacon scaffolding using BLS‑VRF outputs.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod alias;
 /// Declarative alias setup classification and planning primitives.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod alias_setup;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod beacon;
 /// Block types and helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod block;
 /// Lane compliance policy evaluation.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod compliance;
 /// Consensus-neutral key predicates shared by validation paths.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod crypto_util;
 /// Data availability orchestration and ingest helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod da;
 /// Signed committee and monetary staking authority for opaque deferred execution.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod deferred_authority;
 /// Guard-owned execution witness recorder, its sparse Merkle tree and state-root projections.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod exec_witness;
 /// Local execution attempts and non-consensus retry outcomes.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod execution_attempt;
 /// Runtime executor integration and helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod executor;
 /// FASTPQ transcript helpers and host plumbing.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod fastpq;
 /// Unified settlement fee evidence structures.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod fees;
 /// Committed execution-limit policy: the chain parameter that decides overlay, IVM,
 /// quarantine, query and AMX limits of the transaction pipeline.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod fraud_admission_policy;
 /// Gas metering for non-VM ISI execution.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod gas;
 /// Gossip protocols for transactions and peers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod gossiper;
 /// Governance helpers (parliament selection, etc.).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod governance;
 /// Cross-lane plumbing and privacy commitment registries.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod interlane;
 /// ISO bridge helpers (reference data ingestion, etc.).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod jurisdiction;
 /// Kiso: storage primitives and data layout.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod kura;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod musubi_search;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod oracle;
 /// Peer discovery and gossip.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod peers_gossiper;
 /// Pipeline helpers (access-set derivation, scheduler glue)
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod pipeline;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod pipeline_gas_policy;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod pipeline_validity_policy;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod resource_coherence;
 /// Internal privacy owner paths used by Core and Sumeragi-owned tests.
 pub(crate) use iroha_core_privacy::{
     execution_proofs, privacy_engines, privacy_profiles, privacy_state, privacy_verifier,
 };
 /// Reserve-backed KAGEMUSHA wallet ledger orchestration.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod kagemusha_wallet_v1;
 /// First-release privacy protocol governance and admission budgets.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod privacy;
 /// Native deterministic privacy release evidence, compiled only into explicit
 /// release runners and opt-in integration gates.
 #[cfg(feature = "privacy-release-evidence")]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod privacy_release_evidence;
 /// Atomic private-settlement runtime helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod private_settlement;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod publication_lock;
 /// Reader/writer publication locks with original release-driven retry custody.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod publication_rwlock;
 /// Query API types and execution.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod query;
 /// Transaction queue and mempool logic.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod queue;
 /// Dataspace classes and immutable asset-definition homes.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod read_scope;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod release_identity;
 /// Native monthly retail fee accounting and read APIs.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod retained_gossip;
+/// Live runtime upgrades: the definitions this release executes and each root's selection.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
+pub mod runtime;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod secure_file_metadata;
 /// Unified XOR settlement engine.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod settlement;
 /// Smart contracts and host ABI.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod smartcontracts;
 /// World state snapshots.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod snapshot;
 /// Ledger-backed SNS ownership helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod sns;
 /// Shared Soracloud runtime snapshot types and traits.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod soracloud_runtime;
 /// In-memory state and view types.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod state;
 /// Process-local, non-consensus operator diagnostics (Nexus economics, settlement, lanes, queue).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod status;
 /// Norito Streaming handshake/state helpers.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod streaming;
 /// Consensus protocol (Sumeragi).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod sumeragi;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod telemetry;
 /// Network Time Service (scaffolding)
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod time;
 /// Adaptive threshold-BLS timelock-release session and share verification.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod tle_release;
 /// Shared Torii helpers (query surfaces, filters).
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod torii;
 /// Peer-to-peer Torii ingress proxy envelopes.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod torii_proxy;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod tx;
 /// Validation-fee admission enforcement.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod validation_fee;
 /// Protected conversion accounting and validator rewards.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod validation_fee_rewards;
 /// Independently anchored evidence for pending committee signer custody.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod validator_committee_evidence;
 /// Crate-local path to `iroha_core_zk`; external crates import `iroha_core_zk` directly.
 pub(crate) use iroha_core_zk as zk;
 /// Adapters that build zk verification guardrails from a State's frozen ZK settings: the
 /// committed validity policy for limits and switches, the node's own values for local resources.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod zk_guardrails;
 /// Committed ZK validity policy: the chain parameter that decides proof limits, windows,
 /// verifier switches, relation-selecting keys and verification gas.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod zk_validity_policy;
 pub use block::InvalidGenesisError;
 /// Native STARK/FRI verifier under `zk-stark`; external crates use `iroha_core_zk::stark`.
@@ -152,12 +229,33 @@ use iroha_model_base::peer::PeerId;
 ///
 /// Returns [`block::InvalidGenesisError`] when the provided block violates genesis invariants such
 /// as signature, authority, or transaction structure requirements.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub fn validate_genesis_block(
     block: &iroha_data_model::block::SignedBlock,
     genesis_account: &iroha_data_model::account::AccountId,
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
 }
+/// Inspect the sole initial crypto policy only after authenticating its original genesis source.
+///
+/// The callback borrows the policy selected by the same configured-root capability used by
+/// native bootstrap. It receives no installation authority, and its return value is retained
+/// unchanged, so a missing local implementation need not become a protocol rejection.
+///
+/// # Errors
+/// Returns the original genesis validation or local decode refusal before calling the inspector.
+pub fn with_authenticated_genesis_crypto_policy<R>(
+    source: &iroha_data_model::block::SignedBlock,
+    configured_genesis_account: &iroha_data_model::account::AccountId,
+    inspect: impl FnOnce(&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1) -> R,
+) -> Result<R, block::BlockValidationError> {
+    let authenticated =
+        block::authenticate_genesis_block_intents(source, configured_genesis_account)?;
+    Ok(authenticated
+        .initial_crypto_policy(source)?
+        .inspect(inspect))
+}
+
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
 use iroha_primitives::unique_vec::UniqueVec;
@@ -167,15 +265,20 @@ use norito::{
 };
 use std::sync::Arc;
 /// Re-export of Norito JSON derive macros for core crate internals.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
 use crate::peers_gossiper::{PeerTrustGossip, PeersGossip};
 use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 const NETWORK_MESSAGE_SUMERAGI_TAG: u32 = 18;
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn inbound_enum_parts(payload: &[u8]) -> Result<(u32, &[u8]), norito::core::Error> {
     let tag: [u8; core::mem::size_of::<u32>()] = payload
         .get(..core::mem::size_of::<u32>())
@@ -187,6 +290,7 @@ fn inbound_enum_parts(payload: &[u8]) -> Result<(u32, &[u8]), norito::core::Erro
         .ok_or(norito::core::Error::LengthMismatch)?;
     Ok((u32::from_le_bytes(tag), remaining))
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn inbound_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito::core::Error> {
     let (field_len, prefix_len) = norito::core::read_len_from_slice_with_flags(remaining, flags)?;
     let field_end = prefix_len
@@ -199,6 +303,7 @@ fn inbound_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito::core
         .get(prefix_len..field_end)
         .ok_or(norito::core::Error::LengthMismatch)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn inbound_owned_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito::core::Error> {
     // Enum fields are length-delimited by the derive, while Box/Arc add a
     // second ownership prefix around their value. Nested raw classifiers must
@@ -206,6 +311,7 @@ fn inbound_owned_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito
     let owned = inbound_enum_field(remaining, flags)?;
     inbound_enum_field(owned, flags)
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn inbound_transaction_gossip_topic(
     payload: &[u8],
     flags: u8,
@@ -254,6 +360,7 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 #[derive(Clone, Debug, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::NetworkMessage")]
 #[norito(decode_from_slice)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub enum NetworkMessage {
     /// Transaction gossiper message.
     #[codec(index = 6)]
@@ -290,6 +397,7 @@ pub enum NetworkMessage {
     #[codec(index = 18)]
     Sumeragi(Arc<sumeragi::net::SumeragiFrame>),
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl NetworkMessage {
     /// Returns `true` when the message is handled by Torii's proxy-plane P2P
     /// subscribers instead of the generic `irohad` relay path.
@@ -303,6 +411,7 @@ impl NetworkMessage {
 }
 // Encode/Decode are derived above for `NetworkMessage`.
 // Classify core network messages into P2P topics for scheduling.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     const HAS_INBOUND_DECODE_LIMITS: bool = true;
     fn topic(&self) -> iroha_p2p::network::message::Topic {
@@ -452,6 +561,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         }
     }
 }
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod role {
     //! Module with extension for [`RoleId`] to be stored inside state.
     use super::*;
@@ -482,6 +592,7 @@ pub mod role {
     }
 }
 // RoleIdWithOwner derives codec implementations in the role module above.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod prelude {
     //! Re-exports important traits and types. Meant to be glob imported when using `Iroha`.
     #[doc(inline)]
@@ -502,85 +613,114 @@ pub mod prelude {
 extern crate self as iroha_core;
 #[cfg(test)]
 #[path = "../tests/adversarial_block_rejections.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod adversarial_block_rejections_tests;
 #[cfg(test)]
 #[path = "../tests/bls_batch_pop.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod bls_batch_pop_tests;
 #[cfg(test)]
 #[path = "../tests/event_ordering.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod event_ordering_tests;
 #[cfg(test)]
 #[path = "../tests/execute_trigger_events.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod execution_output_test_support;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod frame_identity_tests;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod ivm_test_support;
 #[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod manifest_signing_test_support;
 #[cfg(test)]
 #[path = "../tests/common/native_validation.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod native_validation;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod unit_test_support;
 // Governance height/custody fixtures use explicit synthetic publication,
 // so they share this nonshipping harness rather than exporting that authority.
 #[cfg(test)]
 #[path = "../tests/gov_plain_referendum_open_event.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov_plain_referendum_open_event_tests;
 #[cfg(test)]
 #[path = "../tests/gov_referendum_open_close.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov_referendum_open_close_tests;
 #[cfg(test)]
 #[path = "../tests/gov_slash_and_restitute.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov_slash_and_restitute_tests;
 #[cfg(test)]
 #[path = "../tests/gov_unlock_sweep.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov_unlock_sweep_tests;
 #[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ivm_corehost_axt_tests;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod network_payload_tests;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod overlay_chunking_tests;
 #[cfg(test)]
 #[path = "../tests/overlay_workers_parity.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod overlay_workers_parity_tests;
 #[cfg(test)]
 #[path = "../tests/parallel_apply_knob.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod parallel_apply_knob_tests;
 #[cfg(test)]
 #[path = "../tests/parallel_apply.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod parallel_apply_tests;
 #[cfg(test)]
 #[path = "../tests/pipeline_warning_event.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod pipeline_warning_event_tests;
 #[cfg(test)]
 #[path = "../tests/scheduler_gpu_key_bucket_parity.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod scheduler_gpu_key_bucket_parity_tests;
 #[cfg(test)]
 #[path = "../tests/scheduler_ready_queue_heap_parity.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod scheduler_ready_queue_heap_parity_tests;
 #[cfg(test)]
 #[path = "../tests/scheduler_telemetry.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod scheduler_telemetry_tests;
 #[cfg(test)]
 #[path = "../tests/signature_batch_determinism.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod signature_batch_determinism_tests;
 #[cfg(test)]
 #[path = "../tests/snapshots.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod synthetic_state_snapshots;
 #[cfg(test)]
 #[path = "../tests/validation_fee_admission.rs"]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod validation_fee_admission_tests;
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tests {
     use crate::{
         NetworkMessage, PeerTrustGossip, PeersGossip,
@@ -1330,7 +1470,9 @@ mod tests {
 
 #[cfg(test)]
 #[allow(unsafe_code)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod test_allocations;
 
 #[cfg(test)]
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod retail_fee_tests;

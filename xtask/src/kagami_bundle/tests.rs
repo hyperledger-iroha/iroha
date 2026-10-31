@@ -173,6 +173,41 @@ fn copying_programs_refuses_occupied_names_without_changing_their_bytes_or_custo
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn copied_program_retains_readonly_same_inode_anchor_without_changing_bytes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    let source_path = &programs["kagami"];
+    let expected_bytes = fs::read(source_path).unwrap();
+    let mut input = RetainedFile::open_regular(source_path).unwrap();
+    let source_snapshot = input.snapshot().unwrap();
+    let expected_hash = digest(&mut input).unwrap();
+    let destination = temporary.path().join("copied-program");
+    let mut copied =
+        copy_program(&mut input, source_snapshot, &expected_hash, &destination).unwrap();
+    let anchor = copied
+        .created
+        .as_ref()
+        .expect("Unix retains an inode anchor");
+    assert_eq!(
+        FileIdentity::of(anchor).unwrap(),
+        copied.file.identity().unwrap()
+    );
+    assert_eq!(FileSnapshot::of(anchor, false).unwrap(), copied.snapshot);
+
+    let mut attempted_writer = anchor.try_clone().unwrap();
+    assert!(
+        attempted_writer.write_all(b"not writable").is_err(),
+        "the retained executable anchor must not keep write access"
+    );
+    assert_eq!(FileSnapshot::of(anchor, false).unwrap(), copied.snapshot);
+    assert_eq!(copied.file.snapshot().unwrap(), copied.snapshot);
+    assert_eq!(digest(&mut copied.file).unwrap(), expected_hash);
+    assert_eq!(fs::read(&destination).unwrap(), expected_bytes);
+    assert_eq!(input.snapshot().unwrap(), source_snapshot);
+}
+
 #[test]
 fn packaging_refuses_missing_or_indirect_programs_before_creating_the_package() {
     for program in PROGRAMS {
@@ -633,7 +668,6 @@ fn cli_release_selection_refuses_before_build_or_destination_mutation() {
 
 #[test]
 fn cli_development_preserves_exact_selected_image_and_shared_provenance() {
-    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_deploy::bootstrap::InstalledNetworkProfile;
 
     let root = tempfile::tempdir().unwrap();
@@ -643,11 +677,9 @@ fn cli_development_preserves_exact_selected_image_and_shared_provenance() {
     let image = InstalledNetworkProfiles::new(vec![
         InstalledNetworkProfile::new(
             "fixture".into(),
-            KeyPair::from_seed(vec![29; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-            11,
-            "https://fixture.invalid/checkpoint.nrt",
+            "https://fixture.invalid/",
+            "fixture-chain".into(),
+            369,
         )
         .unwrap(),
     ])

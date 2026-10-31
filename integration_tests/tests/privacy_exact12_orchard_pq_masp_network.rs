@@ -1,6 +1,6 @@
 #![cfg(feature = "privacy-release-evidence")]
 
-//! Four-peer DA/RBC, lifecycle, atomicity, nullifier replay, and restart gate
+//! Four-peer DA/RBC, default resource policy, atomicity, nullifier replay, and restart check
 //! for the retained native Orchard and PQ-MASP production actions.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
@@ -14,8 +14,7 @@ use iroha::{
             Grant, InstructionBox, Mint, Register, SetParameter,
             privacy::{
                 BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyProofManagedPoolV1,
-                RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
-                TransitionPrivacyProtocolLifecycleV1,
+                SubmitPrivacyProofV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -24,11 +23,9 @@ use iroha::{
             AssetDefinitionId, AssetId, FindAssets, Identifiable, Quantity, QueryBuilderExt,
         },
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
-            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+            PrivacyConsensusLimitsV1, PrivacyExact12CapabilityManifestV1,
+            PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -41,7 +38,7 @@ use iroha_core::privacy_release_evidence::{
     PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
     build_privacy_release_pq_masp_network_actions_v1,
 };
-use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
+use iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1;
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -69,7 +66,6 @@ const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 struct ProtocolExpectationV1 {
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
 }
 fn bounded_client(client: Client) -> Client {
     integration_tests::sync::rebind_blocking_client(&client, |configured| {
@@ -136,11 +132,10 @@ fn assert_protocol_expectations(
             row.compiled_profile
         );
         ensure!(
-            row.activation == expected.activation,
-            "{context}: {:?} lifecycle mismatch: expected {:?}, got {:?}",
+            row.policy.is_none(),
+            "{context}: {:?} unexpectedly requires an explicit resource policy: {:?}",
             expected.protocol,
-            expected.activation,
-            row.activation
+            row.policy
         );
     }
     Ok(())
@@ -212,36 +207,6 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let hash = *genesis[0].header().hash().as_ref();
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
-}
-// Each isolated ordinary submission executes in the next native certified global carrier.
-async fn next_governed_execution_height(client: &Client) -> Result<u64> {
-    read_privacy_capabilities(client)
-        .await
-        .wrap_err("query committed height before governed transaction")?
-        .committed_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("governed privacy execution height overflowed"))
-}
-fn proposed_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 { proposed_at_height },
-    ))
-}
-fn active_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-    activated_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height,
-            activated_at_height,
-            state_since_height: activated_at_height,
-        },
-    ))
 }
 async fn submit_instructions(
     client: &Client,
@@ -616,59 +581,22 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "grant CanEnactGovernance",
         )
         .await?;
-        let registration_height = next_governed_execution_height(&client).await?;
-        let orchard_proposed =
-            proposed_activation(orchard_compiled, registration_height);
-        let pq_proposed = proposed_activation(pq_compiled, registration_height);
-        submit_instructions(
-            &client,
-            vec![
-                RegisterPrivacyProtocolActivationV1::new(orchard_proposed).into(),
-                RegisterPrivacyProtocolActivationV1::new(pq_proposed).into(),
-            ],
-            "register exact Orchard and PQ-MASP activations",
-        )
-        .await?;
-        let proposed_expectations = [
-            ProtocolExpectationV1 {
-                protocol: ORCHARD_PROTOCOL,
-                compiled: orchard_snapshot,
-                activation: Some(orchard_proposed),
-            },
-            ProtocolExpectationV1 {
-                protocol: PQ_MASP_PROTOCOL,
-                compiled: pq_snapshot,
-                activation: Some(pq_proposed),
-            },
+        let construction_height = read_privacy_capabilities(&client).await?.committed_height;
+        let default_expectations = [
+            ProtocolExpectationV1 { protocol: ORCHARD_PROTOCOL, compiled: orchard_snapshot },
+            ProtocolExpectationV1 { protocol: PQ_MASP_PROTOCOL, compiled: pq_snapshot },
         ];
-        wait_for_all_peer_protocols(
-            &network,
-            registration_height,
-            &proposed_expectations,
-            "exact proposed retained-native lifecycles",
-        )
-        .await?;
+        wait_for_all_peer_protocols(&network, construction_height, &default_expectations,
+            "native profiles with default resource policies").await?;
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
         let signing_key = client.client().key_pair().private_key().clone();
-        let pre_orchard_context = action_context(
-            &client,
-            genesis_hash,
-            creation_time + Duration::from_millis(1),
-            101,
-        );
         let final_orchard_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(2),
             102,
-        );
-        let pre_pq_context = action_context(
-            &client,
-            genesis_hash,
-            creation_time + Duration::from_millis(3),
-            103,
         );
         let final_pq_context = action_context(
             &client,
@@ -692,39 +620,27 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         let reserve_for_builder = reserve_account.clone();
         let orchard_asset_for_builder = orchard_asset.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
-            let pre_orchard = build_privacy_release_orchard_network_action_v1(
-                pre_orchard_context,
-                orchard_pool,
-                orchard_asset_for_builder.clone(),
-                reserve_for_builder.clone(),
-                registration_height.saturating_add(1_000),
-                [0x31; 32],
-                &signing_key,
-            )
-            .map_err(|error| eyre!("build pre-activation Orchard action: {error:?}"))?;
             let final_orchard = build_privacy_release_orchard_network_action_v1(
-                final_orchard_context,
+                &(final_orchard_context),
                 orchard_pool,
                 orchard_asset_for_builder,
                 reserve_for_builder,
-                registration_height.saturating_add(1_000),
+                construction_height.saturating_add(1_000),
                 [0x32; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build final Orchard action: {error:?}"))?;
             let pq_actions = build_privacy_release_pq_masp_network_actions_v1(
-                pre_pq_context,
-                final_pq_context,
-                replay_pq_context,
-                post_restart_replay_pq_context,
+                &(final_pq_context),
+                &(replay_pq_context),
+                &(post_restart_replay_pq_context),
                 [0x50; 32],
                 &signing_key,
             )
             .map_err(|error| eyre!("build PQ-MASP network actions: {error:?}"))?;
-            Ok::<_, eyre::Report>((pre_orchard, final_orchard, pq_actions))
+            Ok::<_, eyre::Report>((final_orchard, pq_actions))
         });
-        let (pre_orchard, final_orchard, pq_actions): (
-            PrivacyReleaseOrchardNetworkActionV1,
+        let (final_orchard, pq_actions): (
             PrivacyReleaseOrchardNetworkActionV1,
             PrivacyReleasePqMaspNetworkActionsV1,
         ) = timeout(PROVER_TIMEOUT, build_actions)
@@ -732,89 +648,9 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .map_err(|_| eyre!("retained-native action proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained-native prover task failed: {error}"))??;
         ensure!(
-            pre_orchard.bootstrap == final_orchard.bootstrap,
-            "Orchard fixtures disagree on the governed pool bootstrap"
-        );
-        ensure!(
             pq_actions.bootstrap.asset_definition_id() == &pq_asset,
             "PQ-MASP fixture asset differs from the genesis asset"
         );
-        ensure!(
-            pre_orchard.transaction.hash() != final_orchard.transaction.hash(),
-            "pre-activation and final Orchard actions must be distinct"
-        );
-        let pre_orchard_error = submit_signed_transaction(
-            &client,
-            &pre_orchard.transaction,
-            "valid Orchard action before activation must reject",
-        )
-        .await
-        .expect_err("valid Orchard action was admitted before activation");
-        ensure!(
-            error_chain_contains(&pre_orchard_error, "activation is not active"),
-            "pre-activation Orchard rejection had wrong reason: {pre_orchard_error:?}"
-        );
-        let pre_pq_error = submit_signed_transaction(
-            &client,
-            &pq_actions.preactivation_transaction,
-            "valid PQ-MASP action before activation must reject",
-        )
-        .await
-        .expect_err("valid PQ-MASP action was admitted before activation");
-        ensure!(
-            error_chain_contains(&pre_pq_error, "activation is not active"),
-            "pre-activation PQ-MASP rejection had wrong reason: {pre_pq_error:?}"
-        );
-        wait_for_transaction_result_on_peers(
-            &all_clients,
-            &pre_orchard.transaction,
-            false,
-            "pre-activation Orchard rejection convergence",
-        )
-        .await?;
-        wait_for_transaction_result_on_peers(
-            &all_clients,
-            &pq_actions.preactivation_transaction,
-            false,
-            "pre-activation PQ-MASP rejection convergence",
-        )
-        .await?;
-        wait_for_asset_quantities(
-            &all_clients,
-            &[
-                orchard_asset_at_alice.clone(),
-                orchard_asset_at_reserve.clone(),
-            ],
-            &[Some(Quantity::from(100_u32)), None],
-            "pre-activation rejections must preserve public bridge balances",
-        )
-        .await?;
-        let activation_height = next_governed_execution_height(&client).await?;
-        let orchard_active = active_activation(orchard_compiled, registration_height, activation_height);
-        let pq_active = active_activation(pq_compiled, registration_height, activation_height);
-        submit_instructions(&client, vec![
-            TransitionPrivacyProtocolLifecycleV1::new(ORCHARD_PROTOCOL, orchard_active.lifecycle).into(),
-            TransitionPrivacyProtocolLifecycleV1::new(PQ_MASP_PROTOCOL, pq_active.lifecycle).into(),
-        ], "explicitly activate exact Orchard and PQ-MASP profiles").await?;
-        let active_expectations = [
-            ProtocolExpectationV1 {
-                protocol: ORCHARD_PROTOCOL,
-                compiled: orchard_snapshot,
-                activation: Some(orchard_active),
-            },
-            ProtocolExpectationV1 {
-                protocol: PQ_MASP_PROTOCOL,
-                compiled: pq_snapshot,
-                activation: Some(pq_active),
-            },
-        ];
-        wait_for_all_peer_protocols(
-            &network,
-            activation_height,
-            &active_expectations,
-            "exact active retained-native lifecycles",
-        )
-        .await?;
         submit_instructions(
             &client,
             vec![
@@ -1021,8 +857,8 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         wait_for_all_peer_protocols(
             &network,
             finalized_height,
-            &active_expectations,
-            "post-restart active retained-native lifecycles",
+            &default_expectations,
+            "post-restart native profiles and default resource policies",
         )
         .await?;
         let recovered_clients = network

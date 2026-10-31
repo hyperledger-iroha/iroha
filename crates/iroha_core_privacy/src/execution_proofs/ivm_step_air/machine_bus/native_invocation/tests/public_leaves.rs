@@ -50,7 +50,7 @@ pub(in crate::execution_proofs::ivm_step_air::machine_bus::native_invocation) fn
     let post_pad = (4 - (bytes.len() - original.header_len() + data_offset + 8) % 4) % 4;
     bytes.extend(LITERAL_SECTION_MAGIC);
     bytes.extend(1_u32.to_le_bytes());
-    bytes.extend((post_pad as u32).to_le_bytes());
+    bytes.extend((u32::try_from(post_pad).expect("alignment padding")).to_le_bytes());
     bytes.extend(8_u32.to_le_bytes());
     bytes.extend(
         encode_literal_descriptor(LiteralKindV1::I64, data_offset as u64)

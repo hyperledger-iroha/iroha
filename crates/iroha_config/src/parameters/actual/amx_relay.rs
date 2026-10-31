@@ -20,6 +20,10 @@ pub struct AmxRelay {
     pub max_source_heights_per_pass: usize,
     /// Maximum authenticated proof reads per destination observation.
     pub max_finality_proof_reads: usize,
+    /// Finite ordinary carrier reservations per destination. Two additional slots are
+    /// reserved exclusively for one handoff carrier and its contiguous effect scan.
+    /// Existing admitted walks retain their full record allowance until resolved.
+    pub max_pending_finality_walks: usize,
     /// Explicitly provisioned destinations; an empty list performs no relay signing.
     pub routes: Vec<AmxRelayRoute>,
 }
@@ -55,6 +59,7 @@ impl Default for AmxRelay {
             poll_interval: Duration::from_millis(defaults::POLL_INTERVAL_MS),
             max_source_heights_per_pass: defaults::MAX_SOURCE_HEIGHTS_PER_PASS,
             max_finality_proof_reads: defaults::MAX_FINALITY_PROOF_READS,
+            max_pending_finality_walks: defaults::PENDING_FINALITY_WALKS,
             routes: Vec::new(),
         }
     }

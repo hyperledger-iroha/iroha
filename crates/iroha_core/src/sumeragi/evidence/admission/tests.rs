@@ -291,6 +291,9 @@ fn admitted_offender_graph_keeps_original_execution_pool_until_last_graph_drop()
 
 #[test]
 fn late_record_shell_refusal_retains_original_verified_graph_and_frame_for_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut chain = super::super::tests::chain();
     chain.commit(Vec::new());
     let state = chain.state();

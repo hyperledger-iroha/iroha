@@ -66,8 +66,14 @@ fn every_backing_and_control_refusal_retains_exact_source_and_destination_pointe
             assert_eq!(Some(bytes.as_slice().as_ptr()), payload_pointer);
         }
         let expected = raw_length
-            + job.table_backing.as_ref().map_or(0, |b| b.capacity())
-            + job.payload_backing.as_ref().map_or(0, |b| b.capacity())
+            + job
+                .table_backing
+                .as_ref()
+                .map_or(0, iroha_allocation::ChargedBuffer::capacity)
+            + job
+                .payload_backing
+                .as_ref()
+                .map_or(0, iroha_allocation::ChargedBuffer::capacity)
             + job
                 .table
                 .as_ref()

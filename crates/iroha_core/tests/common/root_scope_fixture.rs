@@ -53,9 +53,7 @@ pub fn commit_global_root_scope(state: &State) {
     let mut transaction = block.transaction();
     transaction
         .world
-        .parameters_mut_for_testing()
-        .get_mut()
-        .set_parameter(global_root_scope_parameter())
+        .set_parameter_for_testing(global_root_scope_parameter())
         .expect("valid fixture parameters");
     transaction.apply();
     block

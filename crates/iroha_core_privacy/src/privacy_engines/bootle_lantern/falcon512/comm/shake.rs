@@ -602,7 +602,7 @@ mod tests {
             let input: Vec<u8> = (0..length)
                 .map(|index| u8::try_from(index % 251).unwrap())
                 .collect();
-            let mut reference = sha3::Shake256::default();
+            let mut reference = shake::Shake256::default();
             reference.update(&input);
             let mut expected = [0_u8; 425];
             reference.finalize_xof().read(&mut expected);
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn buffered_prng_matches_independent_xof_at_every_word_and_rate_boundary() {
         let seed = b"Falcon-512 buffered SHAKE256 boundary control";
-        let mut reference = sha3::Shake256::default();
+        let mut reference = shake::Shake256::default();
         reference.update(seed);
         let mut expected = [0_u8; 2 * SHAKE256::RATE + 11];
         reference.finalize_xof().read(&mut expected);

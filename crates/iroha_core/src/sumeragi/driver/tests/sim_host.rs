@@ -424,7 +424,7 @@ fn execute_device_mapping_preserves_certification() {
         1,
         iroha_sumeragi::types::Hash32([0xa0; 32]),
         iroha_sumeragi::types::Hash32([0xa1; 32]),
-        iroha_sumeragi::sim::driver::encode_tx(1, false, 0),
+        &iroha_sumeragi::sim::driver::encode_tx(1, false, 0),
     );
     let block_hash = super::hash(&block);
     let mut host = DriverHost::default();

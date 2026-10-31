@@ -77,6 +77,7 @@ pub fn past_fetch_budget_transaction(
         .sign(key.private_key())
 }
 
+#[cfg(any(feature = "app_api", feature = "connect"))]
 #[tokio::test]
 async fn prepared_submit_outcome_reads_past_fetch_budget_through_checkpoint_ancestry() {
     let key = checked_torii_test_ed25519_keypair(0x24, "prepared replay authority");
@@ -138,6 +139,7 @@ async fn prepared_submit_outcome_reads_past_fetch_budget_through_checkpoint_ance
     );
 }
 
+#[cfg(any(feature = "app_api", feature = "connect"))]
 #[tokio::test]
 async fn prepared_submit_outcome_refuses_a_foreign_query_owner() {
     let (app, hash, chain) = canonical_outcome_test_fixture(false);

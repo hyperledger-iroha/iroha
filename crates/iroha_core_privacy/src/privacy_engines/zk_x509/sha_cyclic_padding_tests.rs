@@ -3,7 +3,7 @@
 fn assert_actual_sha_cyclic_boundaries_v1(
     segment: usize,
     rows: &[ZkX509ShaBatchRowV1; 7],
-    binding: ZkX509CredentialPreAuxBindingV1,
+    binding: &ZkX509CredentialPreAuxBindingV1,
     terminal: u8,
     ca_calls: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 ) {
@@ -51,9 +51,15 @@ fn assert_actual_sha_cyclic_boundaries_v1(
         let mut wrong_first = rows[0];
         wrong_first.aux[column] = wrong_first.aux[column].add(F::ONE);
         assert!(
-            evaluate(&wrong_first, &rows[1], terminal)
-                .iter()
-                .any(|value| *value != F::ZERO),
+            if column < projection_bus::AUX_START_V1 {
+                evaluate(&wrong_first, &rows[1], terminal)
+            } else {
+                // Row zero is the private terminal of the cyclic new bus;
+                // its binding edge comes from the last physical padding row.
+                evaluate(&rows[6], &wrong_first, terminal)
+            }
+            .iter()
+            .any(|value| *value != F::ZERO),
             "segment {segment}, initial product {column}"
         );
         let mut wrong_next = rows[3];
@@ -166,7 +172,7 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
     })
     .unwrap();
     for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
-        let padding = physical_padding_row_v1(ZK_X509_SHA_SEGMENT_ROWS_V1 - 1);
+        let mut padding = physical_padding_row_v1(ZK_X509_SHA_SEGMENT_ROWS_V1 - 1);
         assert_eq!(
             padding.fixed,
             provider
@@ -190,7 +196,7 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
         let mut first = call.row(0).unwrap();
         first.fixed = provider.fixed_row_v1(segment, 0).unwrap();
         assert!(
-            first.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1..]
+            first.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1..projection_bus::AUX_START_V1]
                 .iter()
                 .all(|value| *value == F::ONE)
         );
@@ -198,14 +204,19 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
         // product is zero in padding and starts at one at the cyclic successor.
         let old_gate = F::ONE.sub(padding.fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1]);
         assert_eq!(
-            first.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1..]
+            first.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1..projection_bus::AUX_START_V1]
                 .iter()
                 .map(|value| old_gate.mul(*value))
                 .filter(|value| *value != F::ZERO)
                 .count(),
             24
         );
-        let terminal = segment as u8;
+        // The new cyclic bus carries its private terminal through padding.
+        // This local boundary control uses a nontrivial synthetic terminal;
+        // the complete-source test above checks genuine credential terminals.
+        first.aux[projection_bus::AUX_START_V1..].fill(F(7));
+        padding.aux[projection_bus::AUX_START_V1..].fill(F(7));
+        let terminal = u8::try_from(segment).expect("protocol-bounded index fits u8");
         let boundaries = neutral_ca_call_boundaries();
         let evaluate = |current: &ZkX509ShaBatchRowV1| {
             evaluate_zk_x509_sha_batch_residues_v1(

@@ -7,7 +7,7 @@
 
 #[path = "private_settlement_context.rs"]
 mod context;
-pub(crate) use context::handler as handler_context;
+pub use context::handler as handler_context;
 
 use crate::{JsonBody, NoritoJson, SharedAppState, app_auth::VerifiedCanonicalRequest};
 use axum::{
@@ -25,7 +25,7 @@ use iroha_core::private_settlement::{
     PrivateSettlementSidecarStoreOutcomeV1, fetch_private_settlement_auditor_view_v1,
     validate_private_settlement_committee_authority_v1,
 };
-use iroha_core::state::StateReadOnly as _;
+use iroha_core::state::{StateReadOnly as _, StorageReadOnly as _, WorldReadOnly as _};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     isi::private_settlement::{
@@ -55,7 +55,7 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
     PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
-use std::{path::PathBuf, str::FromStr as _, sync::Arc, time::Duration};
+use std::{str::FromStr as _, sync::Arc, time::Duration};
 
 /// Kura-relative owner-only directory for encrypted private-settlement sidecars.
 pub const PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1: &str = "private-settlement-sidecars-v1";
@@ -99,12 +99,18 @@ const fn private_settlement_abort_height_is_admissible_v1(
             == matches!(reason, PrivateSettlementAbortReasonV1::Expired)
 }
 
-fn private_settlement_carrier_within_wire_bound_v1(
+fn private_settlement_carrier_within_frame_bound_v1(
     transaction: &SignedTransaction,
     max_signed_transaction_bytes: u64,
 ) -> Result<bool, norito::Error> {
     let encoded = transaction.encode_wire_v1()?;
-    let signed_transaction_bytes = u64::try_from(encoded.len()).map_err(|_| {
+    let canonical_bytes = SignedTransaction::canonical_frame_len_from_wire_len_v1(encoded.len())
+        .ok_or_else(|| {
+            norito::Error::Io(std::io::Error::other(
+                "private carrier frame length overflows",
+            ))
+        })?;
+    let signed_transaction_bytes = u64::try_from(canonical_bytes).map_err(|_| {
         norito::Error::Io(std::io::Error::other(
             "private-settlement carrier transaction is too large",
         ))
@@ -130,20 +136,23 @@ pub struct PrivateSettlementToriiRuntimeV1 {
 }
 
 impl PrivateSettlementToriiRuntimeV1 {
-    /// Open the durable store when governed configuration enables the path.
+    /// Open the durable runtime for the built-in private-settlement path on Strict startup.
     ///
-    /// Emergency Fast startup deliberately supplies `None` and therefore
-    /// leaves every private-settlement route fail-closed until a Strict restart.
+    /// This retains the supplied node signers and validates local store custody;
+    /// it does not authorize a settlement request. Request admission separately
+    /// checks the selected native profile and the exact committed resource policy.
+    /// Emergency Fast startup withholds both store and signer capabilities until
+    /// a Strict restart, even when callers supply signers.
     pub(crate) fn open(
         state: &iroha_core::state::State,
-        kura_root: PathBuf,
+        kura_root: &std::path::Path,
         emergency_fast: bool,
         availability_signer: Option<Arc<PrivateSettlementAvailabilitySignerV1>>,
         phase_signer: Option<Arc<PrivateSettlementPhaseSignerV1>>,
     ) -> Result<Self, PrivateSettlementSidecarStoreErrorV1> {
         let nexus = state.nexus_snapshot();
         let config = nexus.atomic_private_settlement;
-        if !config.enabled || emergency_fast {
+        if emergency_fast {
             return Ok(Self {
                 store: None,
                 availability_signer: None,
@@ -197,6 +206,159 @@ impl PrivateSettlementToriiRuntimeV1 {
 
     fn reconciliation_store(&self) -> Option<Arc<PrivateSettlementFileSidecarStoreV1>> {
         self.store.clone()
+    }
+}
+
+#[cfg(test)]
+mod runtime_startup_tests {
+    use super::*;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn state() -> iroha_core::state::State {
+        iroha_core::state::State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+
+    fn signers() -> (
+        Arc<PrivateSettlementAvailabilitySignerV1>,
+        Arc<PrivateSettlementPhaseSignerV1>,
+    ) {
+        let key_pair = KeyPair::from_seed(vec![0x75; 32], Algorithm::BlsNormal);
+        (
+            Arc::new(
+                PrivateSettlementAvailabilitySignerV1::new(key_pair.clone())
+                    .expect("native availability signer"),
+            ),
+            Arc::new(PrivateSettlementPhaseSignerV1::new(key_pair).expect("native phase signer")),
+        )
+    }
+
+    #[test]
+    fn emergency_fast_withholds_supplied_runtime_capabilities() {
+        let state = state();
+        let directory = tempfile::tempdir().expect("temporary Kura root");
+        let (availability, phase) = signers();
+        for supplied in [false, true] {
+            let runtime = PrivateSettlementToriiRuntimeV1::open(
+                &state,
+                directory.path(),
+                true,
+                supplied.then(|| availability.clone()),
+                supplied.then(|| phase.clone()),
+            )
+            .expect("Emergency Fast retains an unavailable runtime");
+            assert!(runtime.store.is_none());
+            assert!(runtime.availability_signer.is_none());
+            assert!(runtime.phase_signer.is_none());
+            assert!(runtime.reconciliation_store().is_none());
+            assert_eq!(runtime.store().unwrap_err().status(), StatusCode::NOT_FOUND);
+            assert_eq!(
+                runtime.availability_signer().unwrap_err().status(),
+                StatusCode::NOT_FOUND
+            );
+            assert_eq!(
+                runtime.phase_signer().unwrap_err().status(),
+                StatusCode::NOT_FOUND
+            );
+            assert!(
+                !directory
+                    .path()
+                    .join(PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1)
+                    .exists(),
+                "Emergency Fast must not create the durable sidecar store"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_startup_requires_both_supplied_signers_before_opening_store() {
+        let state = state();
+        let directory = tempfile::tempdir().expect("temporary Kura root");
+        let (availability, phase) = signers();
+        for (has_availability, has_phase) in [(false, false), (true, false), (false, true)] {
+            assert!(matches!(
+                PrivateSettlementToriiRuntimeV1::open(
+                    &state,
+                    directory.path(),
+                    false,
+                    has_availability.then(|| availability.clone()),
+                    has_phase.then(|| phase.clone()),
+                ),
+                Err(PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid)
+            ));
+            assert!(
+                !directory
+                    .path()
+                    .join(PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1)
+                    .exists(),
+                "missing node signers must be rejected before durable-store creation"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_startup_retains_original_signers_and_exclusive_store_custody() {
+        let state = state();
+        let directory = tempfile::tempdir().expect("temporary Kura root");
+        let (availability, phase) = signers();
+        let open = || {
+            PrivateSettlementToriiRuntimeV1::open(
+                &state,
+                directory.path(),
+                false,
+                Some(availability.clone()),
+                Some(phase.clone()),
+            )
+        };
+        let runtime = open().expect("built-in Strict runtime opens without an enable flag");
+        assert!(Arc::ptr_eq(
+            runtime.availability_signer.as_ref().unwrap(),
+            &availability
+        ));
+        assert!(Arc::ptr_eq(runtime.phase_signer.as_ref().unwrap(), &phase));
+        assert_eq!(
+            runtime.store().unwrap().root(),
+            directory
+                .path()
+                .join(PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1)
+                .canonicalize()
+                .unwrap()
+        );
+        assert!(matches!(
+            open(),
+            Err(PrivateSettlementSidecarStoreErrorV1::StoreAlreadyOpen)
+        ));
+        drop(runtime);
+        let reopened = open().expect("dropping the runtime releases the original durable lease");
+        assert!(reopened.store().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_startup_rejects_invalid_durable_store_root() {
+        let state = state();
+        let directory = tempfile::tempdir().expect("temporary Kura root");
+        let root = directory
+            .path()
+            .join(PRIVATE_SETTLEMENT_SIDECAR_DIRECTORY_V1);
+        std::fs::write(&root, b"not a store directory").expect("invalid existing store root");
+        let (availability, phase) = signers();
+        assert!(matches!(
+            PrivateSettlementToriiRuntimeV1::open(
+                &state,
+                directory.path(),
+                false,
+                Some(availability),
+                Some(phase),
+            ),
+            Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
+        ));
+        assert_eq!(std::fs::read(root).unwrap(), b"not a store directory");
     }
 }
 
@@ -355,7 +517,7 @@ mod governed_sidecar_store_config_tests {
     }
 
     #[test]
-    fn carrier_wire_bound_counts_the_versioned_signed_envelope() {
+    fn carrier_frame_bound_counts_the_complete_canonical_signed_envelope() {
         let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
         let transaction = TransactionBuilder::new(
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -369,23 +531,23 @@ mod governed_sidecar_store_config_tests {
             "complete signed carrier envelope".to_owned(),
         )])
         .sign(signer.private_key());
-        let exact_signed_bytes = u64::try_from(
+        let exact_signed_bytes = SignedTransaction::canonical_frame_len_from_wire_len_v1(
             transaction
                 .encode_wire_v1()
                 .expect("fixed V1 transaction wire encodes")
                 .len(),
         )
-        .expect("fixture transaction length fits u64");
+        .unwrap() as u64;
         assert!(
-            !private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes - 1,)
+            !private_settlement_carrier_within_frame_bound_v1(&transaction, exact_signed_bytes - 1,)
                 .expect("carrier measurement succeeds")
         );
         assert!(
-            private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes)
+            private_settlement_carrier_within_frame_bound_v1(&transaction, exact_signed_bytes)
                 .expect("carrier measurement succeeds")
         );
         assert!(
-            !private_settlement_carrier_within_wire_bound_v1(&transaction, 0)
+            !private_settlement_carrier_within_frame_bound_v1(&transaction, 0)
                 .expect("zero limit fails closed")
         );
     }
@@ -531,7 +693,7 @@ async fn run_private_settlement_finality_reconciliation_v1(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_signal.receive() => return Ok(()),
+            () = shutdown_signal.receive() => return Ok(()),
             _ = ticker.tick() => {
                 if shutdown_signal.is_sent() {
                     return Ok(());
@@ -548,7 +710,7 @@ async fn run_private_settlement_finality_reconciliation_v1(
 
 /// Start the fail-closed local finality reconciler under the Torii shutdown tree.
 pub fn spawn_private_settlement_finality_reconciliation_v1(
-    runtime: PrivateSettlementToriiRuntimeV1,
+    runtime: &PrivateSettlementToriiRuntimeV1,
     state: Arc<iroha_core::state::State>,
     shutdown_signal: ShutdownSignal,
 ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
@@ -810,8 +972,7 @@ fn map_store_error(error: PrivateSettlementSidecarStoreErrorV1) -> Response {
         ),
         PrivateSettlementSidecarStoreErrorV1::StoreAlreadyOpen
         | PrivateSettlementSidecarStoreErrorV1::Corrupt
-        | PrivateSettlementSidecarStoreErrorV1::Backend
-        | PrivateSettlementSidecarStoreErrorV1::UnsupportedPlatform => error_response(
+        | PrivateSettlementSidecarStoreErrorV1::Backend => error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "private_settlement_service_unavailable",
         ),
@@ -857,7 +1018,7 @@ fn authoritative_height(app: &SharedAppState) -> Result<u64, Response> {
 fn active_config(
     app: &SharedAppState,
     height: u64,
-) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
+) -> Result<iroha_data_model::privacy::PrivateSettlementValidityLimitsV1, Response> {
     active_config_at_view(height, &app.state.view())
 }
 
@@ -868,65 +1029,51 @@ fn active_config(
 fn active_config_at_view(
     height: u64,
     state: &iroha_core::state::StateView<'_>,
-) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
-    let config = state.nexus().atomic_private_settlement.clone();
-    if !config.enabled
-        || config
-            .activation_height
-            .is_none_or(|activation| height < activation)
+) -> Result<iroha_data_model::privacy::PrivateSettlementValidityLimitsV1, Response> {
+    let policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+        state.world().parameters(),
+    )
+    .map_err(|_| private_settlement_unavailable())?;
+    let config = policy.current_limits;
+    let committed_height =
+        u64::try_from(state.height()).map_err(|_| private_settlement_unavailable())?;
+    if committed_height != height {
+        return Err(private_settlement_unavailable());
+    }
+    let admitted = state
+        .admitted_privacy_protocol_v1(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        )
+        .map_err(|_| private_settlement_unavailable())?;
+    iroha_core_privacy::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
+        .map_err(|_| private_settlement_unavailable())?;
+    let iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) =
+        admitted.protocol_limits()
+    else {
+        return Err(private_settlement_unavailable());
+    };
+    if limits.max_input_count < iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_INPUTS_V1
+        || limits.max_output_count < iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1
     {
         return Err(private_settlement_unavailable());
     }
-    let activation_height = config
-        .activation_height
-        .ok_or_else(private_settlement_unavailable)?;
-    iroha_core_privacy::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
+    policy
+        .validate_at_committed_height(height)
         .map_err(|_| private_settlement_unavailable())?;
-    let capability = state
-        .privacy_capability_snapshot_v1()
-        .map_err(|_| private_settlement_unavailable())?;
-    capability
-        .validate()
-        .map_err(|_| private_settlement_unavailable())?;
-    let row = capability
-        .protocols
-        .iter()
-        .find(|row| {
-            row.protocol_id
-                == iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-        })
-        .ok_or_else(private_settlement_unavailable)?;
-    let activation = row.activation.ok_or_else(private_settlement_unavailable)?;
-    let iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Active(active) =
-        activation.lifecycle
-    else {
-        return Err(private_settlement_unavailable());
-    };
-    let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(
-        limits,
-    ) = activation.protocol_limits
-    else {
-        return Err(private_settlement_unavailable());
-    };
-    let earliest_activation = active
-        .proposed_at_height
-        .checked_add(config.minimum_activation_notice_blocks.get())
-        .ok_or_else(private_settlement_unavailable)?;
-    if capability.committed_height != height
-        || activation_height < earliest_activation
-        || height < earliest_activation
-        || activation_height < active.activated_at_height
-        || height < active.activated_at_height
-        || height < active.state_since_height
-        || limits.max_input_count < iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_INPUTS_V1
-        || limits.max_output_count < iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1
-        || config.proof_profile_version.get()
-            != u16::from(iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1)
-        || !config.permitted_policy_versions.contains(&u16::from(
-            iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-        ))
+    if state
+        .world()
+        .parameters()
+        .custom()
+        .get(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+        .is_some()
     {
-        return Err(private_settlement_unavailable());
+        policy
+            .validate_protocol_policy(state.world().privacy_protocol_policies().get(
+                &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                    iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                ),
+            ))
+            .map_err(|_| private_settlement_unavailable())?;
     }
     Ok(config)
 }
@@ -1020,36 +1167,32 @@ fn validate_upload_policy(
     request: &PrivateSettlementLegUploadRequestV1,
     stored_at_height: u64,
 ) -> Result<(), Response> {
+    validate_phase_manifest_policy(app, &request.manifest, stored_at_height)?;
     let config = active_config(app, stored_at_height)?;
     if !committee_authority_is_authoritative(
         app,
         request.manifest.authority_context_height,
         &request.committee_authority,
     ) || request.manifest.network_id != app.state.network_id
-        || request.manifest.legs.len() > usize::from(config.max_participants.get())
+        || request.manifest.legs.len() > usize::from(config.max_participants)
         || request
             .manifest
             .expiry_height
             .checked_sub(request.manifest.authority_context_height)
-            .is_none_or(|span| span > config.max_expiry_blocks.get())
-        || request.payload.proof.len() as u64 > config.max_proof_bytes.get()
+            .is_none_or(|span| span > config.max_expiry_blocks)
+        || request.payload.proof.len() as u64 > config.max_proof_bytes
         || !audit_capsule_within_canonical_bound(
             &request.payload.audit_capsule,
-            config.max_capsule_bytes.get(),
+            config.max_capsule_bytes,
         )
-        || !config
-            .permitted_policy_versions
-            .contains(&u16::from(request.audit_policy.body.version))
+        || request.audit_policy.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
         || !audit_threshold_meets_governed_floor(
             request.audit_policy.body.min_approvals,
-            config.default_min_auditor_approvals.get(),
+            config.min_auditor_approvals,
         )
-        || !config.capsule_padding_classes_bytes.iter().any(|class| {
-            usize::try_from(class.get()).ok()
-                == Some(request.payload.audit_capsule.padding.plaintext_bytes())
-        })
+        || !config.permits_padding(request.payload.audit_capsule.padding)
         || request.payload.availability.body.retention_until_height
-            < stored_at_height.saturating_add(config.sidecar_retention_blocks.get())
+            < stored_at_height.saturating_add(config.sidecar_retention_blocks)
     {
         return Err(error_response(
             StatusCode::BAD_REQUEST,
@@ -1068,6 +1211,7 @@ fn validate_availability_share_policy(
     request: &PrivateSettlementAvailabilityShareRequestV1,
     stored_at_height: u64,
 ) -> Result<(), Response> {
+    validate_phase_manifest_policy(app, &request.material.manifest, stored_at_height)?;
     let config = active_config(app, stored_at_height)?;
     let material = &request.material;
     if !committee_authority_is_authoritative(
@@ -1075,30 +1219,22 @@ fn validate_availability_share_policy(
         material.manifest.authority_context_height,
         &material.committee_authority,
     ) || material.manifest.network_id != app.state.network_id
-        || material.manifest.legs.len() > usize::from(config.max_participants.get())
+        || material.manifest.legs.len() > usize::from(config.max_participants)
         || material
             .manifest
             .expiry_height
             .checked_sub(material.manifest.authority_context_height)
-            .is_none_or(|span| span > config.max_expiry_blocks.get())
-        || material.proof.len() as u64 > config.max_proof_bytes.get()
-        || !audit_capsule_within_canonical_bound(
-            &material.audit_capsule,
-            config.max_capsule_bytes.get(),
-        )
-        || !config
-            .permitted_policy_versions
-            .contains(&u16::from(material.audit_policy.body.version))
+            .is_none_or(|span| span > config.max_expiry_blocks)
+        || material.proof.len() as u64 > config.max_proof_bytes
+        || !audit_capsule_within_canonical_bound(&material.audit_capsule, config.max_capsule_bytes)
+        || material.audit_policy.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
         || !audit_threshold_meets_governed_floor(
             material.audit_policy.body.min_approvals,
-            config.default_min_auditor_approvals.get(),
+            config.min_auditor_approvals,
         )
-        || !config.capsule_padding_classes_bytes.iter().any(|class| {
-            usize::try_from(class.get()).ok()
-                == Some(material.audit_capsule.padding.plaintext_bytes())
-        })
+        || !config.permits_padding(material.audit_capsule.padding)
         || material.availability_body.retention_until_height
-            < stored_at_height.saturating_add(config.sidecar_retention_blocks.get())
+            < stored_at_height.saturating_add(config.sidecar_retention_blocks)
         || material.validate().is_err()
     {
         return Err(error_response(
@@ -1118,16 +1254,32 @@ fn validate_phase_manifest_policy(
     manifest: &iroha_data_model::nexus::AtomicPrivateSettlementV1,
     authoritative_height: u64,
 ) -> Result<(), Response> {
-    let config = active_config(app, authoritative_height)?;
+    let view = app.state.view();
+    let config = active_config_at_view(authoritative_height, &view)?;
+    let protocol = view.world().privacy_protocol_policies().get(
+        &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        ),
+    );
+    let policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+        view.world().parameters(),
+    )
+    .map_err(|_| private_settlement_unavailable())?;
+    let deadline =
+        iroha_data_model::privacy::private_settlement_admission_deadline_v1(&policy, protocol);
     if manifest.validate().is_err()
         || manifest.network_id != app.state.network_id
-        || authoritative_height < manifest.authority_context_height
-        || authoritative_height > manifest.expiry_height
-        || manifest.legs.len() > usize::from(config.max_participants.get())
-        || manifest
-            .expiry_height
-            .checked_sub(manifest.authority_context_height)
-            .is_none_or(|span| span > config.max_expiry_blocks.get())
+        || config
+            .validate_admission(
+                manifest.legs.len(),
+                manifest.authority_context_height,
+                manifest.expiry_height,
+                authoritative_height,
+                deadline,
+            )
+            .is_err()
+        || iroha_data_model::privacy::validate_private_settlement_sponsor_v1(&manifest.sponsor)
+            .is_err()
     {
         return Err(error_response(
             StatusCode::BAD_REQUEST,
@@ -1154,12 +1306,12 @@ fn validate_phase_deadline(
         .map_err(|_| map_phase_error(PrivateSettlementPhaseErrorV1))?;
     let prepare_deadline = status
         .stored_at_height
-        .saturating_add(config.audit_timeout_blocks.get())
-        .saturating_add(config.prepare_timeout_blocks.get());
+        .saturating_add(config.audit_timeout_blocks)
+        .saturating_add(config.prepare_timeout_blocks);
     let deadline = match phase {
         PrivateSettlementPhaseV1::Prepare => prepare_deadline,
         PrivateSettlementPhaseV1::Commit => {
-            prepare_deadline.saturating_add(config.commit_timeout_blocks.get())
+            prepare_deadline.saturating_add(config.commit_timeout_blocks)
         }
     };
     if authoritative_height > deadline {
@@ -1790,7 +1942,7 @@ pub async fn handler_auditor_approval(
     if height
         > status
             .stored_at_height
-            .saturating_add(config.audit_timeout_blocks.get())
+            .saturating_add(config.audit_timeout_blocks)
     {
         return error_response(StatusCode::CONFLICT, "private_settlement_audit_timeout");
     }
@@ -1962,10 +2114,6 @@ pub async fn handler_bundle_submit(
         code: "private_settlement_height_unavailable",
         message: "private-settlement height is unavailable".to_owned(),
     })?;
-    let config = active_config(&app, height).map_err(|_| crate::Error::AppServiceUnavailable {
-        code: "private_settlement_unavailable",
-        message: "private-settlement carrier admission is unavailable".to_owned(),
-    })?;
     let transaction = request.transaction;
     let carrier = exact_private_settlement_carrier(&transaction).map_err(|_| {
         crate::Error::AppQueryValidation {
@@ -1974,29 +2122,46 @@ pub async fn handler_bundle_submit(
         }
     })?;
     let manifest = carrier.manifest();
-    let carrier_within_bound = private_settlement_carrier_within_wire_bound_v1(
-        &transaction,
-        config.max_carrier_bytes.get(),
-    )
-    .map_err(|_| crate::Error::AppQueryValidation {
+    let invalid = || crate::Error::AppQueryValidation {
         code: "private_settlement_invalid_carrier",
-        message: "private-settlement carrier is not canonically encodable".to_owned(),
-    })?;
+        message: "private-settlement carrier is invalid".to_owned(),
+    };
+    let (max_carrier_bytes, max_participants) = match &carrier {
+        ExactPrivateSettlementCarrierV1::RegisterPrepare(register) => {
+            validate_phase_manifest_policy(&app, manifest, height).map_err(|_| invalid())?;
+            let config = active_config(&app, height).map_err(|_| invalid())?;
+            let reserved =
+                iroha_data_model::nexus::private_settlement_required_continuation_bytes_v1(
+                    &transaction,
+                    &register.barrier,
+                )
+                .map_err(|_| invalid())?;
+            if reserved > config.max_carrier_bytes {
+                return Err(invalid());
+            }
+            (config.max_carrier_bytes, config.max_participants)
+        }
+        ExactPrivateSettlementCarrierV1::Finalize(_)
+        | ExactPrivateSettlementCarrierV1::Abort(_) => (
+            iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1,
+            iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 as u16,
+        ),
+    };
+    let carrier_within_bound =
+        private_settlement_carrier_within_frame_bound_v1(&transaction, max_carrier_bytes)
+            .map_err(|_| invalid())?;
     if authenticated.account != manifest.sponsor
         || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
+        || transaction.signature_count()
+            > iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1
+        || iroha_data_model::privacy::validate_private_settlement_sponsor_v1(&manifest.sponsor)
+            .is_err()
         || manifest.network_id != app.state.network_id
-        || !carrier.is_structurally_admissible(height, config.max_participants.get())
-        || manifest
-            .expiry_height
-            .checked_sub(manifest.authority_context_height)
-            .is_none_or(|span| span > config.max_expiry_blocks.get())
+        || !carrier.is_structurally_admissible(height, max_participants)
         || !carrier_within_bound
     {
-        return Err(crate::Error::AppQueryValidation {
-            code: "private_settlement_invalid_carrier",
-            message: "private-settlement carrier is invalid".to_owned(),
-        });
+        return Err(invalid());
     }
     let bundle_id = manifest.bundle_id;
     let carrier_id = Hash::from(transaction.hash());
@@ -2015,21 +2180,6 @@ pub async fn handler_bundle_submit(
     Ok(response)
 }
 
-fn terminal_bundle_state(
-    app: &SharedAppState,
-    bundle_id: Hash,
-) -> (
-    Option<iroha_data_model::nexus::PrivateSettlementReceiptV1>,
-    Option<iroha_data_model::nexus::PrivateSettlementAbortReceiptV1>,
-) {
-    let view = app.state.view();
-    let world = view.world();
-    (
-        world.private_settlement_receipt_v1(&bundle_id).cloned(),
-        world.private_settlement_abort_v1(&bundle_id).copied(),
-    )
-}
-
 /// Return an allowlisted aggregate bundle lifecycle.
 pub async fn handler_bundle_status(
     State(app): State<SharedAppState>,
@@ -2040,14 +2190,24 @@ pub async fn handler_bundle_status(
         Ok(bundle_id) => bundle_id,
         Err(response) => return response,
     };
-    let height = match authoritative_height(&app) {
+    let view = app.state.view();
+    let height = match u64::try_from(view.height()) {
         Ok(height) => height,
-        Err(response) => return response,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_height_unavailable",
+            );
+        }
     };
-    if active_config(&app, height).is_err() {
+    if height == 0 {
         return private_settlement_unavailable();
     }
-    let (receipt, abort) = terminal_bundle_state(&app, bundle_id);
+    // An admission-policy change cannot erase an already committed outcome.
+    // Height and both terminal records belong to this one original World view.
+    let world = view.world();
+    let receipt = world.private_settlement_receipt_v1(&bundle_id).cloned();
+    let abort = world.private_settlement_abort_v1(&bundle_id).copied();
     if let Some(receipt) = receipt {
         return JsonBody(PrivateSettlementBundleStatusResponseV1 {
             manifest: Some(receipt.manifest),
@@ -2123,7 +2283,7 @@ pub async fn handler_bundle_receipt(
             );
         }
     };
-    if active_config_at_view(height, &view).is_err() {
+    if height == 0 {
         return private_settlement_unavailable();
     }
     let world = view.world();
@@ -2216,7 +2376,8 @@ mod tests {
         let receipt = iroha_data_model::nexus::PrivateSettlementReceiptV1 {
             version: AtomicPrivateSettlementV1::VERSION,
             manifest,
-            authority_catalog: Default::default(),
+            authority_catalog:
+                iroha_data_model::nexus::PrivateSettlementAuthorityCatalogV1::default(),
             legs: Vec::new(),
             finalized_height: 12,
         };
@@ -2229,68 +2390,312 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
-    fn activated_private_settlement_chain_for_test()
-    -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    fn configured_private_settlement_chain_for_test(
+        next_limits: Option<iroha_data_model::privacy::PrivacyProtocolLimitsV1>,
+    ) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
         use iroha_core::state::World;
         use iroha_data_model::{
-            isi::privacy::{
-                RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1,
-            },
-            privacy::{
-                PrivacyActiveLifecycleV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
-                PrivacyProtocolLifecycleV1,
-            },
+            isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1, privacy::PrivacyProtocolIdV1,
         };
-        use std::num::NonZeroU64;
-
-        let mut config = iroha_config::parameters::actual::Nexus::default();
-        config.atomic_private_settlement.enabled = true;
-        config.atomic_private_settlement.activation_height = Some(2);
-        config
-            .atomic_private_settlement
-            .minimum_activation_notice_blocks = NonZeroU64::new(1).expect("notice");
-        let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let profile =
-            iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
-                .expect("compiled profile");
+        let config = iroha_config::parameters::actual::Nexus::default();
         let mut chain_config =
             iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
         chain_config.nexus = Some(config);
-        chain_config.genesis_instructions = vec![
-            RegisterPrivacyProtocolActivationV1::new(profile.activation_record(
-                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 1,
-                }),
-            ))
-            .into(),
-            TransitionPrivacyProtocolLifecycleV1::new(
-                protocol_id,
-                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 1,
-                    state_since_height: 1,
-                }),
-            )
-            .into(),
-        ];
+        if let Some(next_limits) = next_limits {
+            chain_config.genesis_instructions = vec![
+                SchedulePrivacyProtocolLimitsUpdateV1::new(
+                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    2,
+                    next_limits,
+                )
+                .into(),
+            ];
+        }
         let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(chain_config)
-            .expect("execute original privacy activation genesis");
+            .expect("execute original signed genesis with optional future resource update");
         chain.commit_at(2, Vec::new());
         chain
     }
 
     #[cfg(feature = "app_api")]
+    #[test]
+    fn active_config_reads_committed_private_extension_at_its_effective_height() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{
+            parameter::Parameter,
+            privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1},
+        };
+
+        let mut policy = PrivateSettlementPolicyV1::protocol_default();
+        let mut successor = policy.current_limits;
+        successor.max_carrier_bytes = 2 * 1024 * 1024;
+        policy.pending_update = Some(PrivateSettlementPolicyUpdateV1 {
+            scheduled_at_height: 1,
+            effective_at_height: 2,
+            next_limits: successor,
+        });
+        let mut config = TestChainConfig::new(World::default(), 1);
+        config
+            .genesis_parameters
+            .push(Parameter::Custom(policy.to_custom_parameter().unwrap()));
+        let mut chain = CertifiedTestChain::start(config).expect("signed private policy schedule");
+        assert_eq!(
+            active_config_at_view(1, &chain.state().view()).unwrap(),
+            policy.current_limits,
+        );
+        chain.commit_at(2, Vec::new());
+        assert_eq!(
+            active_config_at_view(2, &chain.state().view()).unwrap(),
+            successor
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    fn terminal_read_fixture_after_admission_closure() -> (
+        SharedAppState,
+        iroha_data_model::nexus::PrivateSettlementReceiptV1,
+        iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
+    ) {
+        use iroha_data_model::privacy::{IvmPrivateNoteLimitsV1, PrivacyProtocolLimitsV1};
+
+        let chain = configured_private_settlement_chain_for_test(Some(
+            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                max_input_count: 1,
+                max_output_count: 2,
+            }),
+        ));
+        let mut manifest = abort_carrier_manifest_fixture();
+        manifest.network_id = *chain.state().network_id_ref();
+        manifest.authority_context_height = 1;
+        manifest.expiry_height = 20;
+        // These are deliberately trusted World-to-HTTP fixture rows. Their
+        // empty certificate material does not establish private execution or
+        // STARK validity; Core's native carrier tests own those boundaries.
+        let receipt = iroha_data_model::nexus::PrivateSettlementReceiptV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            manifest: manifest.clone(),
+            authority_catalog:
+                iroha_data_model::nexus::PrivateSettlementAuthorityCatalogV1::default(),
+            legs: Vec::new(),
+            finalized_height: 1,
+        };
+        let abort = iroha_data_model::nexus::PrivateSettlementAbortReceiptV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            network_id: manifest.network_id,
+            bundle_id: Hash::new(b"separate original aborted payment"),
+            manifest_digest: manifest
+                .manifest_digest()
+                .expect("original manifest digest"),
+            finalized_height: 1,
+            reason: PrivateSettlementAbortReasonV1::ParticipantRejected,
+        };
+        let mut world = chain.state().world.block();
+        world.seed_private_settlement_terminal_read_fixture(receipt.clone(), abort);
+        world.commit();
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).expect("unique fixture app");
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
+        assert!(
+            active_config_at_view(2, &app.state.view()).is_err(),
+            "actual new-admission policy is closed after the committed update"
+        );
+        (app, receipt, abort)
+    }
+
+    #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn activated_public_receipt_route_returns_pending_without_sidecar_runtime() {
+    async fn terminal_receipt_reads_survive_current_admission_tightening() {
         use tower::ServiceExt as _;
-        let chain = activated_private_settlement_chain_for_test();
+
+        let (app, receipt, abort) = terminal_read_fixture_after_admission_closure();
+        let pending = Hash::new(b"unknown original remains pending");
+        // No sidecar runtime is installed: public terminal custody is World.
+        let router = axum::Router::new()
+            .route(
+                "/receipt/{bundle_id}",
+                axum::routing::get(handler_bundle_receipt),
+            )
+            .with_state(app);
+        let expected = [
+            (
+                receipt.manifest.bundle_id,
+                PrivateSettlementBundleReceiptResponseV1::Finalized(receipt),
+            ),
+            (
+                abort.bundle_id,
+                PrivateSettlementBundleReceiptResponseV1::Aborted(abort),
+            ),
+            (
+                pending,
+                PrivateSettlementBundleReceiptResponseV1::Pending { bundle_id: pending },
+            ),
+        ];
+        let mut statuses = Vec::new();
+        for (bundle, expected) in expected {
+            let response = router
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(format!("/receipt/{bundle}"))
+                        .body(axum::body::Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("actual handler");
+            statuses.push(response.status());
+            if response.status() == StatusCode::OK {
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .expect("bounded public receipt");
+                let actual: PrivateSettlementBundleReceiptResponseV1 =
+                    norito::json::from_slice(&bytes).expect("exact receipt DTO");
+                assert_eq!(
+                    actual, expected,
+                    "original terminal record must not be rewritten"
+                );
+            }
+        }
+        assert_eq!(
+            statuses,
+            [StatusCode::OK; 3],
+            "new-admission closure must not hide successful, aborted or unresolved originals"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn terminal_status_reads_survive_current_admission_tightening() {
+        use tower::ServiceExt as _;
+
+        let (app, receipt, abort) = terminal_read_fixture_after_admission_closure();
+        let router = axum::Router::new()
+            .route(
+                "/status/{bundle_id}",
+                axum::routing::get(handler_bundle_status),
+            )
+            .layer(Extension(PrivateSettlementToriiRuntimeV1 {
+                store: None,
+                availability_signer: None,
+                phase_signer: None,
+            }))
+            .with_state(app);
+        let expected = [
+            (
+                receipt.manifest.bundle_id,
+                PrivateSettlementBundleStatusResponseV1 {
+                    manifest: Some(receipt.manifest),
+                    lifecycle: PrivateSettlementLifecycleDtoV1::Finalized,
+                    finalized_height: Some(receipt.finalized_height),
+                },
+            ),
+            (
+                abort.bundle_id,
+                PrivateSettlementBundleStatusResponseV1 {
+                    manifest: None,
+                    lifecycle: PrivateSettlementLifecycleDtoV1::Aborted,
+                    finalized_height: Some(abort.finalized_height),
+                },
+            ),
+        ];
+        let mut statuses = Vec::new();
+        for (bundle, expected) in expected {
+            let response = router
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(format!("/status/{bundle}"))
+                        .body(axum::body::Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("actual handler");
+            statuses.push(response.status());
+            if response.status() == StatusCode::OK {
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .expect("bounded public status");
+                let actual: PrivateSettlementBundleStatusResponseV1 =
+                    norito::json::from_slice(&bytes).expect("exact status DTO");
+                assert_eq!(
+                    actual, expected,
+                    "terminal status must preserve its original height"
+                );
+            }
+        }
+        assert_eq!(
+            statuses,
+            [StatusCode::OK; 2],
+            "terminal status does not require current admission or local sidecars"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn settlement_admission_uses_native_defaults_and_rejects_insufficient_ordinary_policy() {
+        use iroha_data_model::privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+        };
+        let chain = configured_private_settlement_chain_for_test(None);
+        let view = chain.state().view();
+        let snapshot = view
+            .privacy_capability_snapshot_v1()
+            .expect("committed capabilities");
+        let row = snapshot
+            .protocols
+            .iter()
+            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .unwrap();
+        assert!(
+            row.policy.is_none(),
+            "native defaults require no registration"
+        );
+        active_config_at_view(2, &view).expect("actual selected native relation and defaults");
+        assert!(
+            active_config_at_view(1, &view).is_err(),
+            "another committed height cannot replace this view"
+        );
+        for (inputs, outputs) in [(1, 2), (2, 1)] {
+            let limits =
+                PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                    max_input_count: inputs,
+                    max_output_count: outputs,
+                });
+            let chain = configured_private_settlement_chain_for_test(Some(limits));
+            let view = chain.state().view();
+            let admitted = view
+                .admitted_privacy_protocol_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+                .expect(
+                    "the genuine native protocol remains available with bounded ordinary limits",
+                );
+            assert_eq!(
+                admitted.protocol_limits(),
+                &limits,
+                "certified block applies the scheduled policy"
+            );
+            assert!(
+                active_config_at_view(2, &view).is_err(),
+                "settlement requires its complete input/output relation"
+            );
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn configured_public_receipt_route_returns_pending_without_sidecar_runtime() {
+        use tower::ServiceExt as _;
+        let chain = configured_private_settlement_chain_for_test(None);
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let inner = Arc::get_mut(&mut app).expect("unique test app");
         inner.state = chain.state().clone();
         inner.kura = chain.kura().clone();
         let view = app.state.view();
         assert_eq!(view.height(), 2);
-        active_config_at_view(2, &view).expect("real active capability gate");
+        active_config_at_view(2, &view)
+            .expect("actual selected native admission with default policy");
         let bundle_id = Hash::new(b"identifier without local sidecars or terminal records");
         assert!(
             view.world()
@@ -2341,7 +2746,7 @@ mod tests {
     ))]
     #[test]
     fn state_evidence_retains_one_committed_view_across_publication() {
-        let mut chain = activated_private_settlement_chain_for_test();
+        let mut chain = configured_private_settlement_chain_for_test(None);
         let state = Arc::clone(chain.state());
         let captured = state.view();
         let original = private_settlement_test_network_ledger_evidence_at_view(&captured)
@@ -2353,7 +2758,7 @@ mod tests {
             original,
             "a later publication cannot mix the retained height, ledger and replicated locks"
         );
-        let mut current = state.view();
+        let current = state.view();
         assert_eq!(
             private_settlement_test_network_ledger_evidence_at_view(&current)
                 .unwrap()
@@ -2364,20 +2769,52 @@ mod tests {
             active_config_at_view(2, &current).is_err(),
             "a height from another cut is rejected"
         );
-        current.nexus.atomic_private_settlement.enabled = false;
-        assert!(
-            private_settlement_test_network_ledger_evidence_at_view(&current).is_err(),
-            "activation must use the supplied view's policy"
+        assert_eq!(
+            active_config_at_view(3, &current).unwrap(),
+            iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                current.world().parameters(),
+            )
+            .unwrap()
+            .current_limits,
+            "the captured authenticated policy owns admission, without a local version selector"
         );
     }
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn public_receipt_preserves_disabled_service_and_digest_errors_without_runtime() {
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    async fn public_receipt_requires_history_and_survives_admission_closure_without_runtime() {
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let digest = Hash::new(b"unknown receipt bundle");
-        let disabled = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
-        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+        let uncommitted =
+            handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(uncommitted.status(), StatusCode::NOT_FOUND);
+        let baseline = configured_private_settlement_chain_for_test(None);
+        Arc::get_mut(&mut app).expect("unique receipt app").state = Arc::clone(baseline.state());
+        let available = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(
+            available.status(),
+            StatusCode::OK,
+            "the native default profile serves public pending receipts without a sidecar runtime"
+        );
+        let chain = configured_private_settlement_chain_for_test(Some(
+            iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
+                    max_input_count: 1,
+                    max_output_count: 2,
+                },
+            ),
+        ));
+        Arc::get_mut(&mut app).expect("unique receipt app").state = Arc::clone(chain.state());
+        assert!(
+            active_config(&app, 2).is_err(),
+            "new settlement admission is closed"
+        );
+        let pending = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(
+            pending.status(),
+            StatusCode::OK,
+            "public receipt reads survive admission closure"
+        );
         let malformed = handler_bundle_receipt(State(app), Path("invalid-digest".to_owned())).await;
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
     }

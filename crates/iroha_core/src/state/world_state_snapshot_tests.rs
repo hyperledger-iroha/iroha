@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{
+    interlane::LanePrivacyRegistry,
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
@@ -237,10 +238,13 @@ fn complete_cold_snapshot_matches_original_accumulator_and_registry() {
     let original = WorldStateAccumulator::capture(&overlay).unwrap();
     let budget = AllocationBudget::new(16 * 1024 * 1024);
     let captured = capture(&overlay, &original, &budget).unwrap();
-    assert_eq!(captured.snapshot.root().unwrap(), original.root().unwrap());
+    assert_eq!(
+        captured.snapshot.root().unwrap(),
+        original.baseline_root().unwrap()
+    );
     assert_eq!(
         captured.snapshot.schema_hash,
-        field_index().as_ref().unwrap().schema
+        selection_schema(&baseline_selection()).unwrap()
     );
     assert_eq!(
         captured.snapshot.schema_hash,
@@ -332,7 +336,10 @@ fn complete_cold_snapshot_preserves_actual_trigger_child_registry_identity() {
             .any(|entry| entry.field_id == "triggers.ids"
                 || entry.field_id.starts_with("triggers.active_"))
     );
-    assert_eq!(captured.snapshot.root().unwrap(), original.root().unwrap());
+    assert_eq!(
+        captured.snapshot.root().unwrap(),
+        original.baseline_root().unwrap()
+    );
     drop(captured);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -434,8 +441,7 @@ fn snapshot_collector_retains_field_allocation_refusal_without_adding_a_row() {
             Hash::new(b"v"),
         )
         .err()
-        .unwrap()
-        .into();
+        .unwrap();
     let WorldStateSnapshotError::Allocation(refusal @ AllocationRefusal::Capacity { .. }) = error
     else {
         panic!("field storage must preserve the original allocation refusal: {error}");
@@ -476,10 +482,7 @@ fn snapshot_collector_rejects_omission_duplicate_and_excess_elements() {
             .unwrap();
     }
     assert!(matches!(
-        duplicate
-            .finish(schema)
-            .err()
-            .map(WorldStateSnapshotError::from),
+        duplicate.finish(schema).err(),
         Some(WorldStateSnapshotError::Invalid(_))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
@@ -699,11 +702,18 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
         // A new materialization of the exact source is what each watcher tick supplies.
         let equivalent = Arc::new(original.rebind(&nexus.lane_catalog, &nexus.governance));
         assert!(!Arc::ptr_eq(&original, &equivalent));
-        assert!(state.install_lane_manifests_if_consensus_compatible(&equivalent));
+        assert!(
+            state
+                .install_lane_manifests_if_consensus_compatible(&equivalent)
+                .is_ok()
+        );
         assert_proof();
         assert_eq!(state.state_view_generation(), generation);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-        assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &state.lane_privacy_registry.read(),
+            &privacy
+        ));
 
         let directory = tempfile::tempdir().unwrap();
         let alias = &nexus.lane_catalog.lanes()[0].alias;
@@ -729,11 +739,18 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
                 .unwrap(),
         );
         for rejected in [changed, Arc::new(LaneManifestRegistry::default())] {
-            assert!(!state.install_lane_manifests_if_consensus_compatible(&rejected));
+            assert!(
+                state
+                    .install_lane_manifests_if_consensus_compatible(&rejected)
+                    .is_err()
+            );
             assert_proof();
             assert_eq!(state.state_view_generation(), generation);
             assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-            assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+            assert!(LanePrivacyRegistry::ptr_eq(
+                &state.lane_privacy_registry.read(),
+                &privacy
+            ));
         }
     }
     // A real native successor still retires the former cut. No generation check is relaxed.
@@ -843,7 +860,10 @@ fn replayed_world_cut_survives_exact_startup_queue_handoff_without_another_block
     assert_proof();
     assert_eq!(state.state_view_generation(), generation);
     assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-    assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+    assert!(LanePrivacyRegistry::ptr_eq(
+        &state.lane_privacy_registry.read(),
+        &privacy
+    ));
     assert_eq!(
         replay.height(),
         2,
@@ -1170,7 +1190,7 @@ fn cold_reconstruction_removes_tail_insertions_and_restores_deletions_and_update
     let certified = reconstruct(&applied, &capsule, &budget).unwrap();
     assert_eq!(
         certified.snapshot.root().unwrap(),
-        at_result.root().unwrap()
+        at_result.baseline_root().unwrap()
     );
     let target = hash_value(&path("app/updated")).unwrap();
     require_target(
@@ -1245,8 +1265,7 @@ fn cold_reconstruction_rejects_missing_changed_or_foreign_complete_applied_rows(
         .unwrap();
     let error: WorldStateSnapshotError = reconstruct(&applied, &capsule, &reconstruction_request)
         .err()
-        .unwrap()
-        .into();
+        .unwrap();
     let WorldStateSnapshotError::Buffer(iroha_allocation::ChargedBufferError::Admission(
         refusal @ iroha_allocation::AllocationRefusal::Capacity { .. },
     )) = error
@@ -1279,17 +1298,13 @@ fn cold_reconstruction_rejects_missing_changed_or_foreign_complete_applied_rows(
         .unwrap();
     applied.snapshot.entries[position].value_hash = Hash::new(b"substituted post-tail preimage");
     assert!(matches!(
-        reconstruct(&applied, &capsule, &budget)
-            .err()
-            .map(WorldStateSnapshotError::from),
+        reconstruct(&applied, &capsule, &budget).err(),
         Some(WorldStateSnapshotError::Invalid(_))
     ));
     applied.snapshot.entries = original;
     applied.snapshot.entries.remove(position);
     assert!(matches!(
-        reconstruct(&applied, &capsule, &budget)
-            .err()
-            .map(WorldStateSnapshotError::from),
+        reconstruct(&applied, &capsule, &budget).err(),
         Some(WorldStateSnapshotError::Invalid(_))
     ));
     assert!(reconstruct(&applied, &capsule, &AllocationBudget::new(0)).is_err());
@@ -1561,6 +1576,111 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
 }
 
 #[test]
+fn retained_names_snapshot_keeps_its_certified_cut_across_real_publication() {
+    let (mut chain, reader, asset) = names_chain();
+    let state = std::sync::Arc::clone(chain.state());
+    let tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let retained = state
+        .capture_native_resource_names_snapshot_v1(&reader, &budget)
+        .unwrap();
+    assert_eq!(retained.view().height(), 2);
+    let domains = retained.view().world.domains().iter().count();
+    // The fixture submits its signed clock transaction when no business
+    // transaction is supplied. This real commit must complete while the capture
+    // remains alive: no World writer or publication lease may survive acquisition.
+    chain.commit_at(3_000, Vec::new());
+    assert_eq!(state.view().height(), 3);
+    assert!(matches!(
+        state.with_native_resource_names_snapshot_v1(&tip, &reader, &budget, |_, _, _, _| Ok(())),
+        Err(WorldStateSnapshotError::CutChanged {
+            requested_height: 2,
+            observed_height: 3
+        })
+    ));
+    retained
+        .with_native_resource_names_snapshot_v1(&tip, |snapshot, aliases, _, names| {
+            assert_eq!(
+                snapshot.root().unwrap(),
+                tip.commitment().execution.world_state_root
+            );
+            require_complete_table_count(snapshot, "world.domains", domains)?;
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].0, &asset);
+            assert_eq!(names.len(), 2);
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        retained
+            .with_native_resource_names_snapshot_v1::<()>(&chain.committed(3), |_, _, _, _| {
+                panic!("a newer certified tip must not label older originals")
+            })
+            .is_err()
+    );
+    assert!(budget.reserved_bytes() > 0);
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_names_snapshot_requires_current_permission_before_and_after_encoding() {
+    use std::collections::BTreeSet;
+    for revoke_during_encoding in [false, true] {
+        let (chain, reader, _) = names_chain();
+        let state = chain.state();
+        let tip = chain.committed(2);
+        let budget = AllocationBudget::new(32 * 1024 * 1024);
+        let retained = state
+            .capture_native_resource_names_snapshot_v1(&reader, &budget)
+            .unwrap();
+        let revoke = || {
+            let mut permissions = state.world.account_permissions.block();
+            permissions.insert(reader.clone(), BTreeSet::new());
+            permissions.commit();
+        };
+        if !revoke_during_encoding {
+            revoke();
+        }
+        let called = Cell::new(false);
+        let result = retained.with_native_resource_names_snapshot_v1(&tip, |_, _, _, _| {
+            called.set(true);
+            revoke();
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(called.get(), revoke_during_encoding);
+        drop(retained);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn retained_names_snapshot_requires_original_capture_permission_and_budget() {
+    let (chain, reader, _) = names_chain();
+    let state = chain.state();
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(chain.genesis_account(), &budget)
+            .is_err()
+    );
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(&reader, &AllocationBudget::new(0))
+            .is_err()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    *state.native_world_cut.lock() = None;
+    assert!(
+        state
+            .capture_native_resource_names_snapshot_v1(&reader, &budget)
+            .is_err()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn names_publisher_refuses_retired_cut_and_callback_generation_change() {
     let (mut chain, reader, _) = names_chain();
     let tip = chain.committed(2);
@@ -1746,4 +1866,117 @@ fn snapshot_uses_generation_of_acquired_view_after_real_paid_h3_publication() {
     ));
     assert!(!called_old.get());
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn scoped_escrow_zero_requires_native_initialization_at_the_same_certified_world() {
+    use iroha_data_model::{
+        escrow::scoped::{AssetEscrowScopeOriginalV1, scope_key, verify_at_world},
+        isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1,
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier},
+    };
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    let owner_key = config.genesis_key.clone();
+    let domain = DomainId::try_new("escrowscope", "universal").unwrap();
+    let asset = AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    config.genesis_instructions = vec![
+        Register::domain(Domain::new(domain)).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset.clone(),
+            "Scope coin",
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+    ];
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    chain.commit_at(2_000, Vec::new());
+    let validators = chain
+        .validators()
+        .iter()
+        .map(|(peer, pop)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(
+        chain.genesis(),
+        chain.state().chain_id_ref().as_ref(),
+        validators,
+    )
+    .unwrap();
+    verifier
+        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 1).unwrap())
+        .unwrap();
+    let old_block = verifier
+        .verify(
+            &crate::sumeragi::finality::build_proof(&chain.state().view(), chain.height()).unwrap(),
+        )
+        .unwrap();
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let tip = chain.committed(chain.height());
+    let (old_world, incarnation) = with_asset_snapshot(
+        chain.state(),
+        &tip,
+        &asset,
+        &budget,
+        |snapshot, _, incarnation| {
+            Ok((
+                snapshot
+                    .authenticate(&old_block)
+                    .map_err(|e| e.to_string())?,
+                *incarnation,
+            ))
+        },
+    )
+    .unwrap();
+    let instruction = InitializeAssetEscrowReadScopeV1 {
+        asset_definition_id: asset.clone(),
+        expected_incarnation: incarnation,
+        expected_revision: 0,
+    };
+    let tx = chain.sign(&owner_key, [instruction.into()], 2_500);
+    assert_eq!(chain.commit_at(3_000, vec![tx]), vec![true]);
+    let block = verifier
+        .verify(
+            &crate::sumeragi::finality::build_proof(&chain.state().view(), chain.height()).unwrap(),
+        )
+        .unwrap();
+    let tip = chain.committed(chain.height());
+    chain
+        .state()
+        .with_native_world_state_snapshot_cut_v1(&tip, None, &budget, |snapshot, world| {
+            let certified = snapshot.authenticate(&block).map_err(|e| e.to_string())?;
+            let original = AssetEscrowScopeOriginalV1 {
+                scope_original: world
+                    .smart_contract_state()
+                    .get(&scope_key(&asset, &incarnation).unwrap())
+                    .unwrap()
+                    .clone(),
+                records: Vec::new(),
+            };
+            assert_eq!(
+                verify_at_world(&certified, &asset, &incarnation, &original, 10, 4_096)
+                    .unwrap()
+                    .record_count,
+                0
+            );
+            assert!(
+                verify_at_world(&old_world, &asset, &incarnation, &original, 10, 4_096).is_err(),
+                "later initialization does not prove earlier zero"
+            );
+            let mut forged = original.clone();
+            let mut scope: iroha_data_model::escrow::scoped::AssetEscrowScopeV1 =
+                norito::decode_canonical(&forged.scope_original).unwrap();
+            scope.revision += 1;
+            forged.scope_original = norito::encode_canonical(&scope).unwrap();
+            assert!(
+                verify_at_world(&certified, &asset, &incarnation, &forged, 10, 4_096).is_err(),
+                "shape-valid replacement bytes are not certified originals"
+            );
+            forged.scope_original.clear();
+            assert!(verify_at_world(&certified, &asset, &incarnation, &forged, 10, 4_096).is_err());
+            Ok(())
+        })
+        .unwrap();
 }

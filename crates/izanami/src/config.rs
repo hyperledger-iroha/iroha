@@ -14,12 +14,9 @@ use iroha_config::{
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 #[cfg(test)]
 use iroha_data_model::nexus::LaneCatalog;
-use iroha_data_model::{
-    asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus::{
-        MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
-    },
-    nexus::DataSpaceCatalog,
+use iroha_data_model::{asset::AssetDefinitionId, nexus::DataSpaceCatalog};
+use iroha_model_base::topology::{
+    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
@@ -31,6 +28,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent CLI switches are parsed as separate flags rather than mutually exclusive states."
+)]
 pub struct IzanamiArgs {
     /// Launch interactive TUI to configure a run.
     #[arg(long)]
@@ -371,7 +372,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
     fn try_from(args: IzanamiArgs) -> Result<Self> {
         if !args.allow_net {
             return Err(eyre!(
-                "network orchestration disabled: pass --allow-net or set allow_net=true to run Izanami"
+                "network orchestration is disabled: pass --allow-net, or set \"Allow Network\" in --tui, to let Izanami start, fault and stop local peers"
             ));
         }
         if !is_valid_committee_size(args.peers) {
@@ -614,7 +615,7 @@ pub struct NexusProfile {
     pub lane_catalog: LaneCatalog,
     pub dataspace_catalog: DataSpaceCatalog,
     pub bootstrap_public_lanes: Vec<LaneId>,
-    pub stake_asset_id: AssetDefinitionId,
+    pub staking_policy: iroha_data_model::block::consensus::PublicLaneStakingPolicy,
     pub fee_asset_id: AssetDefinitionId,
     pub root_fees: iroha_data_model::block::consensus::RootFeePolicy,
     pub config_layer: Table,
@@ -625,29 +626,19 @@ fn canonical_addr_literal(addr: &str) -> Result<String> {
         .map_err(|err| eyre!("failed to parse embedded socket address `{addr}`: {err}"))?;
     Ok(IrohaSocketAddr::from(parsed).to_literal())
 }
-fn resolve_embedded_asset_selector(
-    field_path: &str,
-    selector: &str,
-    canonical_default: &str,
-) -> Result<AssetDefinitionId> {
-    if let Ok(asset_id) = selector.parse() {
-        return Ok(asset_id);
-    }
-    selector.parse::<AssetDefinitionAlias>().map_err(|err| {
-        eyre!(
-            "failed to parse embedded {field_path} `{selector}` as a canonical asset definition id or alias: {err}"
-        )
-    })?;
-    canonical_default.parse().map_err(|err| {
-        eyre!(
-            "failed to resolve embedded {field_path} alias `{selector}` to canonical asset definition id `{canonical_default}`: {err}"
-        )
-    })
-}
 impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
     pub fn sora_defaults() -> Result<Self> {
         const DEFAULT_CONFIG: &str = include_str!("../../../defaults/nexus/config.toml");
+        const VALIDATOR_PRIVATE_KEY_FILE: &str = "/run/secrets/iroha/nexus-validator-private-key";
+        const VALIDATOR_PROJECTION_PRIVATE_KEY: &str =
+            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
+        const SORANET_TRANSPORT_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-soranet-transport-private-key";
+        const STREAMING_PRIVATE_KEY_FILE: &str =
+            "/run/secrets/iroha/nexus-streaming-identity-private-key";
+        const EXPECTED_HASH_FILE: &str = "/run/iroha/genesis.expected_hash";
+
         let config_str = DEFAULT_CONFIG.replace("\\0", "");
         let mut raw_table: Table = toml::from_str(&config_str)
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err}"))?;
@@ -660,13 +651,7 @@ impl NexusProfile {
         // The checked-in profile deliberately keeps every private identity file-backed. Verify
         // those operator-owned sources exactly, then substitute deterministic in-memory keys only
         // for this typed Nexus/Sumeragi projection; none are copied into `config_layer`.
-        const VALIDATOR_PRIVATE_KEY_FILE: &str = "/run/secrets/iroha/nexus-validator-private-key";
-        const VALIDATOR_PROJECTION_PRIVATE_KEY: &str =
-            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";
-        const SORANET_TRANSPORT_PRIVATE_KEY_FILE: &str =
-            "/run/secrets/iroha/nexus-soranet-transport-private-key";
-        const STREAMING_PRIVATE_KEY_FILE: &str =
-            "/run/secrets/iroha/nexus-streaming-identity-private-key";
+
         if raw_table.contains_key("private_key") {
             return Err(eyre!(
                 "embedded Nexus signing profile must source its validator private key from the operator-owned file"
@@ -788,7 +773,7 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
-        const EXPECTED_HASH_FILE: &str = "/run/iroha/genesis.expected_hash";
+
         let genesis = raw_table
             .get_mut("genesis")
             .and_then(Value::as_table_mut)
@@ -828,25 +813,20 @@ impl NexusProfile {
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
         let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
-        let stake_asset_id = resolve_embedded_asset_selector(
-            "nexus.staking.stake_asset_id",
-            &nexus.staking.stake_asset_id,
-            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
-        )?;
-        let root_fees = iroha_config::profile::Profile::compiled(
+        let compiled = iroha_config::profile::Profile::compiled(
             iroha_config::profile::ProfileId::SoraNexusV1,
-        )?
-        .genesis_recipe()
-        .root_fees
-        .clone();
+        )?;
+        let recipe = compiled.genesis_recipe();
+        let staking_policy = recipe.public_lane_staking.clone();
+        let root_fees = recipe.root_fees.clone();
         let fee_asset_id = root_fees.fee_asset_id.clone();
-        let config_layer = build_nexus_layer(&nexus, &sumeragi, &stake_asset_id);
+        let config_layer = build_nexus_layer(&nexus, &sumeragi);
         Ok(Self {
             #[cfg(test)]
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
             bootstrap_public_lanes,
-            stake_asset_id,
+            staking_policy,
             fee_asset_id,
             root_fees,
             config_layer,
@@ -882,14 +862,14 @@ fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
     owners
 }
 fn normalize_lane_metadata(raw: &mut Table) {
-    if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut) {
-        if let Some(Value::Array(lanes)) = nexus.get_mut("lane_catalog") {
-            for lane in lanes {
-                if let Some(table) = lane.as_table_mut() {
-                    table
-                        .entry("metadata".to_string())
-                        .or_insert(Value::Table(Table::new()));
-                }
+    if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut)
+        && let Some(Value::Array(lanes)) = nexus.get_mut("lane_catalog")
+    {
+        for lane in lanes {
+            if let Some(table) = lane.as_table_mut() {
+                table
+                    .entry("metadata".to_string())
+                    .or_insert(Value::Table(Table::new()));
             }
         }
     }
@@ -904,11 +884,7 @@ fn embedded_dataspace_manifest_hash(id: DataSpaceId) -> String {
     }
     encoded
 }
-fn build_nexus_layer(
-    nexus: &ActualNexus,
-    sumeragi: &ActualSumeragi,
-    stake_asset_id: &AssetDefinitionId,
-) -> Table {
+fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
     let mut layer = Table::new();
     TomlWriter::new(&mut layer).write(
         ["nexus", "lane_count"],
@@ -1012,10 +988,6 @@ fn build_nexus_layer(
     TomlWriter::new(&mut layer).write(
         ["nexus", "routing_policy", "rules"],
         Value::Array(rule_values),
-    );
-    TomlWriter::new(&mut layer).write(
-        ["nexus", "staking", "stake_asset_id"],
-        stake_asset_id.to_string(),
     );
     TomlWriter::new(&mut layer).write(
         ["nexus", "fusion", "floor_teu"],
@@ -1180,7 +1152,7 @@ fn lane_rule_to_value(
     }
     let mut matcher = Table::new();
     if let Some(account) = &rule.matcher.account {
-        matcher.insert("account".to_string(), Value::String(account.to_string()));
+        matcher.insert("account".to_string(), Value::String(account.clone()));
     }
     if let Some(instruction) = &rule.matcher.instruction {
         matcher.insert(
@@ -1364,9 +1336,10 @@ mod tests {
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("allow_net=false should prevent ChaosConfig construction");
         };
+        let message = err.to_string();
         assert!(
-            err.to_string().contains("allow_net"),
-            "error should mention allow_net opt-in: {err}"
+            message.contains("--allow-net") && message.contains("\"Allow Network\""),
+            "error should name both the flag and the TUI field: {err}"
         );
     }
     #[test]
@@ -1543,16 +1516,20 @@ mod tests {
                 .and_then(Value::as_table)
                 .is_none_or(|nexus| !nexus.contains_key("fees"))
         );
-        let expected_stake_asset = profile.stake_asset_id.to_string();
-        let stake_asset = profile
-            .config_layer
-            .get("nexus")
-            .and_then(Value::as_table)
-            .and_then(|nexus| nexus.get("staking"))
-            .and_then(Value::as_table)
-            .and_then(|staking| staking.get("stake_asset_id"))
-            .and_then(Value::as_str);
-        assert_eq!(stake_asset, Some(expected_stake_asset.as_str()));
+        let compiled =
+            iroha_config::profile::Profile::compiled(iroha_config::profile::ProfileId::SoraNexusV1)
+                .unwrap();
+        assert_eq!(
+            profile.staking_policy,
+            compiled.genesis_recipe().public_lane_staking
+        );
+        assert!(
+            profile
+                .config_layer
+                .get("nexus")
+                .and_then(Value::as_table)
+                .is_none_or(|nexus| !nexus.contains_key("staking"))
+        );
     }
     #[test]
     fn chaos_config_rejects_progress_interval_over_timeout() {

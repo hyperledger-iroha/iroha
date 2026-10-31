@@ -61,11 +61,12 @@ macro_rules! capture_controls {
             let verified = CanonicalTableLeafSet::verify_paired_raw_range(
                 TABLE,
                 limits(),
-                &snapshot.root(),
-                &snapshot.lookup_root(),
-                &snapshot.ordered_root(),
-                &start,
-                &end,
+                (
+                    &snapshot.root(),
+                    &snapshot.lookup_root(),
+                    &snapshot.ordered_root(),
+                ),
+                (&start, &end),
                 1,
                 4096,
                 &proof,
@@ -106,11 +107,12 @@ macro_rules! capture_controls {
                 CanonicalTableLeafSet::verify_paired_raw_range(
                     TABLE,
                     limits(),
-                    &snapshot.root(),
-                    &omitted.lookup_root(),
-                    &omitted.ordered_root(),
-                    &start,
-                    &end,
+                    (
+                        &snapshot.root(),
+                        &omitted.lookup_root(),
+                        &omitted.ordered_root()
+                    ),
+                    (&start, &end),
                     0,
                     12,
                     &omission,

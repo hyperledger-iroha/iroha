@@ -28,6 +28,10 @@ use std::{
 };
 
 mod carrier;
+mod finality_custody;
+pub use finality_custody::{
+    FileNativePaymentFinality, MAX_NATIVE_PAYMENT_FINALITY_BYTES, NativePaymentFinalityStorageError,
+};
 mod observation;
 mod session;
 pub use observation::NativePaymentObservationError;
@@ -200,7 +204,8 @@ impl From<NativePaymentObservationError> for NativePaymentError {
 /// Only an independently verified receipt completes the business intent. A status,
 /// replay locator or decoded journal never constructs a receipt. Recovery re-fetches
 /// the certified original block from the caller's pinned genesis-rooted verifier;
-/// it needs no subsequent block or unrelated traffic. No proof blobs are persisted.
+/// it needs no subsequent block or unrelated traffic. Caller-key custody retains only
+/// three bounded native checkpoints for this original payment.
 /// A local read limit, failed read or status-only expiry cannot close a carrier.
 /// Before signing or dispatch, restored carrier bytes must match the independently
 /// retained complete intent and fees, with empty carrier metadata and no attachments.
@@ -223,7 +228,8 @@ impl core::fmt::Debug for NativePaymentOperation {
 impl AccountClient {
     /// Prepare a durable direct payment with independently selected genesis trust.
     ///
-    /// Recreate this handle with the same request and durable storage after restart.
+    /// Recreate this handle with the same request, durable storage and original finality
+    /// directory/key after restart.
     /// This cold operation retains up to 64 authenticated decisions, independently
     /// of the per-call proof-read limit. Use [`Self::native_payment_with_session`] for
     /// sequential payments sharing an explicitly bounded original prefix.
@@ -235,6 +241,7 @@ impl AccountClient {
         &self,
         request: NativePaymentRequest,
         storage: Arc<dyn WorkflowStorage>,
+        finality: Arc<FileNativePaymentFinality>,
         verifier: SumeragiFinalityVerifier,
     ) -> Result<NativePaymentOperation, NativePaymentError> {
         // The cold operation uses the existing short-history observation scale.
@@ -243,7 +250,7 @@ impl AccountClient {
             verifier,
             std::num::NonZeroUsize::new(64).expect("nonzero local history capacity"),
         )?;
-        self.native_payment_with_session(request, storage, session)
+        self.native_payment_with_session(request, storage, finality, session)
     }
 
     /// Prepare a durable payment sharing an independently authenticated local prefix.
@@ -251,8 +258,8 @@ impl AccountClient {
     /// The session retains no endpoint or signer. Every operation binds this exact
     /// account/network/chain to the original Global genesis owner before creating a
     /// journal; per-operation transport deadlines and proof-read limits remain intact.
-    /// Retired historical decisions require cold recovery of the same request/storage,
-    /// never a replacement carrier or a remote checkpoint selected as trust.
+    /// Each original payment retains authenticated pending progress independently of
+    /// warm-cache pruning. Corrected locators replay under the same original genesis.
     /// # Errors
     /// Wrong payer/network/chain/root, unavailable local owner, volatile storage, or
     /// invalid workflow binding. No signing, observation or journal creation precedes
@@ -261,6 +268,7 @@ impl AccountClient {
         &self,
         request: NativePaymentRequest,
         storage: Arc<dyn WorkflowStorage>,
+        finality: Arc<FileNativePaymentFinality>,
         session: NativePaymentSession,
     ) -> Result<NativePaymentOperation, NativePaymentError> {
         let selected = session.verifier()?;
@@ -283,6 +291,7 @@ impl AccountClient {
         NativePaymentOperation::create(
             request,
             storage,
+            finality,
             session,
             context.clone(),
             context,
@@ -296,6 +305,7 @@ impl NativePaymentOperation {
     fn create(
         request: NativePaymentRequest,
         storage: Arc<dyn WorkflowStorage>,
+        finality: Arc<FileNativePaymentFinality>,
         session: NativePaymentSession,
         account: Arc<dyn WorkflowAccount>,
         dispatch: Arc<dyn crate::workflow::WorkflowLedger>,
@@ -309,7 +319,19 @@ impl NativePaymentOperation {
         }
         let plan = request.plan()?;
         let account = Arc::new(carrier::NativePaymentAccount::new(account, request.clone()));
-        let ledger = Arc::new(NativePaymentLedger::new(request, session, dispatch, source));
+        let workflow =
+            crate::workflow::WorkflowIdentityV1::new(&plan, &account.binding())?.workflow_id()?;
+        let bound = finality
+            .bind(workflow, request.digest, &*session.verifier()?)
+            .map_err(NativePaymentObservationError::FinalityCustody)?;
+        let ledger = Arc::new(NativePaymentLedger::new(
+            request,
+            session,
+            dispatch,
+            source,
+            storage.clone(),
+            bound,
+        ));
         let resume_account = Arc::new(carrier::ResumePaymentAccount::new(
             account.binding(),
             ledger.request.clone(),
@@ -427,8 +449,10 @@ impl NativePaymentOperation {
         authorize_submission: bool,
     ) -> Result<NativePaymentSettlement, NativePaymentError> {
         let _call = self.call.lock().await;
-        self.ledger
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+        let _observation = self
+            .ledger
+            .begin_call(options.max_finality_proof_reads.get() as usize)
+            .map_err(|error| self.observation_error(error))?;
         if let Some(receipt) = self.existing_receipt().await? {
             return self.finish_verified(receipt);
         }
@@ -484,8 +508,10 @@ impl NativePaymentOperation {
         options: &NativePaymentRunOptions,
     ) -> Result<NativePaymentRecovery, NativePaymentError> {
         let _call = self.call.lock().await;
-        self.ledger
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+        let _observation = self
+            .ledger
+            .begin_call(options.max_finality_proof_reads.get() as usize)
+            .map_err(|error| self.observation_error(error))?;
         if let Some(receipt) = self.existing_receipt().await? {
             let settled = self.finish_verified(receipt)?;
             return Ok(NativePaymentRecovery {

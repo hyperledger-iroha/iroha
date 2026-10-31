@@ -24,9 +24,9 @@ use iroha_data_model::{
     },
     privacy::{
         IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
-        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1,
-        PrivacyVerifierDigestV1,
+        PrivacyNullifierV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
     },
 };
 use iroha_model_base::domain::DomainId;
@@ -48,7 +48,7 @@ const SETTLEMENT_DUMMY_INPUT_MEMO_DOMAIN_V1: &[u8] =
     b"iroha.atomic-private-settlement.input.dummy.v1";
 
 /// Semantic descriptor for the settlement-only IVM relation binding.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:positive-input-membership-only:zero-valued-virtual-dummies-with-nonzero-authority-rho-blinding-and-path:input-openings=public-air-sha256-binding-of-exact-ordered-value-authority-rho-blinding-memo:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
+pub const ATOMIC_PRIVATE_SETTLEMENT_RELATION_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-relation-v1:separate-from-transparent-amx:ivm-private-note-fixed-2-input-3-output:balanced-only:positive-input-membership-only:zero-valued-virtual-dummies-with-nonzero-authority-rho-blinding-and-path:input-openings=public-air-sha256-binding-of-exact-ordered-value-authority-rho-blinding-memo:payer=purpose-separated-fixed-input-controller-authorization:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:reimbursement-success-fee-carriers=2:asset=salted-auditor-approved-pool-binding:public=canonical-manifest-intent-proof-binding+statement+genesis:post-proof-artifacts=manifest+committee-qc+carrier:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier";
 
 /// Public, redacted failure at the settlement proof relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -124,7 +124,7 @@ impl AtomicPrivateSettlementInputWitnessV1 {
     pub fn new(
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     ) -> Result<Self, AtomicPrivateSettlementRelationErrorV1> {
         if spending_secret.iter().all(|byte| *byte == 0)
             || authentication_path
@@ -136,7 +136,7 @@ impl AtomicPrivateSettlementInputWitnessV1 {
         Ok(Self {
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
 }
@@ -201,6 +201,9 @@ fn settlement_program_v1() -> Result<PrivateProgramV1, AtomicPrivateSettlementRe
 }
 
 /// Return the fixed program identifier used by settlement wallet ciphertext AAD.
+///
+/// # Errors
+/// Returns an invariant error if the fixed settlement program or its identifier cannot be derived.
 pub fn atomic_private_settlement_program_id_v1()
 -> Result<iroha_data_model::privacy::PrivacyProgramIdV1, AtomicPrivateSettlementRelationErrorV1> {
     derive_private_program_id_v1(&settlement_program_v1()?)
@@ -215,7 +218,7 @@ fn synthetic_asset_v1() -> Result<AssetDefinitionId, AtomicPrivateSettlementRela
     Ok(AssetDefinitionId::derive_from_components(domain, name))
 }
 
-pub(crate) fn validate_public_binding_v1(
+pub fn validate_public_binding_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -319,7 +322,7 @@ fn context_digest_v1(
     Ok(digest)
 }
 
-pub(crate) fn internal_statement_v1(
+pub fn internal_statement_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
 ) -> Result<IrohaIvmPrivateNoteStarkStatementV1, AtomicPrivateSettlementRelationErrorV1> {
@@ -385,7 +388,7 @@ pub(crate) fn internal_statement_v1(
     Ok(internal)
 }
 
-pub(crate) fn relation_profile_v1(
+pub fn relation_profile_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
 ) -> Result<PrivateNoteRelationProfileV1, AtomicPrivateSettlementRelationErrorV1> {
@@ -549,10 +552,10 @@ fn validate_output_view_key_authorizations_v1(
 
 fn validate_payer_input_authorization_v1(
     plaintext: &PrivateSettlementAuditPlaintextV1,
-    statement: &PrivateSettlementProofStatementV1,
+    nullifiers: &[PrivacyNullifierV1],
 ) -> Result<(), AtomicPrivateSettlementRelationErrorV1> {
     let expected_body = plaintext
-        .payer_authorization_body(&statement.nullifiers)
+        .payer_authorization_body(nullifiers)
         .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)?;
     let authorization = &plaintext.payer_authorization;
     if authorization.body != expected_body {
@@ -601,6 +604,15 @@ fn validate_payer_input_authorization_v1(
     Ok(())
 }
 
+// The existing payer/view signature owners serve both pre-proof custody and the final relation.
+pub(super) fn validate_wallet_authorizations_v1(
+    plaintext: &PrivateSettlementAuditPlaintextV1,
+    nullifiers: &[PrivacyNullifierV1],
+) -> Result<(), AtomicPrivateSettlementRelationErrorV1> {
+    validate_payer_input_authorization_v1(plaintext, nullifiers)?;
+    validate_output_view_key_authorizations_v1(plaintext)
+}
+
 /// Recompute every note commitment and recipient binding visible to an auditor.
 ///
 /// Input nullifiers remain proof-only because the capsule intentionally never
@@ -620,8 +632,7 @@ pub(super) fn validate_audit_openings_v1_for_intent(
     {
         return Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial);
     }
-    validate_payer_input_authorization_v1(plaintext, statement)?;
-    validate_output_view_key_authorizations_v1(plaintext)?;
+    validate_wallet_authorizations_v1(plaintext, &statement.nullifiers)?;
     let profile = relation_profile_v1(manifest, statement)?;
     for (index, opening) in plaintext.inputs.iter().enumerate() {
         if !opening.active
@@ -695,13 +706,13 @@ pub(super) fn validate_audit_openings_v1_for_intent(
     Ok(())
 }
 
-pub(crate) struct CompiledAtomicPrivateSettlementRelationV1 {
+pub struct CompiledAtomicPrivateSettlementRelationV1 {
     pub(crate) internal_statement: IrohaIvmPrivateNoteStarkStatementV1,
     pub(crate) witness: IvmPrivateNoteWitnessV1,
     pub(crate) profile: PrivateNoteRelationProfileV1,
 }
 
-pub(crate) fn compile_witness_v1(
+pub fn compile_witness_v1(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     witness: &AtomicPrivateSettlementProverWitnessV1,
@@ -758,7 +769,7 @@ pub(crate) fn compile_witness_v1(
             note,
             spend.spending_secret,
             spend.leaf_position,
-            spend.authentication_path,
+            &spend.authentication_path,
             profile,
         )
         .map_err(|_| AtomicPrivateSettlementRelationErrorV1::InvalidWitness)?;
@@ -871,6 +882,48 @@ pub fn atomic_private_settlement_dummy_input_memo_digest_v1(
     )
 }
 
+// Used only while the native preparation owner is filling a statement; it is never a verifier.
+pub(super) fn output_memo_digests_from_bound_preparation_v1(
+    statement: &PrivateSettlementProofStatementV1,
+) -> Result<[[u8; 32]; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1], AtomicPrivateSettlementRelationErrorV1>
+{
+    let change_material = norito::encode_canonical(&(
+        (
+            statement.network_id,
+            statement.bundle_id,
+            statement.leg_ordinal,
+            statement.route,
+            statement.authority_context_height,
+            statement.pool_id,
+            statement.asset_binding_commitment,
+            statement.audit_plaintext_commitment,
+            statement.audit_input_commitment,
+        ),
+        (
+            statement.audit_policy_digest,
+            statement.audit_key_epoch,
+            statement.fee_intent_digest,
+            statement.reimbursement_terms_commitment,
+            statement.reimbursement_leg_ordinal,
+            statement.expiry_height,
+            statement.proof_profile_digest,
+        ),
+    ))
+    .map_err(|_| AtomicPrivateSettlementRelationErrorV1::CanonicalEncoding)?;
+    let change = framed_digest_v1(
+        SETTLEMENT_CHANGE_MEMO_DOMAIN_V1,
+        &[
+            &change_material,
+            PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
+        ],
+    )?;
+    Ok([
+        *statement.audit_plaintext_commitment.as_ref(),
+        change,
+        *statement.reimbursement_terms_commitment.as_ref(),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,7 +958,8 @@ mod tests {
             PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
         },
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
 
     fn signature_entry(
         signer: &KeyPair,
@@ -1002,7 +1056,7 @@ mod tests {
         historical_commitments.sort_unstable();
         let mut frontier = build_proof_managed_frontier_v1(namespace, &historical_commitments)
             .expect("one governed origin");
-        let mut rng = StdRng::seed_from_u64(0x4150_535f_434f_4e54);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x4150_535f_434f_4e54);
         let recipient = KeyPair::from_seed(vec![0x39; 32], Algorithm::Ed25519);
         let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
         let mut previous_dummy_nullifier = None;
@@ -1120,13 +1174,13 @@ mod tests {
                     AtomicPrivateSettlementInputWitnessV1::new(
                         secrets[0],
                         u32::try_from(active_position).unwrap(),
-                        path,
+                        &path,
                     )
                     .expect("live membership"),
                     AtomicPrivateSettlementInputWitnessV1::new(
                         secrets[1],
                         u32::try_from(active_position ^ 1).unwrap(),
-                        [[0xED; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+                        &[[0xED; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
                     )
                     .expect("virtual dummy secret and fixed-shape path"),
                 ],
@@ -1264,7 +1318,7 @@ mod tests {
             &plaintext,
         )
         .expect("substituted plaintext has the same balanced value and public context");
-        validate_payer_input_authorization_v1(&plaintext, &statement)
+        validate_payer_input_authorization_v1(&plaintext, &statement.nullifiers)
             .expect("the cooperating payer signed the substituted funding provenance");
         assert_ne!(
             atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
@@ -1356,7 +1410,7 @@ mod tests {
         let fixture = sidecar_fixture();
         let manifest = &fixture.sidecar.manifest;
         let statement = &fixture.sidecar.payload.statement;
-        validate_payer_input_authorization_v1(&fixture.plaintext, statement)
+        validate_payer_input_authorization_v1(&fixture.plaintext, &statement.nullifiers)
             .expect("fixture payer authorizes both fixed input slots");
 
         let payer = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
@@ -1364,7 +1418,7 @@ mod tests {
         let mut wrong_payer = fixture.plaintext.clone();
         wrong_payer.payer = AccountId::new(attacker.public_key().clone());
         assert_eq!(
-            validate_payer_input_authorization_v1(&wrong_payer, statement),
+            validate_payer_input_authorization_v1(&wrong_payer, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial),
             "the original payer signature cannot authorize a substituted payer"
         );
@@ -1384,7 +1438,7 @@ mod tests {
         let mut substituted_input = fixture.plaintext.clone();
         substituted_input.inputs[0].commitment = PrivacyCommitmentV1::new([0xE8; 32]);
         assert_eq!(
-            validate_payer_input_authorization_v1(&substituted_input, statement),
+            validate_payer_input_authorization_v1(&substituted_input, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
@@ -1396,28 +1450,31 @@ mod tests {
             vec![payer_signature_entry(&payer, &ordinal_body)],
         );
         assert_eq!(
-            validate_payer_input_authorization_v1(&substituted_ordinal, statement),
+            validate_payer_input_authorization_v1(&substituted_ordinal, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
         let mut substituted_statement = statement.clone();
         substituted_statement.nullifiers[0] = PrivacyNullifierV1::new([0xE9; 32]);
         assert_eq!(
-            validate_payer_input_authorization_v1(&fixture.plaintext, &substituted_statement),
+            validate_payer_input_authorization_v1(
+                &fixture.plaintext,
+                &substituted_statement.nullifiers
+            ),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
         let mut substituted_authority = fixture.plaintext.clone();
         substituted_authority.inputs[0].spending_authority[0] ^= 1;
         assert_eq!(
-            validate_payer_input_authorization_v1(&substituted_authority, statement),
+            validate_payer_input_authorization_v1(&substituted_authority, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
         let mut substituted_selector = fixture.plaintext.clone();
         substituted_selector.inputs[1].active = true;
         assert_eq!(
-            validate_payer_input_authorization_v1(&substituted_selector, statement),
+            validate_payer_input_authorization_v1(&substituted_selector, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
@@ -1429,7 +1486,7 @@ mod tests {
             vec![payer_signature_entry(&payer, &expiry_body)],
         );
         assert_eq!(
-            validate_payer_input_authorization_v1(&substituted_expiry, statement),
+            validate_payer_input_authorization_v1(&substituted_expiry, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
     }
@@ -1460,7 +1517,7 @@ mod tests {
             vec![payer_signature_entry(&first, &body)],
         );
         assert_eq!(
-            validate_payer_input_authorization_v1(&plaintext, &statement),
+            validate_payer_input_authorization_v1(&plaintext, &statement.nullifiers),
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
 
@@ -1471,7 +1528,7 @@ mod tests {
                 payer_signature_entry(&second, &body),
             ],
         );
-        validate_payer_input_authorization_v1(&plaintext, &statement)
+        validate_payer_input_authorization_v1(&plaintext, &statement.nullifiers)
             .expect("weighted payer authorization reaches threshold");
     }
 
@@ -1548,46 +1605,4 @@ mod tests {
             Err(AtomicPrivateSettlementRelationErrorV1::InvalidAuditMaterial)
         );
     }
-}
-
-// Used only while the native preparation owner is filling a statement; it is never a verifier.
-pub(super) fn output_memo_digests_from_bound_preparation_v1(
-    statement: &PrivateSettlementProofStatementV1,
-) -> Result<[[u8; 32]; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1], AtomicPrivateSettlementRelationErrorV1>
-{
-    let change_material = norito::encode_canonical(&(
-        (
-            statement.network_id,
-            statement.bundle_id,
-            statement.leg_ordinal,
-            statement.route,
-            statement.authority_context_height,
-            statement.pool_id,
-            statement.asset_binding_commitment,
-            statement.audit_plaintext_commitment,
-            statement.audit_input_commitment,
-        ),
-        (
-            statement.audit_policy_digest,
-            statement.audit_key_epoch,
-            statement.fee_intent_digest,
-            statement.reimbursement_terms_commitment,
-            statement.reimbursement_leg_ordinal,
-            statement.expiry_height,
-            statement.proof_profile_digest,
-        ),
-    ))
-    .map_err(|_| AtomicPrivateSettlementRelationErrorV1::CanonicalEncoding)?;
-    let change = framed_digest_v1(
-        SETTLEMENT_CHANGE_MEMO_DOMAIN_V1,
-        &[
-            &change_material,
-            PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
-        ],
-    )?;
-    Ok([
-        *statement.audit_plaintext_commitment.as_ref(),
-        change,
-        *statement.reimbursement_terms_commitment.as_ref(),
-    ])
 }

@@ -188,7 +188,7 @@ impl GeneratedCompliance {
                 .chain(std::iter::once(selected_gateway.as_str())),
         ) {
             let label = format!("native-service-provider/{slot}/compliance/{name}");
-            let identity = localnet_ephemeral_identity(seed, label.as_bytes())?;
+            let identity = ephemeral_identity(seed, label.as_bytes())?;
             ensure!(
                 unique.insert(identity.public_key.clone()),
                 "compliance credentials must be distinct"

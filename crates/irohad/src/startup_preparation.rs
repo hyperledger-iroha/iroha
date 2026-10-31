@@ -44,6 +44,7 @@ pub struct PreparedStartup {
     // stacks. Preparation still creates it once; activation or joined cleanup consumes it.
     pub(super) native: Box<PreparedNative>,
     pub(super) lifetime: StartupLifetime,
+    pub(super) listeners: Option<iroha_deploy::managed::RuntimeListeners>,
 }
 
 /// Refuse a build whose linked BLS pairing context cannot verify consensus aggregates.
@@ -82,7 +83,11 @@ impl PreparedStartup {
         };
         let mut supervisor = Supervisor::new();
         match Self::prepare_inner(config, genesis, &mut supervisor, &mut lifetime) {
-            Ok(native) => Ok(Self { native, lifetime }),
+            Ok(native) => Ok(Self {
+                native,
+                lifetime,
+                listeners: None,
+            }),
             Err(error) => {
                 supervisor.shutdown_signal().send();
                 let cleanup = supervisor.start().await;
@@ -214,6 +219,11 @@ impl PreparedStartup {
             )
         })?;
         startup_trust_root.verify(genesis_to_verify)?;
+        require_authenticated_genesis_crypto_implementations(
+            genesis_to_verify,
+            &config.genesis.public_key,
+        )
+        .change_context(StartError::InitKura)?;
         let signed_genesis_context = Some(
             signed_genesis_context_metadata(genesis_to_verify)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?,
@@ -230,6 +240,20 @@ impl PreparedStartup {
                     report.attach("lane manifest registry is not ready before snapshot restoration")
                 })?
         };
+        // Blocks at or below an upgrade checkpoint are the predecessor release's history; this
+        // release restores the World there instead of re-executing them.
+        let upgrade_checkpoint = config
+            .snapshot
+            .upgrade_checkpoint
+            .checkpoint()
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+            .map(|checkpoint| {
+                iroha_core::state::upgrade_checkpoint::UpgradeCheckpointV1::from_config(&checkpoint)
+            });
+        if let Some(checkpoint) = &upgrade_checkpoint {
+            kura.set_upgrade_checkpoint(checkpoint.clone())
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        }
         let mut loaded_state_from_snapshot = false;
         let snapshot_read_buffer_budget =
             iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
@@ -271,6 +295,18 @@ impl PreparedStartup {
                 )
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 state
+            }
+            Err(error)
+                if upgrade_checkpoint.as_ref().is_some_and(|checkpoint| {
+                    u64::try_from(block_count.0).is_ok_and(|count| count >= checkpoint.height)
+                }) =>
+            {
+                let height = upgrade_checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.height);
+                return Err(Report::new(error).change_context(StartError::InitKura).attach(format!(
+                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs the checkpoint snapshot or a later snapshot of this release"
+                )));
             }
             Err(error) if snapshot_failure_allows_empty_state_fallback(&error, emergency_fast) => {
                 if matches!(&error, TryReadSnapshotError::NotFound) {
@@ -441,6 +477,26 @@ impl PreparedStartup {
         }
         let fastpq_replay_seed = if emergency_fast {
             None
+        } else if loaded_state_from_snapshot {
+            // The isolated FASTPQ replay starts again from signed genesis, so it takes the
+            // configured pre-genesis lane policy, not the catalogs of the restored height.
+            let (nexus, manifests) = iroha_core::state::pregenesis_lane_policy(
+                config.nexus.clone(),
+                &configured_lane_manifests,
+            )
+            .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+            Some(
+                iroha_core::sumeragi::node::NativeReplaySeed::capture_restored(
+                    &state,
+                    config.kura.clone(),
+                    AccountId::new(effective_genesis_public_key.clone()),
+                    signed_consensus_mode,
+                    nexus,
+                    manifests,
+                    frozen_startup_lane_compliance.clone(),
+                )
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?,
+            )
         } else {
             Some(
                 iroha_core::sumeragi::node::NativeReplaySeed::capture(
@@ -462,7 +518,8 @@ impl PreparedStartup {
         let state: Arc<State> = Arc::from(state);
         lifetime.state = Some(Arc::clone(&state));
         // Sumeragi rebuilds the state: it applies (fresh chain) or re-executes (restart) the
-        // signed genesis and replays every block Kura holds against its commit certificate.
+        // signed genesis, or resumes the authenticated snapshot State, and replays every block
+        // Kura holds above it against its commit certificate.
         let prepared_sumeragi = if emergency_fast {
             None
         } else {
@@ -486,6 +543,17 @@ impl PreparedStartup {
             );
             Some(prepared)
         };
+        // A restored/replayed policy can differ from genesis. Borrow the committed owner
+        // before participation; never filter its algorithms to this machine's backends.
+        {
+            let parameters = state.transaction_admission_parameters();
+            let policy = parameters
+                .require_crypto_policy()
+                .map_err(|message| Report::new(StartError::InitKura).attach(message))?;
+            require_crypto_verification_implementations(policy)
+                .map_err(Report::new)
+                .change_context(StartError::InitKura)?;
+        }
         // Key admission and rotation read canonical WSV parameters. Local configuration must
         // match that authority rather than overwriting it without a block.
         state
@@ -529,6 +597,7 @@ impl PreparedStartup {
         let Self {
             mut native,
             lifetime,
+            listeners,
         } = self;
         // StateExecutor's Drop closes admission and joins its original native thread.
         drop(native.prepared_sumeragi.take());
@@ -537,6 +606,7 @@ impl PreparedStartup {
         let result = supervisor.start().await;
         drop(native);
         drop(lifetime);
+        drop(listeners);
         result
     }
 }

@@ -1291,83 +1291,22 @@ impl History {
                 }
             }
             Some(root) => {
-                // entries brackets its actual census with native custody checks.
-                let names = directory_entries_in_tree(root, MAX_ATTEMPTS, tree.as_deref_mut())?;
-                if names.len() < self.attempts.len()
-                    || names.len() > self.attempts.len() + usize::from(self.empty_tail)
-                    || names
-                        .iter()
-                        .enumerate()
-                        .any(|(index, name)| name != OsStr::new(&format!("{:04}", index + 1)))
+                // Only the exact local census operation owner can lend this callback-free
+                // root scope. Recheck decoder ownership at use; all other recipes stay literal.
+                if operation_read
+                    .as_deref()
+                    .is_some_and(|read| read.covers(self))
+                    && reuse_attempts_root_scope()
+                    && let Some(tree) = tree.as_deref_mut()
                 {
-                    return Err(invalid(
-                        "dispatch inventory changed during native operation",
-                    ));
+                    #[cfg(test)]
+                    attempts_root_scope_tests::root_bracket();
+                    tree.read_scope_with_tree(root, |tree, reader| {
+                        self.require_current_attempts(root, &image, Some(tree), Some(reader))
+                    })?;
+                } else {
+                    self.require_current_attempts(root, &image, tree.as_deref_mut(), None)?;
                 }
-                let inspect_attempts = |tree: &mut iroha_fs::PrivateReadTreeScope<'_>| {
-                    for attempt in &self.attempts {
-                        tree.read_scope(&attempt.directory, |reader| {
-                            // Both native censuses and all lazy record reads share one closed
-                            // suffix bracket; persistent exit custody overrides every result.
-                            let inventory = checked_attempt_inventory(measured_inventory!(
-                                AttemptScopedInventory,
-                                reader.entries(7)
-                            )?)?;
-                            attempt.validate_inventory(
-                                &inventory,
-                                self.dispatch.as_ref().is_some_and(|value| {
-                                    value.state == ReservationState::Reserved
-                                        && value.highest.ordinal == attempt.ordinal()
-                                }),
-                            )?;
-                            // No mutable field or authority is retained with this observation.
-                            // Recheck decoder ownership at the actual row use. Every attempt
-                            // inventory and original native owner still closes independently.
-                            if !image.is_original(&self.image) {
-                                attempt.verify_authorization_in_scope(&image)?;
-                                if image.read::<Observation>(Some(attempt.ordinal()), 1)?
-                                    != attempt.observation
-                                    || image.read::<Commit>(Some(attempt.ordinal()), 2)?
-                                        != attempt.commit
-                                    || image.read::<Retirement>(Some(attempt.ordinal()), 3)?
-                                        != attempt.retirement
-                                {
-                                    return Err(invalid(
-                                        "retained dispatch metadata changed during native operation",
-                                    ));
-                                }
-                            }
-                            if checked_attempt_inventory(measured_inventory!(
-                                AttemptScopedInventory,
-                                reader.entries(7)
-                            )?)? != inventory
-                            {
-                                return Err(invalid(
-                                    "retained dispatch metadata changed during native operation",
-                                ));
-                            }
-                            Ok::<_, crate::managed::Error>(())
-                        })?;
-                    }
-                    Ok::<_, crate::managed::Error>(())
-                };
-                match tree.as_deref_mut() {
-                    Some(tree) => inspect_attempts(tree)?,
-                    None => root.read_tree_scope(inspect_attempts)?,
-                }
-                // A Reserved prefix may have its last empty directory but no authorization.
-                // It is inspected transiently; Published custody can never use this branch.
-                if names.len() > self.attempts.len() {
-                    let tail = root.open_child(&names[self.attempts.len()])?;
-                    if !directory_entries_in_tree(&tail, 1, tree.as_deref_mut())?.is_empty() {
-                        return Err(invalid("reserved dispatch empty tail changed"));
-                    }
-                    revalidate_directory_in_tree(&tail, tree.as_deref_mut())?;
-                }
-                if directory_entries_in_tree(root, MAX_ATTEMPTS, tree.as_deref_mut())? != names {
-                    return Err(invalid("dispatch inventory changed during inspection"));
-                }
-                revalidate_directory_in_tree(root, tree.as_deref_mut())?;
             }
         }
         let final_names = match operation_read
@@ -1400,6 +1339,103 @@ impl History {
             tree,
             root_read,
         )
+    }
+
+    // One concrete read-only attempts body. Row owners keep their own suffix closures and
+    // a reserved empty tail retains its exact transient open/entries/revalidate sequence.
+    // The admitted root reader closes every ordinary result before operation metadata exit;
+    // persistent native refusal wins, even over an early body error. No effect can occur here.
+    // A transient root change fully restored within the bracket may be unobserved.
+    fn require_current_attempts(
+        &self,
+        root: &PrivateDirectory,
+        image: &metadata::ObservedImage<'_>,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+        mut root_read: Option<&mut iroha_fs::PrivateReadScope<'_>>,
+    ) -> Result<()> {
+        // Both inventories use the same native producer; only the attempts-root bracket differs.
+        let names = attempts_root_entries(root, tree.as_deref_mut(), root_read.as_deref_mut())?;
+        if names.len() < self.attempts.len()
+            || names.len() > self.attempts.len() + usize::from(self.empty_tail)
+            || names
+                .iter()
+                .enumerate()
+                .any(|(index, name)| name != OsStr::new(&format!("{:04}", index + 1)))
+        {
+            return Err(invalid(
+                "dispatch inventory changed during native operation",
+            ));
+        }
+        let inspect_attempts = |tree: &mut iroha_fs::PrivateReadTreeScope<'_>| {
+            for attempt in &self.attempts {
+                tree.read_scope(&attempt.directory, |reader| {
+                    // Both native censuses and all lazy record reads share one closed
+                    // suffix bracket; persistent exit custody overrides every result.
+                    let inventory = checked_attempt_inventory(measured_inventory!(
+                        AttemptScopedInventory,
+                        reader.entries(7)
+                    )?)?;
+                    #[cfg(test)]
+                    attempts_root_scope_tests::after_leaf(
+                        attempts_root_scope_tests::Point::RowInventory,
+                    )?;
+                    attempt.validate_inventory(
+                        &inventory,
+                        self.dispatch.as_ref().is_some_and(|value| {
+                            value.state == ReservationState::Reserved
+                                && value.highest.ordinal == attempt.ordinal()
+                        }),
+                    )?;
+                    // No mutable field or authority is retained with this observation.
+                    // Recheck decoder ownership at the actual row use. Every attempt
+                    // inventory and original native owner still closes independently.
+                    if !image.is_original(&self.image) {
+                        attempt.verify_authorization_in_scope(image)?;
+                        if image.read::<Observation>(Some(attempt.ordinal()), 1)?
+                            != attempt.observation
+                            || image.read::<Commit>(Some(attempt.ordinal()), 2)? != attempt.commit
+                            || image.read::<Retirement>(Some(attempt.ordinal()), 3)?
+                                != attempt.retirement
+                        {
+                            return Err(invalid(
+                                "retained dispatch metadata changed during native operation",
+                            ));
+                        }
+                    }
+                    if checked_attempt_inventory(measured_inventory!(
+                        AttemptScopedInventory,
+                        reader.entries(7)
+                    )?)? != inventory
+                    {
+                        return Err(invalid(
+                            "retained dispatch metadata changed during native operation",
+                        ));
+                    }
+                    Ok::<_, crate::managed::Error>(())
+                })?;
+            }
+            Ok::<_, crate::managed::Error>(())
+        };
+        match tree.as_deref_mut() {
+            Some(tree) => inspect_attempts(tree)?,
+            None => root.read_tree_scope(inspect_attempts)?,
+        }
+        // A Reserved prefix may have its last empty directory but no authorization.
+        // It is inspected transiently; Published custody can never use this branch.
+        if names.len() > self.attempts.len() {
+            let tail = root.open_child(&names[self.attempts.len()])?;
+            if !directory_entries_in_tree(&tail, 1, tree.as_deref_mut())?.is_empty() {
+                return Err(invalid("reserved dispatch empty tail changed"));
+            }
+            revalidate_directory_in_tree(&tail, tree.as_deref_mut())?;
+        }
+        if attempts_root_entries(root, tree.as_deref_mut(), root_read.as_deref_mut())? != names {
+            return Err(invalid("dispatch inventory changed during inspection"));
+        }
+        if root_read.is_none() {
+            revalidate_directory_in_tree(root, tree.as_deref_mut())?;
+        }
+        Ok(())
     }
 
     // Keep original native owners live through the sole fresh parser; retain shares their
@@ -1807,6 +1843,28 @@ fn require_semantic_original(operation: &PrivateDirectory, semantic: [u8; 32]) -
 
 // These read-only adapters retain the sole native leaf/census producers. The graph owner
 // chooses the existing ancestry bracket; no pathname or validation result supplies coverage.
+fn reuse_attempts_root_scope() -> bool {
+    #[cfg(test)]
+    if attempts_root_scope_tests::original_recipe() {
+        return false;
+    }
+    !norito::core::decode_limits_active()
+}
+
+fn attempts_root_entries(
+    root: &PrivateDirectory,
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    reader: Option<&mut iroha_fs::PrivateReadScope<'_>>,
+) -> Result<Vec<std::ffi::OsString>> {
+    let names = match reader {
+        Some(reader) => measured_inventory!(AttemptScopedInventory, reader.entries(MAX_ATTEMPTS))?,
+        None => directory_entries_in_tree(root, MAX_ATTEMPTS, tree)?,
+    };
+    #[cfg(test)]
+    attempts_root_scope_tests::after_leaf(attempts_root_scope_tests::Point::RootInventory)?;
+    Ok(names)
+}
+
 fn directory_entries_in_tree(
     directory: &PrivateDirectory,
     maximum: usize,
@@ -2322,3 +2380,6 @@ mod retained_handle_census_tests;
 #[cfg(test)]
 #[path = "attempts/measurement_tests.rs"]
 mod measurement_tests;
+
+#[cfg(test)]
+use crate::managed::stream_token_custody::body_history::attempts_root_scope_tests;

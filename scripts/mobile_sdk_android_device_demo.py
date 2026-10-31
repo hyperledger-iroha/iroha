@@ -68,7 +68,7 @@ def elf(data):
 def toolchain(ndk):
     ndk = directory(ndk)
     source = original(ndk / 'source.properties')
-    require(b'28.0.12674087' in source, 'Wrong NDK source.properties')
+    require(digest(source) == 'e73b7dc557cea2da9212c09ee1795434957d62e63b7550eef69fd1887a355d94', 'Wrong NDK source.properties')
     bins = list((ndk / 'toolchains/llvm/prebuilt').glob('*/bin/llvm-strip'))
     require(len(bins) == 1, 'Expected one pinned NDK llvm-strip')
     strip = bins[0].resolve(strict=True)
@@ -99,7 +99,8 @@ def validate(artifact, root, ndk, allow_source_head_drift=False):
     m = json.loads(receipt_bytes)
     require(m['schema'] == SCHEMA and m['artifact_scope'] == 'physical-device-demo' and
             m['status'] == 'qualified-arm64-device-demo', 'Wrong artifact type/status')
-    require(m['abi'] == ABI and m['target'] == TARGET and m['native_bridge_abi_version'] == 31 and
+    require(m['abi'] == ABI and m['target'] == TARGET and
+            type(m['native_bridge_abi_version']) is int and m['native_bridge_abi_version'] == 33 and
             m['native_signer_contract_revision'] == 7, 'Wrong native ABI/signer contract')
     require(m['source_root'] == str(root), 'Different source checkout')
     commit = m['source_commit']
@@ -122,7 +123,7 @@ def validate(artifact, root, ndk, allow_source_head_drift=False):
     require(cmd['sourceCommit'] == commit and cmd['target'] == TARGET and
             '--crate-name' in cmd['argv'] and cmd['argv'][cmd['argv'].index('--crate-name') + 1] == 'connect_norito_bridge', 'Compiler origin mismatch')
     require(env['environment_profile'] == 'android-cargo' and env['cargo_build_jobs'] == 1 and
-            env['rust_toolchain_channel'] == '1.93.1', 'Unexpected producer environment')
+            env['rust_toolchain_channel'] == '1.99.1', 'Unexpected producer environment')
     for key, name in [('wallet_runtime_authority', 'MOBILE_SDK_WALLET_RUNTIME_AUTHORITY'),
                       ('wallet_runtime_trust_ed25519_hex', 'MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX')]:
         require(os.environ.get(name) and env[key] == os.environ[name], 'Runtime trust selection differs from compiled native original')
@@ -198,7 +199,7 @@ def capture(args):
                    env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'})
     stripped = original(destination / LIB)
     m = {'schema': SCHEMA, 'artifact_scope': 'physical-device-demo', 'status': 'qualified-arm64-device-demo',
-         'abi': ABI, 'target': TARGET, 'native_bridge_abi_version': 31, 'native_signer_contract_revision': 7,
+         'abi': ABI, 'target': TARGET, 'native_bridge_abi_version': 33, 'native_signer_contract_revision': 7,
          'source_root': str(root), 'source_commit': seal['source_commit'],
          'source_fingerprint_sha256': seal['source_fingerprint_sha256'], 'producer_artifact_root': str(producer),
          'producer_stage': 'arm64-promoted-full-producer-continues',

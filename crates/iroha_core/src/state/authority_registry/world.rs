@@ -1,4 +1,4 @@
-//! Explicit authority declarations for every actual WorldData field.
+//! Explicit authority declarations for every actual `WorldData` field.
 
 use iroha_data_model::nexus::{
     PrivateSettlementNullifierKeyV1, PrivateSettlementOutputKeyV1,
@@ -13,7 +13,7 @@ use crate::state::*;
 use iroha_data_model::block::consensus::EvidenceRecord;
 
 classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldReadReleases, {
-    parameters: Cell<StateParameters> => ("world.parameters",
+    parameters: Cell<RetainedStateParameters, iroha_allocation::AllocationCharge> => ("world.parameters",
         Role::Canonical(Canonical::Cell(schema::<Parameters>()))), release = parameters;
     consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => ("world.consensus_schedule",
         Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::schedule::ConsensusSchedule>()))), release = consensus_schedule;
@@ -23,7 +23,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<Peers>()))), release = peers;
     domains: Storage<DomainId, Domain> => ("world.domains",
         Role::Canonical(Canonical::Table { key: schema::<DomainId>(), value: schema::<Domain>() })), release = domains;
-    domains_by_owner: Storage<AccountId, BTreeSet<DomainId>> => ("world.domains_by_owner",
+    domains_by_owner: Storage<(AccountId, DomainId), ()> => ("world.domains_by_owner",
         Role::Derived { sources: &["world.domains"], check: DerivationCheck::Rebuild("World::rebuild_domain_owner_index; state::authority_registry::domain_ownership::CheckedDomainOwnership::capture") }), release = domains_by_owner;
     kaigi_relay_registry: Storage<AccountId, DomainId> => ("world.kaigi_relay_registry",
         Role::Derived { sources: &["world.domains", "world.accounts"], check: DerivationCheck::Rebuild("isi::kaigi::rebuild_kaigi_relay_registry; validate_rebuilt_kaigi_relay_registry") }), release = kaigi_relay_registry;
@@ -238,14 +238,18 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::confidential::ConfidentialParamsId>(), value: schema::<iroha_data_model::confidential::PedersenParams>() })), release = pedersen_params;
     poseidon_params: Storage< iroha_data_model::confidential::ConfidentialParamsId, iroha_data_model::confidential::PoseidonParams, > => ("world.poseidon_params",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::confidential::ConfidentialParamsId>(), value: schema::<iroha_data_model::confidential::PoseidonParams>() })), release = poseidon_params;
-    runtime_upgrades: Storage< iroha_data_model::runtime::RuntimeUpgradeId, iroha_data_model::runtime::RuntimeUpgradeRecord, > => ("world.runtime_upgrades",
-        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::RuntimeUpgradeId>(), value: schema::<iroha_data_model::runtime::RuntimeUpgradeRecord>() })), release = runtime_upgrades;
+    runtime_change_sets: Storage< iroha_data_model::runtime::lifecycle::ChangeSetId, iroha_data_model::runtime::lifecycle::ChangeSetRecordV1, > => ("world.runtime_change_sets",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::lifecycle::ChangeSetId>(), value: schema::<iroha_data_model::runtime::lifecycle::ChangeSetRecordV1>() })), release = runtime_change_sets;
+    runtime_containments: Storage<[u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1> => ("world.runtime_containments",
+        Role::Canonical(Canonical::Table { key: schema::<[u8; 32]>(), value: schema::<iroha_data_model::runtime::lifecycle::ContainmentRecordV1>() })), release = runtime_containments;
+    runtime_definitions: Storage<iroha_data_model::runtime::definition::DefinitionId, iroha_data_model::runtime::definition::DefinitionDescriptorV1> => ("world.runtime_definitions",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::runtime::definition::DefinitionId>(), value: schema::<iroha_data_model::runtime::definition::DefinitionDescriptorV1>() })), release = runtime_definitions;
+    runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> => ("world.runtime_selection",
+        Role::Canonical(Canonical::Cell(schema::<iroha_data_model::runtime::definition::RootSelectionV1>()))), release = runtime_selection;
     privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> => ("world.privacy_consensus_policy",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::privacy::PrivacyConsensusPolicyV1>()))), release = privacy_consensus_policy;
-    privacy_exact12_qualification: Cell<Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>> => ("world.privacy_exact12_qualification",
-        Role::Canonical(Canonical::Cell(schema::<Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>>()))), release = privacy_exact12_qualification;
-    privacy_activations: Storage< crate::privacy_state::PrivacyActivationKeyV1, iroha_data_model::privacy::PrivacyProtocolActivationRecordV1, > => ("world.privacy_activations",
-        Role::Canonical(Canonical::Table { key: schema::<crate::privacy_state::PrivacyActivationKeyV1>(), value: schema::<iroha_data_model::privacy::PrivacyProtocolActivationRecordV1>() })), release = privacy_activations;
+    privacy_protocol_policies: Storage< iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1, iroha_data_model::privacy::PrivacyProtocolPolicyV1, > => ("world.privacy_protocol_policies",
+        Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1>(), value: schema::<iroha_data_model::privacy::PrivacyProtocolPolicyV1>() })), release = privacy_protocol_policies;
     kagemusha_wallet_ledger: Storage<iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>> => ("world.kagemusha_wallet_ledger",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1>(), value: schema::<Vec<u8>>() })), release = kagemusha_wallet_ledger;
     private_settlement_governance: Storage<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1> => ("world.private_settlement_governance",
@@ -470,11 +474,11 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<u64>()))), release = soradns_history_len;
     repo_agreements: Storage<RepoAgreementId, RepoAgreement> => ("world.repo_agreements",
         Role::Canonical(Canonical::Table { key: schema::<RepoAgreementId>(), value: schema::<RepoAgreement>() })), release = repo_agreements;
-    repo_agreements_by_initiator: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_initiator",
+    repo_agreements_by_initiator: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_initiator",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_initiator;
-    repo_agreements_by_counterparty: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_counterparty",
+    repo_agreements_by_counterparty: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_counterparty",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_counterparty;
-    repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>> => ("world.repo_agreements_by_custodian",
+    repo_agreements_by_custodian: Storage<(AccountId, RepoAgreementId), ()> => ("world.repo_agreements_by_custodian",
         Role::Derived { sources: &["world.repo_agreements"], check: DerivationCheck::Rebuild("World::rebuild_repo_agreement_indexes; state::authority_registry::grouped_ownership::CheckedRepoAgreements::capture") }), release = repo_agreements_by_custodian;
     settlement_receipts: Storage<SettlementId, SettlementReceipt> => ("world.settlement_receipts",
         Role::Canonical(Canonical::Table { key: schema::<SettlementId>(), value: schema::<SettlementReceipt>() })), release = settlement_receipts;

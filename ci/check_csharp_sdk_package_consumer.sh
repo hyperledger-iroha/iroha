@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 Usage: ci/check_csharp_sdk_package_consumer.sh [negative-control]
 
-Builds and runs a temporary net8.0 consumer project against the packed
+Builds and runs a temporary net10.0 consumer project against the packed
 Hyperledger.Iroha.Sdk NuGet package from csharp/artifacts/packages. Set
 CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER to one of linux-x64,
 linux-arm64, osx-x64, osx-arm64, or win-x64.
@@ -129,14 +129,14 @@ stage_pinned_dotnet_global_json() {
 require_dotnet() {
   local sdk_dir="$1"
   if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
-    echo "error: C# SDK package consumer smoke requires .NET SDK 8.0.x; '${DOTNET_BIN}' was not found" >&2
+    echo "error: C# SDK package consumer smoke requires .NET SDK 10.0.x; '${DOTNET_BIN}' was not found" >&2
     return 1
   fi
   local dotnet_version
   dotnet_version="$(run_dotnet "${sdk_dir}" --version)"
   printf 'C# SDK package consumer dotnet version: %s\n' "${dotnet_version}"
-  if [[ ! "${dotnet_version}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
-    echo "error: C# SDK package consumer smoke requires a stable canonical .NET SDK 8.0.x with a non-zero patch; got ${dotnet_version}" >&2
+  if [[ ! "${dotnet_version}" =~ ^10\.0\.[1-9][0-9]*$ ]]; then
+    echo "error: C# SDK package consumer smoke requires a stable canonical .NET SDK 10.0.x with a non-zero patch; got ${dotnet_version}" >&2
     return 1
   fi
   printf 'C# SDK package consumer dotnet --info:\n'
@@ -207,10 +207,10 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 31u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 33u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-31 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-33 SoraFS native bridge is unavailable");
 }
 
 // Probe the actual library resolved from the installed, manifest-verified package.
@@ -297,7 +297,7 @@ run_consumer_smoke() {
   export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${WORK_DIR}/dotnet-home}"
   export NUGET_PACKAGES="${NUGET_PACKAGES:-${WORK_DIR}/nuget-packages}"
 
-  run_dotnet "${app_dir}" new console --framework net8.0 --output . --no-restore || return 1
+  run_dotnet "${app_dir}" new console --framework net10.0 --output . --no-restore || return 1
   cat > "${app_dir}/Directory.Build.props" <<EOF
 <Project>
   <PropertyGroup>

@@ -2910,23 +2910,31 @@ pub mod runtime_governance {
         "operator.node.query_projection.shard_export",
         "/v1/node/query/projection/shards/{resource}/{partition_id}",
     );
-    /// List staged runtime upgrades.
+    /// The committed runtime selection and every recorded change set.
     pub const RUNTIME_UPGRADES: RouteDescriptor =
         operator_get("operator.runtime.upgrade.list", "/v1/runtime/upgrades");
-    /// Propose a runtime upgrade.
+    /// Draft the Parliament proposal that schedules a runtime change set.
     pub const RUNTIME_UPGRADE_PROPOSE: RouteDescriptor = operator_post(
         "operator.runtime.upgrade.propose",
         "/v1/runtime/upgrades/propose",
     );
-    /// Activate a runtime upgrade.
-    pub const RUNTIME_UPGRADE_ACTIVATE: RouteDescriptor = operator_post(
-        "operator.runtime.upgrade.activate",
-        "/v1/runtime/upgrades/activate/{id}",
-    );
-    /// Cancel a runtime upgrade.
+    /// Draft the Parliament proposal that withdraws a scheduled runtime change set.
     pub const RUNTIME_UPGRADE_CANCEL: RouteDescriptor = operator_post(
         "operator.runtime.upgrade.cancel",
         "/v1/runtime/upgrades/cancel/{id}",
+    );
+    /// Sign this node's support attestation of a scheduled runtime change set.
+    pub const RUNTIME_UPGRADE_ATTEST: RouteDescriptor = operator_post(
+        "operator.runtime.upgrade.attest",
+        "/v1/runtime/upgrades/attest/{id}",
+    );
+    /// This release's support for the committed and the scheduled runtime selections.
+    pub const RUNTIME_RELEASE: RouteDescriptor =
+        operator_get("operator.runtime.release", "/v1/runtime/release");
+    /// Every recorded emergency containment of runtime definitions.
+    pub const RUNTIME_CONTAINMENTS: RouteDescriptor = operator_get(
+        "operator.runtime.containment.list",
+        "/v1/runtime/containments",
     );
     /// Draft a ministry agenda proposal for local signing.
     pub const MINISTRY_AGENDA_DRAFT: RouteDescriptor = app_signed_post(
@@ -3123,8 +3131,10 @@ pub mod runtime_governance {
         NODE_PROJECTION_SHARD_EXPORT,
         RUNTIME_UPGRADES,
         RUNTIME_UPGRADE_PROPOSE,
-        RUNTIME_UPGRADE_ACTIVATE,
         RUNTIME_UPGRADE_CANCEL,
+        RUNTIME_UPGRADE_ATTEST,
+        RUNTIME_RELEASE,
+        RUNTIME_CONTAINMENTS,
         MINISTRY_AGENDA_DRAFT,
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,
@@ -4052,6 +4062,13 @@ pub mod application_api {
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_permissions_query_post", "/v1/accounts/{account_id}/permissions/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => dataspace_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
+        ///
+        /// Every committed movement of one asset definition, newest first, from the node's
+        /// movement index; `503 asset_movements_indexing` while it catches up with the tip.
+        ASSETS_BY_DEFINITION_ID_MOVEMENTS_GET => dataspace_get("application.assets_by_definition_id_movements_get", "/v1/assets/{definition_id}/movements");
+        ///
+        /// The asset movement feed with its controls as a JSON body.
+        ASSETS_BY_DEFINITION_ID_MOVEMENTS_QUERY_POST => dataspace_post("application.assets_by_definition_id_movements_query_post", "/v1/assets/{definition_id}/movements/query");
         PROOFS_QUERY_POST => signed_compute_post("application.proofs_query_post", "/v1/proofs/query");
         ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => app_get("application.zk_proof_tags_by_backend_by_hash_get", "/v1/zk/proof-tags/{backend}/{hash}");
         DOMAINS_GET => dataspace_get("application.domains_get", "/v1/domains");
@@ -4219,6 +4236,7 @@ pub mod application_api {
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => dataspace_get("application.explorer_instructions_by_hash_by_index_get", "/v1/explorer/instructions/{hash}/{index}");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => dataspace_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
         KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}");
+        KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET => account_private_sdk_get("application.kaigi_calls_by_call_id_participation_get", "/v1/kaigi/calls/{call_id}/participation");
         KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
         KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => app_unprojected_protocol_get("application.kaigi_calls_by_call_id_events_get", "/v1/kaigi/calls/{call_id}/events");
         KAIGI_RELAYS_GET => operator_expensive_get("application.kaigi_relays_get", "/v1/kaigi/relays");

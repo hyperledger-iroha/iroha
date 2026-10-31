@@ -102,7 +102,7 @@ pub fn quantity_statement_from_finalized_transcripts(
 
 /// Fixture-only funding for existing semantic controls; production passes its original pool.
 #[cfg(test)]
-pub(crate) fn quantity_statement_from_finalized_transcripts_for_testing(
+pub fn quantity_statement_from_finalized_transcripts_for_testing(
     public_inputs: FastpqPublicInputs,
     transcripts: &[TransferTranscript],
     public_limits: PublicTransferLimits,
@@ -139,7 +139,7 @@ std::thread_local! {
 
 /// Read this test thread's strict full materializer invocation count.
 #[cfg(test)]
-pub(crate) fn quantity_materializer_invocations_for_testing() -> usize {
+pub fn quantity_materializer_invocations_for_testing() -> usize {
     MATERIALIZER_INVOCATIONS.with(std::cell::Cell::get)
 }
 
@@ -158,7 +158,7 @@ pub(crate) fn quantity_materializer_invocations_for_testing() -> usize {
 /// Rejects the same public preparation failures as the strict full-domain producer,
 /// including invalid digest policy, arithmetic, chronology and explicit public bounds.
 #[cfg(test)]
-pub(crate) fn quantity_statement_frame_len_from_finalized_transcripts(
+pub fn quantity_statement_frame_len_from_finalized_transcripts(
     transcripts: &[TransferTranscript],
     public_limits: PublicTransferLimits,
 ) -> fastpq_prover::Result<usize> {

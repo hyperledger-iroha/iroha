@@ -1,4 +1,4 @@
-//! Constant-memory token budgets for the SoraFS gateway.
+//! Constant-memory token budgets for the `SoraFS` gateway.
 use blake3::Hasher;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -364,7 +364,8 @@ mod tests {
             limiter.check(&client, now),
             Err(RateLimitError::Limited {
                 retry_after: Duration::new(
-                    (wait_nanos / 1_000_000_000) as u64,
+                    u64::try_from(wait_nanos / 1_000_000_000)
+                        .expect("bounded fixture or protocol constant fits u64"),
                     (wait_nanos % 1_000_000_000) as u32
                 ),
             })

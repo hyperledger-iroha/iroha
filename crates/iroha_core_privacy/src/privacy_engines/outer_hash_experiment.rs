@@ -10,7 +10,7 @@ use fastpq_isi::{
     GoldilocksDigest384DomainPrefixV1, GoldilocksDigest384FrameV1, GoldilocksDigestDomainV1,
 };
 use sha3::{Digest, Sha3_384};
-use std::{hint::black_box, time::Instant};
+use std::{fmt::Write as _, hint::black_box, time::Instant};
 
 const SHA_FRAME: &[u8] = b"iroha:privacy:outer-sha3-384:experiment:v1\0";
 const ROWS: usize = 64;
@@ -90,7 +90,7 @@ fn sha_frame(domain: GoldilocksDigestDomainV1<'_>, fields: &[&[u8]]) -> ShaDiges
 }
 
 fn domain<'a>(
-    catalog: &'a [u8; 48],
+    catalog: &'a [u8; 32],
     role: &'a [u8],
     phase: &'a [u8],
     level: u64,
@@ -131,7 +131,7 @@ struct ShaTranscript {
 }
 
 impl ShaTranscript {
-    fn new(catalog: &[u8; 48], profile: ShaDigest, public: ShaDigest) -> Self {
+    fn new(catalog: &[u8; 32], profile: ShaDigest, public: ShaDigest) -> Self {
         Self {
             state: sha_frame(
                 domain(catalog, TRANSCRIPT_INIT_DOMAIN_V1, b"initialize", 0),
@@ -141,7 +141,7 @@ impl ShaTranscript {
         }
     }
 
-    fn absorb(&mut self, catalog: &[u8; 48], label: &[u8], fields: &[&[u8]]) {
+    fn absorb(&mut self, catalog: &[u8; 32], label: &[u8], fields: &[&[u8]]) {
         let message = sha_frame(
             GoldilocksDigestDomainV1 {
                 counter: self.counter,
@@ -181,7 +181,7 @@ impl ShaTranscript {
 
     fn sequence(
         &mut self,
-        catalog: &[u8; 48],
+        catalog: &[u8; 32],
         label: &[u8],
         count: usize,
     ) -> Option<Vec<[u64; 4]>> {
@@ -225,7 +225,11 @@ fn row_bytes(rows: &[Vec<GoldilocksFieldV1>]) -> Vec<Vec<u8>> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String is infallible");
+    }
+    encoded
 }
 
 // Only public experiment data is printed. Timings contain complete batches and include
@@ -248,7 +252,7 @@ fn measure<T>(
     result
 }
 
-fn poseidon_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
+fn poseidon_run(pair: usize, catalog: &[u8; 32], rows: &[Vec<u8>]) {
     let width = u16::try_from(ivm_private_note::PRIVATE_NOTE_BASE_WIDTH_V1)
         .unwrap()
         .to_be_bytes();
@@ -377,7 +381,7 @@ fn poseidon_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
         pair,
         "poseidon6",
         "grinding_fixed_attempts",
-        NONCES as usize,
+        usize::try_from(NONCES).expect("diagnostic nonce count fits address space"),
         || {
             let bytes = seed.to_le_bytes();
             let fields: &[&[u8]] = &[&bytes];
@@ -392,11 +396,11 @@ fn poseidon_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
                 .map(|nonce| u64::from(predicate.matches_index_v1(nonce, TARGET_BITS).unwrap()))
                 .sum::<u64>()
         },
-        |hits| hits.to_string(),
+        std::string::ToString::to_string,
     );
 }
 
-fn sha_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
+fn sha_run(pair: usize, catalog: &[u8; 32], rows: &[Vec<u8>]) {
     let width = u16::try_from(ivm_private_note::PRIVATE_NOTE_BASE_WIDTH_V1)
         .unwrap()
         .to_be_bytes();
@@ -467,7 +471,7 @@ fn sha_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
         pair,
         "sha3_384",
         "grinding_fixed_attempts",
-        NONCES as usize,
+        usize::try_from(NONCES).expect("diagnostic nonce count fits address space"),
         || {
             let prefix = ShaPrefix::new(domain(
                 catalog,
@@ -486,7 +490,7 @@ fn sha_run(pair: usize, catalog: &[u8; 48], rows: &[Vec<u8>]) {
                 })
                 .sum::<u64>()
         },
-        |hits| hits.to_string(),
+        std::string::ToString::to_string,
     );
 }
 
@@ -497,7 +501,8 @@ fn production_frames_and_cached_digest_agree() {
     use crate::privacy_engines::privacy_outer_hash::{
         PrivacyOuterDomainPrefixV1, PrivacyOuterFrameV1,
     };
-    let catalog = CONTEXT.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     let rows = public_rows();
     let bytes = row_bytes(&rows);
     let group = 0_u16.to_be_bytes();
@@ -608,7 +613,8 @@ fn sha3_independent_vectors_and_field_boundaries() {
 
 #[test]
 fn sha3_rejection_counter_and_absorption_are_bounded() {
-    let catalog = CONTEXT.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     let prefix = ShaPrefix::new(domain(
         &catalog,
         TRANSCRIPT_ABSORB_DOMAIN_V1,
@@ -670,7 +676,8 @@ fn outer_hash_component_pairs() {
     );
     assert_eq!(ivm_private_note::PRIVATE_NOTE_BASE_WIDTH_V1, 556);
     let rows = row_bytes(&public_rows());
-    let catalog = CONTEXT.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(WORKERS)
         .build()

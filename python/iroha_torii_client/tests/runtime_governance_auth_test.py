@@ -102,7 +102,12 @@ def test_same_account_and_route_bind_distinct_genesis_networks() -> None:
     foreign_messages: list[bytes] = []
     payload = {
         "abi_version": 1,
-        "upgrade_events_total": {"proposed": 0, "activated": 0, "canceled": 0},
+        "upgrade_events_total": {
+            "scheduled": 0,
+            "activated": 0,
+            "lapsed": 0,
+            "canceled": 0,
+        },
     }
     primary = _Session(_Response(200, payload))
     foreign = _Session(_Response(200, payload))

@@ -29,7 +29,7 @@ impl Client {
         })
     }
 
-    /// Discover exact genesis/profile and the explicit admitted signing default.
+    /// Discover the exact genesis/profile and admitted signing algorithms.
     ///
     /// # Errors
     /// Returns the asynchronous discovery error or a blocking runtime rejection.

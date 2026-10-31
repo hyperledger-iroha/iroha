@@ -52,6 +52,10 @@ impl Drop for OwnedChild {
         }
     }
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The watchdog thread owns its control reference until it finishes reaping the owned child."
+)]
 fn watch_child(mut child: OwnedChild, control: Arc<Control>) {
     loop {
         match child.0.try_wait() {
@@ -185,7 +189,7 @@ impl ChildProbe {
         let worker_control = Arc::clone(&control);
         let deadline = control
             .now()
-            .checked_add(plan.timeout_ns as u64)
+            .checked_add(u64::try_from(plan.timeout_ns)?)
             .ok_or_else(|| eyre!("resource admission deadline overflow"))?;
         control
             .request_deadline_ns
@@ -251,12 +255,11 @@ impl Probe for ChildProbe {
                 })
                 .map_err(|_| eyre!("resource request owner is unavailable or saturated"))?;
             let remaining = Duration::from_nanos(deadline.saturating_sub(self.control.now()));
-            match tokio::time::timeout(remaining, receive).await {
-                Ok(Ok(result)) => result,
-                _ => {
-                    self.control.stop.store(true, Ordering::Release);
-                    Err(eyre!("resource response owner timed out or closed"))
-                }
+            if let Ok(Ok(result)) = tokio::time::timeout(remaining, receive).await {
+                result
+            } else {
+                self.control.stop.store(true, Ordering::Release);
+                Err(eyre!("resource response owner timed out or closed"))
             }
         }
         .boxed()
@@ -268,6 +271,10 @@ impl Probe for ChildProbe {
 
 /// The pending owner has only a pathname. No output exists until its one
 /// admission exchange succeeds within the caller's original preflight deadline.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The pipe session owns its request receiver and admission expectation until the session closes."
+)]
 fn serve_pipe<W: Write + AsFd, R: Read + AsFd>(
     pending: Pipe<W, R, PathBuf>,
     receiver: mpsc::Receiver<Work>,
@@ -368,13 +375,11 @@ impl<W: Write + AsFd, R: Read + AsFd, C> Pipe<W, R, C> {
     fn poll(&self, writing: bool, deadline: u64) -> Result<()> {
         self.control.check(deadline)?;
         let mut descriptors = Vec::with_capacity(2);
-        if writing {
-            if let Some(stdin) = &self.stdin {
-                descriptors.push(rustix::event::PollFd::new(
-                    stdin,
-                    rustix::event::PollFlags::OUT,
-                ));
-            }
+        if writing && let Some(stdin) = &self.stdin {
+            descriptors.push(rustix::event::PollFd::new(
+                stdin,
+                rustix::event::PollFlags::OUT,
+            ));
         }
         descriptors.push(rustix::event::PollFd::new(
             &self.stdout,
@@ -742,7 +747,8 @@ impl Captures {
         if !same_file(&before, &opened) {
             bail!("resource manifest changed during admission");
         }
-        let mut bytes = Vec::with_capacity(manifest.bytes as usize);
+        let manifest_len = usize::try_from(manifest.bytes)?;
+        let mut bytes = Vec::with_capacity(manifest_len);
         let mut buffer = [0_u8; 8192];
         loop {
             control.check(deadline)?;
@@ -752,7 +758,7 @@ impl Captures {
             if count == 0 {
                 break;
             }
-            if bytes.len() + count > manifest.bytes as usize {
+            if bytes.len() + count > manifest_len {
                 bail!("resource manifest grew beyond exact size");
             }
             bytes.extend_from_slice(&buffer[..count]);
@@ -765,7 +771,7 @@ impl Captures {
         if !same_file(&before, &held)
             || !same_file(&before, &named)
             || bytes.len() as u64 != manifest.bytes
-            || format!("{:x}", Sha256::digest(&bytes)) != manifest.sha256
+            || hex::encode(Sha256::digest(&bytes)) != manifest.sha256
         {
             bail!("resource manifest publication changed or digest mismatched");
         }

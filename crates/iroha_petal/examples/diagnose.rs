@@ -1,4 +1,5 @@
-//! Per-cell error rates of the decoder under a simulated camera.
+//! Per-cell error rates of the decoder under a simulated camera: petals and ring dots read
+//! under the decoder's own pose and under the camera's true (undistorted) pose.
 //!
 //! `cargo run --release -p iroha_petal --example diagnose -- blur=1.4 noise=5 fill=0.8 w=1280 h=720 tilt=10 trials=20`
 #[path = "support/count.rs"]
@@ -7,7 +8,9 @@ mod count;
 use count::count_as_f64;
 
 use iroha_petal::decode::{DecodeOptions, decode, decode_at, observed_cells};
-use iroha_petal::layout::{SlotRole, TILE_COUNT, slot_roles};
+use iroha_petal::geometry::Pose;
+use iroha_petal::lanes::FIELD_WORD;
+use iroha_petal::layout::{SECTORS, SlotRole, sector_cells, slot_roles};
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, camera_homography, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
@@ -73,9 +76,10 @@ fn main() {
     let encoder = StreamEncoder::new(&payload, 2).unwrap();
     let options = DecodeOptions::default();
     let roles = slot_roles();
-    let mask = 0xFFFFu32;
-    let mut glyph_seen = [0usize; 2];
-    let mut totals = [[0usize; 4]; 2]; // [estimated, oracle] x [polarity err, glyph err, dot err, lane-K ok]
+    let coded: Vec<usize> = (0..SECTORS)
+        .flat_map(|s| sector_cells(s)[..FIELD_WORD * 8].iter().copied())
+        .collect();
+    let mut totals = [[0usize; 3]; 2]; // [estimated, oracle] x [petal err, dot err, field lanes ok]
     let mut counted = [0usize; 2];
     for trial in 0..trials {
         let (frame, rotation, tilt_x, tilt_y) = trial_geometry(trial);
@@ -99,44 +103,26 @@ fn main() {
         let c = fit_to_frame(&c, 4.0);
         let image = capture(&source, &c);
         let estimated = decode(&image, &options).ok();
-        let oracle = decode_at(&image, camera_homography(&c), &options);
+        let oracle = decode_at(&image, Pose::plain(camera_homography(&c)), &options);
         for (slot, decoded) in [(0, estimated), (1, oracle)] {
             let Some(decoded) = decoded else { continue };
             let Some(observed) = observed_cells(&image, &decoded, &options) else {
                 continue;
             };
-            let mut p_err = 0;
-            let mut g_err = 0;
-            for t in 0..TILE_COUNT {
-                if observed.light[t] != truth.light[t] {
-                    p_err += 1;
-                } else if mask >> truth.glyph[t] & 1 == 1 {
-                    glyph_seen[slot] = glyph_seen[slot]
-                        .checked_add(1)
-                        .expect("glyph count fits usize");
-                    if observed.glyph[t] != truth.glyph[t] {
-                        g_err += 1;
-                    }
-                }
-            }
+            let petal_err = coded
+                .iter()
+                .filter(|&&cell| observed.petals[cell] != truth.petals[cell])
+                .count();
             let dot_err = (0..roles.len())
                 .filter(|&i| {
                     matches!(roles[i], SlotRole::Data(_)) && observed.dots[i] != truth.dots[i]
                 })
                 .count();
+            let fields = decoded.fields.iter().filter(|f| f.is_some()).count();
             let t = &mut totals[slot];
-            t[0] = t[0]
-                .checked_add(p_err)
-                .expect("diagnostic count fits usize");
-            t[1] = t[1]
-                .checked_add(g_err)
-                .expect("diagnostic count fits usize");
-            t[2] = t[2]
-                .checked_add(dot_err)
-                .expect("diagnostic count fits usize");
-            t[3] = t[3]
-                .checked_add(usize::from(decoded.k.is_some()))
-                .expect("diagnostic count fits usize");
+            for (total, add) in t.iter_mut().zip([petal_err, dot_err, fields]) {
+                *total = total.checked_add(add).expect("diagnostic count fits usize");
+            }
             counted[slot] = counted[slot]
                 .checked_add(1)
                 .expect("trial count fits usize");
@@ -145,12 +131,11 @@ fn main() {
     for (slot, name) in [(0, "finder-based"), (1, "oracle pose ")] {
         let n = count_as_f64(counted[slot].max(1));
         println!(
-            "{name}: n={} tile-polarity err {:.2}%  glyph err {:.2}%  dot err {:.2}%  lane K ok {:.0}%",
+            "{name}: n={} petal err {:.2}%  dot err {:.2}%  field lanes ok {:.0}%",
             counted[slot],
-            100.0 * count_as_f64(totals[slot][0]) / n / count_as_f64(TILE_COUNT),
-            100.0 * count_as_f64(totals[slot][1]) / count_as_f64(glyph_seen[slot].max(1)),
-            100.0 * count_as_f64(totals[slot][2]) / n / 240.0,
-            100.0 * count_as_f64(totals[slot][3]) / n
+            100.0 * count_as_f64(totals[slot][0]) / n / count_as_f64(coded.len()),
+            100.0 * count_as_f64(totals[slot][1]) / n / 240.0,
+            25.0 * count_as_f64(totals[slot][2]) / n
         );
     }
 }

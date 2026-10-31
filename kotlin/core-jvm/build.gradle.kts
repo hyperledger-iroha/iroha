@@ -24,6 +24,10 @@ repositories {
 
 dependencies {
     api(libs.okhttp)
+    constraints {
+        // Keep OkHttp's published transitive IO dependency on the reviewed current patch.
+        api(libs.okio)
+    }
     api(platform(libs.netty.bom))
     api(libs.netty.transport)
     implementation(libs.netty.handler)
@@ -146,7 +150,7 @@ tasks.test {
         ).withPropertyName("packageSurface-$module").ignoreEmptyDirectories()
     }
 
-    // Release CI supplies a freshly built, isolated ABI-31 bridge. Local
+    // Release CI supplies a freshly built, isolated ABI-33 bridge. Local
     // development retains the conventional root target/debug fallback.
     val configuredNativeDir = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
     val hostNativeDir = if (configuredNativeDir.isNullOrBlank()) {

@@ -54,6 +54,29 @@ impl Kura {
         })
     }
 
+    /// Replace only the original local consensus-header bytes for reader-order controls.
+    /// Execution/hash authority is unchanged; no new block is published or executed.
+    ///
+    /// # Errors
+    /// The original source is absent, changes concurrently, or cannot be rewritten.
+    #[doc(hidden)]
+    pub fn corrupt_commit_header_for_testing(
+        &self,
+        height: NonZeroUsize,
+        header: Vec<u8>,
+    ) -> Result<()> {
+        self.corrupt_certificate_parts_for_testing(height, |certificate| {
+            Some(
+                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                    header,
+                    certificate.commit_qc().to_vec(),
+                    certificate.result_preimage().to_vec(),
+                    certificate.availability().to_vec(),
+                ),
+            )
+        })
+    }
+
     fn corrupt_certificate_parts_for_testing(
         &self,
         height: NonZeroUsize,

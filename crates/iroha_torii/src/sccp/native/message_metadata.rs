@@ -141,7 +141,7 @@ pub async fn handler_messages_recent(
             .as_deref()
             .map(|text| source::recent_cursor(direction, text))
             .transpose()
-            .map_err(source_error)?;
+            .map_err(|value| source_error(&value))?;
         Ok::<_, Response>(Selection::Recent {
             direction,
             network,

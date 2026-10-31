@@ -1,4 +1,4 @@
-//! Separate genuine fee-bearing Send, historical Request custody, and ArchiveReceive replay.
+//! Separate genuine fee-bearing Send, historical Request custody, and `ArchiveReceive` replay.
 //!
 //! Export a NEW dedicated target, fund it through ordinary Core execution, then run this
 //! producer on the SAME retained custody. Never clone or reuse the consumed zero-fee ABC A.
@@ -434,10 +434,9 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
     let payment_bytes = complete(a.execute(send.clone()).unwrap());
     let payment: KagemushaWalletPaymentV1 = decode(&payment_bytes);
     let companion = a.payment_companion(&payment_bytes).unwrap();
-    KagemushaWalletPayerCompanionV1::decode_canonical(&companion)
-        .unwrap()
-        .check_payment(&payment)
-        .unwrap();
+    let (companion_measurement, decoded_companion) =
+        message_census::retain_companion(&output, "payer-companion", &companion);
+    decoded_companion.check_payment(&payment).unwrap();
     let payment_measurement = message_census::record(
         &output,
         "fee-payment",
@@ -498,10 +497,10 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
         3
     );
     let signatures = device_a.platform.with(|state| state.sign_calls);
-    let sent = a.snapshot().unwrap();
+    let sender_snapshot = a.snapshot().unwrap();
     drop(a);
     let mut a = sources.open(&device_a, &f, &frames_a);
-    assert_eq!(a.snapshot().unwrap(), sent);
+    assert_eq!(a.snapshot().unwrap(), sender_snapshot);
     assert_eq!(complete(a.execute(send.clone()).unwrap()), payment_bytes);
     assert_eq!(
         a.fee_claim(digests.credit_id).unwrap(),
@@ -532,8 +531,15 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
             credited: decode(&acknowledgement),
         },
     );
-    let (mut a, archived) =
-        archive::exercise(a, &device_a, &sources, &f, &frames_a, &acknowledgement);
+    let (mut a, archived) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &send.request_id,
+        &acknowledgement,
+    );
     assert_eq!(
         a.fee_claim(digests.credit_id).unwrap(),
         Some(retained.clone()),
@@ -608,10 +614,11 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
         publish(&output.join(name), bytes);
         originals.push(norito::json!({"name":name,"bytes":(bytes.len()),"sha256":(sha(bytes))}));
     }
-    let mut producer_originals = Vec::new();
+    let mut producer_originals = vec![norito::json!({
+        "name":"payer-companion.norito", "bytes":(companion.len()), "sha256":(sha(&companion))
+    })];
     for (name, bytes) in [
         ("target.json", target_bytes.clone()),
-        ("payer-companion.norito", companion),
         ("load-package.norito", loaded),
         (
             "regulatory-certificate.norito",
@@ -677,6 +684,7 @@ fn actual_native_fee_send_retains_historical_claim_across_restart_and_archive() 
         "scope":"Genuine installed native Send, Receive, ArchiveReceive and SchemePolicy refresh proofs over real host storage with simulated hardware and an engineering issuer. Fee claim retains its historical signed Request after restart, delivery Archive and local fee disable. No online payout or payout acknowledgement is asserted here. Four live validators, physical hardware, enabled offline controls and nonzero online charges remain separate.",
         "originals":originals, "producer_originals":producer_originals,
         "complete_envelopes":complete_envelopes,
+        "payer_companion":companion_measurement,
         "complete_exchange_roles":complete_exchange_roles,
     });
     let bytes = norito::json::to_vec(&result).unwrap();

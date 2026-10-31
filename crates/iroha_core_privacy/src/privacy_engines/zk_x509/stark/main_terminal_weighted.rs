@@ -502,7 +502,8 @@ fn accumulate_with_batches_v1<'a>(
                 .mul(F(2).inv().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?)
                 .mul(point_inverse);
             weighted_mask.fill(E::ZERO);
-            let mut caches: [NativeFamilyCacheV1; 2] = core::array::from_fn(|_| NativeFamilyCacheV1::default());
+            let mut caches: [NativeFamilyCacheV1; 2] =
+                core::array::from_fn(|_| NativeFamilyCacheV1::default());
             for (index, (link, &alpha)) in links.iter().zip(alphas).enumerate() {
                 if link.point != point {
                     continue;
@@ -611,6 +612,13 @@ fn accumulate_with_batches_v1<'a>(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "test builds inject allocation failure through this fallible hook"
+    )
+)]
 fn before_allocation_v1() -> Result<(), ZkX509StarkErrorV1> {
     #[cfg(test)]
     allocation_failure::step_v1()?;
@@ -654,7 +662,8 @@ mod tests {
         goldilocks_ifft_v1, masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
     };
     use crate::privacy_engines::zk_x509::private_table::inspection::observe_v1;
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
 
     fn plan_v1(logs: [u8; 3]) -> MainTerminalLinkPlanV1 {
         let points = [
@@ -703,7 +712,7 @@ mod tests {
     fn masks_v1() -> Vec<Vec<F>> {
         (0..2 * LINK_COUNT_V1)
             .map(|column| {
-                (0..MASK_DEGREE + 1)
+                (0..=MASK_DEGREE)
                     .map(|i| F((17 * column + 31 * i + 1) as u64))
                     .collect()
             })
@@ -712,6 +721,10 @@ mod tests {
     fn alphas_v1() -> [E; LINK_COUNT_V1] {
         core::array::from_fn(|index| E::canonical([index as u64 + 1, 7, 11, 13]).unwrap())
     }
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the test adapter implements the fallible transform callback contract"
+    )]
     fn cpu_adapter_v1(
         words: &mut [Vec<u64>],
         root: u64,
@@ -997,7 +1010,7 @@ mod tests {
             assert_eq!(output, before);
             failures += 1;
         }
-        assert!(failures >= 28 && failures < 80);
+        assert!((28..80).contains(&failures));
         assert!(fields_v1(usize::MAX).is_err());
         assert!(extensions_v1(usize::MAX).is_err());
         assert!(payload_v1(usize::MAX, 1, 1).is_err());
@@ -1006,7 +1019,7 @@ mod tests {
     #[test]
     fn replay_borrows_sampled_masks_without_consuming_next_blinding_entropy() {
         let plan = plan_v1([1, 2, 3]);
-        let mut rng = StdRng::from_seed([93; 32]);
+        let mut rng = ChaCha12Rng::from_seed([93; 32]);
         let masks = (0..2 * LINK_COUNT_V1)
             .map(|_| sample_trace_mask_v1(MASK_DEGREE, &mut rng).unwrap())
             .collect::<Vec<_>>();
@@ -1027,7 +1040,10 @@ mod tests {
         // This is the exact next entropy cursor used by the unchanged caller's
         // canonical quotient blinding; no private mask is copied or resampled.
         for _ in 0..(6 - 1) * 137 * 4 {
-            assert_eq!(rng.next_u64(), untouched.next_u64());
+            assert_eq!(
+                rng.try_next_u64().expect("test RNG draw succeeds"),
+                untouched.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
     }
 
@@ -1056,16 +1072,40 @@ mod tests {
         let independent =
             (12 * (1 << 19) + 384 + 4) * 8 + (2 * ((1 << 19) + 1816) + 1816) * 32 + 16 * 1024;
         assert_eq!(payload, independent);
-        let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
-            &layout,
-            288_345_698,
-        )
-        .unwrap();
-        let adjusted = policy.reserve_additional_v1(payload).unwrap();
-        // Backend-independent resource admission is exercised even on CPU hosts.
-        // The required four-column device payload remains below the free budget.
-        adjusted.reserve_additional_v1(119_095_420).unwrap();
-        assert!(policy.reserve_additional_v1(usize::MAX).is_err());
+        let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+        let ceiling =
+            super::super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
+                as usize;
+        let public_owners = MainTerminalLinkPlanV1::public_owner_charge_v1()
+            + main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
+            + main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();
+        for assembly in [288_345_698, 215_244_730] {
+            let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+                &layout, assembly,
+            )
+            .unwrap();
+            let adjusted = policy.reserve_additional_v1(payload).unwrap();
+            let remaining = ceiling
+                - buffers.check_before_sources_v1(assembly).unwrap()
+                - public_owners
+                - payload;
+            let exhausted = adjusted.reserve_additional_v1(remaining).unwrap();
+            assert!(exhausted.reserve_additional_v1(1).is_err());
+            assert!(adjusted.reserve_additional_v1(remaining + 1).is_err());
+            assert!(policy.reserve_additional_v1(usize::MAX).is_err());
+            if assembly == 215_244_730 {
+                // The measured maximum fixture admits four native columns with
+                // the actual single-staging Metal forecast on every host. The
+                // larger synthetic assembly may deterministically use the CPU.
+                let rows = 1 << 19;
+                let columns = 4;
+                let staging = fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(rows, columns).unwrap()
+                    + rows * columns * core::mem::size_of::<u64>()
+                    + columns * core::mem::size_of::<Vec<u64>>()
+                    + core::mem::size_of::<PrivateTableV1<Vec<u64>>>();
+                adjusted.reserve_additional_v1(staging).unwrap();
+            }
+        }
     }
 
     #[test]

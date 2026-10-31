@@ -807,14 +807,14 @@ struct SignedHeaders {
     signature: String,
 }
 fn signed_headers(auth: &OperatorAuth, route: &str, body: &[u8]) -> Result<SignedHeaders, String> {
-    use rand::rand_core::TryRngCore as _;
+    use rand::rand_core::TryRng as _;
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock is before the Unix epoch; cannot sign PDP request".to_owned())?;
     let timestamp_ms = u64::try_from(elapsed.as_millis())
         .map_err(|_| "system clock does not fit the PDP operator timestamp".to_owned())?;
     let mut nonce_bytes = [0_u8; 12];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut nonce_bytes)
         .map_err(|_| "OS RNG failed while signing PDP request".to_owned())?;
     let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);

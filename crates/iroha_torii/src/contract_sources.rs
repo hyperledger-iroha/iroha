@@ -451,7 +451,7 @@ fn conversion_error(message: impl Into<String>) -> Error {
 fn storage_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::InternalError(message.into()))
 }
-fn map_io_error(error: io::Error, context: &str) -> Error {
+fn map_io_error(error: &io::Error, context: &str) -> Error {
     storage_error(format!("{context}: {error}"))
 }
 fn hash_hex(hash: &Hash) -> String {
@@ -585,7 +585,7 @@ fn open_storage_parent(
         parent.to_owned()
     } else {
         std::env::current_dir()
-            .map_err(|error| map_io_error(error, "failed to resolve contract source directory"))?
+            .map_err(|error| map_io_error(&(error), "failed to resolve contract source directory"))?
             .join(parent)
     };
     let mut absolute = PathBuf::new();
@@ -613,7 +613,7 @@ fn open_storage_parent(
         )
         .map_err(|error| {
             map_io_error(
-                io::Error::from(error),
+                &(io::Error::from(error)),
                 "failed to open the contract source filesystem root",
             )
         })?,
@@ -643,35 +643,38 @@ fn open_storage_parent(
                     Ok(()) | Err(rustix::io::Errno::EXIST) => {}
                     Err(error) => {
                         return Err(map_io_error(
-                            io::Error::from(error),
+                            &(io::Error::from(error)),
                             "failed to create contract source directory",
                         ));
                     }
                 }
                 directory.sync_all().map_err(|error| {
                     map_io_error(
-                        error,
+                        &(error),
                         "failed to sync a new contract source directory entry",
                     )
                 })?;
                 rustix::fs::statat(&directory, component, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(|error| {
                         map_io_error(
-                            io::Error::from(error),
+                            &(io::Error::from(error)),
                             "failed to inspect a new contract source directory",
                         )
                     })?
             }
             Err(error) => {
                 return Err(map_io_error(
-                    io::Error::from(error),
+                    &(io::Error::from(error)),
                     "failed to inspect contract source directory",
                 ));
             }
         };
         let file_type = rustix::fs::FileType::from_raw_mode(named.st_mode);
         let current = directory.metadata().map_err(|error| {
-            map_io_error(error, "failed to inspect a contract source path ancestor")
+            map_io_error(
+                &(error),
+                "failed to inspect a contract source path ancestor",
+            )
         })?;
         let trusted_system_symlink = file_type == rustix::fs::FileType::Symlink
             && named.st_uid == 0
@@ -693,7 +696,7 @@ fn open_storage_parent(
             rustix::fs::openat(&directory, component, flags, rustix::fs::Mode::empty()).map_err(
                 |error| {
                     map_io_error(
-                        io::Error::from(error),
+                        &(io::Error::from(error)),
                         "failed to pin a contract source directory",
                     )
                 },
@@ -701,7 +704,7 @@ fn open_storage_parent(
         );
         let opened = next.metadata().map_err(|error| {
             map_io_error(
-                error,
+                &(error),
                 "failed to inspect a pinned contract source directory",
             )
         })?;
@@ -718,7 +721,10 @@ fn open_storage_parent(
         directory = next;
     }
     let opened = directory.metadata().map_err(|error| {
-        map_io_error(error, "failed to inspect opened contract source directory")
+        map_io_error(
+            &(error),
+            "failed to inspect opened contract source directory",
+        )
     })?;
     if !opened.is_dir()
         || opened.uid() != rustix::process::geteuid().as_raw()
@@ -729,8 +735,9 @@ fn open_storage_parent(
             absolute.display()
         )));
     }
-    let after = fs::metadata(&absolute)
-        .map_err(|error| map_io_error(error, "failed to re-inspect contract source directory"))?;
+    let after = fs::metadata(&absolute).map_err(|error| {
+        map_io_error(&(error), "failed to re-inspect contract source directory")
+    })?;
     if !after.is_dir() || opened.dev() != after.dev() || opened.ino() != after.ino() {
         return Err(conversion_error(format!(
             "{label} directory changed while it was being opened: {}",
@@ -760,7 +767,7 @@ fn read_bounded_relative(
         Err(rustix::io::Errno::NOENT) => return Ok(None),
         Err(error) => {
             return Err(map_io_error(
-                io::Error::from(error),
+                &(io::Error::from(error)),
                 "failed to inspect contract source file",
             ));
         }
@@ -785,14 +792,14 @@ fn read_bounded_relative(
         )
         .map_err(|error| {
             map_io_error(
-                io::Error::from(error),
+                &(io::Error::from(error)),
                 "failed to open contract source file",
             )
         })?,
     );
     let opened = file
         .metadata()
-        .map_err(|error| map_io_error(error, "failed to inspect contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to inspect contract source file"))?;
     if !opened.is_file()
         || opened.uid() != rustix::process::geteuid().as_raw()
         || opened.mode() & 0o7077 != 0
@@ -822,7 +829,7 @@ fn read_bounded_relative(
     (&mut file)
         .take(maximum_u64.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| map_io_error(error, "failed to read contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to read contract source file"))?;
     if bytes.len() > maximum_bytes {
         return Err(conversion_error(format!(
             "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
@@ -832,7 +839,7 @@ fn read_bounded_relative(
     let after = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| {
             map_io_error(
-                io::Error::from(error),
+                &(io::Error::from(error)),
                 "failed to re-inspect contract source file",
             )
         })?;
@@ -864,7 +871,7 @@ fn create_secure_temporary(
 ) -> io::Result<(File, OsString)> {
     for _ in 0..VERIFIED_SOURCE_SECURE_TEMP_RETRIES_V1 {
         let mut suffix = [0_u8; 16];
-        rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut suffix)
+        rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut suffix)
             .map_err(|error| io::Error::other(format!("OS randomness unavailable: {error}")))?;
         let name = OsString::from(format!(
             ".{}.{}.tmp",
@@ -882,8 +889,10 @@ fn create_secure_temporary(
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
         ) {
             Ok(file) => {
-                let file = File::from(file);
                 use std::os::unix::fs::PermissionsExt as _;
+
+                let file = File::from(file);
+
                 if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
                     let _ = rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty());
                     return Err(error);
@@ -936,23 +945,30 @@ fn write_immutable_file(
             )));
         }
         directory.sync_all().map_err(|error| {
-            map_io_error(error, "failed to sync existing contract source directory")
+            map_io_error(
+                &(error),
+                "failed to sync existing contract source directory",
+            )
         })?;
         return Ok(());
     }
-    let (mut temporary_file, temporary_name) = create_secure_temporary(&directory, &name)
-        .map_err(|error| map_io_error(error, "failed to create contract source temporary file"))?;
+    let (mut temporary_file, temporary_name) =
+        create_secure_temporary(&directory, &name).map_err(|error| {
+            map_io_error(&(error), "failed to create contract source temporary file")
+        })?;
     let publication = (|| {
+        use std::os::unix::fs::MetadataExt as _;
+
         temporary_file
             .write_all(bytes)
             .and_then(|()| temporary_file.sync_all())
             .map_err(|error| {
-                map_io_error(error, "failed to sync contract source temporary file")
+                map_io_error(&(error), "failed to sync contract source temporary file")
             })?;
         let metadata = temporary_file.metadata().map_err(|error| {
-            map_io_error(error, "failed to inspect contract source temporary file")
+            map_io_error(&(error), "failed to inspect contract source temporary file")
         })?;
-        use std::os::unix::fs::MetadataExt as _;
+
         if !metadata.is_file()
             || metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o600
@@ -963,20 +979,19 @@ fn write_immutable_file(
             ));
         }
         drop(temporary_file);
-        if let Err(error) = publish_noreplace(&directory, &temporary_name, &name) {
-            if error.kind() != io::ErrorKind::AlreadyExists
-                || !read_bounded_relative(&directory, &name, path, maximum_bytes, label)?
-                    .is_some_and(|existing| existing == bytes)
-            {
-                return Err(map_io_error(
-                    error,
-                    "failed no-clobber contract source publication",
-                ));
-            }
+        if let Err(error) = publish_noreplace(&directory, &temporary_name, &name)
+            && (error.kind() != io::ErrorKind::AlreadyExists
+                || read_bounded_relative(&directory, &name, path, maximum_bytes, label)?
+                    .is_none_or(|existing| existing != bytes))
+        {
+            return Err(map_io_error(
+                &(error),
+                "failed no-clobber contract source publication",
+            ));
         }
         directory
             .sync_all()
-            .map_err(|error| map_io_error(error, "failed to sync contract source directory"))?;
+            .map_err(|error| map_io_error(&(error), "failed to sync contract source directory"))?;
         let readback = read_bounded_relative(&directory, &name, path, maximum_bytes, label)?
             .ok_or_else(|| conversion_error(format!("published {label} disappeared")))?;
         if readback != bytes {
@@ -1002,7 +1017,7 @@ fn revalidate_windows_storage_directories(
 
     for (path, before) in directories {
         let after = from_path(path).map_err(|error| {
-            map_io_error(error, "failed to re-inspect contract source directory")
+            map_io_error(&(error), "failed to re-inspect contract source directory")
         })?;
         if !is_direct_directory(&after) || !same_file(before, &after) {
             return Err(conversion_error(format!(
@@ -1026,7 +1041,7 @@ fn prepare_windows_storage_parent(
         parent.to_owned()
     } else {
         std::env::current_dir()
-            .map_err(|error| map_io_error(error, "failed to resolve contract source directory"))?
+            .map_err(|error| map_io_error(&(error), "failed to resolve contract source directory"))?
             .join(parent)
     };
     if !candidate.is_absolute() {
@@ -1064,18 +1079,18 @@ fn prepare_windows_storage_parent(
                             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                             Err(error) => {
                                 return Err(map_io_error(
-                                    error,
+                                    &(error),
                                     "failed to create contract source directory",
                                 ));
                             }
                         }
                         from_path(&cursor).map_err(|error| {
-                            map_io_error(error, "failed to inspect contract source directory")
+                            map_io_error(&(error), "failed to inspect contract source directory")
                         })?
                     }
                     Err(error) => {
                         return Err(map_io_error(
-                            error,
+                            &(error),
                             "failed to inspect contract source directory",
                         ));
                     }
@@ -1091,7 +1106,7 @@ fn prepare_windows_storage_parent(
                     crate::durable_fs::sync_direct_directory(&containing_directory).map_err(
                         |error| {
                             map_io_error(
-                                error,
+                                &(error),
                                 "failed to sync a new contract source directory entry",
                             )
                         },
@@ -1106,8 +1121,9 @@ fn prepare_windows_storage_parent(
         .last()
         .is_none_or(|(path, _)| path != &candidate)
     {
-        let metadata = from_path(&candidate)
-            .map_err(|error| map_io_error(error, "failed to inspect contract source directory"))?;
+        let metadata = from_path(&candidate).map_err(|error| {
+            map_io_error(&(error), "failed to inspect contract source directory")
+        })?;
         if !is_direct_directory(&metadata) {
             return Err(conversion_error(format!(
                 "{label} directory is not a direct directory: {}",
@@ -1166,15 +1182,21 @@ fn write_immutable_file(
             )));
         }
         crate::durable_fs::sync_direct_directory(&parent).map_err(|error| {
-            map_io_error(error, "failed to sync existing contract source directory")
+            map_io_error(
+                &(error),
+                "failed to sync existing contract source directory",
+            )
         })?;
         revalidate_windows_storage_directories(&pinned_directories, label)?;
         return Ok(());
     }
-    let mut temporary = tempfile::NamedTempFile::new_in(&parent)
-        .map_err(|error| map_io_error(error, "failed to create contract source temporary file"))?;
-    let temporary_before = crate::secure_file_metadata::from_file(temporary.as_file())
-        .map_err(|error| map_io_error(error, "failed to inspect contract source temporary file"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(&parent).map_err(|error| {
+        map_io_error(&(error), "failed to create contract source temporary file")
+    })?;
+    let temporary_before =
+        crate::secure_file_metadata::from_file(temporary.as_file()).map_err(|error| {
+            map_io_error(&(error), "failed to inspect contract source temporary file")
+        })?;
     validate_windows_storage_file(&temporary_before, temporary.path(), label)?;
     if temporary_before.len() != 0 {
         return Err(conversion_error(
@@ -1185,11 +1207,11 @@ fn write_immutable_file(
     temporary
         .write_all(bytes)
         .and_then(|()| temporary.as_file().sync_all())
-        .map_err(|error| map_io_error(error, "failed to sync contract source temporary file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to sync contract source temporary file"))?;
     let temporary_ready =
         crate::secure_file_metadata::from_file(temporary.as_file()).map_err(|error| {
             map_io_error(
-                error,
+                &(error),
                 "failed to inspect synced contract source temporary file",
             )
         })?;
@@ -1213,21 +1235,26 @@ fn write_immutable_file(
                 drop(temporary_ready);
                 drop(error);
                 crate::durable_fs::sync_direct_directory(&parent).map_err(|error| {
-                    map_io_error(error, "failed to sync existing contract source directory")
+                    map_io_error(
+                        &(error),
+                        "failed to sync existing contract source directory",
+                    )
                 })?;
                 revalidate_windows_storage_directories(&pinned_directories, label)?;
                 return Ok(());
             }
             return Err(map_io_error(
-                error.error,
+                &(error.error),
                 "failed no-clobber contract source publication",
             ));
         }
     };
-    let published_before = crate::secure_file_metadata::from_file(&published_file)
-        .map_err(|error| map_io_error(error, "failed to inspect published contract source file"))?;
+    let published_before =
+        crate::secure_file_metadata::from_file(&published_file).map_err(|error| {
+            map_io_error(&(error), "failed to inspect published contract source file")
+        })?;
     let named_after_publish = crate::secure_file_metadata::from_path(&destination)
-        .map_err(|error| map_io_error(error, "failed to inspect named contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to inspect named contract source file"))?;
     validate_windows_storage_file(&published_before, &destination, label)?;
     validate_windows_storage_file(&named_after_publish, &destination, label)?;
     if !crate::secure_file_metadata::same_file(&temporary_ready, &published_before)
@@ -1242,13 +1269,18 @@ fn write_immutable_file(
     }
     revalidate_windows_storage_directories(&pinned_directories, label)?;
     crate::durable_fs::sync_direct_directory(&parent)
-        .map_err(|error| map_io_error(error, "failed to sync contract source directory"))?;
+        .map_err(|error| map_io_error(&(error), "failed to sync contract source directory"))?;
     let published_after =
         crate::secure_file_metadata::from_file(&published_file).map_err(|error| {
-            map_io_error(error, "failed to re-inspect published contract source file")
+            map_io_error(
+                &(error),
+                "failed to re-inspect published contract source file",
+            )
         })?;
-    let named_after_sync = crate::secure_file_metadata::from_path(&destination)
-        .map_err(|error| map_io_error(error, "failed to re-inspect named contract source file"))?;
+    let named_after_sync =
+        crate::secure_file_metadata::from_path(&destination).map_err(|error| {
+            map_io_error(&(error), "failed to re-inspect named contract source file")
+        })?;
     validate_windows_storage_file(&published_after, &destination, label)?;
     validate_windows_storage_file(&named_after_sync, &destination, label)?;
     if !crate::secure_file_metadata::same_file(&published_before, &published_after)
@@ -1318,7 +1350,7 @@ fn read_bounded_file(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(map_io_error(
-                error,
+                &(error),
                 "failed to inspect contract source file",
             ));
         }
@@ -1334,12 +1366,17 @@ fn read_bounded_file(
     let mut file = match crate::secure_file_metadata::open_direct_file(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(map_io_error(error, "failed to open contract source file")),
+        Err(error) => {
+            return Err(map_io_error(
+                &(error),
+                "failed to open contract source file",
+            ));
+        }
     };
     let opened_before = from_file(&file)
-        .map_err(|error| map_io_error(error, "failed to inspect contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to inspect contract source file"))?;
     let named_after_open = from_path(&path)
-        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to re-inspect contract source file"))?;
     validate_windows_storage_file(&opened_before, &path, label)?;
     validate_windows_storage_file(&named_after_open, &path, label)?;
     if !same_file(&before, &opened_before)
@@ -1369,7 +1406,7 @@ fn read_bounded_file(
     (&mut file)
         .take(maximum_u64.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| map_io_error(error, "failed to read contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to read contract source file"))?;
     if bytes.len() > maximum_bytes {
         return Err(conversion_error(format!(
             "{label} at {} exceeds the first-release {maximum_bytes}-byte maximum",
@@ -1377,9 +1414,9 @@ fn read_bounded_file(
         )));
     }
     let opened_after = from_file(&file)
-        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to re-inspect contract source file"))?;
     let named_after_read = from_path(&path)
-        .map_err(|error| map_io_error(error, "failed to re-inspect contract source file"))?;
+        .map_err(|error| map_io_error(&(error), "failed to re-inspect contract source file"))?;
     validate_windows_storage_file(&opened_after, &path, label)?;
     validate_windows_storage_file(&named_after_read, &path, label)?;
     if !same_file(&opened_before, &opened_after)
@@ -2304,7 +2341,7 @@ fn resolve_contract_view_input_for_instruction(
 }
 fn new_job_id() -> Result<String, Error> {
     let mut bytes = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
-    rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).map_err(
+    rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut bytes).map_err(
         |error| {
             storage_error(format!(
                 "failed to generate verified-source job id: {error}"
@@ -2710,6 +2747,10 @@ fn bounded_verified_source_diagnostic_message(
     }
     output.finish()
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_get_instruction_contract_view(
     app: crate::SharedAppState,
     transaction_hash: String,
@@ -2720,6 +2761,10 @@ pub async fn handle_get_instruction_contract_view(
     let view = build_contract_view(input)?;
     Ok(JsonBody(view))
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_get_contract_code_view(
     state: Arc<CoreState>,
     artifact_id: ContractArtifactId,
@@ -2882,22 +2927,7 @@ pub fn handle_post_verified_source_job(
                 ))
             })?;
             let actual_code_hash = hash_hex(&actual_hash);
-            if actual_hash != requested_hash {
-                ContractVerifiedSourceJobResponseDto {
-                    network_id,
-                    artifact_id,
-                    job_id,
-                    code_hash: code_hash_hex.clone(),
-                    status: "mismatch".to_owned(),
-                    submitted_at,
-                    completed_at: Some(now_rfc3339()),
-                    message: Some(
-                        "compiled source does not match the requested code hash".to_owned(),
-                    ),
-                    actual_code_hash: Some(actual_code_hash),
-                    verified_source_ref: None,
-                }
-            } else {
+            if actual_hash == requested_hash {
                 let mutation_lock = verified_source_mutation_lock(network_id, artifact_id);
                 let _guard = mutation_lock
                     .lock()
@@ -2985,6 +3015,21 @@ pub fn handle_post_verified_source_job(
                         verified_source_ref,
                     }
                 }
+            } else {
+                ContractVerifiedSourceJobResponseDto {
+                    network_id,
+                    artifact_id,
+                    job_id,
+                    code_hash: code_hash_hex.clone(),
+                    status: "mismatch".to_owned(),
+                    submitted_at,
+                    completed_at: Some(now_rfc3339()),
+                    message: Some(
+                        "compiled source does not match the requested code hash".to_owned(),
+                    ),
+                    actual_code_hash: Some(actual_code_hash),
+                    verified_source_ref: None,
+                }
             }
         }
         Err(err) => ContractVerifiedSourceJobResponseDto {
@@ -3001,13 +3046,16 @@ pub fn handle_post_verified_source_job(
         },
     };
     let status_code = match response.status.as_str() {
-        "accepted" => StatusCode::ACCEPTED,
         "mismatch" | "compile_error" | "conflict" | "error" => StatusCode::BAD_REQUEST,
         _ => StatusCode::ACCEPTED,
     };
     let persisted = persist_job_response(response)?;
     Ok((status_code, JsonBody(persisted)))
 }
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_get_verified_source_job(
     network_id: NetworkId,
     artifact_id: ContractArtifactId,
@@ -3807,7 +3855,7 @@ seiyaku Display {
         let target_hash = signed.hash_as_entrypoint();
         crate::test_utils::commit_native_accepted_inputs(
             &mut chain,
-            vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
+            &[AcceptedTransaction::new_unchecked(Cow::Owned(signed))],
         );
         (state, target_hash)
     }
@@ -4067,7 +4115,7 @@ seiyaku Display {
     }
     #[test]
     fn verified_source_job_accepts_exact_match_and_persists_record() {
-        let _guard = TestDataDirGuard::new();
+        let fixture_directory = TestDataDirGuard::new();
         let source = r"
 seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
 ";
@@ -4078,7 +4126,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
         let node = sorafs_node::NodeHandle::new(
             sorafs_node::config::StorageConfig::builder()
                 .enabled(true)
-                .data_dir(_guard.path().join("sorafs"))
+                .data_dir(fixture_directory.path().join("sorafs"))
                 .build(),
         );
         let request = SubmitVerifiedContractSourceDto {
@@ -4112,11 +4160,11 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
     }
     #[test]
     fn verified_source_job_rejects_language_aliases() {
-        let _guard = TestDataDirGuard::new();
+        let fixture_directory = TestDataDirGuard::new();
         let code_hash = "11".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
         let node = sorafs_node::NodeHandle::new(
             sorafs_node::config::StorageConfig::builder()
-                .data_dir(_guard.path().join("sorafs"))
+                .data_dir(fixture_directory.path().join("sorafs"))
                 .build(),
         );
         let (status, JsonBody(response)) = handle_post_verified_source_job(
@@ -4147,7 +4195,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
     }
     #[test]
     fn verified_source_job_does_not_mutate_provider_storage() {
-        let _guard = TestDataDirGuard::new();
+        let fixture_directory = TestDataDirGuard::new();
         let source = "seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }";
         let (compiled, _, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -4156,7 +4204,7 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
         let node = sorafs_node::NodeHandle::new(
             sorafs_node::config::StorageConfig::builder()
                 .enabled(true)
-                .data_dir(_guard.path().join("sorafs"))
+                .data_dir(fixture_directory.path().join("sorafs"))
                 .build(),
         );
         let inspect_node = node.clone();
@@ -4187,12 +4235,12 @@ seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }
     }
     #[test]
     fn verified_source_job_reports_hash_mismatch() {
-        let _guard = TestDataDirGuard::new();
+        let fixture_directory = TestDataDirGuard::new();
         let source = "seiyaku Demo { permission Run;  kotoage fn main() authorize(Run) {} }";
         let wrong_hash = "11".repeat(32);
         let node = sorafs_node::NodeHandle::new(
             sorafs_node::config::StorageConfig::builder()
-                .data_dir(_guard.path().join("sorafs"))
+                .data_dir(fixture_directory.path().join("sorafs"))
                 .build(),
         );
         let (status, JsonBody(response)) = handle_post_verified_source_job(

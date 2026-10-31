@@ -36,7 +36,7 @@ use thiserror::Error;
 #[path = "fixed_algebraic_oods_tests.rs"]
 mod oods_tests;
 /// Exact first-release semantics committed alongside every schedule digest.
-pub const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries272-output-fields128384-work2pow28:digest=sha3-384-opaque48:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
+pub const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width548-atoms65536-queries272-output-fields149056-work2pow28:digest=sha3-384-opaque48:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
 const ZK_X509_FIXED_ALGEBRAIC_MAGIC_V1: [u8; 4] = *b"X5K1";
 const ZK_X509_FIXED_ALGEBRAIC_VERSION_V1: u16 = 1;
 const ZK_X509_FIXED_ALGEBRAIC_HEADER_BYTES_V1: u16 = 24;
@@ -56,7 +56,7 @@ pub const ZK_X509_FIXED_ALGEBRAIC_MAX_LDE_LOG2_V1: u8 = 25;
 /// Largest supported LDE-to-native power-of-two ratio.
 pub const ZK_X509_FIXED_ALGEBRAIC_MAX_BLOWUP_LOG2_V1: u8 = 8;
 /// Largest fixed-column width accepted by one schedule.
-pub const ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1: u16 = 472;
+pub const ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1: u16 = 548;
 /// Largest canonical atom collection accepted by one schedule.
 pub const ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1: usize = 65_536;
 #[cfg(test)]
@@ -64,7 +64,7 @@ pub const ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1: usize = 65_536;
 pub const ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1: usize = 272;
 #[cfg(test)]
 /// Largest row-major result, measured in Goldilocks elements.
-pub const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 272 * 472;
+pub const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 272 * 548;
 /// Deterministic cap on the evaluator's coarse field-operation work score.
 pub const ZK_X509_FIXED_ALGEBRAIC_MAX_EVALUATION_WORK_V1: u64 = 1_u64 << 28;
 /// Fail-closed error from construction, binding, or deterministic evaluation.
@@ -1702,7 +1702,11 @@ fn modular_inverse_power_of_two_v1(
     value: usize,
     modulus: usize,
 ) -> Result<usize, ZkX509FixedAlgebraicErrorV1> {
-    if modulus < 2 || !modulus.is_power_of_two() || value == 0 || value >= modulus || value % 2 == 0
+    if modulus < 2
+        || !modulus.is_power_of_two()
+        || value == 0
+        || value >= modulus
+        || value.is_multiple_of(2)
     {
         return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
     }
@@ -2103,10 +2107,9 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
         &self,
         query_index: u64,
     ) -> Result<Option<&[F]>, ZkX509FixedAlgebraicErrorV1> {
-        match self.query_indices.binary_search(&query_index) {
-            Ok(slot) => self.row_v1(slot).map(Some),
-            Err(_) => Ok(None),
-        }
+        self.query_indices
+            .binary_search(&query_index)
+            .map_or(Ok(None), |slot| self.row_v1(slot).map(Some))
     }
 }
 #[cfg(test)]
@@ -2365,7 +2368,7 @@ mod tests {
             Some(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         assert_eq!(
-            ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 473).err(),
+            ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 549).err(),
             Some(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         assert_eq!(
@@ -2589,9 +2592,9 @@ mod tests {
             vec![
                 ZkX509FixedAlgebraicAtomV1::affine_v1(0, 0, 128, F(3), F(2))
                     .expect("first-column affine"),
-                ZkX509FixedAlgebraicAtomV1::repeated_affine_v1(471, 1, 4, 32, F(5), F(7))
+                ZkX509FixedAlgebraicAtomV1::repeated_affine_v1(547, 1, 4, 32, F(5), F(7))
                     .expect("last-column repeated"),
-                ZkX509FixedAlgebraicAtomV1::sparse_v1(471, 127, F(11)).expect("last-column sparse"),
+                ZkX509FixedAlgebraicAtomV1::sparse_v1(547, 127, F(11)).expect("last-column sparse"),
             ],
         )
         .expect("boundary schedule");
@@ -2601,7 +2604,7 @@ mod tests {
             .fill_native_column_v1(0, &mut first)
             .expect("first column");
         schedule
-            .fill_native_column_v1(471, &mut last)
+            .fill_native_column_v1(547, &mut last)
             .expect("last column");
         assert_eq!(first[0], F(3));
         assert_eq!(first[127], F(257));
@@ -2613,7 +2616,7 @@ mod tests {
         assert!(first.iter().chain(&last).copied().all(canonical_field_v1));
         let mut unchanged = vec![F(99); 128];
         assert_eq!(
-            schedule.fill_native_column_v1(472, &mut unchanged),
+            schedule.fill_native_column_v1(548, &mut unchanged),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
         assert_eq!(unchanged, vec![F(99); 128]);
@@ -2727,7 +2730,7 @@ mod tests {
             references_end: 1,
             total_occurrences: 9,
         };
-        assert_eq!(9 * 8, 64 + 1 * 8);
+        assert_eq!(9 * 8, 64 + 8);
         assert_eq!(repeated_stride_uses_table_v1(tied, 8, 64), Ok(false));
         assert_eq!(
             repeated_stride_uses_table_v1(
@@ -2932,8 +2935,8 @@ mod tests {
             ZkX509FixedAlgebraicOpeningsV1 {
                 schedule_digest: PrivacyOuterDigestV1::from_bytes([4; 48]),
                 query_indices: vec![0],
-                width: 173,
-                fields: vec![F::ZERO; 173],
+                width: 237,
+                fields: vec![F::ZERO; 237],
             },
         ];
         assert_eq!(
@@ -2955,13 +2958,13 @@ mod tests {
         );
     }
     #[test]
-    fn exact_release_272_by_472_result_boundary_is_accepted_v1() {
-        assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 128_384);
+    fn exact_release_272_by_548_result_boundary_is_accepted_v1() {
+        assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 149_056);
         let domain = domain_v1(7, 9).expect("boundary domain");
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(
             domain,
             ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1,
-            vec![ZkX509FixedAlgebraicAtomV1::sparse_v1(471, 0, F::ONE).expect("boundary atom")],
+            vec![ZkX509FixedAlgebraicAtomV1::sparse_v1(547, 0, F::ONE).expect("boundary atom")],
         )
         .expect("boundary schedule");
         let queries: Vec<u64> = (0..u64::try_from(ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1)
@@ -2971,13 +2974,13 @@ mod tests {
             .evaluate_query_indices_v1(&queries)
             .expect("exact release boundary");
         assert_eq!(openings.len_v1(), 272);
-        assert_eq!(openings.width_v1(), 472);
+        assert_eq!(openings.width_v1(), 548);
         assert_eq!(
             openings.row_v1(271).expect("last row").len(),
             usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)
         );
         assert_eq!(
-            ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 473).err(),
+            ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 549).err(),
             Some(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         let too_many_queries: Vec<u64> = (0..273).collect();

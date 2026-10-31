@@ -227,8 +227,8 @@ fn verify(args: &Args) -> Result<json::Value, CliError> {
     Ok(result)
 }
 
-pub(crate) fn run(args: Args) -> Result<ExitCode, CliError> {
-    let result = verify(&args)?;
+pub fn run(args: &Args) -> Result<ExitCode, CliError> {
+    let result = verify(args)?;
     println!(
         "{}",
         json::to_string(&result).map_err(|_| CliError::Internal(

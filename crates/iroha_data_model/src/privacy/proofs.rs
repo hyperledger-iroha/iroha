@@ -1,10 +1,10 @@
-/// Statement failure against activation-specific governed limits.
+/// Statement failure against protocol-specific governed limits.
 #[allow(variant_size_differences)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub enum PrivacyActivationStatementLimitsError {
-    /// Statement and activation-limit protocol tags differ.
+pub enum PrivacyProfileStatementLimitsError {
+    /// Statement and protocol-limit protocol tags differ.
     #[error(
-        "privacy activation-limit protocol {limits_protocol:?} differs from statement protocol {statement_protocol:?}"
+        "privacy profile-limit protocol {limits_protocol:?} differs from statement protocol {statement_protocol:?}"
     )]
     ProtocolMismatch {
         /// Protocol encoded by the limits.
@@ -12,11 +12,11 @@ pub enum PrivacyActivationStatementLimitsError {
         /// Protocol encoded by the statement.
         statement_protocol: PrivacyProtocolIdV1,
     },
-    /// A statement count exceeds the activation-specific maximum.
+    /// A statement count exceeds the protocol-specific maximum.
     #[error("privacy statement count {field:?} value {count} exceeds active maximum {max}")]
     CountExceeds {
         /// Count field.
-        field: PrivacyActivationLimitFieldV1,
+        field: PrivacyProtocolLimitFieldV1,
         /// Statement count.
         count: u32,
         /// Active governed maximum.
@@ -65,17 +65,27 @@ impl PrivacyProofBytesV1 {
         &self,
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(), PrivacyProofValidationError> {
+        Self::validate_bytes_v1(&self.bytes, limits)
+    }
+    /// Validate original borrowed proof bytes without copying their allocation.
+    ///
+    /// # Errors
+    /// Returns the same presence, non-degeneracy and configured bound failures as [`Self::validate`].
+    pub fn validate_bytes_v1(
+        bytes: &[u8],
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyProofValidationError> {
         limits
             .validate()
             .map_err(PrivacyProofValidationError::InvalidLimits)?;
-        if self.bytes.is_empty() {
+        if bytes.is_empty() {
             return Err(PrivacyProofValidationError::Empty);
         }
-        if self.bytes.iter().all(|byte| *byte == 0) {
+        if bytes.iter().all(|byte| *byte == 0) {
             return Err(PrivacyProofValidationError::AllZero);
         }
-        let len = u64::try_from(self.bytes.len())
-            .map_err(|_| PrivacyProofValidationError::LengthOverflow)?;
+        let len =
+            u64::try_from(bytes.len()).map_err(|_| PrivacyProofValidationError::LengthOverflow)?;
         if len > u64::from(limits.max_proof_bytes_per_action) {
             return Err(PrivacyProofValidationError::TooLarge {
                 bytes: len,
@@ -365,6 +375,9 @@ pub enum PrivacyStatementValidationError {
     /// Canonical transaction-intent projection digest is zero.
     #[error("privacy statement transaction-intent digest must be non-zero")]
     ZeroTransactionIntentDigest,
+    /// A proof-free X.509 request supplied a caller-derived transaction binding.
+    #[error("proof-free X509 request transaction-intent digest must be zero")]
+    NonZeroProofFreeTransactionIntentDigest,
     /// Governed parameter-set identifier is zero.
     #[error("privacy statement parameter id must be non-zero")]
     ZeroParameterId,
@@ -1024,7 +1037,7 @@ impl PrivacyProofEnvelopeV1 {
     /// Validate internal protocol bindings and resource limits.
     ///
     /// This validates only the envelope's intrinsic shape. Chain admission must
-    /// additionally call [`Self::validate_against_activation`] to bind the
+    /// additionally call [`Self::validate_against_profile_v1`] to bind the
     /// envelope to the active governed artifacts and current block height.
     ///
     /// # Errors
@@ -1152,82 +1165,90 @@ impl PrivacyProofEnvelopeV1 {
         }
         Ok(())
     }
-    /// Validate this envelope against an active governed protocol record.
-    ///
+    /// Validate the canonical semantic profile, ordinary limits and intrinsic envelope.
     /// # Errors
-    ///
-    /// Returns [`PrivacyProofEnvelopeValidationError`] if the activation record
-    /// is invalid or inactive at `current_height`, any governed identity or
-    /// digest differs, or intrinsic envelope validation fails.
-    pub fn validate_against_activation(
+    /// Rejects wrong relation identities, invalid resource policy or malformed proof data.
+    pub fn validate_against_profile_v1(
         &self,
-        activation: &PrivacyProtocolActivationRecordV1,
+        profile: &PrivacyCompiledProfileSnapshotV1,
+        protocol_limits: &PrivacyProtocolLimitsV1,
         consensus_limits: &PrivacyConsensusLimitsV1,
-        current_height: u64,
     ) -> Result<(), PrivacyProofEnvelopeValidationError> {
-        activation
-            .validate()
-            .map_err(PrivacyProofEnvelopeValidationError::InvalidActivation)?;
-        if activation.protocol_id != self.protocol_id {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationProtocolMismatch {
-                    activation: activation.protocol_id,
-                    envelope: self.protocol_id,
-                },
-            );
-        }
-        let PrivacyProtocolLifecycleV1::Active(active_state) = activation.lifecycle else {
-            return Err(PrivacyProofEnvelopeValidationError::ActivationNotActive);
+        // Preserve envelope-header failure precedence; intrinsic validation below
+        // independently requires these exact fields to match its statement.
+        let header = PrivacyStatementContextV1 {
+            parameter_id: self.parameter_id,
+            parameter_digest: self.parameter_digest,
+            verifier_digest: self.verifier_digest,
+            statement_schema_digest: self.statement_schema_digest,
+            engine_manifest_digest: self.engine_manifest_digest,
+            ..*self.statement.context()
         };
-        if current_height < active_state.state_since_height {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationNotEffective {
-                    current_height,
-                    effective_height: active_state.state_since_height,
-                },
-            );
-        }
-        if activation.proof_system_id != self.proof_system_id {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationProofSystemMismatch {
-                    activation: activation.proof_system_id,
-                    envelope: self.proof_system_id,
-                },
-            );
-        }
-        if activation.engine_id != self.engine_id {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationEngineMismatch {
-                    activation: activation.engine_id,
-                    envelope: self.engine_id,
-                },
-            );
-        }
-        if activation.parameter_id != self.parameter_id {
-            return Err(PrivacyProofEnvelopeValidationError::ActivationParameterIdMismatch);
-        }
-        if activation.parameter_digest != self.parameter_digest {
-            return Err(PrivacyProofEnvelopeValidationError::ActivationParameterDigestMismatch);
-        }
-        if activation.verifier_digest != self.verifier_digest {
-            return Err(PrivacyProofEnvelopeValidationError::ActivationVerifierDigestMismatch);
-        }
-        if activation.statement_schema_digest != self.statement_schema_digest {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationStatementSchemaDigestMismatch,
-            );
-        }
-        if activation.engine_manifest_digest != self.engine_manifest_digest {
-            return Err(
-                PrivacyProofEnvelopeValidationError::ActivationEngineManifestDigestMismatch,
-            );
-        }
-        activation
-            .protocol_limits
+        validate_privacy_profile_identity_v1(
+            profile,
+            self.protocol_id,
+            self.proof_system_id,
+            self.engine_id,
+            &header,
+        )?;
+        protocol_limits
+            .validate_with_ceiling(&profile.protocol_limits)
+            .map_err(PrivacyProofEnvelopeValidationError::ProfileProtocolLimits)?;
+        protocol_limits
             .validate_statement(&self.statement)
-            .map_err(PrivacyProofEnvelopeValidationError::ActivationStatementLimits)?;
+            .map_err(PrivacyProofEnvelopeValidationError::ProfileStatementLimits)?;
         self.validate_with_limits(consensus_limits)
     }
+}
+/// Shared canonical semantic profile identity checks for envelopes and borrowed attached statements.
+pub(crate) fn validate_privacy_profile_identity_v1(
+    profile: &PrivacyCompiledProfileSnapshotV1,
+    protocol_id: PrivacyProtocolIdV1,
+    proof_system_id: PrivacyProofSystemIdV1,
+    engine_id: PrivacyEngineIdV1,
+    context: &PrivacyStatementContextV1,
+) -> Result<(), PrivacyProofEnvelopeValidationError> {
+    profile
+        .validate()
+        .map_err(PrivacyProofEnvelopeValidationError::InvalidProfile)?;
+    if profile.protocol_id != protocol_id {
+        return Err(
+            PrivacyProofEnvelopeValidationError::ProfileProtocolMismatch {
+                profile: profile.protocol_id,
+                envelope: protocol_id,
+            },
+        );
+    }
+    if profile.proof_system_id != proof_system_id {
+        return Err(
+            PrivacyProofEnvelopeValidationError::ProfileProofSystemMismatch {
+                profile: profile.proof_system_id,
+                envelope: proof_system_id,
+            },
+        );
+    }
+    if profile.engine_id != engine_id {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileEngineMismatch {
+            profile: profile.engine_id,
+            envelope: engine_id,
+        });
+    }
+    if profile.parameter_id != context.parameter_id {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileParameterIdMismatch);
+    }
+    if profile.parameter_digest != context.parameter_digest {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileParameterDigestMismatch);
+    }
+    if profile.verifier_digest != context.verifier_digest {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileVerifierDigestMismatch);
+    }
+    if profile.statement_schema_digest != context.statement_schema_digest {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileStatementSchemaDigestMismatch);
+    }
+    if profile.engine_manifest_digest != context.engine_manifest_digest {
+        return Err(PrivacyProofEnvelopeValidationError::ProfileEngineManifestDigestMismatch);
+    }
+    Ok(())
 }
 /// Validation failure for [`PrivacyProofEnvelopeV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -1339,68 +1360,56 @@ pub enum PrivacyProofEnvelopeValidationError {
         /// Configured maximum.
         max: u32,
     },
-    /// Governed activation record is internally invalid.
-    #[error("privacy activation record is invalid: {0}")]
-    InvalidActivation(PrivacyActivationValidationError),
-    /// Activation and envelope protocols differ.
-    #[error(
-        "privacy activation protocol {activation:?} differs from envelope protocol {envelope:?}"
-    )]
-    ActivationProtocolMismatch {
+    /// Canonical profile is internally invalid.
+    #[error("privacy profile record is invalid: {0}")]
+    InvalidProfile(PrivacyCompiledProfileSnapshotValidationErrorV1),
+    /// Profile and envelope protocols differ.
+    #[error("privacy profile protocol {profile:?} differs from envelope protocol {envelope:?}")]
+    ProfileProtocolMismatch {
         /// Governed protocol.
-        activation: PrivacyProtocolIdV1,
+        profile: PrivacyProtocolIdV1,
         /// Envelope protocol.
         envelope: PrivacyProtocolIdV1,
     },
-    /// Governed activation is not active.
-    #[error("privacy protocol activation is not active")]
-    ActivationNotActive,
-    /// The active state is not yet effective at the current height.
-    #[error(
-        "privacy activation effective height {effective_height} is later than current height {current_height}"
-    )]
-    ActivationNotEffective {
-        /// Current block height.
-        current_height: u64,
-        /// First height of the current active interval.
-        effective_height: u64,
-    },
     /// Governed and envelope proof systems differ.
     #[error(
-        "privacy activation proof system {activation:?} differs from envelope proof system {envelope:?}"
+        "privacy profile proof system {profile:?} differs from envelope proof system {envelope:?}"
     )]
-    ActivationProofSystemMismatch {
+    ProfileProofSystemMismatch {
         /// Governed proof system.
-        activation: PrivacyProofSystemIdV1,
+        profile: PrivacyProofSystemIdV1,
         /// Envelope proof system.
         envelope: PrivacyProofSystemIdV1,
     },
     /// Governed and envelope native engines differ.
-    #[error("privacy activation engine {activation:?} differs from envelope engine {envelope:?}")]
-    ActivationEngineMismatch {
+    #[error("privacy profile engine {profile:?} differs from envelope engine {envelope:?}")]
+    ProfileEngineMismatch {
         /// Governed native engine.
-        activation: PrivacyEngineIdV1,
+        profile: PrivacyEngineIdV1,
         /// Envelope native engine.
         envelope: PrivacyEngineIdV1,
     },
     /// Governed and envelope parameter-set identifiers differ.
-    #[error("privacy activation parameter id differs from envelope")]
-    ActivationParameterIdMismatch,
+    #[error("privacy profile parameter id differs from envelope")]
+    ProfileParameterIdMismatch,
     /// Governed and envelope parameter digests differ.
-    #[error("privacy activation parameter digest differs from envelope")]
-    ActivationParameterDigestMismatch,
+    #[error("privacy profile parameter digest differs from envelope")]
+    ProfileParameterDigestMismatch,
     /// Governed and envelope verifier digests differ.
-    #[error("privacy activation verifier digest differs from envelope")]
-    ActivationVerifierDigestMismatch,
+    #[error("privacy profile verifier digest differs from envelope")]
+    ProfileVerifierDigestMismatch,
     /// Governed and envelope statement-schema digests differ.
-    #[error("privacy activation statement-schema digest differs from envelope")]
-    ActivationStatementSchemaDigestMismatch,
+    #[error("privacy profile statement-schema digest differs from envelope")]
+    ProfileStatementSchemaDigestMismatch,
     /// Governed and envelope engine-manifest digests differ.
-    #[error("privacy activation engine-manifest digest differs from envelope")]
-    ActivationEngineManifestDigestMismatch,
-    /// Statement exceeds activation-specific governed protocol limits.
+    #[error("privacy profile engine-manifest digest differs from envelope")]
+    ProfileEngineManifestDigestMismatch,
+    /// Ordinary limits exceed the canonical selected protocol profile.
+    #[error("privacy protocol limits exceed the canonical profile: {0}")]
+    ProfileProtocolLimits(PrivacyProtocolLimitsValidationError),
+    /// Statement exceeds protocol-specific governed protocol limits.
     #[error("privacy statement violates active protocol limits: {0}")]
-    ActivationStatementLimits(PrivacyActivationStatementLimitsError),
+    ProfileStatementLimits(PrivacyProfileStatementLimitsError),
 }
 #[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
@@ -2144,11 +2153,15 @@ mod exact12_fixture {
         pub envelope_norito: Vec<u8>,
         /// Exact first-release instruction wire identifier.
         pub submit_proof_wire_id: String,
-        /// Complete canonical [`SubmitPrivacyProofV1`] instruction archive.
+        /// Complete canonical request archive selected by `submit_proof_wire_id`.
+        /// X.509 uses the proof-free SubmitPrivacyZkX509CertificateV1; other protocols
+        /// use SubmitPrivacyProofV1.
         pub submit_proof_instruction_norito: Vec<u8>,
-        /// Canonical normalized unsigned-payload preimage for the privacy intent.
+        /// Canonical binding preimage: X.509's ActionStatementV1, or the ordinary
+        /// normalized privacy unsigned-payload projection for other protocols.
         pub transaction_intent_projection_norito: Vec<u8>,
-        /// BLAKE3 domain-separated digest of the normalized intent projection.
+        /// Domain-separated digest of that binding preimage. X.509 uses the existing
+        /// ActionStatementV1 domain; other protocols use the privacy transaction-intent domain.
         pub transaction_intent_digest: [u8; 32],
         /// Canonical adaptive unsigned [`TransactionPayload`] bytes presented to signers.
         pub unsigned_transaction_payload_norito: Vec<u8>,
@@ -2234,6 +2247,7 @@ mod exact12_fixture {
         Transaction(String),
     }
     struct PrivacyExact12CompleteRowV1 {
+        submit_proof_wire_id: &'static str,
         statement: PrivacyStatementV1,
         envelope: PrivacyProofEnvelopeV1,
         submit_proof_instruction_norito: Vec<u8>,
@@ -2294,6 +2308,9 @@ mod exact12_fixture {
         statement: PrivacyStatementV1,
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
+        if let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = statement {
+            return exact12_x509_complete_row_v1(statement, row_index);
+        }
         let envelope = try_envelope(statement)?;
         let signing_key = exact12_signing_key_pair_v1();
         let authority = AccountId::new(signing_key.public_key().clone());
@@ -2352,6 +2369,7 @@ mod exact12_fixture {
         let signed_transaction_hash = *signed.hash().as_ref();
         let signed_transaction_versioned_norito = signed.encode_versioned();
         Ok(PrivacyExact12CompleteRowV1 {
+            submit_proof_wire_id: SubmitPrivacyProofV1::WIRE_ID,
             statement: submission.envelope.statement.clone(),
             envelope: submission.envelope,
             submit_proof_instruction_norito,
@@ -2362,85 +2380,174 @@ mod exact12_fixture {
             signed_transaction_hash,
         })
     }
-    /// Maximum governed limits of one protocol, as an activation record carries them.
-    pub(super) fn sample_protocol_limits(
-        protocol: PrivacyProtocolIdV1,
-    ) -> PrivacyProtocolActivationLimitsV1 {
+    fn exact12_x509_complete_row_v1(
+        mut inputs: IrohaZkX509StarkP256StatementV1,
+        row_index: usize,
+    ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
+        use crate::{
+            isi::privacy::SubmitPrivacyZkX509CertificateV1, transaction::signed_attachments::*,
+        };
+        let failure = |error: String| PrivacyExact12FixtureErrorV1::Transaction(error);
+        let signing_key = exact12_signing_key_pair_v1();
+        let authority = AccountId::new(signing_key.public_key().clone());
+        inputs.wallet_account = authority.clone();
+        inputs.context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+        let request = SubmitPrivacyZkX509CertificateV1::new(
+            inputs,
+            ActionAttachmentRefV1 {
+                action_index: 0,
+                slot_index: 0,
+            },
+        );
+        let proof = proof_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1);
+        let mut plan = SignedAttachmentPlanV1::new();
+        plan.push_action(PlannedActionV1 {
+            operation: ActionOperationV1::NativeInstruction(
+                SubmitPrivacyZkX509CertificateV1::WIRE_ID.into(),
+            ),
+            role: ActionRoleV1::ProofEffect,
+            authority: ActionAuthorityBindingV1::TransactionAuthority,
+            invocation: ActionInvocationBindingV1::Direct {
+                instruction_index: 0,
+            },
+            public_inputs_digest: request
+                .public_inputs_digest_v1()
+                .map_err(|e| failure(e.to_string()))?,
+            attachments: vec![PlannedAttachmentV1 {
+                kind: AttachmentKindV1::Proof,
+                role: AttachmentRoleV1::ActionProof,
+                bytes: proof.bytes().as_bytes().to_vec(),
+            }],
+        });
+        let nonce = u32::try_from(row_index + 1)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| failure("fixture nonce overflow".into()))?;
+        let mut payload = TransactionPayload {
+            domain: TransactionDomain::Network(request.statement.context.network_id),
+            authority,
+            creation_time_ms: 1_700_000_000_000_u64
+                .checked_add(
+                    u64::try_from(row_index).map_err(|_| failure("fixture row overflow".into()))?,
+                )
+                .ok_or_else(|| failure("fixture time overflow".into()))?,
+            instructions: Executable::Instructions(vec![request.clone().into()].into()),
+            time_to_live_ms: NonZeroU64::new(60_000),
+            nonce: Some(nonce),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            metadata: Metadata::default(),
+            attachments: Some(plan.declare()),
+        };
+        payload
+            .bind_attachment_statements_v1()
+            .map_err(|e| failure(e.to_string()))?;
+        payload
+            .validate_signed_attachments_v1()
+            .map_err(|e| failure(e.to_string()))?;
+        let action = payload
+            .attachments
+            .as_ref()
+            .and_then(|a| a.action(0))
+            .ok_or_else(|| failure("fixture action missing".into()))?;
+        let intent = payload
+            .ordered_intent_digest_v1()
+            .map_err(|e| failure(e.to_string()))?;
+        let action_statement = action.statement_for_v1(intent);
+        let materialized = request
+            .materialize_statement_v1(action, intent, &PrivacyConsensusLimitsV1::taira_default())
+            .map_err(|e| failure(e.to_string()))?;
+        let transaction_intent_digest = *materialized.context.transaction_intent_digest.as_bytes();
+        let statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(materialized);
+        let envelope = PrivacyProofEnvelopeV1::bind_v1(statement.clone(), proof)?;
+        let unsigned_transaction_payload_norito = TransactionBuilder::from_payload(payload.clone())
+            .map_err(|e| failure(e.to_string()))?
+            .encode_payload();
+        let signed = TransactionBuilder::from_payload(payload)
+            .map_err(|e| failure(e.to_string()))?
+            .try_sign(signing_key.private_key())
+            .map_err(|e| failure(e.to_string()))?;
+        signed
+            .verify_signature()
+            .map_err(|e| failure(e.to_string()))?;
+        Ok(PrivacyExact12CompleteRowV1 {
+            submit_proof_wire_id: SubmitPrivacyZkX509CertificateV1::WIRE_ID,
+            statement,
+            envelope,
+            submit_proof_instruction_norito: norito::encode_canonical(&request)?,
+            transaction_intent_projection_norito: norito::encode_canonical(&action_statement)?,
+            transaction_intent_digest,
+            unsigned_transaction_payload_norito,
+            signed_transaction_versioned_norito: signed.encode_versioned(),
+            signed_transaction_hash: *signed.hash().as_ref(),
+        })
+    }
+    /// Maximum governed limits of one protocol, for ordinary committed policy.
+    pub(super) fn sample_protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolLimitsV1 {
         match protocol {
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
-                PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV1
+                PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1
             }
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
-                PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-                    AnonymousPgcActivationLimitsV1 {
-                        max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
-                        max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
-                    },
-                )
+                PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+                    max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
+                    max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
+                })
             }
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
-                PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
-                    VeRangeActivationLimitsV1 {
-                        max_aggregation_count: VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
-                    },
-                )
+                PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+                    max_aggregation_count: VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
+                })
             }
             PrivacyProtocolIdV1::IrohaZkAmsV1 => {
-                PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
                     max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
                     max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
                 })
             }
             PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
-                PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV1
+                PrivacyProtocolLimitsV1::VegaExistingCredentialZkV1
             }
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
-                PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V1
+                PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1
             }
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
-                PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-                    JindoActivationLimitsV1 {
-                        max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
-                    },
-                )
+                PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                    max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+                })
             }
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-                PrivacyProtocolActivationLimitsV1::IrohaBootleLanternAnoncredV1
+                PrivacyProtocolLimitsV1::IrohaBootleLanternAnoncredV1
             }
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
-                PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(
-                    OrchardActivationLimitsV1 {
-                        max_action_count: ORCHARD_MAX_ACTIONS_V1,
-                    },
-                )
+                PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+                    max_action_count: ORCHARD_MAX_ACTIONS_V1,
+                })
             }
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
-                PrivacyProtocolActivationLimitsV1::MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1 {
+                PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
                     max_input_count: FCMP_MAX_INPUTS_V1,
                     max_output_count: FCMP_MAX_OUTPUTS_V1,
                 })
             }
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
-                PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(
-                    IvmPrivateNoteActivationLimitsV1 {
-                        max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
-                        max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-                    },
-                )
+                PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                    max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
+                    max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
+                })
             }
             PrivacyProtocolIdV1::PqMaspStarkV1 => {
-                PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(PqMaspActivationLimitsV1 {
+                PrivacyProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
                     max_input_count: PQ_MASP_MAX_INPUTS_V1,
                     max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
                 })
             }
         }
     }
-    /// An active activation record that admits `envelope` from height 2.
-    pub(super) fn sample_activation(
+    /// Canonical semantic profile for the structural envelope fixture.
+    pub(super) fn sample_profile(
         envelope: &PrivacyProofEnvelopeV1,
-    ) -> PrivacyProtocolActivationRecordV1 {
-        PrivacyProtocolActivationRecordV1 {
+    ) -> PrivacyCompiledProfileSnapshotV1 {
+        PrivacyCompiledProfileSnapshotV1 {
             protocol_id: envelope.protocol_id,
             proof_system_id: envelope.proof_system_id,
             engine_id: envelope.engine_id,
@@ -2449,21 +2556,15 @@ mod exact12_fixture {
             verifier_digest: envelope.verifier_digest,
             statement_schema_digest: envelope.statement_schema_digest,
             engine_manifest_digest: envelope.engine_manifest_digest,
-            lifecycle: PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 2,
-                state_since_height: 2,
-            }),
             protocol_limits: sample_protocol_limits(envelope.protocol_id),
-            pending_protocol_limits_tightening: None,
         }
     }
     /// One structurally valid sample of an Exact12 role.
     ///
     /// The envelope is the canonical binding of a typed sample statement and a
-    /// placeholder proof; the activation record is active from height 2 and
+    /// placeholder proof; the canonical profile
     /// carries exactly the envelope's identities. A sample passes intrinsic and
-    /// activation validation and is never accepted by a native verifier, so it
+    /// canonical profile validation and is never accepted by a native verifier, so it
     /// exercises routing, substitution and refusal without a prover.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct PrivacyActionRoleSampleV1 {
@@ -2471,8 +2572,21 @@ mod exact12_fixture {
         pub role: PrivacyActionRoleV1,
         /// Canonical envelope of the sample statement and placeholder proof.
         pub envelope: PrivacyProofEnvelopeV1,
-        /// Active record whose identities equal the envelope's.
-        pub activation: PrivacyProtocolActivationRecordV1,
+        /// Canonical profile whose identities and limits bind the structural envelope.
+        pub profile: PrivacyCompiledProfileSnapshotV1,
+    }
+    #[test]
+    fn structural_profile_samples_preserve_protocol_limits() {
+        for sample in privacy_action_role_samples_v1().expect("complete structural role samples") {
+            let expected = sample_protocol_limits(sample.envelope.protocol_id);
+            assert_eq!(sample.profile.protocol_limits, expected);
+            sample.profile.validate().expect("valid canonical fixture profile");
+            sample.envelope.validate_against_profile_v1(
+                &sample.profile,
+                &sample.profile.protocol_limits,
+                &PrivacyConsensusLimitsV1::taira_default(),
+            ).expect("structural fixture respects its canonical protocol limits");
+        }
     }
     /// Build one structurally valid sample for each of the thirteen Exact12 roles.
     ///
@@ -2493,11 +2607,11 @@ mod exact12_fixture {
             .map(|statement| {
                 let envelope = try_envelope(statement)?;
                 let role = envelope.action_role_v1()?;
-                let activation = sample_activation(&envelope);
+                let profile = sample_profile(&envelope);
                 Ok(PrivacyActionRoleSampleV1 {
                     role,
                     envelope,
-                    activation,
+                    profile,
                 })
             })
             .collect::<Result<Vec<_>, PrivacyExact12FixtureErrorV1>>()?;
@@ -2569,7 +2683,7 @@ mod exact12_fixture {
                     protocol_id,
                     statement_norito,
                     envelope_norito,
-                    submit_proof_wire_id: SubmitPrivacyProofV1::WIRE_ID.to_owned(),
+                    submit_proof_wire_id: complete.submit_proof_wire_id.to_owned(),
                     submit_proof_instruction_norito: complete.submit_proof_instruction_norito,
                     transaction_intent_projection_norito: complete
                         .transaction_intent_projection_norito,

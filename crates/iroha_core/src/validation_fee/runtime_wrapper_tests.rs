@@ -1,6 +1,6 @@
-//! Execute the SoraSwap wrapper through the real host and production DLMM bin math.
+//! Execute the `SoraSwap` wrapper through the real host and production DLMM bin math.
 #[path = "runtime_rewards_tests.rs"]
-pub(crate) mod reward_tests;
+pub mod reward_tests;
 use super::*;
 use crate::{
     executor::ContractEntrypointAuthorizationSnapshot, smartcontracts::ivm::host::CoreHostImpl,
@@ -17,10 +17,7 @@ fn wrapper_chain() -> (crate::sumeragi::test_chain::CertifiedTestChain, AccountI
     let deployer = account(55);
     // Use the actual default block policy from the signed original genesis.
     // The production wrapper, nested DLMM and byte charge must fit it unchanged.
-    let config = crate::sumeragi::test_chain::TestChainConfig::new(
-        validation_fee_payout_world(&deployer),
-        1_000,
-    );
+    let config = validation_fee_payout_config(&deployer, 1_000);
     let (chain, deployer, _, _) =
         signed_original_fixtures::signed_fee_registry_root_fixture_with_config(config);
     (chain, deployer)
@@ -125,38 +122,41 @@ seiyaku FullFillPool { permission SwapQuotePublic;
                    address: &ContractAddress,
                    source: &str,
                    imported_pool: Option<&[u8]>| {
-        let (code, report) = if let Some(pool) = imported_pool {
-            use kotodama_lang::linker::{
-                SourceContractArtifact, SourceLinkRequest, SourceModuleUnit,
-            };
-            let output = kotodama_lang::driver::BuildDriver::new(
-                kotodama_lang::session::CompilerSession::default(),
-                "validation-fee-production-wrapper",
-            )
-            .compile_project(
-                SourceLinkRequest {
-                    root: SourceModuleUnit {
-                        source_name: "autonomous_payout.ko".into(),
-                        source: source.into(),
+        let (code, report) = imported_pool.map_or_else(
+            || {
+                let (code, _, report) = kotodama_lang::compiler::Compiler::new()
+                    .compile_source_with_manifest_and_report(source)
+                    .expect("compile real contract frames");
+                (code, report)
+            },
+            |pool| {
+                use kotodama_lang::linker::{
+                    SourceContractArtifact, SourceLinkRequest, SourceModuleUnit,
+                };
+                let output = kotodama_lang::driver::BuildDriver::new(
+                    kotodama_lang::session::CompilerSession::default(),
+                    "validation-fee-production-wrapper",
+                )
+                .compile_project(
+                    SourceLinkRequest {
+                        root: SourceModuleUnit {
+                            source_name: "autonomous_payout.ko".into(),
+                            source: source.into(),
+                        },
+                        artifacts: vec![SourceContractArtifact {
+                            source_name: "dlmm_pool.to".into(),
+                            artifact: pool.to_vec(),
+                        }],
+                        sources: Vec::new(),
+                        imports: Vec::new(),
+                        packages: Vec::new(),
                     },
-                    artifacts: vec![SourceContractArtifact {
-                        source_name: "dlmm_pool.to".into(),
-                        artifact: pool.to_vec(),
-                    }],
-                    sources: Vec::new(),
-                    imports: Vec::new(),
-                    packages: Vec::new(),
-                },
-                "autonomous_payout.ko",
-            )
-            .expect("compile wrapper against exact production pool interface");
-            (output.artifact, output.report)
-        } else {
-            let (code, _, report) = kotodama_lang::compiler::Compiler::new()
-                .compile_source_with_manifest_and_report(source)
-                .expect("compile real contract frames");
-            (code, report)
-        };
+                    "autonomous_payout.ko",
+                )
+                .expect("compile wrapper against exact production pool interface");
+                (output.artifact, output.report)
+            },
+        );
         let metadata = ivm::ProgramMetadata::parse(&code).unwrap();
         let literal_bytes = metadata
             .literal_section
@@ -277,7 +277,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
             &pool_code,
             &key_pair(55),
             "hajimari",
-            Json::from(norito::json!({
+            &Json::from(norito::json!({
                 "base_asset": (xor.to_string()), "quote_asset": (sbd.to_string()),
                 "vault_account": (pool.subject_id().to_string()), "fee_pips": "3000",
                 "bin_step": "1", "active_bin": "1000", "impact_cap_bps": "10000",
@@ -292,7 +292,7 @@ seiyaku FullFillPool { permission SwapQuotePublic;
             &pool_code,
             &key_pair(55),
             "seed_bin",
-            Json::from(norito::json!({
+            &Json::from(norito::json!({
                 "position_id": "wrapper-liquidity", "bin_id": "1000",
                 "base_amount": "1000", "quote_amount": "1000",
             })),
@@ -551,11 +551,11 @@ fn compiled_fee_wrapper_preserves_nested_pool_authorities_and_actual_output() {
     }
 }
 
+type WrapperLedgerSnapshot = (Vec<(AssetId, Quantity)>, Vec<(StatePath, Vec<u8>)>);
+
 // Compare complete ledger balances and every durable contract-state byte after
 // dropping the diagnostic's unapplied transaction, rather than assuming rollback.
-fn wrapper_ledger_snapshot(
-    block: &crate::state::StateBlock<'_>,
-) -> (Vec<(AssetId, Quantity)>, Vec<(StatePath, Vec<u8>)>) {
+fn wrapper_ledger_snapshot(block: &crate::state::StateBlock<'_>) -> WrapperLedgerSnapshot {
     (
         block
             .world

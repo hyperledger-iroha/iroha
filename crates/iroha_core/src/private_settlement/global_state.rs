@@ -43,7 +43,7 @@ use thiserror::Error;
 
 const RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:global-receipt:v1\0";
 
-pub(crate) fn canonical_receipt_digest_v1(
+pub fn canonical_receipt_digest_v1(
     receipt: &PrivateSettlementReceiptV1,
 ) -> Result<Hash, PrivateSettlementGlobalStateErrorV1> {
     let encoded = norito::encode_canonical(receipt)
@@ -58,7 +58,7 @@ pub(crate) fn canonical_receipt_digest_v1(
 }
 
 /// Native state validation/mutation for the single Model-owned canonical record.
-pub(crate) trait PrivateSettlementPoolKeyExtV1: Sized {
+pub trait PrivateSettlementPoolKeyExtV1: Sized {
     fn new(
         route: PrivateSettlementRouteV1,
         pool_id: PrivacyPoolIdV1,
@@ -93,7 +93,7 @@ impl PrivateSettlementPoolKeyExtV1 for PrivateSettlementPoolKeyV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementRootKeyV1")]
-pub(crate) struct PrivateSettlementRootKeyV1 {
+pub struct PrivateSettlementRootKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
     pub(crate) epoch: u64,
     pub(crate) root: PrivacyRootV1,
@@ -122,7 +122,7 @@ pub(crate) struct PrivateSettlementRootKeyV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockKeyV1"
 )]
-pub(crate) enum PrivateSettlementStagedLockKeyV1 {
+pub enum PrivateSettlementStagedLockKeyV1 {
     /// One exact complete-bundle Prepare registration.
     Bundle(Hash),
     /// The authoritative predecessor frontier of one governed pool.
@@ -149,7 +149,11 @@ pub(crate) enum PrivateSettlementStagedLockKeyV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockRecordV1"
 )]
-pub(crate) enum PrivateSettlementStagedLockRecordV1 {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The canonical staged-lock schema retains the complete barrier in its bundle variant"
+)]
+pub enum PrivateSettlementStagedLockRecordV1 {
     /// Complete public all-Prepare barrier and its global registration height.
     Bundle {
         /// Exact barrier bytes authorized by the sponsor.
@@ -202,7 +206,7 @@ impl_private_settlement_json_key_v1!(PrivateSettlementRootKeyV1, PrivateSettleme
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementFinalizationReferenceV1"
 )]
-pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
+pub struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) bundle_id: Hash,
     pub(crate) receipt_digest: Hash,
     pub(crate) leg_ordinal: u8,
@@ -215,7 +219,7 @@ pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementRootProvenanceV1"
 )]
-pub(crate) enum PrivateSettlementRootProvenanceV1 {
+pub enum PrivateSettlementRootProvenanceV1 {
     Governance {
         governance_digest: Hash,
         admitted_at_height: u64,
@@ -237,7 +241,7 @@ pub(crate) enum PrivateSettlementRootProvenanceV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputRecordV1"
 )]
-pub(crate) struct PrivateSettlementOutputRecordV1 {
+pub struct PrivateSettlementOutputRecordV1 {
     pub(crate) reference: PrivateSettlementFinalizationReferenceV1,
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,
 }
@@ -248,7 +252,7 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
 #[norito_schema(
     name = "iroha_core::private_settlement::global_state::PrivateSettlementGlobalStateV1"
 )]
-pub(crate) struct PrivateSettlementGlobalStateV1 {
+pub struct PrivateSettlementGlobalStateV1 {
     governance: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1>,
     pools: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1>,
     roots: BTreeMap<PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1>,
@@ -262,14 +266,14 @@ pub(crate) struct PrivateSettlementGlobalStateV1 {
 
 /// Outcome of an idempotent global-state operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PrivateSettlementGlobalStateOutcomeV1 {
+pub enum PrivateSettlementGlobalStateOutcomeV1 {
     /// The complete operation was applied.
     Applied,
     /// The exact operation was already durable.
     Idempotent,
 }
 
-pub(crate) struct PrivateSettlementPlannedLegV1 {
+pub struct PrivateSettlementPlannedLegV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) next_pool: PrivateSettlementPoolStateV1,
     pub(crate) root_key: PrivateSettlementRootKeyV1,
@@ -283,19 +287,19 @@ pub(crate) struct PrivateSettlementPlannedLegV1 {
 }
 
 /// Complete infallible write set for one globally replicated Prepare registration.
-pub(crate) struct PrivateSettlementPrepareLockPlanV1 {
+pub struct PrivateSettlementPrepareLockPlanV1 {
     pub(crate) records:
         BTreeMap<PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
 }
 
 /// Complete infallible finalization write set, including exact lock release.
-pub(crate) struct PrivateSettlementReceiptPlanV1 {
+pub struct PrivateSettlementReceiptPlanV1 {
     pub(crate) legs: Vec<PrivateSettlementPlannedLegV1>,
     pub(crate) staged_lock_keys: Vec<PrivateSettlementStagedLockKeyV1>,
 }
 
 /// Complete infallible write set for bootstrapping one governed pool.
-pub(crate) struct PrivateSettlementPoolBootstrapPlanV1 {
+pub struct PrivateSettlementPoolBootstrapPlanV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) governance: PrivateSettlementPoolGovernanceProjectionV1,
     pub(crate) pool: PrivateSettlementPoolStateV1,
@@ -304,7 +308,7 @@ pub(crate) struct PrivateSettlementPoolBootstrapPlanV1 {
 }
 
 /// Complete infallible write set for one policy/key rotation.
-pub(crate) struct PrivateSettlementPoolRotationPlanV1 {
+pub struct PrivateSettlementPoolRotationPlanV1 {
     pub(crate) key: PrivateSettlementPoolKeyV1,
     pub(crate) governance: PrivateSettlementPoolGovernanceProjectionV1,
     pub(crate) pool: PrivateSettlementPoolStateV1,
@@ -351,7 +355,7 @@ fn receipt_leg_matches_governance_lineage_v1(
 }
 
 /// Validate and plan one governed pool bootstrap without mutating persistent state.
-pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
+pub fn plan_private_settlement_pool_bootstrap_v1(
     governance_store: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -414,7 +418,7 @@ pub(crate) fn plan_private_settlement_pool_bootstrap_v1(
 }
 
 /// Validate and plan one exact governance rotation without changing the pool frontier.
-pub(crate) fn plan_private_settlement_pool_rotation_v1(
+pub fn plan_private_settlement_pool_rotation_v1(
     governance_store: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -508,7 +512,7 @@ fn staged_lock_resource_record_v1(
 }
 
 /// Derive the exact bundle and resource rows for one complete Prepare barrier.
-pub(crate) fn private_settlement_staged_lock_records_v1(
+pub fn private_settlement_staged_lock_records_v1(
     barrier: &PrivateSettlementPrepareBarrierV1,
     registered_at_height: u64,
 ) -> Result<
@@ -627,7 +631,7 @@ fn exact_staged_lock_keys_v1(
 /// The stored barrier keeps its original aggregate QC bytes. A retry or
 /// recovered coordinator may supply independently valid quorum-equivalent QCs;
 /// signer-subset encoding therefore does not orphan the replicated lock.
-pub(crate) fn validate_private_settlement_prepare_lock_registration_v1(
+pub fn validate_private_settlement_prepare_lock_registration_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -647,7 +651,7 @@ pub(crate) fn validate_private_settlement_prepare_lock_registration_v1(
 
 /// Validate and plan one complete all-Prepare control-lock registration.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_private_settlement_prepare_locks_v1(
+pub fn plan_private_settlement_prepare_locks_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -758,7 +762,7 @@ pub(crate) fn plan_private_settlement_prepare_locks_v1(
 
 /// Validate and plan a complete certified receipt without mutating persistent state.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn plan_private_settlement_receipt_v1(
+pub fn plan_private_settlement_receipt_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -899,7 +903,7 @@ pub(crate) fn plan_private_settlement_receipt_v1(
 }
 
 /// Validate an abort marker against terminal WSV state without mutating it.
-pub(crate) fn plan_private_settlement_abort_v1(
+pub fn plan_private_settlement_abort_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -953,7 +957,7 @@ pub(crate) fn plan_private_settlement_abort_v1(
 }
 
 /// Return every exact row whose owner bundle expired before `current_height`.
-pub(crate) fn expired_private_settlement_staged_lock_keys_v1(
+pub fn expired_private_settlement_staged_lock_keys_v1(
     staged_locks: &impl StorageReadOnly<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -989,7 +993,7 @@ pub(crate) fn expired_private_settlement_staged_lock_keys_v1(
 /// The index is deliberately omitted from snapshots. A duplicate recipient is
 /// therefore detected from canonical state during every restore instead of
 /// being hidden by last-write-wins map construction.
-pub(crate) fn rebuild_private_settlement_recipient_index_v1(
+pub fn rebuild_private_settlement_recipient_index_v1(
     outputs: &impl StorageReadOnly<PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
 ) -> Result<
     BTreeMap<PrivacyRecipientIdV1, PrivateSettlementFinalizationReferenceV1>,
@@ -1010,7 +1014,7 @@ pub(crate) fn rebuild_private_settlement_recipient_index_v1(
 
 /// Validate every private-settlement map and cross-reference after snapshot recovery.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(crate) fn validate_private_settlement_persisted_state_v1(
+pub fn validate_private_settlement_persisted_state_v1(
     governance: &impl StorageReadOnly<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
@@ -1375,7 +1379,7 @@ impl PrivateSettlementGlobalStateV1 {
     /// Explicitly bootstrap one restricted pool through governance.
     pub(crate) fn bootstrap_pool(
         &mut self,
-        governance: PrivateSettlementPoolGovernanceV1,
+        governance: &PrivateSettlementPoolGovernanceV1,
         initial_commitments: &[PrivacyCommitmentV1],
         admitted_at_height: u64,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
@@ -1387,7 +1391,7 @@ impl PrivateSettlementGlobalStateV1 {
         }
         let key = PrivateSettlementPoolKeyV1::new(governance.body.route, governance.body.pool_id)?;
         let governance_projection =
-            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&governance)
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(governance)
                 .map_err(PrivateSettlementGlobalStateErrorV1::from_pool)?;
         let pool = PrivateSettlementPoolStateV1::bootstrap(
             governance.body.route,
@@ -1463,7 +1467,7 @@ impl PrivateSettlementGlobalStateV1 {
     /// Register one exact complete all-Prepare barrier before Commit voting.
     pub(crate) fn register_prepare(
         &mut self,
-        barrier: PrivateSettlementPrepareBarrierV1,
+        barrier: &PrivateSettlementPrepareBarrierV1,
         current_height: u64,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
         let governance = mv::storage::Storage::from_iter(self.governance.clone());
@@ -1485,7 +1489,7 @@ impl PrivateSettlementGlobalStateV1 {
             &staged_locks.view(),
             &receipts.view(),
             &aborts.view(),
-            &barrier,
+            barrier,
             current_height,
         )?;
         let Some(plan) = plan else {
@@ -1746,13 +1750,7 @@ impl PrivateSettlementGlobalStateV1 {
 
 /// Redacted global-state failure safe for consensus diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivateSettlementGlobalStateErrorV1 {
-    /// The governed feature is disabled in the consensus configuration.
-    #[error("private-settlement is disabled")]
-    Disabled,
-    /// The carrier or governance operation precedes governed activation.
-    #[error("private-settlement is not active at this height")]
-    Activation,
+pub enum PrivateSettlementGlobalStateErrorV1 {
     /// The configured node capability cannot enforce the V1 proof/policy profile.
     #[error("private-settlement capability is unavailable")]
     Capability,
@@ -1803,8 +1801,26 @@ impl PrivateSettlementGlobalStateErrorV1 {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl crate::state::WorldBlock<'_> {
+    /// Seed trusted terminal rows for a World-to-HTTP component fixture.
+    ///
+    /// This deliberately does not execute or authenticate a payment. Callers must
+    /// not use this fixture as evidence of a valid proof, carrier or certified block.
+    pub fn seed_private_settlement_terminal_read_fixture(
+        &mut self,
+        receipt: PrivateSettlementReceiptV1,
+        abort: PrivateSettlementAbortReceiptV1,
+    ) {
+        self.private_settlement_receipts
+            .insert(receipt.manifest.bundle_id, receipt);
+        self.private_settlement_aborts
+            .insert(abort.bundle_id, abort);
+    }
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -1827,7 +1843,7 @@ pub(crate) mod tests {
     use iroha_model_base::peer::PeerId;
 
     /// Verify one declared owner frame, reconstruction, and strict malformed-frame rejection.
-    pub(crate) fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
+    pub fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
     where
         T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
     {
@@ -1937,17 +1953,17 @@ pub(crate) mod tests {
 
     #[test]
     fn private_settlement_json_keys_require_the_exact_owner_and_uppercase_frame() {
-        fn check<T>(value: T)
+        fn check<T>(value: &T)
         where
             T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
         {
-            let bytes = norito::to_bytes(&value).expect("key frame");
+            let bytes = norito::to_bytes(value).expect("key frame");
             let uppercase = hex::encode_upper(&bytes);
             let decoded: T =
                 decode_private_settlement_storage_key_v1(&uppercase).expect("exact key");
-            assert!(decoded == value);
+            assert!(&decoded == value);
             let mut encoded = String::new();
-            encode_private_settlement_storage_key_v1(&value, &mut encoded);
+            encode_private_settlement_storage_key_v1(value, &mut encoded);
             assert_eq!(encoded, format!("\"{uppercase}\""));
             assert!(
                 decode_private_settlement_storage_key_v1::<T>(&uppercase.to_lowercase()).is_err()
@@ -1966,17 +1982,17 @@ pub(crate) mod tests {
         let pool = *state.pools.keys().next().expect("governed pool");
         let root = *state.roots.keys().next().expect("governed root");
         let delta = &receipt.legs[0].delta;
-        check(pool);
-        check(root);
-        check(PrivateSettlementNullifierKeyV1 {
+        check(&pool);
+        check(&root);
+        check(&PrivateSettlementNullifierKeyV1 {
             pool,
             nullifier: delta.nullifiers[0],
         });
-        check(PrivateSettlementOutputKeyV1 {
+        check(&PrivateSettlementOutputKeyV1 {
             pool,
             commitment: delta.output_commitments[0],
         });
-        check(PrivateSettlementStagedLockKeyV1::Bundle(
+        check(&PrivateSettlementStagedLockKeyV1::Bundle(
             receipt.manifest.bundle_id,
         ));
     }
@@ -2224,7 +2240,7 @@ pub(crate) mod tests {
         world.commit();
     }
 
-    pub(crate) fn fixture() -> (
+    pub fn fixture() -> (
         PrivateSettlementGlobalStateV1,
         PrivateSettlementReceiptV1,
         SidecarFixtureV1,
@@ -2274,7 +2290,7 @@ pub(crate) mod tests {
             fixture.sidecar.payload.delta.clone(),
         ];
         for (index, pool) in [&first_pool, &second_pool].into_iter().enumerate() {
-            let manifest_leg = manifest.legs[index].clone();
+            let manifest_leg = manifest.legs[index];
             let delta = &mut deltas[index];
             delta.bundle_id = manifest.bundle_id;
             delta.leg_ordinal = u8::try_from(index).expect("fixture ordinal");
@@ -2381,10 +2397,10 @@ pub(crate) mod tests {
         verify_private_settlement_receipt_v1(&receipt).expect("receipt");
         let mut state = PrivateSettlementGlobalStateV1::default();
         state
-            .bootstrap_pool(first_governance, &initial_commitments, 5)
+            .bootstrap_pool(&first_governance, &initial_commitments, 5)
             .expect("first bootstrap");
         state
-            .bootstrap_pool(second_governance, &initial_commitments, 5)
+            .bootstrap_pool(&second_governance, &initial_commitments, 5)
             .expect("second bootstrap");
         (state, receipt, fixture)
     }
@@ -2394,7 +2410,7 @@ pub(crate) mod tests {
         receipt: &PrivateSettlementReceiptV1,
     ) -> Result<PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementGlobalStateErrorV1> {
         state.register_prepare(
-            prepare_barrier_from_receipt_v1(receipt)?,
+            &prepare_barrier_from_receipt_v1(receipt)?,
             receipt.manifest.authority_context_height,
         )
     }
@@ -2460,12 +2476,15 @@ pub(crate) mod tests {
         alternate_barrier.prepare_certificates[0] = alternate_prepare.clone();
         assert!(barrier.quorum_equivalent_to(&alternate_barrier));
         assert_eq!(
-            state.register_prepare(barrier.clone(), receipt.manifest.authority_context_height,),
+            state.register_prepare(&barrier, receipt.manifest.authority_context_height,),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
         let registered_bytes = norito::encode_canonical(&state).expect("registered state bytes");
         assert_eq!(
-            state.register_prepare(alternate_barrier, receipt.manifest.authority_context_height),
+            state.register_prepare(
+                &alternate_barrier,
+                receipt.manifest.authority_context_height
+            ),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent)
         );
         assert_eq!(
@@ -2511,7 +2530,7 @@ pub(crate) mod tests {
         );
         let before = norito::encode_canonical(&state).expect("conflicted state bytes");
         assert_eq!(
-            state.register_prepare(barrier.clone(), receipt.manifest.authority_context_height),
+            state.register_prepare(&barrier, receipt.manifest.authority_context_height),
             Err(PrivateSettlementGlobalStateErrorV1::Substitution)
         );
         assert_eq!(
@@ -2545,7 +2564,7 @@ pub(crate) mod tests {
         let barrier = prepare_barrier_from_receipt_v1(&receipt).expect("fixture Prepare barrier");
         let before = norito::encode_canonical(&state).expect("pre-registration state bytes");
         assert_eq!(
-            state.register_prepare(barrier, receipt.manifest.expiry_height),
+            state.register_prepare(&barrier, receipt.manifest.expiry_height),
             Err(PrivateSettlementGlobalStateErrorV1::Height),
             "a registration at expiry leaves no successor block for finalization"
         );
@@ -2584,7 +2603,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             state.register_prepare(
-                competing_barrier,
+                &competing_barrier,
                 competing.manifest.authority_context_height,
             ),
             Err(PrivateSettlementGlobalStateErrorV1::Conflict)
@@ -3154,7 +3173,7 @@ pub(crate) mod tests {
         let (mut state, receipt, _) = fixture();
         let abort = PrivateSettlementAbortReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-            network_id: receipt.manifest.network_id.clone(),
+            network_id: receipt.manifest.network_id,
             bundle_id: receipt.manifest.bundle_id,
             manifest_digest: receipt.manifest.manifest_digest().expect("manifest digest"),
             finalized_height: 19,
@@ -3188,7 +3207,7 @@ pub(crate) mod tests {
             reason: iroha_data_model::nexus::PrivateSettlementAbortReasonV1::Expired,
         };
         assert_eq!(
-            state.apply_abort(expired.clone(), 21),
+            state.apply_abort(expired, 21),
             Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
         );
         assert!(state.staged_locks.is_empty());
@@ -3204,7 +3223,7 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn world_from_private_settlement_state(
+    pub fn world_from_private_settlement_state(
         state: PrivateSettlementGlobalStateV1,
     ) -> crate::state::World {
         let PrivateSettlementGlobalStateV1 {
@@ -3232,14 +3251,14 @@ pub(crate) mod tests {
     }
 
     /// Build a valid World with one durable all-Prepare registration and no terminal marker.
-    pub(crate) fn prepared_world_fixture() -> crate::state::World {
+    pub fn prepared_world_fixture() -> crate::state::World {
         let (mut private_state, receipt, _) = fixture();
         register_receipt_prepare(&mut private_state, &receipt)
             .expect("register prepared fixture barrier");
         world_from_private_settlement_state(private_state)
     }
 
-    pub(crate) fn finalized_world_fixture() -> crate::state::World {
+    pub fn finalized_world_fixture() -> crate::state::World {
         let (mut private_state, receipt, _) = fixture();
         register_receipt_prepare(&mut private_state, &receipt)
             .expect("register finalized fixture Prepare barrier");
@@ -3258,6 +3277,265 @@ pub(crate) mod tests {
             .apply_abort(abort, receipt.finalized_height + 1)
             .expect("persist private-settlement abort fixture");
         world_from_private_settlement_state(private_state)
+    }
+
+    #[test]
+    fn same_signed_private_register_ignores_node_local_validity_limits() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, false, false);
+    }
+
+    #[test]
+    fn same_signed_private_finalize_ignores_node_local_validity_limits() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(true, false, false);
+    }
+
+    #[test]
+    fn committed_register_refuses_the_first_byte_beyond_reserved_continuation_capacity() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, true, false);
+    }
+
+    #[test]
+    fn original_registered_finalize_uses_its_reservation_after_admission_tightening() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(true, true, false);
+    }
+
+    #[test]
+    fn original_expired_abort_survives_committed_admission_closure() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, true, true);
+    }
+
+    fn assert_same_signed_private_carrier_ignores_node_local_validity_limits(
+        is_finalize: bool,
+        tightened: bool,
+        is_abort: bool,
+    ) {
+        use crate::{
+            private_settlement::carrier::signed_private_settlement_carrier_binding_v1,
+            query::store::LiveQueryStore, smartcontracts::Execute as _, state::State,
+        };
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{
+            account::AccountId,
+            block::BlockHeader,
+            isi::private_settlement::{
+                AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+                RegisterAtomicPrivateSettlementPrepareV1,
+            },
+            nexus::{
+                DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+                PrivateSettlementCommitBundleV1,
+            },
+            transaction::TransactionBuilder,
+        };
+        use iroha_model_base::chain::ChainId;
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        // The fixture has actual participant quorum signatures and public state
+        // transitions; its synthetic proof bytes do not qualify STARK execution.
+        let (original, receipt, sidecar) = fixture();
+        let receipt = recertify_receipt_with_validator_keys(receipt, &sidecar.validator_keys);
+        let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        assert_eq!(
+            receipt.manifest.sponsor,
+            AccountId::new(sponsor.public_key().clone())
+        );
+        let register = RegisterAtomicPrivateSettlementPrepareV1::new(
+            prepare_barrier_from_receipt_v1(&receipt).expect("exact all-Prepare barrier"),
+        );
+        let abort = AbortAtomicPrivateSettlementV1::new(
+            receipt.manifest.clone(),
+            iroha_data_model::nexus::PrivateSettlementAbortReasonV1::Expired,
+        );
+        let finalize = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
+            version: receipt.version,
+            manifest: receipt.manifest.clone(),
+            authority_catalog: receipt.authority_catalog.clone(),
+            legs: receipt.legs.clone(),
+        });
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(
+                receipt
+                    .manifest
+                    .legs
+                    .iter()
+                    .map(|leg| leg.route.lane_id.as_u32())
+                    .max()
+                    .expect("participants")
+                    + 1,
+            )
+            .expect("non-zero lane bound"),
+            std::iter::once(LaneConfig::default())
+                .chain(receipt.manifest.legs.iter().map(|leg| LaneConfig {
+                    id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    alias: format!("private-policy-{}", leg.route.lane_id.as_u32()),
+                    ..LaneConfig::default()
+                }))
+                .collect(),
+        )
+        .expect("original catalog");
+        let dataspaces = DataSpaceCatalog::new(
+            DataSpaceCatalog::default()
+                .entries()
+                .iter()
+                .cloned()
+                .chain(receipt.manifest.legs.iter().map(|leg| DataSpaceMetadata {
+                    id: leg.route.dataspace_id,
+                    alias: format!("private-policy-{}", leg.route.dataspace_id.as_u64()),
+                    description: None,
+                    fault_tolerance: 1,
+                }))
+                .collect(),
+        )
+        .expect("original data spaces");
+
+        {
+            let instruction: iroha_data_model::isi::InstructionBox = if is_abort {
+                abort.clone().into()
+            } else if is_finalize {
+                finalize.clone().into()
+            } else {
+                register.clone().into()
+            };
+            let mut builder = TransactionBuilder::new(
+                receipt.manifest.network_id,
+                receipt.manifest.sponsor.clone(),
+                receipt.manifest.public_fee_intent.clone(),
+            )
+            .with_instructions([instruction]);
+            builder.set_nonce(NonZeroU32::new(7).expect("original nonce"));
+            let signed = builder.sign(sponsor.private_key());
+            let mut observations = Vec::new();
+            for local_cap in [1_u64, u64::MAX] {
+                let mut private_state = original.clone();
+                if is_finalize || is_abort {
+                    register_receipt_prepare(&mut private_state, &receipt)
+                        .expect("original registered obligation");
+                }
+                let mut nexus = iroha_config::parameters::actual::Nexus::default();
+                nexus.lane_catalog = lane_catalog.clone();
+                nexus.dataspace_catalog = dataspaces.clone();
+                nexus.atomic_private_settlement.sidecar_max_total_bytes =
+                    NonZeroU64::new(local_cap).expect("positive local capacity");
+                nexus.atomic_private_settlement.sidecar_max_records =
+                    NonZeroU32::new(if local_cap == 1 { 1 } else { u32::MAX }).unwrap();
+                let mut world = world_from_private_settlement_state(private_state);
+                let required =
+                    iroha_data_model::nexus::private_settlement_required_continuation_bytes_v1(
+                        &signed,
+                        &register.barrier,
+                    )
+                    .unwrap();
+                let mut policy =
+                    iroha_data_model::privacy::PrivateSettlementPolicyV1::protocol_default();
+                policy.current_limits.max_carrier_bytes =
+                    if tightened { required - 1 } else { required };
+                policy.validate().unwrap();
+                let mut parameters =
+                    crate::state::parameter_cell_block_for_testing(&world).unwrap();
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
+                        policy.to_custom_parameter().unwrap(),
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
+                parameters.commit();
+                if (is_finalize || is_abort) && tightened {
+                    use iroha_data_model::privacy::{
+                        IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+                        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1,
+                    };
+                    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+                    world.privacy_protocol_policies.insert(
+                        PrivacyProtocolPolicyKeyV1::new(protocol),
+                        PrivacyProtocolPolicyV1 {
+                            protocol_id: protocol,
+                            current_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                                IvmPrivateNoteLimitsV1 {
+                                    max_input_count: 1,
+                                    max_output_count: 1,
+                                },
+                            ),
+                            pending_update: None,
+                        },
+                    );
+                }
+                let (state, _kura) =
+                    State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                        world,
+                        nexus,
+                        LiveQueryStore::start_test(),
+                        ChainId::from("private-policy-component"),
+                        receipt.manifest.network_id,
+                    );
+                install_private_settlement_authority_fixture(
+                    &state,
+                    &receipt,
+                    &sidecar.validator_keys,
+                );
+                let height = if is_abort {
+                    receipt.manifest.expiry_height + 1
+                } else if is_finalize {
+                    receipt.finalized_height
+                } else {
+                    receipt.manifest.authority_context_height
+                };
+                let mut block = state.block(BlockHeader::new(
+                    NonZeroU64::new(height).expect("actual phase height"),
+                    None,
+                    None,
+                    0,
+                    0,
+                ));
+                let mut transaction = block.transaction();
+                transaction.bind_private_settlement_carrier_v1(
+                    signed_private_settlement_carrier_binding_v1(&signed)
+                        .expect("original signed binding"),
+                );
+                let before = private_settlement_transaction_bytes(&transaction);
+                let result = if is_abort {
+                    abort
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                } else if is_finalize {
+                    finalize
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                } else {
+                    register
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                };
+                let after = private_settlement_transaction_bytes(&transaction);
+                if result.is_err() {
+                    assert_eq!(
+                        after, before,
+                        "rejected carrier must leave every table intact"
+                    );
+                } else {
+                    assert_ne!(
+                        after, before,
+                        "positive carrier must produce its real state effect"
+                    );
+                }
+                observations.push((result.is_ok(), after));
+            }
+            assert_eq!(
+                observations[0].0,
+                is_finalize || is_abort || !tightened,
+                "committed boundary and original continuation control"
+            );
+            assert_eq!(
+                observations[0].0, observations[1].0,
+                "same signed carrier and committed World must agree; finalize={is_finalize}"
+            );
+            assert_eq!(
+                observations[0].1, observations[1].1,
+                "accepted carriers must produce the same private state; finalize={is_finalize}"
+            );
+        }
     }
 
     #[test]
@@ -3281,7 +3559,7 @@ pub(crate) mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("private-settlement-wsv-test"),
-            receipt.manifest.network_id.clone(),
+            receipt.manifest.network_id,
         );
         install_private_settlement_authority_fixture(
             &state,
@@ -3296,13 +3574,6 @@ pub(crate) mod tests {
             0,
         );
         let mut block = state.block(header);
-        block.nexus.atomic_private_settlement.enabled = true;
-        block.nexus.atomic_private_settlement.activation_height = Some(2);
-        block
-            .nexus
-            .atomic_private_settlement
-            .minimum_activation_notice_blocks =
-            NonZeroU64::new(2).expect("non-zero settlement activation notice");
         let lane_bound = receipt
             .manifest
             .legs
@@ -3347,6 +3618,21 @@ pub(crate) mod tests {
         )
         .expect("fixture settlement dataspace catalog");
 
+        let protocol_id =
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol_id);
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+            .expect("actual compiled IVM private-note profile");
+        block.world.privacy_protocol_policies.insert(
+            policy_key,
+            iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+                protocol_id,
+                current_limits:
+                    iroha_data_model::privacy::PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                pending_update: None,
+            },
+        );
+
         let old_heads = receipt
             .legs
             .iter()
@@ -3367,7 +3653,7 @@ pub(crate) mod tests {
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(receipt.clone()),
                 Err(PrivateSettlementGlobalStateErrorV1::Capability),
-                "WSV admission must not trust the Torii capability gate"
+                "WSV admission must reject a malformed stored policy independently of Torii"
             );
             assert!(
                 transaction
@@ -3387,59 +3673,79 @@ pub(crate) mod tests {
                 .private_settlement_receipts
                 .get(&receipt.manifest.bundle_id)
                 .is_none(),
-            "missing compiled capability must leave the parent block byte-clean"
+            "invalid stored policy must leave the parent block byte-clean"
         );
 
-        let protocol_id =
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
-            .expect("compiled IVM private-note profile");
-        let proposed = profile.activation_record(
-            iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Proposed(
-                iroha_data_model::privacy::PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 1,
+        for (inputs, outputs) in [(1, 2), (2, 1)] {
+            let limits =
+                iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                    iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
+                        max_input_count: inputs,
+                        max_output_count: outputs,
+                    },
+                );
+            block.world.privacy_protocol_policies.insert(
+                policy_key,
+                iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+                    protocol_id,
+                    current_limits: limits,
+                    pending_update: None,
                 },
-            ),
-        );
-        block.world.privacy_activations.insert(
-            crate::privacy_state::PrivacyActivationKeyV1::new(protocol_id),
-            proposed,
-        );
-        {
+            );
             let mut transaction = block.transaction();
+            let before = private_settlement_transaction_bytes(&transaction);
+            assert_eq!(
+                transaction.apply_private_settlement_prepare_locks_v1(
+                    &prepare_barrier_from_receipt_v1(&receipt).unwrap(),
+                ),
+                Err(PrivateSettlementGlobalStateErrorV1::Capability),
+                "closed current admission must refuse new Prepare registration without mutation"
+            );
+            assert_eq!(private_settlement_transaction_bytes(&transaction), before);
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(receipt.clone()),
-                Err(PrivateSettlementGlobalStateErrorV1::Activation),
-                "a proposed generic capability must not activate the settlement profile"
+                Ok(PrivateSettlementGlobalStateOutcomeV1::Applied),
+                "a valid admission closure cannot revoke the original registered obligation"
+            );
+            assert_eq!(
+                transaction.private_settlement_receipt_v1(&receipt.manifest.bundle_id),
+                Some(&receipt)
             );
         }
+        block.world.privacy_protocol_policies.remove(policy_key);
+        assert_eq!(
+            crate::privacy_state::resolve_admitted_privacy_protocol_v1(
+                &block.world.privacy_protocol_policies,
+                protocol_id,
+                receipt.finalized_height,
+            )
+            .expect("available relation uses defaults without registration")
+            .profile(),
+            &profile.snapshot()
+        );
 
-        let active = profile.activation_record(
-            iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Active(
-                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ),
-        );
-        block.world.privacy_activations.insert(
-            crate::privacy_state::PrivacyActivationKeyV1::new(protocol_id),
-            active,
-        );
+        // The default node configuration needs no enable flag or activation event.
+        // Exact authority context remains bound by the receipt and committee verifier.
         {
             let mut transaction = block.transaction();
-            assert_eq!(
-                transaction.apply_private_settlement_receipt_v1(receipt.clone()),
-                Err(PrivateSettlementGlobalStateErrorV1::Activation),
-                "configuration activation earlier than the notice window must fail closed"
+            let before = private_settlement_transaction_bytes(&transaction);
+            let mut wrong_network = receipt.clone();
+            wrong_network.manifest.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"different settlement network"),
+                ));
+            assert_ne!(
+                wrong_network.manifest.network_id,
+                receipt.manifest.network_id
             );
+            assert_eq!(
+                transaction.apply_private_settlement_receipt_v1(wrong_network),
+                Err(PrivateSettlementGlobalStateErrorV1::Network),
+            );
+            assert_eq!(private_settlement_transaction_bytes(&transaction), before);
         }
-        block
-            .nexus
-            .atomic_private_settlement
-            .minimum_activation_notice_blocks =
-            NonZeroU64::new(1).expect("non-zero settlement activation notice");
 
         {
             let mut transaction = block.transaction();

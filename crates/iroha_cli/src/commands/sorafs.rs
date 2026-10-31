@@ -88,9 +88,9 @@ use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROO
 use norito::json::{Map, Number, Value};
 use norito::{NoritoSerialize, decode_from_bytes};
 use rand::{
-    CryptoRng, RngCore, SeedableRng,
-    rand_core::{TryCryptoRng, TryRngCore},
-    rngs::{OsRng, StdRng},
+    CryptoRng, Rng, SeedableRng,
+    rand_core::{TryCryptoRng, TryRng},
+    rngs::{StdRng, SysRng},
 };
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
@@ -580,7 +580,7 @@ fn required_hedging_billing_page_limit(limit: u16) -> Result<u16> {
     }
     Ok(limit)
 }
-/// Authenticated SoraFS billing statement and reconciliation commands.
+/// Authenticated `SoraFS` billing statement and reconciliation commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum BillingCommand {
     /// Fetch the supervised billing projector status and current anchor.
@@ -600,6 +600,10 @@ impl_run_for_subcommand!(BillingCommand => Status, Statements, Statement, Acknow
 pub struct BillingStatusArgs {}
 impl_run_with_client_methods!(BillingStatusArgs, Client::get_sorafs_billing_status);
 impl BillingStatusArgs {
+    #[expect(
+        clippy::unused_self,
+        reason = "The shared command dispatch macro and injected-client tests use the same method interface for empty and populated arguments"
+    )]
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
@@ -996,6 +1000,10 @@ impl_run_with_client_methods!(
     Client::get_sorafs_billing_reconciliation,
 );
 impl BillingReconciliationArgs {
+    #[expect(
+        clippy::unused_self,
+        reason = "The shared command dispatch macro and injected-client tests use the same method interface for empty and populated arguments"
+    )]
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
@@ -1005,7 +1013,7 @@ impl BillingReconciliationArgs {
         render_json_response(context, get(&client)?)
     }
 }
-/// Read-only finalized SoraFS hedging projections.
+/// Read-only finalized `SoraFS` hedging projections.
 #[derive(clap::Subcommand, Debug)]
 pub enum HedgingCommand {
     /// List finalized XOR exposure, including below-threshold periods.
@@ -2028,20 +2036,20 @@ impl ModerationBallotsExecuteArgs {
             if !coordination.pending_commits.contains(&key) {
                 return Err(eyre!(
                     "commit payload for juror `{}` ballot `{}/{}` is not pending in --status",
-                    key.juror_id,
-                    key.case_id,
-                    key.round_id
+                    key.juror,
+                    key.case,
+                    key.round
                 ));
             }
             let transaction = build_moderation_commit_transaction(&client, &commit)?;
             let hash = submit_commit(&client, &transaction)?;
             actions.push(moderation_ballot_execution_action_json(
                 "commit",
-                &key.case_id,
-                &key.round_id,
-                Some(&key.juror_id),
+                &key.case,
+                &key.round,
+                Some(&key.juror),
                 &hash,
-            )?);
+            ));
         }
         for path in &self.reveal_payloads {
             let reveal = load_moderation_ballot_reveal_payload(path, self.reveal_format.as_str())?;
@@ -2049,20 +2057,20 @@ impl ModerationBallotsExecuteArgs {
             if !coordination.pending_reveals.contains(&key) {
                 return Err(eyre!(
                     "reveal payload for juror `{}` ballot `{}/{}` is not pending in --status",
-                    key.juror_id,
-                    key.case_id,
-                    key.round_id
+                    key.juror,
+                    key.case,
+                    key.round
                 ));
             }
             let transaction = build_moderation_reveal_transaction(&client, &reveal)?;
             let hash = submit_reveal(&client, &transaction)?;
             actions.push(moderation_ballot_execution_action_json(
                 "reveal",
-                &key.case_id,
-                &key.round_id,
-                Some(&key.juror_id),
+                &key.case,
+                &key.round,
+                Some(&key.juror),
                 &hash,
-            )?);
+            ));
         }
         if self.submit_tally {
             for (case_id, round_id) in &coordination.tally_ready {
@@ -2071,7 +2079,7 @@ impl ModerationBallotsExecuteArgs {
                 let hash = submit_tally(&client, &transaction)?;
                 actions.push(moderation_ballot_execution_action_json(
                     "tally", case_id, round_id, None, &hash,
-                )?);
+                ));
             }
         }
         let mut output = Map::new();
@@ -2521,8 +2529,7 @@ impl ModerationQuarantineNotificationsDeliverArgs {
         for notification in notifications {
             let canonical = norito::json::to_vec(notification.value)
                 .wrap_err("failed to encode juror notification JSON")?;
-            let mut outbox_path = Value::Null;
-            if let Some(out_dir) = &self.out_dir {
+            let outbox_path = if let Some(out_dir) = &self.out_dir {
                 let path = out_dir.join(format!(
                     "{}.json",
                     safe_moderation_notification_filename(notification.delivery_id)
@@ -2533,12 +2540,13 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                         path.display()
                     )
                 })?;
-                outbox_path = Value::from(path.to_string_lossy().into_owned());
-            }
+                Value::from(path.to_string_lossy().into_owned())
+            } else {
+                Value::Null
+            };
             let mut webhook_status = Value::Null;
             let mut webhook_response_bytes = Value::Null;
-            let mut webhook_response_body_blake3 = Value::Null;
-            if let Some(url) = webhook_url.as_deref() {
+            let webhook_response_body_blake3 = if let Some(url) = webhook_url.as_deref() {
                 let response = post_webhook(url, &canonical)?;
                 let status = response.status();
                 let body = response.into_body();
@@ -2547,8 +2555,10 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                 }
                 webhook_status = Value::from(u64::from(status.as_u16()));
                 webhook_response_bytes = Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX));
-                webhook_response_body_blake3 = Value::from(encode(blake3::hash(&body).as_bytes()));
-            }
+                Value::from(encode(blake3::hash(&body).as_bytes()))
+            } else {
+                Value::Null
+            };
             deliveries.push(moderation_juror_notification_delivery_result_json(
                 notification,
                 canonical.len(),
@@ -2643,7 +2653,7 @@ impl ModerationQuarantineNotificationsCanaryArgs {
                 notification,
                 &canonical,
                 response,
-            )?);
+            ));
         }
         let status = if probes.iter().all(moderation_canary_probe_ok) {
             "passed"
@@ -3071,24 +3081,21 @@ impl RepairListArgs {
             expected_finalized_block_hash_hex: finalized_block_hash.as_deref(),
         };
         let client = context.client_from_config()?;
-        let response = match self.ticket_id.as_deref() {
-            Some(ticket_id) => {
-                if self.limit.is_some() || after_task_id.is_some() {
-                    return Err(eyre!(
-                        "--limit and --after-task-id cannot be combined with --ticket-id"
-                    ));
-                }
-                let ticket_id = parse_repair_ticket_id(ticket_id, "--ticket-id")?;
-                get(&client, &ticket_id.0, &finalized)?
+        let response = if let Some(ticket_id) = self.ticket_id.as_deref() {
+            if self.limit.is_some() || after_task_id.is_some() {
+                return Err(eyre!(
+                    "--limit and --after-task-id cannot be combined with --ticket-id"
+                ));
             }
-            None => {
-                let filter = SorafsRepairTasksFilter {
-                    finalized,
-                    limit: self.limit,
-                    after_task_id_hex: after_task_id.as_deref(),
-                };
-                list(&client, &filter)?
-            }
+            let ticket_id = parse_repair_ticket_id(ticket_id, "--ticket-id")?;
+            get(&client, &ticket_id.0, &finalized)?
+        } else {
+            let filter = SorafsRepairTasksFilter {
+                finalized,
+                limit: self.limit,
+                after_task_id_hex: after_task_id.as_deref(),
+            };
+            list(&client, &filter)?
         };
         render_json_response(context, response)
     }
@@ -3376,7 +3383,7 @@ pub enum GcCommand {
 impl_run_for_subcommand!(GcCommand => Inspect, DryRun);
 #[derive(clap::Args, Debug)]
 pub struct GcInspectArgs {
-    /// Root directory for SoraFS storage data (defaults to the node config default).
+    /// Root directory for `SoraFS` storage data (defaults to the node config default).
     #[arg(long = "data-dir", value_name = "PATH")]
     data_dir: Option<PathBuf>,
     /// Override the reference timestamp (RFC3339 or `@unix_seconds`).
@@ -3400,7 +3407,7 @@ impl Run for GcInspectArgs {
 }
 #[derive(clap::Args, Debug)]
 pub struct GcDryRunArgs {
-    /// Root directory for SoraFS storage data (defaults to the node config default).
+    /// Root directory for `SoraFS` storage data (defaults to the node config default).
     #[arg(long = "data-dir", value_name = "PATH")]
     data_dir: Option<PathBuf>,
     /// Override the reference timestamp (RFC3339 or `@unix_seconds`).
@@ -3467,9 +3474,7 @@ fn build_gc_report(
     grace_secs: Option<u64>,
     only_expired: bool,
 ) -> Result<GcReportOutput> {
-    let data_dir = data_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(defaults::sorafs::storage::data_dir);
+    let data_dir = data_dir.map_or_else(defaults::sorafs::storage::data_dir, Path::to_path_buf);
     let now_unix = parse_timestamp_or_now(now, "now")?;
     let grace_secs = grace_secs.unwrap_or(defaults::sorafs::gc::RETENTION_GRACE_SECS);
     let mut entries = load_gc_manifest_entries(&data_dir)?;
@@ -3558,7 +3563,7 @@ fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
         let retention_sources = retention_source
             .sources
             .iter()
-            .map(|source| source.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
         entries.push(GcManifestEntry {
             manifest_id,
@@ -3686,7 +3691,7 @@ impl ReserveLedgerArgs {
             .wrap_err("failed to parse --asset-definition")?;
         let plan = build_reserve_ledger_plan(
             &self.quote_path,
-            projection,
+            &(projection),
             &provider,
             &treasury,
             &reserve,
@@ -3868,7 +3873,7 @@ impl GarReceiptArgs {
     }
 }
 fn parse_receipt_id(receipt_id_hex: Option<&str>) -> Result<[u8; 16]> {
-    parse_receipt_id_with_rng(receipt_id_hex, &mut OsRng)
+    parse_receipt_id_with_rng(receipt_id_hex, &mut SysRng)
 }
 fn parse_receipt_id_with_rng<R: TryCryptoRng>(
     receipt_id_hex: Option<&str>,
@@ -5108,7 +5113,7 @@ fn persist_owner_private_guard_cache(path: &Path, payload: &[u8]) -> Result<()> 
         .parent()
         .ok_or_else(|| eyre!("guard cache path has no parent directory"))?;
     let mut nonce = [0_u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| eyre!("failed to generate guard cache staging name: {error}"))?;
     let staging_path = parent.join(format!(".guard-cache-{}.tmp", hex::encode(nonce)));
@@ -8437,10 +8442,10 @@ fn moderation_actor_or_default<C: RunContext>(
     value: Option<&str>,
     flag: &str,
 ) -> Result<String> {
-    match value {
-        Some(raw) => required_trimmed_text(raw, flag),
-        None => Ok(context.config().account.to_string()),
-    }
+    value.map_or_else(
+        || Ok(context.config().account.to_string()),
+        |raw| required_trimmed_text(raw, flag),
+    )
 }
 fn required_trimmed_text(value: &str, flag: &str) -> Result<String> {
     let trimmed = value.trim();
@@ -8592,30 +8597,30 @@ fn read_bounded_moderation_file(path: &Path, label: &str, maximum: usize) -> Res
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ModerationBallotExecutionKey {
-    case_id: String,
-    round_id: String,
-    juror_id: String,
+    case: String,
+    round: String,
+    juror: String,
 }
 impl ModerationBallotExecutionKey {
     fn from_commit(commit: &SoraFsModerationBallotCommitV1) -> Self {
         Self {
-            case_id: commit.context.case_id.clone(),
-            round_id: commit.round_id.clone(),
-            juror_id: commit.juror_id.clone(),
+            case: commit.context.case_id.clone(),
+            round: commit.round_id.clone(),
+            juror: commit.juror_id.clone(),
         }
     }
     fn from_reveal(reveal: &SoraFsModerationBallotRevealV1) -> Self {
         Self {
-            case_id: reveal.context.case_id.clone(),
-            round_id: reveal.round_id.clone(),
-            juror_id: reveal.juror_id.clone(),
+            case: reveal.context.case_id.clone(),
+            round: reveal.round_id.clone(),
+            juror: reveal.juror_id.clone(),
         }
     }
     fn new(case_id: &str, round_id: &str, juror_id: &str) -> Result<Self> {
         Ok(Self {
-            case_id: required_trimmed_text(case_id, "case_id")?,
-            round_id: required_trimmed_text(round_id, "round_id")?,
-            juror_id: required_trimmed_text(juror_id, "juror_id")?,
+            case: required_trimmed_text(case_id, "case_id")?,
+            round: required_trimmed_text(round_id, "round_id")?,
+            juror: required_trimmed_text(juror_id, "juror_id")?,
         })
     }
 }
@@ -8638,8 +8643,7 @@ fn moderation_commit_reveal_coordination_from_status(
     let ballots = root
         .get("ballots")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     let mut coordination = ModerationCommitRevealCoordination::default();
     for ballot in ballots {
         let ballot_obj = value_object(ballot, "commit/reveal execution ballot")?;
@@ -8776,7 +8780,7 @@ fn moderation_ballot_execution_action_json(
     round_id: &str,
     juror_id: Option<&str>,
     hash: &HashOf<SignedTransaction>,
-) -> Result<Value> {
+) -> Value {
     let mut fields = Map::new();
     fields.insert("action".into(), Value::from(action.to_string()));
     fields.insert("case_id".into(), Value::from(case_id.to_string()));
@@ -8791,7 +8795,7 @@ fn moderation_ballot_execution_action_json(
     );
     fields.insert("payload_bytes_included".into(), Value::Bool(false));
     fields.insert("private_payloads_included".into(), Value::Bool(false));
-    Ok(Value::Object(fields))
+    Value::Object(fields)
 }
 fn write_moderation_ballots_executor_bundle(
     args: &ModerationBallotsExecutorBundleArgs,
@@ -8888,9 +8892,7 @@ fn write_moderation_ballots_executor_bundle(
         reveal_payloads.len(),
         args.submit_tally,
         args.interval_secs,
-        &systemd_unit_name,
-        &systemd_timer_name,
-        &launchd_plist_name,
+        (&systemd_unit_name, &systemd_timer_name, &launchd_plist_name),
     );
     write_text_artifact(
         &readme_path,
@@ -8996,8 +8998,7 @@ fn moderation_ballots_executor_bundle_systemd_timer(
     interval_secs: u64,
 ) -> String {
     format!(
-        "[Unit]\nDescription=Schedule SoraFS moderation ballot executor ({})\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec={}s\nAccuracySec=5s\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-        service_name, interval_secs
+        "[Unit]\nDescription=Schedule SoraFS moderation ballot executor ({service_name})\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec={interval_secs}s\nAccuracySec=5s\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
     )
 }
 fn moderation_ballots_executor_bundle_launchd_plist(
@@ -9022,22 +9023,10 @@ fn moderation_ballots_executor_bundle_readme(
     reveal_payload_count: usize,
     submit_tally: bool,
     interval_secs: u64,
-    systemd_unit_name: &str,
-    systemd_timer_name: &str,
-    launchd_plist_name: &str,
+    (systemd_unit_name, systemd_timer_name, launchd_plist_name): (&str, &str, &str),
 ) -> String {
     format!(
-        "# SoraFS Moderation Ballot Executor Bundle\n\nThis bundle runs `iroha sorafs moderation ballots execute` as a scheduled local job. It does not copy private commit or reveal payload files; keep those files in an operator-controlled location and update `run.sh` only if their runtime paths change.\n\n- Status path: `{}`\n- Commit payload paths referenced: `{}`\n- Reveal payload paths referenced: `{}`\n- Submit tally requests: `{}`\n- Interval seconds: `{}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {} {} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {}\n```\n\nInstall with launchd:\n\n```sh\ncp {} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{}\n```\n\nReplace `IROHA_BIN` in `executor.env` with the absolute path to the audited `iroha` binary on the target host before installing.\n",
-        status_path,
-        commit_payload_count,
-        reveal_payload_count,
-        submit_tally,
-        interval_secs,
-        systemd_unit_name,
-        systemd_timer_name,
-        systemd_timer_name,
-        launchd_plist_name,
-        launchd_plist_name
+        "# SoraFS Moderation Ballot Executor Bundle\n\nThis bundle runs `iroha sorafs moderation ballots execute` as a scheduled local job. It does not copy private commit or reveal payload files; keep those files in an operator-controlled location and update `run.sh` only if their runtime paths change.\n\n- Status path: `{status_path}`\n- Commit payload paths referenced: `{commit_payload_count}`\n- Reveal payload paths referenced: `{reveal_payload_count}`\n- Submit tally requests: `{submit_tally}`\n- Interval seconds: `{interval_secs}`\n\nRun directly:\n\n```sh\n./run.sh\n```\n\nInstall with systemd:\n\n```sh\nsudo cp {systemd_unit_name} {systemd_timer_name} /etc/systemd/system/\nsudo systemctl daemon-reload\nsudo systemctl enable --now {systemd_timer_name}\n```\n\nInstall with launchd:\n\n```sh\ncp {launchd_plist_name} ~/Library/LaunchAgents/\nlaunchctl load ~/Library/LaunchAgents/{launchd_plist_name}\n```\n\nReplace `IROHA_BIN` in `executor.env` with the absolute path to the audited `iroha` binary on the target host before installing.\n"
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -9215,7 +9204,7 @@ fn moderation_ballots_executor_canary_evidence(
         .as_ref()
         .and_then(|summary| summary.get("passed"))
         .and_then(Value::as_bool)
-        .unwrap_or(args.execution_summary.is_none());
+        .unwrap_or_else(|| args.execution_summary.is_none());
     let artifact_count = u64::try_from(artifacts.len()).unwrap_or(u64::MAX);
     let artifacts_passed = passed_artifact_count == artifact_count;
     let status = if artifacts_passed && execution_summary_passed {
@@ -9294,7 +9283,7 @@ fn moderation_ballots_executor_canary_artifact(
             path.display()
         ));
     }
-    let checks = moderation_ballots_executor_artifact_checks(kind, &body, &path)?;
+    let checks = moderation_ballots_executor_artifact_checks(kind, &body, &path);
     let passed = checks.iter().all(|check| {
         check
             .get("passed")
@@ -9314,11 +9303,7 @@ fn moderation_ballots_executor_canary_artifact(
     fields.insert("checks".into(), Value::Array(checks));
     Ok(Value::Object(fields))
 }
-fn moderation_ballots_executor_artifact_checks(
-    kind: &str,
-    body: &str,
-    path: &Path,
-) -> Result<Vec<Value>> {
+fn moderation_ballots_executor_artifact_checks(kind: &str, body: &str, path: &Path) -> Vec<Value> {
     let mut checks = Vec::new();
     match kind {
         "env" => {
@@ -9383,7 +9368,7 @@ fn moderation_ballots_executor_artifact_checks(
         }
         _ => checks.push(check_json("known_artifact_kind", false)),
     }
-    Ok(checks)
+    checks
 }
 fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<Value> {
     let (summary, bytes) =
@@ -9413,8 +9398,7 @@ fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<V
     let actions = fields
         .get("actions")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     for action in actions {
         let action_fields = value_object(action, "moderation ballots executor action summary")?;
         let transaction_hash_hex = required_string_field(
@@ -9706,7 +9690,7 @@ fn moderation_juror_notification_canary_probe_json(
     notification: ModerationJurorNotificationEntry<'_>,
     canonical: &[u8],
     response: Response<Vec<u8>>,
-) -> Result<Value> {
+) -> Value {
     let status = response.status();
     let body = response.into_body();
     let mut fields = Map::new();
@@ -9757,7 +9741,7 @@ fn moderation_juror_notification_canary_probe_json(
     );
     fields.insert("payload_bytes_included".into(), Value::Bool(false));
     fields.insert("private_payloads_included".into(), Value::Bool(false));
-    Ok(Value::Object(fields))
+    Value::Object(fields)
 }
 fn moderation_canary_probe_ok(probe: &Value) -> bool {
     probe
@@ -10174,7 +10158,7 @@ pub enum HandshakeCommand {
     Show,
     /// Admission token helpers (issuance, fingerprinting, revocation digests).
     #[command(subcommand)]
-    Token(HandshakeTokenCommand),
+    Token(Box<HandshakeTokenCommand>),
 }
 impl Run for HandshakeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -10203,7 +10187,7 @@ impl Run for HandshakeCommand {
                 ))?;
                 Ok(())
             }
-            HandshakeCommand::Token(cmd) => cmd.run(context),
+            HandshakeCommand::Token(cmd) => (*cmd).run(context),
         }
     }
 }
@@ -10315,7 +10299,7 @@ impl HandshakeTokenIssueArgs {
     ) -> Result<TokenIssueArtifacts>
     where
         C: RunContext,
-        R: RngCore + CryptoRng,
+        R: Rng + CryptoRng,
     {
         let suite = self.suite;
         let secret_key = read_owner_private_handshake_file(
@@ -10479,7 +10463,7 @@ fn canonical_default_token_timestamp(now: SystemTime) -> Result<OffsetDateTime> 
     })
 }
 fn token_issue_rng() -> Result<StdRng> {
-    token_issue_rng_from_rng(&mut OsRng)
+    token_issue_rng_from_rng(&mut SysRng)
 }
 fn token_issue_rng_from_rng<R: TryCryptoRng>(rng: &mut R) -> Result<StdRng> {
     StdRng::try_from_rng(rng).map_err(|error| {
@@ -10953,6 +10937,8 @@ fn write_token_encoding(
 }
 #[cfg(unix)]
 fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
+    use std::os::unix::fs::MetadataExt as _;
+
     let descriptor = rustix::fs::open(
         path,
         rustix::fs::OFlags::WRONLY
@@ -10972,7 +10958,7 @@ fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
     let metadata = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect token output {}", path.display()))?;
-    use std::os::unix::fs::MetadataExt as _;
+
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.mode() & 0o077 != 0
@@ -11951,7 +11937,7 @@ ban = {{ secs = 30, nanos = 0 }}
 enabled = true
 account_email = "ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
-hostnames = [{hosts}]
+hostnames = [{host_list}]
 dns_provider_id = "cloudflare-prod"
 renewal_window = {{ secs = 2592000, nanos = 0 }}
 retry_backoff = {{ secs = 1800, nanos = 0 }}
@@ -11961,7 +11947,6 @@ retry_jitter = {{ secs = 300, nanos = 0 }}
 dns01 = true
 tls_alpn_01 = true
 "#,
-            hosts = host_list,
         );
         context.println(template)
     }
@@ -13141,8 +13126,7 @@ where
         ));
     }
     let body_blake3_hex = blake3::hash(&response.body).to_hex().to_string();
-    let mut schema = None;
-    if let Some(expected_schema) = spec.expected_schema {
+    let schema = if let Some(expected_schema) = spec.expected_schema {
         let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
             format!(
                 "failed to decode SoraFS transparency explorer canary `{}` JSON response",
@@ -13162,8 +13146,10 @@ where
                 spec.name
             ));
         }
-        schema = Some(actual_schema.to_string());
-    }
+        Some(actual_schema.to_string())
+    } else {
+        None
+    };
     if let Some(marker) = spec.expect_html_marker {
         let body = std::str::from_utf8(&response.body).wrap_err_with(|| {
             format!(
@@ -13232,7 +13218,7 @@ fn transparency_publication_canary_route_url(
         .wrap_err("failed to join transparency publication cycles route")?;
     if let Some(cycle_id) = cycle_id {
         url.path_segments_mut()
-            .map_err(|_| eyre!("failed to append transparency cycle id to --torii-url"))?
+            .map_err(|()| eyre!("failed to append transparency cycle id to --torii-url"))?
             .push(cycle_id);
     }
     if let Some(limit) = limit {
@@ -13310,7 +13296,7 @@ fn transparency_explorer_canary_ensure_payload_free(value: &Value) -> Result<()>
             Value::Object(fields) => {
                 for (key, child) in fields {
                     let child_path = if path.is_empty() {
-                        key.to_string()
+                        key.clone()
                     } else {
                         format!("{path}.{key}")
                     };
@@ -13499,8 +13485,7 @@ where
         ));
     }
     let body_blake3_hex = blake3::hash(&response.body).to_hex().to_string();
-    let mut schema = None;
-    if let Some(expected_schema) = spec.expected_schema {
+    let schema = if let Some(expected_schema) = spec.expected_schema {
         let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
             format!(
                 "failed to decode SoraFS moderation operator canary `{}` JSON response",
@@ -13517,8 +13502,10 @@ where
                 spec.name
             ));
         }
-        schema = Some(actual_schema.to_string());
-    }
+        Some(actual_schema.to_string())
+    } else {
+        None
+    };
     if let Some(marker) = spec.expect_html_marker {
         let body = std::str::from_utf8(&response.body).wrap_err_with(|| {
             format!(
@@ -13580,7 +13567,7 @@ fn moderation_operator_canary_ensure_payload_free(value: &Value) -> Result<()> {
             Value::Object(fields) => {
                 for (key, child) in fields {
                     let child_path = if path.is_empty() {
-                        key.to_string()
+                        key.clone()
                     } else {
                         format!("{path}.{key}")
                     };
@@ -13621,11 +13608,11 @@ fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 fn generate_nonce_hex(bytes: usize) -> Result<String> {
-    generate_nonce_hex_with_rng(bytes, &mut OsRng)
+    generate_nonce_hex_with_rng(bytes, &mut SysRng)
 }
 fn generate_moderation_operator_csrf_token() -> Result<String> {
     let mut token = [0_u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut token)
         .map_err(|error| eyre!("SoraFS moderation operator CSRF token OS RNG failed: {error}"))?;
     Ok(URL_SAFE_NO_PAD.encode(token))
@@ -13706,8 +13693,7 @@ fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value
     let cases = root
         .get("cases")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     let case_ref = first_moderation_case_reference(cases);
     let mut actions = Vec::with_capacity(next_actions.len());
     let mut required_count = 0_u64;
@@ -13896,15 +13882,6 @@ fn moderation_quarantine_bridge_action_cli(
                 ])
             }
         }
-        "release_complete" => command(&[
-            "iroha",
-            "sorafs",
-            "moderation",
-            "quarantine",
-            "operator-panel",
-            "--quarantine-id",
-            quarantine_id_hex,
-        ]),
         _ => command(&[
             "iroha",
             "sorafs",
@@ -13940,17 +13917,16 @@ fn moderation_quarantine_juror_plan_json(quarantine_id_hex: &str, panel: &Value)
     let ballots = root
         .get("cases")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     let mut planned_ballots = Vec::with_capacity(ballots.len());
     let mut notification_count = 0_u64;
     let mut pending_commit_count = 0_u64;
     let mut pending_reveal_count = 0_u64;
     for ballot in ballots {
         let (planned, counts) = moderation_quarantine_juror_plan_ballot_json(ballot)?;
-        notification_count = notification_count.saturating_add(counts.notification_count);
-        pending_commit_count = pending_commit_count.saturating_add(counts.pending_commit_count);
-        pending_reveal_count = pending_reveal_count.saturating_add(counts.pending_reveal_count);
+        notification_count = notification_count.saturating_add(counts.notifications);
+        pending_commit_count = pending_commit_count.saturating_add(counts.pending_commits);
+        pending_reveal_count = pending_reveal_count.saturating_add(counts.pending_reveals);
         planned_ballots.push(planned);
     }
     let mut plan = Map::new();
@@ -14004,8 +13980,7 @@ fn moderation_quarantine_juror_notifications_from_plan(
     let ballots = root
         .get("ballots")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     let mut notifications = Vec::new();
     let mut planned_juror_count = 0_u64;
     let mut skipped_complete_count = 0_u64;
@@ -14112,8 +14087,7 @@ fn moderation_quarantine_commit_reveal_status_from_plan(
     let ballots = root
         .get("ballots")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .map_or(&[][..], Vec::as_slice);
     let mut ballot_statuses = Vec::with_capacity(ballots.len());
     let mut pending_commit_count = 0_u64;
     let mut pending_reveal_count = 0_u64;
@@ -14179,6 +14153,10 @@ fn moderation_quarantine_commit_reveal_status_from_plan(
     Ok(Value::Object(status))
 }
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independent observed quorum and tally flags describe a read-only status projection"
+)]
 struct ModerationCommitRevealStatusCounts {
     pending_commit_count: u64,
     pending_reveal_count: u64,
@@ -14454,9 +14432,9 @@ fn moderation_juror_notification_delivery_id(
 }
 #[derive(Default)]
 struct ModerationJurorPlanCounts {
-    notification_count: u64,
-    pending_commit_count: u64,
-    pending_reveal_count: u64,
+    notifications: u64,
+    pending_commits: u64,
+    pending_reveals: u64,
 }
 fn moderation_quarantine_juror_plan_ballot_json(
     ballot: &Value,
@@ -14495,23 +14473,23 @@ fn moderation_quarantine_juror_plan_ballot_json(
             .ok_or_else(|| eyre!("operator panel ballot juror id must be a string"))?;
         let planned = moderation_quarantine_juror_plan_entry_json(
             case_id, round_id, juror_id, &commits, &reveals,
-        )?;
+        );
         let planned_obj = value_object(&planned, "juror notification plan entry")?;
         if planned_obj
             .get("needs_commit")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         {
-            counts.pending_commit_count = counts.pending_commit_count.saturating_add(1);
+            counts.pending_commits = counts.pending_commits.saturating_add(1);
         }
         if planned_obj
             .get("needs_reveal")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         {
-            counts.pending_reveal_count = counts.pending_reveal_count.saturating_add(1);
+            counts.pending_reveals = counts.pending_reveals.saturating_add(1);
         }
-        counts.notification_count = counts.notification_count.saturating_add(1);
+        counts.notifications = counts.notifications.saturating_add(1);
         jurors.push(planned);
     }
     let mut fields = Map::new();
@@ -14583,7 +14561,7 @@ fn moderation_quarantine_juror_plan_entry_json(
     juror_id: &str,
     commits: &BTreeSet<String>,
     reveals: &BTreeSet<String>,
-) -> Result<Value> {
+) -> Value {
     let committed = commits.contains(juror_id);
     let revealed = reveals.contains(juror_id);
     let needs_commit = !committed;
@@ -14660,10 +14638,10 @@ fn moderation_quarantine_juror_plan_entry_json(
             .collect(),
         ),
     );
-    Ok(Value::Object(entry))
+    Value::Object(entry)
 }
 fn first_moderation_case_reference(cases: &[Value]) -> Option<(&str, &str)> {
-    for case in cases {
+    if let Some(case) = cases.first() {
         let case_obj = case.as_object()?.get("case")?.as_object()?;
         let spec = case_obj.get("spec")?.as_object()?;
         let round_id = spec.get("round_id")?.as_str()?;
@@ -14679,7 +14657,7 @@ fn ensure_moderation_bridge_plan_has_no_payload(value: &Value) -> Result<()> {
             Value::Object(fields) => {
                 for (key, child) in fields {
                     let child_path = if path.is_empty() {
-                        key.to_string()
+                        key.clone()
                     } else {
                         format!("{path}.{key}")
                     };
@@ -14922,8 +14900,8 @@ impl ModerationOperatorService {
             }
             ModerationOperatorRoute::Review { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
-                    .and_then(|_| moderation_operator_reject_query(request.query))
-                    .and_then(|_| self.require_csrf_token(request))
+                    .and_then(|()| moderation_operator_reject_query(request.query))
+                    .and_then(|()| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -14931,8 +14909,8 @@ impl ModerationOperatorService {
             }
             ModerationOperatorRoute::Release { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
-                    .and_then(|_| moderation_operator_reject_query(request.query))
-                    .and_then(|_| self.require_csrf_token(request))
+                    .and_then(|()| moderation_operator_reject_query(request.query))
+                    .and_then(|()| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -14940,8 +14918,8 @@ impl ModerationOperatorService {
             }
             ModerationOperatorRoute::AppealHandoff { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
-                    .and_then(|_| moderation_operator_reject_query(request.query))
-                    .and_then(|_| self.require_csrf_token(request))
+                    .and_then(|()| moderation_operator_reject_query(request.query))
+                    .and_then(|()| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -15455,13 +15433,15 @@ fn moderation_operator_find_header_end(raw: &[u8]) -> Option<usize> {
 fn moderation_operator_route(
     path: &str,
 ) -> Result<ModerationOperatorRoute, ModerationOperatorRequestError> {
+    const PREFIX: &str = "/v1/sorafs/moderation/quarantine/";
+
     if path == "/" || path == "/v1/sorafs/moderation/operator-panel/ui" {
         return Ok(ModerationOperatorRoute::BrowserUi);
     }
     if path == "/healthz" || path == "/v1/sorafs/moderation/operator-panel/status" {
         return Ok(ModerationOperatorRoute::Status);
     }
-    const PREFIX: &str = "/v1/sorafs/moderation/quarantine/";
+
     let Some(remainder) = path.strip_prefix(PREFIX) else {
         return Err(ModerationOperatorRequestError::new(
             StatusCode::NOT_FOUND,
@@ -15942,7 +15922,7 @@ fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
 }
 fn build_reserve_ledger_plan(
     quote_path: &Path,
-    projection: LedgerProjectionAmounts,
+    projection: &LedgerProjectionAmounts,
     provider: &AccountId,
     treasury: &AccountId,
     reserve: &AccountId,

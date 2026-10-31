@@ -1,8 +1,11 @@
-
 seiyaku CompilerFixture {
-
-fn main(AssetDefinitionId asset) {
-  ledger::asset::register(asset_definition: asset, name: Json::parse("{}"), spec: NumericSpec::integer(), mintable: Mintable::Not);
-}
-
+    fn main(AssetDefinitionId asset) {
+        ledger::asset::register(
+            asset_definition: asset,
+            name: Json::parse("{}"),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Not,
+            owning_domain: DomainId::parse("default.universal"),
+        );
+    }
 }

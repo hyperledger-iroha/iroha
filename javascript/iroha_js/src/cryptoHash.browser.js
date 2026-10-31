@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import { sha256 } from "@noble/hashes/sha2";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 const SHA256_ALIASES = new Set(["sha256", "sha-256"]);
 const MAX_RANDOM_BYTES = 0x7fff_ffff;

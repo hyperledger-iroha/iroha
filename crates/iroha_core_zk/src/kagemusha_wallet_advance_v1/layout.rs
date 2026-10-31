@@ -41,7 +41,7 @@ use super::{
     },
     store::KagemushaWalletDurableStoreV1,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 /// Directory name of the custody root under the platform's no-backup directory.
 pub const KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1: &str = "kagemusha-wallet-v1";
@@ -194,7 +194,7 @@ impl KagemushaWalletSlotIdV1 {
     /// Returns [`KagemushaWalletUnavailableV1::Platform`] when the RNG fails.
     pub fn generate() -> Result<Self, KagemushaWalletUnavailableV1> {
         let mut bytes = [0_u8; 32];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
             .map_err(|_| KagemushaWalletUnavailableV1::Platform(0))?;
         if bytes == [0; 32] {
@@ -238,10 +238,8 @@ impl KagemushaWalletCopyV1 {
     }
 
     fn split(name: &str) -> (&str, Self) {
-        match name.strip_suffix(REPLICA_SUFFIX) {
-            Some(stem) => (stem, Self::Replica),
-            None => (name, Self::Primary),
-        }
+        name.strip_suffix(REPLICA_SUFFIX)
+            .map_or((name, Self::Primary), |stem| (stem, Self::Replica))
     }
 }
 
@@ -582,7 +580,7 @@ pub(super) fn kagemusha_wallet_prepare_root_v1<F: KagemushaWalletFsV1>(
         }
     }
     let mut root_nonce = [0_u8; 32];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut root_nonce)
         .map_err(|_| {
             KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
@@ -733,14 +731,14 @@ fn kagemusha_wallet_ensure_durable_dir_v1<F: KagemushaWalletFsV1>(
     name: &KagemushaWalletEntryNameV1,
 ) -> Result<(), KagemushaWalletProviderErrorV1> {
     let dir = parent.child(name);
-    if let Some(entries) = kagemusha_wallet_list_dir_v1(store, &dir)? {
-        if entries.iter().all(|entry| {
+    if let Some(entries) = kagemusha_wallet_list_dir_v1(store, &dir)?
+        && entries.iter().all(|entry| {
             entry.kind == KagemushaWalletEntryKindV1::File
                 && kagemusha_wallet_is_staging_name_v1(&entry.name)
-        }) {
-            store.remove_staging(&dir)?;
-            kagemusha_wallet_require_removed_v1(store.remove_dir(parent, name))?;
-        }
+        })
+    {
+        store.remove_staging(&dir)?;
+        kagemusha_wallet_require_removed_v1(store.remove_dir(parent, name))?;
     }
     kagemusha_wallet_ensure_dir_v1(store, parent, name)
 }

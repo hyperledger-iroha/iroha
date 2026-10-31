@@ -63,9 +63,7 @@ fn malformed_registry(stx: &mut StateTransaction<'_, '_>) -> CustomParameter {
     let original =
         CustomParameter::new(ValidationFeePolicyRegistryV1::parameter_id(), Json::new(()));
     stx.world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(original.clone()))
+        .set_parameter_for_testing(Parameter::Custom(original.clone()))
         .expect("valid fixture parameters");
     original
 }
@@ -248,7 +246,7 @@ fn recognized_payout_runtime_permission_original_decode_refusal_defers_without_g
 fn unrelated_permission_name_remains_unrestricted_without_original_payload_decode() {
     with_permission_state(|stx, owner, recipient| {
         let permission: Permission =
-            iroha_executor_data_model::permission::governance::CanManageRuntimeUpgrades.into();
+            iroha_executor_data_model::permission::governance::CanManageConsensusKeys.into();
         let original = malformed_registry(stx);
         let grant = Grant::account_permission(permission.clone(), recipient.clone());
         norito::with_decode_limits_scope(

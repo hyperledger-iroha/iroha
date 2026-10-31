@@ -5,6 +5,7 @@ use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;
 
 fn challenges() -> ZkX509ProjectionChallengesV1 {
     ZkX509ProjectionChallengesV1 {
+        hash_bus: super::tests::test_hash_bus_challenges_v1(),
         copy: core::array::from_fn(|lane| ZkX509ProjectionCopyChallengesV1 {
             beta: F(17 * lane as u64 + 2),
             gamma: F(17 * lane as u64 + 3),

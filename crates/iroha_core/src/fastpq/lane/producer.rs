@@ -40,23 +40,22 @@ pub(super) enum ProducerError {
 impl ProducerError {
     fn retryable(&self) -> bool {
         match self {
-            Self::Deadline | Self::View(StateViewError::Busy(_)) => true,
-            Self::Finality(NativeFinalityCursorErrorV1::Deadline) => true,
             Self::Finality(NativeFinalityCursorErrorV1::Proof(ProofError::Deferred(error))) => {
                 deferred_retryable(error)
             }
             Self::Source(error) => source_retryable(error),
             Self::Replay(error) => replay_retryable(error),
             Self::Durable(durable::DurableError::Storage(error)) => storage_retryable(error),
-            Self::Durable(durable::DurableError::Verification(error)) => {
+            Self::Durable(durable::DurableError::Verification(error))
+            | Self::Work(FastpqWorkRefusal::Prove(ProvingError::Verify(error))) => {
                 verification_retryable(error)
             }
-            Self::Durable(durable::DurableError::Source(error)) => work_source_retryable(error),
-            Self::Work(FastpqWorkRefusal::Source(error)) => work_source_retryable(error),
-            Self::Work(FastpqWorkRefusal::Prove(ProvingError::Busy)) => true,
-            Self::Work(FastpqWorkRefusal::Prove(ProvingError::Verify(error))) => {
-                verification_retryable(error)
-            }
+            Self::Durable(durable::DurableError::Source(error))
+            | Self::Work(FastpqWorkRefusal::Source(error)) => work_source_retryable(error),
+            Self::Deadline
+            | Self::View(StateViewError::Busy(_))
+            | Self::Finality(NativeFinalityCursorErrorV1::Deadline)
+            | Self::Work(FastpqWorkRefusal::Prove(ProvingError::Busy)) => true,
             Self::Work(FastpqWorkRefusal::Prove(ProvingError::Prove(error))) => {
                 backend_retryable(error)
             }
@@ -119,8 +118,8 @@ fn work_source_retryable(error: &source::SourceWorkError) -> bool {
 }
 fn source_retryable(error: &SourceReadError) -> bool {
     match error {
-        SourceReadError::Allocation(error) => allocation_retryable(error),
-        SourceReadError::Writes(
+        SourceReadError::Allocation(error)
+        | SourceReadError::Writes(
             crate::query::native_receipts::ordinary_writes::WriteDecodeError::Admission(error),
         ) => allocation_retryable(error),
         SourceReadError::Writes(
@@ -505,6 +504,10 @@ impl Producer {
 
     // Each phase owns large native by-value results. End unrelated temporary
     // frames before replay acquires World blocks on the ordinary blocking worker.
+    #[expect(
+        clippy::result_large_err,
+        reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+    )]
     fn step(
         &mut self,
         engine: &Arc<dyn FastpqProofEngine>,
@@ -744,6 +747,10 @@ impl Producer {
         check(deadline)
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "FASTPQ refusal returns original source custody and its paid work admission without allocating an error box"
+)]
 fn check(deadline: Instant) -> Result<(), ProducerError> {
     if Instant::now() >= deadline {
         Err(ProducerError::Deadline)
@@ -856,8 +863,10 @@ mod tests {
             .ivm_execution_budget()
             .set_limit_bytes(2 * 1024 * 1024 * 1024);
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut policy = FastpqProducer::default();
-        policy.poll_interval = std::time::Duration::from_millis(1);
+        let policy = FastpqProducer {
+            poll_interval: std::time::Duration::from_millis(1),
+            ..FastpqProducer::default()
+        };
         let producer = WorkerProducer::new(Arc::clone(chain.state()), policy, None);
         let (_sender, receiver) = tokio::sync::mpsc::channel(1);
         let shutdown = ShutdownSignal::new();
@@ -1165,7 +1174,7 @@ mod tests {
                 assert_eq!(chain.state().committed_height(), 2, "no successor traffic was submitted");
                 assert_eq!(chain.state().verify_world_state_accumulator().unwrap(), root_before);
                 assert!(std::fs::read_dir(source_root).unwrap().all(|entry| {
-                    !entry.unwrap().path().extension().is_some_and(|extension| extension == "fqs")
+                    entry.unwrap().path().extension().is_none_or(|extension| extension != "fqs")
                 }), "isolated reconstruction must not rewrite live optional source custody");
             })
             .unwrap()
@@ -1175,7 +1184,7 @@ mod tests {
 }
 
 #[cfg(test)]
-pub(crate) fn isolated_replay_retryable_for_test(
+pub fn isolated_replay_retryable_for_test(
     error: &crate::sumeragi::node::IsolatedReplayError,
 ) -> bool {
     replay_retryable(error)

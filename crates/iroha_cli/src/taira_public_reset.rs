@@ -91,10 +91,10 @@ mod native_edge_prepare;
 mod native_edge_protocol;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
-pub(crate) use host::config_retirement::RetireValidatorConfig;
+pub use host::config_retirement::RetireValidatorConfig;
 #[cfg(target_os = "linux")]
 pub(crate) use host::config_retirement::verify_installed_retirement;
-pub(crate) use host::maintenance::StoppedOwnerMaintenance;
+pub use host::maintenance::StoppedOwnerMaintenance;
 #[path = "taira_public_reset_deployment_profile.rs"]
 mod deployment_profile;
 #[path = "taira_public_reset_inputs.rs"]
@@ -109,20 +109,20 @@ mod staging_canary;
 mod validator_units;
 
 #[cfg(test)]
-pub(crate) fn deployment_genesis_fixture()
--> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
+pub fn deployment_genesis_fixture() -> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair)
+{
     public_inputs::deployment_genesis_fixture()
 }
 
 /// Executed genesis with its exact native manifest and verifier-key binding.
 #[cfg(test)]
-pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+pub fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
     public_inputs::deployment_validated_genesis_fixture()
 }
 
 /// Executed signed genesis with four explicit active lane-validator account bindings.
 #[cfg(test)]
-pub(crate) fn deployment_lane_genesis_fixture()
+pub fn deployment_lane_genesis_fixture()
 -> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
     public_inputs::deployment_lane_genesis_fixture()
 }
@@ -132,7 +132,7 @@ mod source;
 
 /// Strict compiled public-reset command.
 #[derive(clap::Args, Debug)]
-pub(crate) struct PublicReset {
+pub struct PublicReset {
     /// Select source export, signed admission, or reset execution.
     #[command(subcommand)]
     command: PublicResetCommand,
@@ -498,8 +498,8 @@ impl PublicReset {
                         let mut transport = match host::OpenSshTransport::new(
                             &admitted,
                             journal_dir,
-                            args.ssh_identity.clone(),
-                            args.known_hosts.clone(),
+                            &args.ssh_identity,
+                            &args.known_hosts,
                             runtime,
                         ) {
                             Ok(transport) => transport,
@@ -518,7 +518,8 @@ impl PublicReset {
                             &mut journal,
                         )?;
                     }
-                    executor_model::JournalOpen::Resumable(mut journal) => {
+                    executor_model::JournalOpen::Resumable(journal) => {
+                        let mut journal = *journal;
                         let disposition = journal.resume_disposition();
                         match disposition {
                             executor_model::ResumeDisposition::Rollback => {
@@ -551,8 +552,8 @@ impl PublicReset {
                                 let mut transport = host::RecoverySshTransport::new(
                                     &admitted,
                                     journal_dir,
-                                    runtime_client_config,
-                                    validator_client_configs,
+                                    &runtime_client_config,
+                                    &validator_client_configs,
                                     args.recovery_validator_operator_key(recovery_step)?,
                                 )?;
                                 executor_model::execute_plan(
@@ -609,8 +610,8 @@ impl PublicReset {
                                 let mut transport = match host::OpenSshTransport::new(
                                     &admitted,
                                     journal_dir,
-                                    args.ssh_identity.clone(),
-                                    args.known_hosts.clone(),
+                                    &args.ssh_identity,
+                                    &args.known_hosts,
                                     runtime,
                                 ) {
                                     Ok(transport) => transport,
@@ -653,11 +654,12 @@ impl PublicReset {
                     ControllerAdmission::AbandonOriginalTarget,
                 )?;
                 let journal_dir = Path::new(JOURNAL_ROOT);
-                let executor_model::JournalOpen::Resumable(mut journal) =
+                let executor_model::JournalOpen::Resumable(journal) =
                     executor_model::DurableJournal::classify(journal_dir, &admitted)?
                 else {
                     return Err(eyre!("abandonment requires an existing unresolved journal"));
                 };
+                let mut journal = *journal;
                 let mut transport = host::RollbackSshTransport::new(&admitted, journal_dir)?;
                 let receipt = executor_model::abandon_pending_attempt(
                     &admitted.inventory,
@@ -726,7 +728,7 @@ fn sample_inventory_fixture() -> InventoryV1 {
 
 /// Create a disposable fixture with the same ancestor custody as operator inputs.
 #[cfg(test)]
-pub(crate) fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
+pub fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
     // A private leaf below a shared temporary directory does not satisfy the
     // public-reset custody policy. Keep fixtures beneath the owned workspace.
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
@@ -1226,6 +1228,10 @@ struct InrouCanaryV1 {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The signed cleanup policy contains independent preservation requirements"
+)]
 struct CleanupV1 {
     policy: String,
     max_reclaim_bytes_per_host: u64,
@@ -1239,6 +1245,10 @@ struct CleanupV1 {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The signed inventory field names explicitly state their time unit"
+)]
 struct TimeoutsV1 {
     stop_secs: u64,
     install_secs: u64,
@@ -1305,7 +1315,7 @@ struct TrustedKeyV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(super) struct RecoveryIntentV1 {
+pub struct RecoveryIntentV1 {
     pub(super) schema: String,
     pub(super) step_label: String,
     pub(super) next_mutation: u16,
@@ -1314,7 +1324,7 @@ pub(super) struct RecoveryIntentV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(super) struct RecoveryMutationV1 {
+pub struct RecoveryMutationV1 {
     pub(super) kind: String,
     pub(super) phase: String,
     pub(super) idempotency_key: String,
@@ -1325,7 +1335,7 @@ pub(super) struct RecoveryMutationV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "state", content = "value")]
 #[norito(deny_unknown_fields)]
-pub(super) enum RecoveryMutationStateV1 {
+pub enum RecoveryMutationStateV1 {
     #[norito(rename = "prepared")]
     Prepared,
     #[norito(rename = "submitted")]
@@ -1335,7 +1345,7 @@ pub(super) enum RecoveryMutationStateV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum RecoveryOutcome {
+pub enum RecoveryOutcome {
     Applied,
     ReadyToContinue,
     ResumeSubmittedBeaconActivation,
@@ -2569,7 +2579,9 @@ fn validate_validator_public_origin(origin: &str) -> Result<()> {
         label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
     }) || host == "localhost"
         || host.ends_with(".localhost")
-        || host.ends_with(".local")
+        || host
+            .rsplit_once('.')
+            .is_some_and(|(_, suffix)| suffix == "local")
         || url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
@@ -3241,7 +3253,7 @@ fn validate_known_host_endpoints(endpoints: &[&EndpointV1], path: &Path) -> Resu
         MAX_JSON_BYTES,
     )?;
     let text = std::str::from_utf8(&bytes).wrap_err("known-hosts must be UTF-8")?;
-    if !text.ends_with('\n') || text.lines().any(|line| line.is_empty()) {
+    if !text.ends_with('\n') || text.lines().any(str::is_empty) {
         return Err(eyre!(
             "known-hosts must be an exact non-empty newline-terminated closure"
         ));
@@ -3602,15 +3614,13 @@ fn validate_recovery_intent(
                 "recovery intent reuses an idempotency key or receipt name"
             ));
         }
-        let valid_state = if index < next_mutation {
-            mutation.state == RecoveryMutationStateV1::Applied
-        } else if index == next_mutation {
-            matches!(
+        let valid_state = match index.cmp(&next_mutation) {
+            std::cmp::Ordering::Less => mutation.state == RecoveryMutationStateV1::Applied,
+            std::cmp::Ordering::Equal => matches!(
                 mutation.state,
                 RecoveryMutationStateV1::Prepared | RecoveryMutationStateV1::Submitted
-            )
-        } else {
-            mutation.state == RecoveryMutationStateV1::Prepared
+            ),
+            std::cmp::Ordering::Greater => mutation.state == RecoveryMutationStateV1::Prepared,
         };
         if !valid_state {
             return Err(eyre!(
@@ -3958,7 +3968,7 @@ fn validate_fixed_executable(_path: &Path, _label: &str) -> Result<()> {
 
 fn sha256_reader(file: &mut File, path: &Path) -> Result<String> {
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let read = file
             .read(&mut buffer)
@@ -4060,7 +4070,7 @@ mod executor_model {
 
     pub(super) enum JournalOpen {
         Fresh(JournalSeed),
-        Resumable(DurableJournal),
+        Resumable(Box<DurableJournal>),
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4092,7 +4102,7 @@ mod executor_model {
         deployment_receipt_path: PathBuf,
         aborted_receipt_path: PathBuf,
         rollback_receipt_path: PathBuf,
-        _lock: JournalLock,
+        lock: JournalLock,
     }
 
     pub(super) struct DurableJournal {
@@ -4111,7 +4121,7 @@ mod executor_model {
         pub(super) fn open(directory: &Path, admitted: &AdmittedReset) -> Result<Self> {
             match Self::classify(directory, admitted)? {
                 JournalOpen::Fresh(seed) => Self::initialize(seed, admitted),
-                JournalOpen::Resumable(journal) => Ok(journal),
+                JournalOpen::Resumable(journal) => Ok(*journal),
             }
         }
 
@@ -4229,10 +4239,10 @@ mod executor_model {
                     deployment_receipt_path,
                     aborted_receipt_path,
                     rollback_receipt_path,
-                    _lock: lock,
+                    lock,
                 }));
             };
-            Ok(JournalOpen::Resumable(Self {
+            Ok(JournalOpen::Resumable(Box::new(Self {
                 directory: directory.to_path_buf(),
                 current_path,
                 receipt_path,
@@ -4241,7 +4251,7 @@ mod executor_model {
                 rollback_receipt_path,
                 state,
                 _lock: lock,
-            }))
+            })))
         }
 
         pub(super) fn initialize(seed: JournalSeed, admitted: &AdmittedReset) -> Result<Self> {
@@ -4260,7 +4270,7 @@ mod executor_model {
                 aborted_receipt_path: seed.aborted_receipt_path,
                 rollback_receipt_path: seed.rollback_receipt_path,
                 state: expected,
-                _lock: seed._lock,
+                _lock: seed.lock,
             })
         }
 
@@ -4300,8 +4310,8 @@ mod executor_model {
                 ));
             }
             let mut state = self.state.clone();
-            state.status = "aborted_before_mutation".to_owned();
-            state.phase = "aborted_before_mutation".to_owned();
+            "aborted_before_mutation".clone_into(&mut state.status);
+            "aborted_before_mutation".clone_into(&mut state.phase);
             publish_json(&self.directory, &self.current_path, &state)?;
             recover_aborted_receipt(
                 &self.directory,
@@ -4344,8 +4354,8 @@ mod executor_model {
         }
 
         fn finish(&mut self, mut state: JournalV1) -> Result<()> {
-            state.status = "finishing".to_owned();
-            state.phase = "finishing".to_owned();
+            "finishing".clone_into(&mut state.status);
+            "finishing".clone_into(&mut state.phase);
             recover_deployment_receipt(&self.deployment_receipt_path, &state)?;
             publish_json(&self.directory, &self.current_path, &state)?;
             recover_finishing_receipt(
@@ -4354,8 +4364,8 @@ mod executor_model {
                 &self.receipt_path,
                 &state,
             )?;
-            state.status = "completed".to_owned();
-            state.phase = "completed".to_owned();
+            "completed".clone_into(&mut state.status);
+            "completed".clone_into(&mut state.phase);
             sync_directory(self.receipt_path.parent().expect("receipt has parent"))?;
             sync_directory(&self.directory)?;
             self.state = state;
@@ -4363,8 +4373,8 @@ mod executor_model {
         }
 
         fn finish_rollback(&mut self, mut state: JournalV1) -> Result<()> {
-            state.status = "rolled_back".to_owned();
-            state.phase = "rolled_back".to_owned();
+            "rolled_back".clone_into(&mut state.status);
+            "rolled_back".clone_into(&mut state.phase);
             publish_json(&self.directory, &self.current_path, &state)?;
             recover_rolled_back_receipt(
                 &self.directory,
@@ -4884,8 +4894,8 @@ mod executor_model {
             return Err(eyre!("journal is not at the exact finishing boundary"));
         }
         let mut completed = finishing.clone();
-        completed.status = "completed".to_owned();
-        completed.phase = "completed".to_owned();
+        "completed".clone_into(&mut completed.status);
+        "completed".clone_into(&mut completed.phase);
         publish_json_no_replace(receipt, &completed)?;
         if current.exists() {
             let (actual, _) = read_json::<JournalV1>(current, "finishing journal")?;
@@ -4942,8 +4952,8 @@ mod executor_model {
                 "journal is not at the exact immutable deployment-proven boundary"
             ));
         }
-        proven.status = "sealing".to_owned();
-        proven.phase = "seal".to_owned();
+        "sealing".clone_into(&mut proven.status);
+        "seal".clone_into(&mut proven.phase);
         proven.next_step = u16::try_from(execution_steps(state.qualification_scope).len() - 2)
             .expect("bounded execution plan");
         proven.failure_summary.clear();
@@ -5151,8 +5161,8 @@ mod executor_model {
         if current.exists() {
             let (state, _) = read_json::<JournalV1>(&current, "stale finishing journal")?;
             let mut expected_completed = state.clone();
-            expected_completed.status = "completed".to_owned();
-            expected_completed.phase = "completed".to_owned();
+            "completed".clone_into(&mut expected_completed.status);
+            "completed".clone_into(&mut expected_completed.phase);
             if state.status != "finishing" || completed != expected_completed {
                 return Err(eyre!("completed receipt conflicts with active journal"));
             }
@@ -5288,10 +5298,8 @@ mod executor_model {
 
         const fn timeout(self, timeouts: &TimeoutsV1) -> u64 {
             match self {
-                Self::Preflight => timeouts.install_secs,
-                Self::Stage => timeouts.install_secs,
                 Self::Stop => timeouts.stop_secs,
-                Self::Install => timeouts.install_secs,
+                Self::Preflight | Self::Stage | Self::Install => timeouts.install_secs,
                 Self::Reset => timeouts.reset_secs,
                 Self::Preseed => timeouts.preseed_secs,
                 Self::Start => timeouts.start_secs,
@@ -5446,7 +5454,7 @@ mod executor_model {
         {
             let mut state = journal.state().clone();
             if step != ExecutionStep::Cleanup || state.status != "cleanup_pending" {
-                state.phase = step.label().to_owned();
+                step.label().clone_into(&mut state.phase);
             }
             journal.replace(state)?;
             if step.supports_recovery() {
@@ -5488,8 +5496,8 @@ mod executor_model {
                     intent
                 };
                 let mut prepared = journal.state().clone();
-                prepared.status = "recovery_pending".to_owned();
-                prepared.phase = step.label().to_owned();
+                "recovery_pending".clone_into(&mut prepared.status);
+                step.label().clone_into(&mut prepared.phase);
                 prepared.recovery_intent = Some(intent);
                 prepared.failure_summary.clear();
                 journal.replace(prepared)?;
@@ -5545,7 +5553,7 @@ mod executor_model {
             let mut state = journal.state().clone();
             state.next_step = u16::try_from(index + 1).expect("bounded execution step count");
             if state.status == "recovery_pending" {
-                state.status = "in_progress".to_owned();
+                "in_progress".clone_into(&mut state.status);
                 state.recovery_intent = None;
                 state.failure_summary.clear();
             }
@@ -5558,14 +5566,14 @@ mod executor_model {
                 return Ok(());
             }
             if step == ExecutionStep::EdgeVerify {
-                state.status = "sealing".to_owned();
-                state.phase = "seal".to_owned();
+                "sealing".clone_into(&mut state.status);
+                "seal".clone_into(&mut state.phase);
                 journal.mark_deployment_proven(state)?;
                 continue;
             }
             if step == ExecutionStep::Seal {
-                state.status = "cleanup_pending".to_owned();
-                state.phase = "cleanup_pending".to_owned();
+                "cleanup_pending".clone_into(&mut state.status);
+                "cleanup_pending".clone_into(&mut state.phase);
                 journal.replace(state)?;
                 continue;
             }
@@ -5587,7 +5595,7 @@ mod executor_model {
         let successor = execution_steps(state.qualification_scope)
             .get(successor_index)
             .ok_or_else(|| eyre!("execution step has no forward successor"))?;
-        state.phase = successor.label().to_owned();
+        successor.label().clone_into(&mut state.phase);
         Ok(())
     }
 
@@ -5702,7 +5710,7 @@ mod executor_model {
                         ),
                     );
                 }
-                state.status = "in_progress".to_owned();
+                "in_progress".clone_into(&mut state.status);
                 state.failure_summary.clear();
                 journal.replace(state)?;
                 Err(eyre!(
@@ -5725,7 +5733,7 @@ mod executor_model {
                 // The transport verified the exact host intent and live original
                 // authorization. Retain Submitted; a normal forward reopen verifies
                 // that authorization again before any host mutation.
-                state.status = "in_progress".to_owned();
+                "in_progress".clone_into(&mut state.status);
                 state.failure_summary.clear();
                 journal.replace(state)?;
                 Err(eyre!(
@@ -5753,11 +5761,11 @@ mod executor_model {
                 state.recovery_intent = None;
                 state.failure_summary.clear();
                 if step == ExecutionStep::EdgeVerify {
-                    state.status = "sealing".to_owned();
-                    state.phase = "seal".to_owned();
+                    "sealing".clone_into(&mut state.status);
+                    "seal".clone_into(&mut state.phase);
                     journal.mark_deployment_proven(state)?;
                 } else {
-                    state.status = "in_progress".to_owned();
+                    "in_progress".clone_into(&mut state.status);
                     set_forward_successor_phase(&mut state, index)?;
                     journal.replace(state)?;
                 }
@@ -5808,8 +5816,8 @@ mod executor_model {
             .as_ref()
             .ok_or_else(|| eyre!("recovery-pending state omits its durable mutation intent"))?;
         validate_recovery_intent(intent, step)?;
-        state.status = "recovery_pending".to_owned();
-        state.phase = step.label().to_owned();
+        "recovery_pending".clone_into(&mut state.status);
+        step.label().clone_into(&mut state.phase);
         eprintln!("public-reset local mutation recovery remains pending (ephemeral): {original:#}");
         state.failure_summary = stable_error_record(&state.phase, "local_mutation", &original);
         journal.replace(state)?;
@@ -5823,8 +5831,8 @@ mod executor_model {
         original: eyre::Report,
     ) -> Result<()> {
         let mut state = journal.state().clone();
-        state.status = "cleanup_pending".to_owned();
-        state.phase = "cleanup_pending".to_owned();
+        "cleanup_pending".clone_into(&mut state.status);
+        "cleanup_pending".clone_into(&mut state.phase);
         eprintln!("public-reset cleanup remains pending (ephemeral): {original:#}");
         state.failure_summary = stable_error_record(&state.phase, "cleanup", &original);
         journal.replace(state)?;
@@ -5835,8 +5843,8 @@ mod executor_model {
 
     fn preserve_sealing<J: JournalStore>(journal: &mut J, original: eyre::Report) -> Result<()> {
         let mut state = journal.state().clone();
-        state.status = "sealing".to_owned();
-        state.phase = "seal".to_owned();
+        "sealing".clone_into(&mut state.status);
+        "seal".clone_into(&mut state.phase);
         eprintln!("public-reset host seal remains pending (ephemeral): {original:#}");
         state.failure_summary = stable_error_record(&state.phase, "commit_distribution", &original);
         journal.replace(state)?;
@@ -5915,8 +5923,8 @@ mod executor_model {
                 "deployment-proven sealing and cleanup journals cannot enter rollback"
             ));
         }
-        state.status = "rolling_back".to_owned();
-        state.phase = "rollback".to_owned();
+        "rolling_back".clone_into(&mut state.status);
+        "rollback".clone_into(&mut state.phase);
         state.recovery_intent = None;
         eprintln!("public-reset phase failure (ephemeral): {original:#}");
         state.failure_summary = stable_error_record(&state.phase, "forward", original);
@@ -6022,7 +6030,8 @@ mod executor_model {
                 onboarding_token: Some(unavailable.join("onboarding-token")),
                 inrou_stage_dir: Some(unavailable.join("inrou-stage")),
             };
-            for step in [ExecutionStep::EdgeVerify] {
+            {
+                let step = ExecutionStep::EdgeVerify;
                 assert!(
                     args.recovery_validator_client_configs(step)
                         .expect("identical forward arguments permit read-only recovery")
@@ -6157,9 +6166,10 @@ mod executor_model {
 
         impl MockTransport {
             fn record(&mut self, event: String) -> Result<()> {
-                self.events.push(event.clone());
-                if self.fail.as_deref() == Some(event.as_str()) {
-                    return Err(eyre!("injected failure at {event}"));
+                self.events.push(event);
+                let recorded = self.events.last().expect("event was just appended");
+                if self.fail.as_deref() == Some(recorded.as_str()) {
+                    return Err(eyre!("injected failure at {recorded}"));
                 }
                 Ok(())
             }
@@ -6287,8 +6297,7 @@ mod executor_model {
                 step_label: step.label().to_owned(),
                 next_mutation: 0,
                 mutations: (0..match step {
-                    ExecutionStep::Canary => 3,
-                    ExecutionStep::EdgeVerify => 3,
+                    ExecutionStep::Canary | ExecutionStep::EdgeVerify => 3,
                     _ => 1,
                 })
                     .map(|index| RecoveryMutationV1 {
@@ -6644,7 +6653,7 @@ mod executor_model {
                     drop(crashing);
                     let mut resumed = match DurableJournal::classify(&canonical, &admitted).unwrap()
                     {
-                        JournalOpen::Resumable(journal) => journal,
+                        JournalOpen::Resumable(journal) => *journal,
                         JournalOpen::Fresh(_) => panic!("durable boundary must remain resumable"),
                     };
                     assert_eq!(resumed.state().phase, steps[boundary].label());
@@ -7253,10 +7262,8 @@ mod executor_model {
             validate_inrou(&canonical).expect("canonical artifact-version format");
 
             let mut another_canonical_digest = canonical.clone();
-            another_canonical_digest.service_version = format!(
-                "artifact-{}",
-                Hash::new(b"another fixture Inrou bundle").to_string()
-            );
+            another_canonical_digest.service_version =
+                format!("artifact-{}", Hash::new(b"another fixture Inrou bundle"));
             validate_inrou(&another_canonical_digest)
                 .expect("format admission defers bundle derivation to retained-stage apply");
 
@@ -7596,7 +7603,9 @@ mod executor_model {
 
             let mut multi_host = sample_inventory();
             for (index, validator) in multi_host.validators.iter_mut().enumerate() {
-                validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+                validator.endpoint.host_identity_sha256 = hex::encode(
+                    [u8::try_from(index).expect("fixture validator index fits u8") + 1; 32],
+                );
             }
             let multi_host_lifetime =
                 execution_lifetime_ms(&multi_host).expect("four-host lifetime");
@@ -7649,7 +7658,7 @@ mod executor_model {
                 .expect("durable journal classification")
             {
                 JournalOpen::Fresh(_) => panic!("durable journal must classify as resumable"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             assert_eq!(resumed.resume_disposition(), ResumeDisposition::Forward);
         }
@@ -7697,6 +7706,10 @@ mod executor_model {
         }
 
         #[test]
+        #[expect(
+            clippy::used_underscore_binding,
+            reason = "The regression inspects the journal lock retained solely for its drop semantics"
+        )]
         fn journal_lock_release_does_not_wait_for_duplicated_descriptors() {
             for initialized in [false, true] {
                 let directory = private_tempdir();
@@ -7709,16 +7722,16 @@ mod executor_model {
                     JournalOpen::Resumable(_) => panic!("new directory must be fresh"),
                 };
                 let first = if initialized {
-                    JournalOpen::Resumable(
+                    JournalOpen::Resumable(Box::new(
                         DurableJournal::initialize(seed, &admitted).expect("initialize journal"),
-                    )
+                    ))
                 } else {
                     JournalOpen::Fresh(seed)
                 };
                 // A duplicate retains the same open file description as a child
                 // forked by another thread before CLOEXEC takes effect.
                 let duplicate = match &first {
-                    JournalOpen::Fresh(seed) => seed._lock.file.try_clone(),
+                    JournalOpen::Fresh(seed) => seed.lock.file.try_clone(),
                     JournalOpen::Resumable(journal) => journal._lock.file.try_clone(),
                 }
                 .expect("duplicate lock descriptor");
@@ -7774,7 +7787,8 @@ mod executor_model {
 
         #[test]
         fn every_classifier_reachable_recovery_phase_reopens_with_exact_cursor() {
-            for step in [ExecutionStep::Canary] {
+            {
+                let step = ExecutionStep::Canary;
                 let directory = private_tempdir();
                 let canonical = directory.path().canonicalize().expect("canonical tempdir");
                 let admitted = admitted(sample_inventory());
@@ -7796,21 +7810,22 @@ mod executor_model {
                     .collect();
                 state.edge_touched = step == ExecutionStep::EdgeVerify;
                 journal.replace(state).expect("persist prepared recovery");
-                let mut progress = JournalRecoveryProgress {
-                    journal: &mut journal,
-                    step,
-                };
-                progress
-                    .mark_submitted(0)
-                    .expect("persist submitted cursor");
-                drop(progress);
+                {
+                    let mut progress = JournalRecoveryProgress {
+                        journal: &mut journal,
+                        step,
+                    };
+                    progress
+                        .mark_submitted(0)
+                        .expect("persist submitted cursor");
+                }
                 drop(journal);
 
                 let resumed = match DurableJournal::classify(&canonical, &admitted)
                     .expect("reopen exact recovery phase")
                 {
                     JournalOpen::Fresh(_) => panic!("recovery phase cannot become fresh"),
-                    JournalOpen::Resumable(journal) => journal,
+                    JournalOpen::Resumable(journal) => *journal,
                 };
                 assert_eq!(
                     resumed.resume_disposition(),
@@ -7853,7 +7868,7 @@ mod executor_model {
                 .expect("ordinary successor must reopen")
             {
                 JournalOpen::Fresh(_) => panic!("durable successor cannot become fresh"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             assert_eq!(resumed.resume_disposition(), ResumeDisposition::Forward);
             assert_eq!(resumed.state().next_step, 1);
@@ -7916,7 +7931,7 @@ mod executor_model {
                 .expect("recovered successor must reopen")
             {
                 JournalOpen::Fresh(_) => panic!("recovered successor cannot become fresh"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             assert_eq!(resumed.resume_disposition(), ResumeDisposition::Forward);
             assert_eq!(usize::from(resumed.state().next_step), step_index + 1);
@@ -8061,12 +8076,17 @@ mod executor_model {
                 )
                 .into())
             }
+            #[expect(
+                clippy::unnecessary_wraps,
+                reason = "The injected outcome callback shares the fallible transport signature"
+            )]
             fn pending() -> Result<host::PreparedMutationOutcome> {
                 Ok(host::PreparedMutationOutcome::Pending)
             }
             let failures: [fn() -> Result<host::PreparedMutationOutcome>; 4] =
                 [timeout, lost_response, receipt_failure, pending];
-            for step in [ExecutionStep::Canary] {
+            {
+                let step = ExecutionStep::Canary;
                 for failure in failures {
                     let (inventory, mut journal) = journal(sample_inventory());
                     let mut transport = MockTransport {
@@ -8223,12 +8243,17 @@ mod executor_model {
 
         #[test]
         fn authenticated_submitted_child_rejection_remains_terminal() {
+            #[expect(
+                clippy::unnecessary_wraps,
+                reason = "The injected outcome callback shares the fallible transport signature"
+            )]
             fn rejected() -> Result<host::PreparedMutationOutcome> {
                 Ok(host::PreparedMutationOutcome::Rejected(
                     "Rejected".to_owned(),
                 ))
             }
-            for step in [ExecutionStep::Canary] {
+            {
+                let step = ExecutionStep::Canary;
                 let (inventory, mut journal) = journal(sample_inventory());
                 let mut transport = MockTransport {
                     submitted_step: Some(step),
@@ -8254,7 +8279,7 @@ mod executor_model {
             }
         }
 
-        pub(crate) fn assert_core_recovery_rejection_for_test(class: &str) {
+        pub fn assert_core_recovery_rejection_for_test(class: &str) {
             let (inventory, mut journal) = journal(sample_inventory());
             let step = ExecutionStep::Canary;
             let mut intent = test_recovery_intent(step);
@@ -8356,7 +8381,8 @@ mod executor_model {
 
         #[test]
         fn recovered_partial_mutation_reopens_and_dispatches_only_prepared_suffix() {
-            for step in [ExecutionStep::Canary] {
+            {
+                let step = ExecutionStep::Canary;
                 let count = test_recovery_intent(step).mutations.len();
                 for submitted in 0..count - 1 {
                     let admitted = signed_admitted(sample_inventory(), 1_000_000);
@@ -8418,7 +8444,7 @@ mod executor_model {
                     drop(journal);
                     let mut journal = match DurableJournal::classify(&canonical, &admitted).unwrap()
                     {
-                        JournalOpen::Resumable(journal) => journal,
+                        JournalOpen::Resumable(journal) => *journal,
                         JournalOpen::Fresh(_) => panic!("partial recovery cannot reopen fresh"),
                     };
                     assert_eq!(journal.resume_disposition(), ResumeDisposition::Forward);
@@ -8704,7 +8730,7 @@ mod executor_model {
                 .expect("resume cleanup-pending journal")
             {
                 JournalOpen::Fresh(_) => panic!("cleanup-pending journal must be resumable"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             assert_eq!(
                 resumed.resume_disposition(),
@@ -8727,7 +8753,7 @@ mod executor_model {
                 .expect("retry cleanup-pending journal")
             {
                 JournalOpen::Fresh(_) => panic!("cleanup-pending journal must be resumable"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             let mut cleanup = MockTransport::default();
             execute_plan(&admitted.inventory, &mut cleanup, &mut resumed)
@@ -8847,7 +8873,7 @@ mod executor_model {
                 .expect("partial staging recovery")
             {
                 JournalOpen::Fresh(_) => panic!("durable predecessor must remain resumable"),
-                JournalOpen::Resumable(journal) => journal,
+                JournalOpen::Resumable(journal) => *journal,
             };
             assert_eq!(resumed.state(), &initial_journal(&admitted));
             assert!(!staging.exists());
@@ -8914,8 +8940,10 @@ mod executor_model {
                     let mut inventory = original.clone();
                     for (index, validator) in inventory.validators.iter_mut().enumerate() {
                         if mask & (1 << index) == 0 {
-                            validator.endpoint.host_identity_sha256 =
-                                hex::encode([index as u8 + 1; 32]);
+                            validator.endpoint.host_identity_sha256 = hex::encode(
+                                [u8::try_from(index).expect("fixture validator index fits u8") + 1;
+                                    32],
+                            );
                         }
                     }
                     assert!(
@@ -9159,7 +9187,7 @@ mod executor_model {
             encoded.as_object_mut().unwrap().remove("service_state");
             assert!(json::from_value::<ValidatorAdmittedReleaseV1>(encoded).is_err());
             for invalid in [
-                r#"{}"#,
+                r"{}",
                 r#"{"state":"running"}"#,
                 r#"{"state":"running","value":{}}"#,
                 r#"{"state":"stopped","value":null}"#,
@@ -9247,7 +9275,7 @@ mod executor_model {
         #[test]
         fn initial_state_discriminator_and_fields_are_strict() {
             for invalid in [
-                r#"{}"#,
+                r"{}",
                 r#"{"value":null}"#,
                 r#"{"state":"vacant"}"#,
                 r#"{"state":null,"value":null}"#,
@@ -9973,7 +10001,7 @@ mod executor_model {
                         arch: "aarch64".to_owned(),
                         kvm_api_version: 0,
                     },
-                    service_root: edge_root.to_owned(),
+                    service_root: edge_root.clone(),
                     state_root: format!("{edge_root}/state"),
                     reset_guard: format!("{}/taira-edge", hosts.native_edge.custody_root),
                     nginx_config:

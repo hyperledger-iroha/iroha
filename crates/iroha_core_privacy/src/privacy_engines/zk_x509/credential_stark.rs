@@ -58,7 +58,6 @@ const _: () = assert!(
         == ZK_X509_MAX_PROOF_BYTES_V1 as usize
 );
 /// Compute the exact encoded outer-envelope length without allocation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_credential_envelope_encoded_len_v1(
     main_aggregate_bytes: usize,
     ca_subproof_bytes: usize,
@@ -85,7 +84,7 @@ impl ZkX509CredentialPublicBindingV1 {
         statement: &IrohaZkX509StarkP256StatementV1,
         genesis_hash: [u8; 32],
     ) -> Result<Self, ZkX509CredentialProofErrorV1> {
-        if genesis_hash == [0; 32] {
+        if genesis_hash == [0; 32] || statement.context.network_id.as_bytes() != &genesis_hash {
             return Err(ZkX509CredentialProofErrorV1::InvalidStatement);
         }
         let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
@@ -160,11 +159,9 @@ pub enum ZkX509CredentialProofErrorV1 {
     #[error("zk-X509 credential joint original-oracle binding does not match")]
     CrossSubproofMismatch,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u16_v1(output: &mut Vec<u8>, value: u16) {
     output.extend_from_slice(&value.to_be_bytes());
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u32_v1(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
 }
@@ -240,7 +237,6 @@ fn read_subproof_v1<'a>(
     Ok(proof)
 }
 /// Encode exactly one main aggregate followed by exactly one `X5C1` proof.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[doc(hidden)]
 pub fn encode_zk_x509_credential_envelope_v1(
     proof_instance: ZkX509ProofInstanceV1,
@@ -356,7 +352,9 @@ pub fn decode_zk_x509_credential_envelope_v1(
 #[cfg(test)]
 mod tests {
     fn proof_instance_fixture_v1() -> super::ZkX509ProofInstanceV1 {
-        super::ZkX509ProofInstanceV1::new_v1(core::array::from_fn(|i| i as u8))
+        super::ZkX509ProofInstanceV1::new_v1(core::array::from_fn(|i| {
+            u8::try_from(i).expect("fixture value fits u8")
+        }))
     }
     fn joint_openings_fixture_v1() -> [u8; super::JointOriginalOpeningsV1::ENCODED_BYTES] {
         [0; super::JointOriginalOpeningsV1::ENCODED_BYTES]
@@ -502,7 +500,11 @@ mod tests {
     #[test]
     fn all_nonce_values_are_canonical_but_missing_or_extra_nonce_bytes_are_rejected() {
         let (public, encoded) = proof_fixture();
-        for nonce in [[0; 32], [255; 32], core::array::from_fn(|i| i as u8)] {
+        for nonce in [
+            [0; 32],
+            [255; 32],
+            core::array::from_fn(|i| u8::try_from(i).expect("fixture value fits u8")),
+        ] {
             let proof_instance = ZkX509ProofInstanceV1::new_v1(nonce);
             let encoded = encode_zk_x509_credential_envelope_v1(
                 proof_instance,
@@ -547,7 +549,7 @@ mod tests {
     #[test]
     fn consensus_context_derivation_binds_statement_profile_intent_and_genesis() {
         let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
-        let genesis = [0x91; 32];
+        let genesis = *statement.context.network_id.as_bytes();
         let canonical =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis)
                 .expect("canonical consensus context");
@@ -575,9 +577,28 @@ mod tests {
                 .expect("changed engine manifest digest"),
             canonical
         );
+        let mut changed_genesis = genesis;
+        changed_genesis[0] ^= 1;
+        assert_eq!(
+            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, changed_genesis),
+            Err(ZkX509CredentialProofErrorV1::InvalidStatement)
+        );
+        let mut changed_network = statement.clone();
+        changed_network.context.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                changed_genesis,
+            )),
+        );
+        assert_eq!(
+            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&changed_network, genesis),
+            Err(ZkX509CredentialProofErrorV1::InvalidStatement)
+        );
         assert_ne!(
-            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, [0x92; 32],)
-                .expect("changed committed genesis"),
+            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
+                &changed_network,
+                changed_genesis
+            )
+            .expect("matching changed network and genesis"),
             canonical
         );
         assert_eq!(
@@ -693,11 +714,11 @@ mod tests {
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 4_348);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_412_944);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_435_984);
         assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 7_934_010);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            24_240
+            1_200
         );
         let maximum_inner = ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1

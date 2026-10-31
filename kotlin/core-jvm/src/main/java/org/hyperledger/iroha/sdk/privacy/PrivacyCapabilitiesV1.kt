@@ -15,6 +15,8 @@ private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 internal const val PRIVACY_ACTION_ENVELOPE_MAX_BYTES_V1: Int = 9 * 1024 * 1024 + 256 * 1024 + 512
 internal val PRIVACY_SUBMIT_PROOF_FRAME_MAX_BYTES_V1: Int = PRIVACY_ACTION_ENVELOPE_MAX_BYTES_V1 +
     Varint.encode(PRIVACY_ACTION_ENVELOPE_MAX_BYTES_V1.toLong()).size
+// Outer JNI allocation bound only; the Rust request owner enforces its tighter canonical bound.
+internal const val PRIVACY_X509_REQUEST_BRIDGE_MAX_BYTES_V1: Int = PRIVACY_ACTION_ENVELOPE_MAX_BYTES_V1
 internal const val PRIVACY_BLOCK_MAX_BYTES_V1: Int = 16 * 1024 * 1024 - 64 * 1024
 private val CONSENSUS_LIMIT_MAXIMA_V1 = linkedMapOf(
     "max_actions_per_transaction" to 1,
@@ -129,7 +131,8 @@ class PrivacyConsensusLimitsV1(
     }
 }
 
-class PrivacyConsensusPolicyTighteningV1(
+/** Future committed update within the canonical chain-wide resource bounds. */
+class PrivacyConsensusPolicyUpdateV1(
     @JvmField val scheduledAtHeight: BigInteger,
     @JvmField val effectiveAtHeight: BigInteger,
     @JvmField val nextLimits: PrivacyConsensusLimitsV1,
@@ -138,12 +141,12 @@ class PrivacyConsensusPolicyTighteningV1(
         requireValidPrivacyPolicyScheduleV1(
             scheduledAtHeight,
             effectiveAtHeight,
-            "privacy consensus-policy tightening",
+            "privacy consensus-policy update",
         )
     }
 
     override fun equals(other: Any?): Boolean =
-        other is PrivacyConsensusPolicyTighteningV1 &&
+        other is PrivacyConsensusPolicyUpdateV1 &&
             scheduledAtHeight == other.scheduledAtHeight &&
             effectiveAtHeight == other.effectiveAtHeight &&
             nextLimits == other.nextLimits
@@ -155,16 +158,17 @@ class PrivacyConsensusPolicyTighteningV1(
     }
 }
 
+/** Current chain-wide resource limits and an optional future update. */
 class PrivacyConsensusPolicyV1(
     @JvmField val currentLimits: PrivacyConsensusLimitsV1,
-    @JvmField val pendingTightening: PrivacyConsensusPolicyTighteningV1?,
+    @JvmField val pendingUpdate: PrivacyConsensusPolicyUpdateV1?,
 ) {
     init {
-        pendingTightening?.let { pending ->
-            requireStrictConsensusTighteningV1(
+        pendingUpdate?.let { pending ->
+            requireConsensusUpdateV1(
                 currentLimits,
                 pending.nextLimits,
-                "privacy consensus-policy tightening",
+                "privacy consensus-policy update",
             )
         }
     }
@@ -172,10 +176,10 @@ class PrivacyConsensusPolicyV1(
     override fun equals(other: Any?): Boolean =
         other is PrivacyConsensusPolicyV1 &&
             currentLimits == other.currentLimits &&
-            pendingTightening == other.pendingTightening
+            pendingUpdate == other.pendingUpdate
 
     override fun hashCode(): Int =
-        31 * currentLimits.hashCode() + (pendingTightening?.hashCode() ?: 0)
+        31 * currentLimits.hashCode() + (pendingUpdate?.hashCode() ?: 0)
 }
 
 /** Closed protocol-tagged verifier ceilings. */
@@ -275,6 +279,7 @@ enum class PrivacyCompiledProfileUnavailableReasonV1 {
     ENGINE_UNAVAILABLE,
     PROFILE_INITIALIZATION_FAILED,
     STATEMENT_SCHEMA_INVALID,
+    JOINT_SECURITY_REDUCTION_INCOMPLETE,
 }
 
 enum class PrivacyCompiledStatementSchemaErrorV1 {
@@ -328,7 +333,7 @@ enum class PrivacySecurityModelV1(val canonicalLabel: String) {
     }
 }
 
-/** Pinned commitment to the sole first-release Exact12 catalog. */
+/** Pinned full 32-byte native BLAKE3 commitment to the sole first-release Exact12 catalog. */
 class PrivacyExact12CatalogCommitmentV1 internal constructor(bytes: ByteArray) {
     private val value = bytes.copyOf()
 
@@ -347,13 +352,10 @@ class PrivacyExact12CatalogCommitmentV1 internal constructor(bytes: ByteArray) {
 
     private companion object {
         val CANONICAL_BYTES: ByteArray = byteArrayOf(
-            0xe0.toByte(), 0x37, 0xf1.toByte(), 0x39, 0x04, 0xa0.toByte(), 0x30, 0x7c,
-            0x00, 0xdb.toByte(), 0x15, 0xd8.toByte(), 0x5c, 0xfb.toByte(), 0x40, 0x6b,
-            0xd7.toByte(), 0x97.toByte(), 0x72, 0xd2.toByte(), 0x01, 0x44, 0xa9.toByte(), 0x49,
-            0xde.toByte(), 0xf0.toByte(), 0xf3.toByte(), 0xfd.toByte(), 0xa7.toByte(),
-            0x8e.toByte(), 0x34, 0x2e, 0x74, 0x7f, 0x65, 0x78, 0x7c, 0xbf.toByte(),
-            0xbf.toByte(), 0xfa.toByte(), 0xc9.toByte(), 0x4f, 0x11, 0xc3.toByte(), 0x69,
-            0xe2.toByte(), 0xbb.toByte(), 0xff.toByte(),
+            0x5b, 0xcf.toByte(), 0x36, 0x6f, 0xb1.toByte(), 0x8d.toByte(), 0x2e, 0x43,
+            0x61, 0x48, 0x6c, 0x01, 0x5d, 0xa5.toByte(), 0xb4.toByte(), 0x1a,
+            0x3f, 0xb0.toByte(), 0x0e, 0xdf.toByte(), 0x05, 0x61, 0x10, 0x42,
+            0xcc.toByte(), 0xc4.toByte(), 0x52, 0x12, 0x0d, 0x17, 0x6e, 0xb0.toByte(),
         )
     }
 }
@@ -409,86 +411,8 @@ class PrivacySecurityClaimV1 internal constructor(
     }
 }
 
-enum class PrivacyProtocolLifecycleStateV1 {
-    PROPOSED,
-    ACTIVE,
-    SUSPENDED,
-    RETIRED,
-}
-
-class PrivacyProtocolLifecycleV1(
-    @JvmField val state: PrivacyProtocolLifecycleStateV1,
-    @JvmField val proposedAtHeight: BigInteger,
-    @JvmField val activatedAtHeight: BigInteger?,
-    @JvmField val stateSinceHeight: BigInteger?,
-) {
-    init {
-        requirePositivePrivacyHeightV1(proposedAtHeight, "privacy proposal height")
-        when (state) {
-            PrivacyProtocolLifecycleStateV1.PROPOSED -> {
-                require(activatedAtHeight == null && stateSinceHeight == null) {
-                    "proposed privacy lifecycle must not carry activated-at or state-since heights"
-                }
-            }
-            PrivacyProtocolLifecycleStateV1.ACTIVE -> {
-                val activated = requireNotNull(activatedAtHeight) {
-                    "active privacy lifecycle must carry activated-at height"
-                }
-                val since = requireNotNull(stateSinceHeight) {
-                    "active privacy lifecycle must carry state-since height"
-                }
-                requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
-                requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated >= proposedAtHeight && since >= activated) {
-                    "active privacy lifecycle heights are out of order"
-                }
-            }
-            PrivacyProtocolLifecycleStateV1.SUSPENDED -> {
-                val activated = requireNotNull(activatedAtHeight) {
-                    "suspended privacy lifecycle must carry activated-at height"
-                }
-                val since = requireNotNull(stateSinceHeight) {
-                    "suspended privacy lifecycle must carry state-since height"
-                }
-                requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
-                requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated >= proposedAtHeight && since > activated) {
-                    "suspended privacy lifecycle heights are out of order"
-                }
-            }
-            PrivacyProtocolLifecycleStateV1.RETIRED -> {
-                val since = requireNotNull(stateSinceHeight) {
-                    "retired privacy lifecycle must carry state-since height"
-                }
-                requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                activatedAtHeight?.let { activated ->
-                    requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
-                    require(activated >= proposedAtHeight && since > activated) {
-                        "retired privacy lifecycle heights are out of order"
-                    }
-                } ?: require(since > proposedAtHeight) {
-                    "unactivated retired privacy lifecycle must retire after proposal"
-                }
-            }
-        }
-    }
-
-    override fun equals(other: Any?): Boolean =
-        other is PrivacyProtocolLifecycleV1 &&
-            state == other.state &&
-            proposedAtHeight == other.proposedAtHeight &&
-            activatedAtHeight == other.activatedAtHeight &&
-            stateSinceHeight == other.stateSinceHeight
-
-    override fun hashCode(): Int {
-        var result = state.hashCode()
-        result = 31 * result + proposedAtHeight.hashCode()
-        result = 31 * result + (activatedAtHeight?.hashCode() ?: 0)
-        return 31 * result + (stateSinceHeight?.hashCode() ?: 0)
-    }
-}
-
-class PrivacyProtocolLimitsTighteningV1(
+/** Future committed update within the canonical protocol resource bounds. */
+class PrivacyProtocolLimitsUpdateV1(
     @JvmField val scheduledAtHeight: BigInteger,
     @JvmField val effectiveAtHeight: BigInteger,
     @JvmField val nextLimits: PrivacyProtocolLimitsV1,
@@ -497,12 +421,12 @@ class PrivacyProtocolLimitsTighteningV1(
         requireValidPrivacyPolicyScheduleV1(
             scheduledAtHeight,
             effectiveAtHeight,
-            "privacy protocol-limit tightening",
+            "privacy protocol-limit update",
         )
     }
 
     override fun equals(other: Any?): Boolean =
-        other is PrivacyProtocolLimitsTighteningV1 &&
+        other is PrivacyProtocolLimitsUpdateV1 &&
             scheduledAtHeight == other.scheduledAtHeight &&
             effectiveAtHeight == other.effectiveAtHeight &&
             nextLimits == other.nextLimits
@@ -514,34 +438,31 @@ class PrivacyProtocolLimitsTighteningV1(
     }
 }
 
-class PrivacyProtocolActivationRecordV1(
-    @JvmField val profileBindings: PrivacyCompiledProfileV1,
-    @JvmField val lifecycle: PrivacyProtocolLifecycleV1,
-    @JvmField val pendingProtocolLimitsTightening: PrivacyProtocolLimitsTighteningV1?,
+/** Ordinary committed limits policy; its presence does not enable an implementation. */
+class PrivacyProtocolPolicyV1(
+    @JvmField val protocolId: PrivacyProtocolIdV1,
+    @JvmField val currentLimits: PrivacyProtocolLimitsV1,
+    @JvmField val pendingUpdate: PrivacyProtocolLimitsUpdateV1?,
 ) {
     init {
-        pendingProtocolLimitsTightening?.let { pending ->
-            require(pending.nextLimits.protocolId == profileBindings.protocolId) {
-                "privacy protocol-limit tightening does not match its activation protocol"
-            }
-            requireStrictProtocolTighteningV1(
-                profileBindings.protocolLimits,
-                pending.nextLimits,
-                "privacy protocol-limit tightening",
-            )
+        require(currentLimits.protocolId == protocolId) {
+            "privacy protocol policy current limits do not match its protocol"
+        }
+        pendingUpdate?.let { pending ->
+            requireProtocolUpdateV1(currentLimits, pending.nextLimits, "privacy protocol-limit update")
         }
     }
 
     override fun equals(other: Any?): Boolean =
-        other is PrivacyProtocolActivationRecordV1 &&
-            profileBindings == other.profileBindings &&
-            lifecycle == other.lifecycle &&
-            pendingProtocolLimitsTightening == other.pendingProtocolLimitsTightening
+        other is PrivacyProtocolPolicyV1 &&
+            protocolId == other.protocolId &&
+            currentLimits == other.currentLimits &&
+            pendingUpdate == other.pendingUpdate
 
     override fun hashCode(): Int {
-        var result = profileBindings.hashCode()
-        result = 31 * result + lifecycle.hashCode()
-        return 31 * result + (pendingProtocolLimitsTightening?.hashCode() ?: 0)
+        var result = protocolId.hashCode()
+        result = 31 * result + currentLimits.hashCode()
+        return 31 * result + (pendingUpdate?.hashCode() ?: 0)
     }
 }
 
@@ -587,21 +508,12 @@ private fun privacyConsensusLimitValuesV1(limits: PrivacyConsensusLimitsV1): Map
         "retained_root_count" to limits.retainedRootCount,
     )
 
-private fun requireStrictConsensusTighteningV1(
+private fun requireConsensusUpdateV1(
     current: PrivacyConsensusLimitsV1,
     next: PrivacyConsensusLimitsV1,
     subject: String,
 ) {
-    val currentValues = privacyConsensusLimitValuesV1(current)
-    val nextValues = privacyConsensusLimitValuesV1(next)
-    require(currentValues.keys == nextValues.keys) { "$subject fields do not match" }
-    var changed = false
-    for ((name, currentValue) in currentValues) {
-        val nextValue = nextValues.getValue(name)
-        require(nextValue <= currentValue) { "$subject cannot increase $name" }
-        changed = changed || nextValue != currentValue
-    }
-    require(changed) { "$subject must be a strict tightening" }
+    require(next != current) { "$subject must change the current limits" }
 }
 
 private fun requirePrivacyHeightV1(height: BigInteger, subject: String) {
@@ -645,13 +557,13 @@ internal fun requireProtocolLimitsAtMostV1(
     }
 }
 
-private fun requireStrictProtocolTighteningV1(
+private fun requireProtocolUpdateV1(
     current: PrivacyProtocolLimitsV1,
     next: PrivacyProtocolLimitsV1,
     subject: String,
 ) {
-    requireProtocolLimitsAtMostV1(next, current, subject)
-    require(next != current) { "$subject must be strict" }
+    require(next.protocolId == current.protocolId) { "$subject protocol tag differs from current limits" }
+    require(next != current) { "$subject must change the current limits" }
 }
 
 internal fun requirePrivacyProfileBindingsEqualV1(
@@ -675,12 +587,12 @@ internal fun requirePrivacyConsensusPolicyAtHeightV1(
     policy: PrivacyConsensusPolicyV1,
     committedHeight: BigInteger,
 ) {
-    policy.pendingTightening?.let { pending ->
+    policy.pendingUpdate?.let { pending ->
         require(pending.scheduledAtHeight <= committedHeight) {
-            "privacy consensus-policy tightening was scheduled after the committed height"
+            "privacy consensus-policy update was scheduled after the committed height"
         }
         require(pending.effectiveAtHeight > committedHeight) {
-            "privacy consensus-policy tightening is already due at the committed height"
+            "privacy consensus-policy update is already due at the committed height"
         }
     }
 }

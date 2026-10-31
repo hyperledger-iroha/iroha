@@ -12,8 +12,8 @@ fn small_native_source_forecast_uses_full_widths_and_rejects_oversized_extents()
         projection_rows: 1 << 15,
     };
     let (retained, scratch) = shape.allocation_forecast_v1(&layout).unwrap();
-    let matrices = 327_680 * (76 + 196) * 8 + (1 << 18) * (28 + 17 + 39) * 8 + (1 << 15) * 32 * 8;
-    assert_eq!(matrices, 897_581_056);
+    let matrices = 327_680 * (76 + 196) * 8 + (1 << 18) * (28 + 17 + 39) * 8 + (1 << 15) * 36 * 8;
+    assert_eq!(matrices, 898_629_632);
     assert!(retained >= matrices + 4096);
     assert!(scratch < main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
     let mut changed = shape;
@@ -57,13 +57,15 @@ fn canonical_source_shape_forecasts_fit_the_preconstruction_allowances() {
     let sha_scratch = ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(sha_shape).unwrap();
     let rfc_coefficients = main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(&layout).unwrap();
     let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
-    assert!(sha_aux > 1_308_622_848); // Four full 524288 x 78 field matrices plus terminals.
-    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux;
+    let sha_base = ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1().unwrap();
+    assert_eq!(sha_base, 134_217_728); // Four full native segments, 64 bytes per original row.
+    assert!(sha_aux > 1_375_731_712); // Four full 524288 x 82 field matrices plus terminals.
+    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux + sha_base;
     assert!(retained <= main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
     let serial_scratch = small_scratch.max(sha_scratch).max(p256_scratch);
     assert!(serial_scratch <= main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
     eprintln!(
-        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, retained_rfc={rfc_coefficients}, serial_scratch={serial_scratch}"
+        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, sha_base={sha_base}, retained_rfc={rfc_coefficients}, serial_scratch={serial_scratch}"
     );
     // These construction bounds do not materialize or qualify the separately
     // borrowed maximum-profile assembly, nor measure allocator/process RSS.
@@ -75,8 +77,9 @@ fn source_payload_admission_includes_scratch_reserve_and_capacity_overflow() {
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let reserve = main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1;
     let scratch = 13_579;
-    let powers = main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
-    assert_eq!(powers, 4_194_384);
+    let fft_powers = main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
+    assert_eq!(fft_powers, 4_194_384);
+    let powers = fft_powers + main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1;
     let available = plan.remaining_source_and_runtime_envelope - reserve - scratch - powers;
     let first = available / 3;
     let second = available - first;
@@ -112,7 +115,8 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
         - source_limit
         - scratch
         - reserve
-        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
+        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+        - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1;
     assert_eq!(
         plan.check_before_sources_v1(assembly_limit).unwrap() as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
@@ -141,6 +145,17 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
         plan.check_native_sources_v1(0, &[source_limit - sha_aux + 1, sha_aux]),
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
+    let sha_base = ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1().unwrap();
+    let other_sources = source_limit - sha_aux - sha_base;
+    assert_eq!(
+        plan.check_native_sources_v1(assembly_limit, &[other_sources, sha_aux, sha_base])
+            .unwrap(),
+        plan.check_before_sources_v1(assembly_limit).unwrap()
+    );
+    assert!(matches!(
+        plan.check_native_sources_v1(0, &[other_sources + 1, sha_aux, sha_base]),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
     // The source transition reuses the same retained assembly charge, rather
     // than treating a borrowed assembly as already freed after base commitment.
     assert!(matches!(
@@ -150,11 +165,47 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
 }
 
 #[test]
+fn joined_transform_admission_reuses_only_absent_registration_owners() {
+    use main_ca_resources::MainCaBufferPhaseV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let original = joint
+        .required_v1(MainCaBufferPhaseV1::OriginalCommitments)
+        .unwrap();
+    let finalization = joint
+        .required_v1(MainCaBufferPhaseV1::Finalization)
+        .unwrap();
+    let assembly = 215_244_730;
+    let global = plan.check_before_sources_v1(assembly).unwrap();
+    let admitted = plan.joined_transform_admission_v1(assembly).unwrap();
+    assert_eq!(
+        admitted,
+        global - plan.maximum_live_buffers + original.max(finalization)
+    );
+    for phase in [original, finalization] {
+        assert!(admitted >= global - plan.maximum_live_buffers + phase);
+    }
+    assert!(admitted < global);
+    let cap = 12_usize << 30;
+    let assembly_limit = cap - plan.check_before_sources_v1(0).unwrap();
+    assert!(plan.joined_transform_admission_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.joined_transform_admission_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+    assert!(plan.joined_transform_admission_v1(usize::MAX).is_err());
+    let mut corrupted = plan;
+    corrupted.retained_cuts = usize::MAX;
+    assert!(corrupted.joined_transform_admission_v1(0).is_err());
+}
+
+#[test]
 fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     eprintln!("MAIN current owner plan before original pins: {plan:?}");
-    assert_eq!(plan.masks, 84_422_208);
+    assert_eq!(plan.masks, 84_712_768);
     let cut_payload = aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(
         layout.common_lde_size(),
     )
@@ -163,9 +214,9 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         core::mem::size_of::<aggregate::retained_commitment::RetainedMerkleCutV1>(),
         80
     );
-    assert_eq!(cut_payload, 12_582_912 + 80);
+    assert_eq!(cut_payload, 100_663_296 + 80);
     assert_eq!(plan.retained_cuts, 2 * cut_payload);
-    assert_eq!(plan.retained_cuts, 25_165_984);
+    assert_eq!(plan.retained_cuts, 201_326_752);
     let total_width = layout
         .trace_groups
         .iter()
@@ -210,16 +261,14 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
                 crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
             >()
     );
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.quotient_cache_reserve, 67_341_896);
     assert_eq!(
         plan.maximum_live_buffers,
-        plan.masks
-            + (plan.quotient_stage + plan.replay_batch).max(
-                plan.joined_streams
-                    + plan.replay_batch
-                    + plan.composition
-                    + plan.fri_stage
-                    + plan.openings
-            )
+        joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::Registration)
+            .unwrap()
+            + plan.quotient_cache_reserve
     );
     assert_eq!(
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
@@ -228,35 +277,40 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     // The current RFC stripe is the largest registration phase. It retains
     // the full 147-column fixed stripe, all quotient originals and the outer
     // chunks; interpolation and incoming chunks are charged in their own phase.
-    // The unchanged FRI envelope still dominates the global arithmetic bound.
+    // The complete joint registration and two cache batches now dominate the
+    // global arithmetic bound independently of the SHA3 owner's inline size.
     assert_eq!(core::mem::size_of::<E>(), 32);
     assert_eq!(
         super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
         core::mem::size_of::<E>()
     );
-    assert_eq!(plan.quotient_stage, 3_166_719_416);
+    assert_eq!(plan.quotient_stage, 3_166_719_464);
     assert_eq!(
         plan.maximum_live_buffers,
-        3_697_993_152 + core::mem::size_of::<E>()
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope,
-        9_186_908_736 - core::mem::size_of::<E>()
+        (12_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope
             - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
-        596_974_144 - core::mem::size_of::<E>(),
+        (4_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1,
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope
             - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
-            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
-        592_779_760 - core::mem::size_of::<E>()
+            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1,
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
     // This remainder must also cover borrowed sources and process overhead;
     // passing this buffer check is not whole-prover or RSS qualification.
@@ -279,10 +333,10 @@ fn whole_main_retaining_every_masked_coefficient_exceeds_the_release_memory_ceil
         [
             (5, 800),
             (8, 190),
-            (15, 49),
+            (15, 53),
             (16, 805),
             (18, 67),
-            (19, 3900)
+            (19, 3916)
         ]
     );
     let masks = MASK_DEGREE + 1;
@@ -295,12 +349,12 @@ fn whole_main_retaining_every_masked_coefficient_exceeds_the_release_memory_ceil
         .iter()
         .map(|(_, width)| *width as u64 * masks as u64 * 8)
         .sum::<u64>();
-    assert_eq!(coefficient_bytes, 17_018_207_808);
-    assert_eq!(mask_bytes, 84_422_208);
+    assert_eq!(coefficient_bytes, 17_086_655_808);
+    assert_eq!(mask_bytes, 84_712_768);
     assert!(coefficient_bytes > super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1);
     // This is a payload lower bound, excluding borrowed assembly/source traces,
     // quotient matrices, public fixed polynomials, FFT scratch and allocator overhead.
-    assert_eq!(((1_u64 << 19) + masks as u64) * 3900 * 8, 16_414_444_800);
+    assert_eq!(((1_u64 << 19) + masks as u64) * 3916 * 8, 16_481_786_112);
 }
 
 /// Admit the actual complete maximum fixture before entropy or commitments.
@@ -339,15 +393,17 @@ fn maximum_profile_assembly_payload_fits_source_admission_before_masks() {
         - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
         - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
         - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
-        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
+        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+        - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1;
     eprintln!(
         "maximum complete MAIN assembly payload={payload}, allowance={allowance}; capacity accounting only, no RSS or full-proof qualification"
     );
     assert_eq!(
         allowance,
-        596_974_144
-            - core::mem::size_of::<E>()
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
             - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
     assert!(payload <= allowance);
     plan.check_source_shapes_v1(&layout, &assembly)
@@ -415,7 +471,8 @@ fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
             main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
                 + main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
                 + main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
-                + main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+                + main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+                + main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1,
         )
         .unwrap();
     let total_columns = layout
@@ -455,10 +512,11 @@ fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
 #[test]
 #[ignore = "optimized exact-width X509 streaming hash cost diagnostic; run --release"]
 fn maximum_profile_streaming_hash_cost_diagnostic() {
+    const SAMPLE_ROWS: usize = 128;
     use std::time::Instant;
 
     crate::test_support::require_no_debug_assertions("run this diagnostic with --release");
-    const SAMPLE_ROWS: usize = 128;
+
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let widths = [
         layout
@@ -524,7 +582,12 @@ fn maximum_profile_streaming_hash_cost_diagnostic() {
             widths[0],
             widths[1],
             widths.iter().sum::<usize>(),
-            seconds * 2.0 * (full_rows / SAMPLE_ROWS) as f64,
+            seconds
+                * 2.0
+                * f64::from(
+                    u32::try_from(full_rows / SAMPLE_ROWS)
+                        .expect("fixed profile row ratio fits u32"),
+                ),
         );
     }
 }
@@ -598,7 +661,11 @@ fn maximum_profile_replay_fft_cost_diagnostic() {
         "X509 replay FFT diagnostic: rayon_workers={}, columns={batch_width}, native_rows={}, common_rows={rows}, interpolation_and_mask_seconds={interpolation_seconds:.6}, forward_seconds={lde_seconds:.6}, commitment_forward_transforms={forward_transforms}, commitment_forward_butterflies={butterflies}, linear_commitment_forward_seconds={:.3}; excludes source construction/replay, remaining native IFFTs, constraints/quotient/DEEP, hashing/FRI/CA and host contention",
         rayon::current_num_threads(),
         1_usize << native_log,
-        lde_seconds * forward_transforms as f64 / batch_width as f64,
+        lde_seconds
+            * f64::from(
+                u32::try_from(forward_transforms).expect("fixed profile transform count fits u32"),
+            )
+            / f64::from(u32::try_from(batch_width).expect("fixed column batch fits u32")),
     );
 }
 
@@ -660,69 +727,142 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         // accumulation each replay every original masked trace polynomial.
         other_native_butterflies += 4 * width * (n / 2) * u64::from(segment.trace_log2);
         fixed_native_butterflies += fixed * (n / 2) * u64::from(segment.trace_log2);
-        // Later stripes recover the shifted public coefficients in place.
-        // Count these real extra transforms separately from native interpolation.
-        fixed_recovery_iffts += fixed * (stripes - 1);
-        fixed_recovery_butterflies +=
-            fixed * (stripes - 1) * (stripe_rows / 2) * u64::from(stripe_rows.ilog2());
+        // The private cache keeps its complete original allocation. Only the
+        // unspent remainder retains a public fixed coefficient prefix; later
+        // stripes recover the remaining suffix in place.
+        let retained_fixed = cache
+            .fixed_prefix_columns_v1(n as usize, fixed as usize, stripes as usize)
+            .unwrap() as u64;
+        fixed_recovery_iffts += (fixed - retained_fixed) * (stripes - 1);
+        fixed_recovery_butterflies += (fixed - retained_fixed)
+            * (stripes - 1)
+            * (stripe_rows / 2)
+            * u64::from(stripe_rows.ilog2());
     }
     eprintln!(
         "MAIN current work before original pins: columns={columns}, native_cells={native_cells}, masked_cells={masked_cells}, quotient_rows={quotient_rows}, residues={residues}, cached_columns={cached_columns}, quotient_native_iffts={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_iffts={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}"
     );
     assert_eq!(SECURITY_LANES, 1);
     assert_eq!(layout.registered_segments.len(), 49);
-    assert_eq!(columns, 5_811);
-    assert_eq!(native_cells, 2_116_723_200);
-    assert_eq!(masked_cells, 2_127_275_976);
+    assert_eq!(columns, 5_831);
+    assert_eq!(native_cells, 2_125_242_880);
+    assert_eq!(masked_cells, 2_135_831_976);
     assert_eq!(quotient_rows, 53_215_232);
     // Per-adapter local residue work from the complete 49-registration census:
     // reduction, low-S, scalar-bit, projection, window, value, byte-memory,
     // strict-DER, RFC5280, SHA-call and P-256 arithmetic, in that order.
+    // SHA includes the prefix/frame constraints as well as the projection hash
+    // binding: the old work census preceded both additions (564, now593 local).
+    // Joined endpoint work is pinned separately in main_sha_union_tests.rs.
     assert_eq!(
         [
             11_796_480_u64,
             770_048,
             2_744_320,
-            39_190_528,
+            40_108_032,
             367_001_600,
             2_803_630_080,
             95_420_416,
             3_732_930_560,
             4_498_391_040, // RFC: 2,145 local residues across 2^21 quotient rows.
-            9_462_349_824,
+            9_948_889_088,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        25_785_245_696
+        26_272_702_464
     );
-    assert_eq!(residues, 25_785_245_696);
+    assert_eq!(residues, 26_272_702_464);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
-        3_697_993_152 + core::mem::size_of::<E>()
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         buffers.remaining_source_and_runtime_envelope,
-        9_186_908_736 - core::mem::size_of::<E>()
+        (12_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     // Both cut owners remain live. Phase-specific accounting admits all 283
     // P-256 arithmetic columns in each of five registrations, while the RFC
-    // registration retains only its first 26 base columns across four stripes.
-    assert_eq!(cached_columns, 3_428);
-    assert_eq!(quotient_native_iffts, 7_428);
-    assert_eq!(quotient_native_butterflies, 28_071_145_984);
-    assert_eq!(quotient_forward_butterflies, 139_336_818_688);
+    // registration retains only its first 25 base columns across four stripes.
+    assert_eq!(cached_columns, 3_443);
+    assert_eq!(quotient_native_iffts, 7_451);
+    assert_eq!(quotient_native_butterflies, 28_166_763_008);
+    assert_eq!(quotient_forward_butterflies, 143_013_781_504);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
-    assert_eq!(other_native_butterflies, 80_069_183_488);
-    assert_eq!(fixed_native_butterflies, 8_447_302_080);
-    assert_eq!(fixed_recovery_iffts, 6_670);
-    assert_eq!(fixed_recovery_butterflies, 33_221_509_120);
+    assert_eq!(other_native_butterflies, 80_391_882_752);
+    assert_eq!(fixed_native_butterflies, 8_827_312_576);
+    assert_eq!(fixed_recovery_iffts, 1_896);
+    assert_eq!(fixed_recovery_butterflies, 9_443_475_456);
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
-    assert_eq!(commitment_forward_butterflies, 536_208_211_968);
+    assert_eq!(commitment_forward_butterflies, 538_053_705_728);
     eprintln!(
         "MAIN complete work inventory: quotient_rows={quotient_rows}, AIR_residues={residues}, quotient_native_IFFTs={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_Fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_IFFTs={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}, commitment_forward_butterflies={commitment_forward_butterflies}, masked_coefficient_cells={masked_cells}; public operation counts only, no timing or maximum-proof qualification"
+    );
+}
+
+#[test]
+fn projection_sha_binding_geometry_keeps_the_existing_resource_ceilings() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for (adapter, instances, base, aux, fixed, constraints, native_log, quotient_log) in [
+        (SegmentAdapterIdV1::Projection, 1, 17, 36, 31, 306, 15, 17),
+        (
+            SegmentAdapterIdV1::Sha256CallBus,
+            4,
+            89,
+            82,
+            137,
+            593,
+            19,
+            22,
+        ),
+    ] {
+        for instance in 0..instances {
+            let registration = layout.registered_segment(adapter, instance).unwrap();
+            let segment = registration.segment;
+            assert_eq!(
+                (
+                    segment.base_width,
+                    segment.aux_width,
+                    segment.fixed_width,
+                    segment.constraint_count,
+                    segment.trace_log2
+                ),
+                (base, aux, fixed, constraints, native_log)
+            );
+            let retained =
+                registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+            assert_eq!(retained.quotient_coset_log2, quotient_log);
+        }
+    }
+    let extra_columns = 4 + 4 * 4;
+    let extra_native_cells = 4 * (1 << 15) + 4 * 4 * (1 << 19);
+    assert_eq!(extra_native_cells, 8_519_680);
+    assert_eq!(
+        extra_native_cells + extra_columns * (MASK_DEGREE + 1),
+        8_556_000
+    );
+    let extra_masks = extra_columns * (MASK_DEGREE + 1) * core::mem::size_of::<F>();
+    let extra_openings =
+        extra_columns * 2 * AGGREGATE_PARAMETERS_V1.query_count * core::mem::size_of::<F>();
+    assert_eq!((extra_masks, extra_openings), (290_560, 43_520));
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(
+        plan.maximum_live_buffers,
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
+    assert_eq!(
+        super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+        12 << 30
+    );
+    assert_eq!(
+        super::super::super::profile::ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1,
+        32 << 30
+    );
+    assert_eq!(
+        super::super::super::profile::ZK_X509_PROVER_TARGET_SECONDS_V1,
+        300
     );
 }
 
@@ -746,8 +886,8 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
     assert_eq!(plan.replay_batch, 310_494_720);
     // Each of the two evaluations divides every masked polynomial once;
     // synthetic division uses one fewer recurrence step than coefficients.
-    assert_eq!(original_division_steps, 2 * (2_127_275_976 - 5_811));
-    assert_eq!(original_division_steps, 4_254_540_330);
+    assert_eq!(original_division_steps, 2 * (2_135_831_976 - 5_831));
+    assert_eq!(original_division_steps, 4_271_652_290);
     assert_eq!(grouped_division_steps, 1_791_828);
     assert_eq!(
         4 * ((1 << 19) + MASK_DEGREE + 1) * core::mem::size_of::<E>()
@@ -760,6 +900,49 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
     eprintln!(
         "MAIN DEEP synthetic-division recurrence steps: original={original_division_steps}, grouped={grouped_division_steps}; each individual claim remains checked, base-field weighted sums remain"
     );
+}
+
+#[test]
+fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let buffers = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let mut original_recoveries = 0;
+    let mut retained_recoveries = 0;
+    for registration in &layout.registered_segments {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+        let stripe_rows = plan.quotient_coset_rows.min(1 << 19);
+        let stripes = plan.quotient_coset_rows / stripe_rows;
+        let cache = buffers
+            .quotient_cache_plan_v1(&layout, *registration)
+            .unwrap();
+        let fixed = cache
+            .fixed_prefix_columns_v1(segment.trace_size(), segment.fixed_width, stripes)
+            .unwrap();
+        original_recoveries += segment.fixed_width * (stripes - 1);
+        retained_recoveries += (segment.fixed_width - fixed) * (stripes - 1);
+        match segment.adapter {
+            SegmentAdapterIdV1::Sha256CallBus => {
+                assert_eq!(
+                    (cache.base_columns, cache.aux_columns, fixed),
+                    (89, 82, 137)
+                );
+            }
+            SegmentAdapterIdV1::P256Arithmetic => {
+                assert_eq!(
+                    (cache.base_columns, cache.aux_columns, fixed),
+                    (211, 72, 27)
+                );
+            }
+            SegmentAdapterIdV1::Rfc5280 => {
+                assert_eq!((cache.base_columns, cache.aux_columns, fixed), (16, 0, 0));
+            }
+            _ => (),
+        }
+    }
+    assert_eq!(original_recoveries, 7_202);
+    assert_eq!(retained_recoveries, 2_046);
+    assert_eq!(original_recoveries - retained_recoveries, 5_156);
 }
 
 #[test]
@@ -784,12 +967,18 @@ fn registration_quotient_phase_ledger_retains_originals_chunks_and_growth() {
             + 2 * SECURITY_LANES * core::mem::size_of::<Vec<Vec<E>>>()
             + 2 * SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * core::mem::size_of::<Vec<E>>()
             + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<&mut [F]>()
-            + 2 * super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 * core::mem::size_of::<F>()
+            + 2 * main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1 * core::mem::size_of::<F>()
             + 16 * core::mem::size_of::<usize>()
             + main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
-                main_quotient_stripes::MainQuotientStripeV1::new_v1(segment.trace_log2, plan.quotient_coset_log2, 0).unwrap(),
-            ).unwrap();
+                main_quotient_stripes::MainQuotientStripeV1::new_v1(
+                    segment.trace_log2,
+                    plan.quotient_coset_log2,
+                    0,
+                )
+                .unwrap(),
+            )
+            .unwrap();
         let quotients = SECURITY_LANES * plan.quotient_coset_rows * core::mem::size_of::<E>();
         let copy = plan.quotient_coset_rows * core::mem::size_of::<E>();
         let chunks = SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * cap * core::mem::size_of::<E>();
@@ -858,6 +1047,7 @@ fn current_registration_resource_owner_plan_diagnostic() {
     for phase in [
         main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
         main_ca_resources::MainCaBufferPhaseV1::Registration,
+        main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
         main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
         main_ca_resources::MainCaBufferPhaseV1::Finalization,
     ] {
@@ -868,5 +1058,8 @@ fn current_registration_resource_owner_plan_diagnostic() {
     }
     // This is source-derived allocation arithmetic only. Original numeric pins,
     // complete native proof/RSS and all external limits remain separate gates.
-    assert_eq!(plan.maximum_live_buffers, 3_697_993_184);
+    assert_eq!(
+        plan.maximum_live_buffers,
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
 }

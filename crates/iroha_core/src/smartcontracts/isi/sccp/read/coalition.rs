@@ -46,6 +46,15 @@ pub(super) fn floor(
     if current == 0 {
         return Ok(None);
     }
+    // This report borrows the exact captured read cut. Missing original monetary
+    // authority is unknown collateral, never a zero or node-local default.
+    let max_slash_bps = world
+        .parameters()
+        .staking_policy()
+        .ok_or(SccpNativeReadError::Unavailable(
+            "captured World omits committed staking monetary policy",
+        ))?
+        .max_slash_bps;
     let generation = store::committee_generations::get(world, &current).ok_or_else(unavailable)?;
     if !store::committee_generations::valid_entry(&current, generation) {
         return Err(unavailable());
@@ -153,7 +162,7 @@ pub(super) fn floor(
             .try_add_accumulator(&sums[index][2])
             .map_err(|_| unavailable())?;
         exposure
-            .try_scale_basis_points(view.nexus().staking.max_slash_bps)
+            .try_scale_basis_points(max_slash_bps)
             .map_err(|_| unavailable())?;
         seizable[index] = exposure;
     }
@@ -334,6 +343,20 @@ mod tests {
         }
     }
     fn seed(stx: &mut StateTransaction<'_, '_>, amounts: [&str; 4], bps: u16) {
+        let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
+        );
+        policy.max_slash_bps = bps;
+        stx.world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                policy.into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+        seed_records(stx, amounts);
+    }
+
+    fn seed_records(stx: &mut StateTransaction<'_, '_>, amounts: [&str; 4]) {
         let mut generation = sample_generation(2);
         generation.members.clear();
         for (index, amount) in amounts.iter().enumerate() {
@@ -382,7 +405,6 @@ mod tests {
         .unwrap();
         store::committee_generations::insert(stx, 2, retained).unwrap();
         store::committee_current::set(stx, 2);
-        stx.nexus.staking.max_slash_bps = bps;
     }
     fn value(stx: &StateTransaction<'_, '_>) -> Quantity {
         floor(stx, control(&AtomicBool::new(false)))
@@ -651,5 +673,70 @@ mod tests {
             Err(SccpNativeReadError::Deadline)
         ));
         assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn missing_monetary_policy_is_unavailable_not_zero_collateral() {
+        let state = blank_state();
+        let mut block = state.block(header(3));
+        let mut stx = block.transaction();
+        let stop = AtomicBool::new(false);
+        assert!(floor(&stx, control(&stop)).unwrap().is_none());
+        seed_records(&mut stx, ["10", "20", "30", "40"]);
+        assert!(matches!(
+            floor(&stx, control(&stop)),
+            Err(SccpNativeReadError::Unavailable(
+                "captured World omits committed staking monetary policy"
+            ))
+        ));
+        assert!(matches!(
+            capabilities(
+                &stx,
+                &AllocationBudget::new(0),
+                control(&stop),
+                std::iter::empty()
+            ),
+            Err(SccpNativeReadError::Unavailable(
+                "captured World omits committed staking monetary policy"
+            ))
+        ));
+    }
+
+    #[test]
+    fn coalition_rate_remains_bound_to_each_retained_world_snapshot() {
+        let state = blank_state();
+        // Publish isolated World generations; this fixture does not finalize blocks.
+        {
+            let mut block = state.block(header(3));
+            let mut tx = block.transaction();
+            seed(&mut tx, ["10", "20", "30", "40"], 10_000);
+            tx.apply();
+            block.commit_world_overlay_for_testing().unwrap();
+        }
+        let original = state.view();
+        {
+            let mut block = state.block(header(4));
+            let mut tx = block.transaction();
+            seed(&mut tx, ["10", "20", "30", "40"], 5_000);
+            tx.apply();
+            block.commit_world_overlay_for_testing().unwrap();
+        }
+        let current = state.view();
+        let stop = AtomicBool::new(false);
+        assert_eq!(
+            floor(&original, control(&stop))
+                .unwrap()
+                .unwrap()
+                .try_into_quantity()
+                .unwrap(),
+            Quantity::from(30_u32)
+        );
+        assert_eq!(
+            floor(&current, control(&stop))
+                .unwrap()
+                .unwrap()
+                .try_into_quantity()
+                .unwrap(),
+            Quantity::from(15_u32)
+        );
     }
 }

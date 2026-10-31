@@ -47,24 +47,24 @@ fn complete_projection_budget(world: &World) -> AllocationBudget {
 fn retire_original_world(world: World, budget: &AllocationBudget) {
     let (generations, _) =
         crate::state::world_acquisition::original_world_funded_cell_bytes(&world);
+    let parameter_graphs =
+        crate::state::initial_custody_test_support::retain_parameter_graphs(&world);
     let retirement_pin = crossbeam_epoch::pin();
     drop(world);
     retirement_pin.flush();
-    assert_eq!(
-        budget.reserved_bytes(),
-        generations,
-        "every funded current/undo generation remains charged while epoch-pinned",
-    );
+    let pinned_bytes = budget.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while budget.reserved_bytes() != 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "original World generations did not retire",
-        );
-        crossbeam_epoch::pin().flush();
-        std::thread::yield_now();
-    }
+    crate::state::initial_custody_test_support::reclaim_to(budget, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - budget.reserved_bytes(),
+        generations,
+        "every independently counted current/undo shell refunds after its epoch pin releases",
+    );
+    // Keeping these same-version handles separates the payload lifetime from
+    // the Cell shells; releasing them must refund the exact remaining bytes.
+    drop(parameter_graphs);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

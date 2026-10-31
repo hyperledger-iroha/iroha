@@ -61,8 +61,9 @@ fn suite_reports_exactly_the_specified_rules() {
     use std::collections::BTreeSet;
 
     let source = include_str!("conformance.rs");
+    // Match the rule declaration independently of its visibility.
     let (head, tail) = source
-        .split_once("pub(crate) const RULES")
+        .split_once("const RULES:")
         .expect("the suite declares its rules");
     let (_, tail) = tail.split_once("];").expect("the rule list ends");
     let mut reported = BTreeSet::new();

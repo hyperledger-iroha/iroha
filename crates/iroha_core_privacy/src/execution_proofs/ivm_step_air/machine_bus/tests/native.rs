@@ -11,7 +11,8 @@ use crate::execution_proofs::stark::{
         prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
 };
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn exact_packet_layout_stays_in_native_envelope_and_every_phase_is_degree_four() {
@@ -71,20 +72,20 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
     let proof = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x71; 32]),
+        &mut ChaCha12Rng::from_seed([0x71; 32]),
     )
     .unwrap();
     let repeated = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x71; 32]),
+        &mut ChaCha12Rng::from_seed([0x71; 32]),
     )
     .unwrap();
     assert_eq!(proof, repeated);
     let randomized = prove_proof_managed_note_stark_v1_with_rng(
         &bus,
         &columns,
-        &mut StdRng::from_seed([0x72; 32]),
+        &mut ChaCha12Rng::from_seed([0x72; 32]),
     )
     .unwrap();
     assert_ne!(proof, randomized);
@@ -93,25 +94,29 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
     assert!(proof.len() <= 2_472_320);
     for change in 0..11 {
         let mut events = bus.events.clone();
-        if change < 9 {
-            let event = events[0].as_mut().unwrap();
-            match change {
-                0 => event.space = Space::Owner,
-                1 => event.vm ^= 1,
-                2 => event.generation ^= 1,
-                3 => event.index ^= 1,
-                4 => event.write = !event.write,
-                5 => event.before[15] ^= 1,
-                6 => event.after[15] ^= 1,
-                7 => event.before_private ^= 1,
-                _ => event.after_private ^= 1,
+        match change {
+            0..=8 => {
+                let event = events[0].as_mut().unwrap();
+                match change {
+                    0 => event.space = Space::Owner,
+                    1 => event.vm ^= 1,
+                    2 => event.generation ^= 1,
+                    3 => event.index ^= 1,
+                    4 => event.write = !event.write,
+                    5 => event.before[15] ^= 1,
+                    6 => event.after[15] ^= 1,
+                    7 => event.before_private ^= 1,
+                    _ => event.after_private ^= 1,
+                }
             }
-        } else if change == 9 {
-            events[0] = None;
-        } else {
-            // Move an active packet into an existing ordered hole. Reconstruct
-            // its clock and the verifier-owned total through the constructor.
-            events.swap(0, 1);
+            9 => {
+                events[0] = None;
+            }
+            _ => {
+                // Move an active packet into an existing ordered hole. Reconstruct
+                // its clock and the verifier-owned total through the constructor.
+                events.swap(0, 1);
+            }
         }
         let changed = PublicPacketBus::new(events).unwrap();
         assert_ne!(changed.digest().unwrap(), bus.digest().unwrap());
@@ -126,7 +131,7 @@ fn native_packet_proof_binds_every_public_event_and_explicit_entropy() {
         prove_proof_managed_note_stark_v1_with_rng(
             &bus,
             &forged,
-            &mut StdRng::from_seed([0x71; 32]),
+            &mut ChaCha12Rng::from_seed([0x71; 32]),
         )
         .is_err()
     );

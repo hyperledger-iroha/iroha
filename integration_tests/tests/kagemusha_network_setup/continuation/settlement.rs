@@ -349,6 +349,7 @@ fn omitted_proof_observation() -> norito::json::Value {
 
 pub(super) fn run(
     network: &Network,
+    genesis_owner: &KeyPair,
     root: &Path,
     command: &norito::json::Value,
     setup_sha: &str,
@@ -440,7 +441,14 @@ pub(super) fn run(
     let instruction = KagemushaWalletLedgerV1::new(scheme_id, Action::Unload(claim_bytes.clone()));
     // The exact genuine claim must survive an authoritative policy refusal without
     // consuming its payout key. Availability changes use the ordinary asset owner.
-    let policy_retry = policy::before_payout(network, &output, &instruction, 43, [900, 0, 0, 100])?;
+    let policy_retry = policy::before_payout(
+        network,
+        genesis_owner,
+        &output,
+        &instruction,
+        43,
+        [900, 0, 0, 100],
+    )?;
     let (transaction, settled_height) = submit(
         network,
         43,

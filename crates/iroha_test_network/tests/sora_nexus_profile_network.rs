@@ -12,7 +12,7 @@
 //!   session installs with no restart, every validator reports its provider ready, `/readyz` turns
 //!   200, and the chain crosses a mandatory pulse that verifies against the installed session.
 //!
-//! Genesis is today's Kagami Taira localnet re-targeted to the profile (the P2 genesis builder
+//! Genesis is today's Kagami Taira network re-targeted to the profile (the P2 genesis builder
 //! replaces this, TODO(P2)): content of the Taira catalog the profile omits (the Digital Shekel
 //! dataspace and validator seats on lanes the profile does not define) is removed, the protocol
 //! custody account becomes the profile's keyless account, the `NPoS` epoch becomes the qual
@@ -335,7 +335,7 @@ fn profile_manifest(
         npos.evidence_horizon_blocks = epoch;
         npos.slashing_delay_blocks = epoch;
         npos.validate().map_err(|error| eyre!(error))?;
-        typed.custom.insert(id, npos.into_custom_parameter());
+        typed.custom.insert(npos.into_custom_parameter());
         *parameters = json::value::to_value(&typed)?;
     }
     transactions.retain(|transaction| {
@@ -1022,12 +1022,12 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
     let outcome = async {
         let deadline = Instant::now() + PHASE;
         let (api, p2p, reservations) = reserve_ports()?;
-        // 1. Today's Kagami Taira localnet with the qual cadence.
+        // 1. Today's Kagami Taira network with the qual cadence.
         let kagami_dir = root.join("kagami");
         let mut generate = kagami.command()?;
         generate
-            .args(["localnet", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
-            .args(["--sora-profile", "nexus", "--consensus-mode", "npos"])
+            .args(["sora-network", "generate", "--peers", "4", "--chain-id", TAIRA_CHAIN])
+            .args(["--profile", "nexus"])
             .args(["--seed", "sora-nexus-v1-qual-predeal"])
             .arg("--block-cadence-ms")
             .arg(profile.genesis_recipe().block_cadence_ms.to_string())
@@ -1039,7 +1039,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             .arg("--out-dir")
             .arg(&kagami_dir);
         run(generate, &root.join("kagami-localnet"), deadline).await?;
-        eprintln!("[{}] Kagami Taira localnet generated", elapsed(started));
+        eprintln!("[{}] Kagami Taira network generated", elapsed(started));
         let seats = (0..PEERS)
             .map(|index| Seat::load(&kagami_dir, index))
             .collect::<Result<Vec<_>>>()?;

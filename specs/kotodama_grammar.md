@@ -498,6 +498,24 @@ nominal identity. Struct and tuple fields flatten in declaration order; Option, 
 List retain one active-only handle. Private and public functions use this same
 convention, including calls with one argument or one result.
 
+`ledger::credentials::present_x509(request: bytes) -> PendingAction` submits
+one canonical `InstructionBox(SubmitPrivacyZkX509CertificateV1)` through ABI V1
+operation tag 2. The request carries independent public inputs with a ZERO
+transaction-intent field and a signed attachment reference; it carries no proof
+bytes. The existing metered bytes normalizer supplies the exact `NoritoBytes`
+carrier. The host returns the original signed attachment action ordinal only
+after retaining funded queue custody. This token does not report verification,
+authorization, an applied nullifier or a committed effect.
+
+`PendingAction` has no source constructor, numeric/bool conversion, comparison,
+public argument/result schema, serialization or durable-state representation.
+It may be copied and passed or returned through internal functions, including
+local products, options, results and lists, within the same invocation. Its
+internal call-table node is distinct (CS1 tag 13), occupies one public word,
+and accepts only a `u32` ordinal. Public and cross-contract boundaries reject
+it recursively. Branching on a local option or result discriminant says only
+which local value was constructed; the queued action's outcome remains unavailable.
+
 The authenticated CNTR callable descriptors bind every function root, its
 aligned stack-frame reservation, and every argument/result slot's representation
 and privacy role. Admission checks public signatures against their canonical
@@ -592,7 +610,7 @@ The V1 type vocabulary is:
 <!-- BEGIN GENERATED: kotodama-v1-source-policy -->
 | Source policy | Canonical V1 values |
 | --- | --- |
-| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `ListError`, `NumericError`, `StateMap`, `StateCursor`, `StatePage`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage`, `AssetUidHoldingQuote` |
+| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `ListError`, `NumericError`, `StateMap`, `StateCursor`, `StatePage`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage`, `AssetUidHoldingQuote`, `PendingAction` |
 | Forbidden in every source identifier position | `Amount` |
 | Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
 | Ordinary value/function identifier examples | `amount` |
@@ -1634,15 +1652,25 @@ fingerprint. A rejected positional argument reports
 | `ledger::asset::balance` | `account:`, `asset_definition:` |
 | `ledger::asset::burn` | `account:`, `asset_definition:`, `amount:` |
 | `ledger::asset::mint` | `account:`, `asset_definition:`, `amount:` |
-| `ledger::asset::register` | `asset_definition:`, `name:`, `spec:`, `mintable:` |
+| `ledger::asset::register` | `asset_definition:`, `name:`, `spec:`, `mintable:`, `owning_domain:` |
+| `ledger::asset::same_uid` | `asset_definition:`, `source:`, `destination:` |
 | `ledger::asset::set_holding_limit` | `account:`, `asset_definition:`, `limit:` |
 | `ledger::asset::set_transfer_availability` | `account:`, `asset_definition:`, `expected_revision:`, `incoming:`, `outgoing:`, `reason:` |
 | `ledger::asset::set_transfer_daily_limit` | `account:`, `asset_definition:`, `cap:` |
 | `ledger::asset::transfer` | `source:`, `destination:`, `asset_definition:`, `amount:`, `dataspace:` (optional) |
+| `ledger::asset::uid_holding_quote` | `asset_definition:`, `account:`, `incoming:` |
+| `ledger::asset_lock::cancel` | `key:`, `expected_remaining:` |
+| `ledger::asset_lock::cancel_with_waterfall` | `key:`, `expected_remaining:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::drawdown` | `key:`, `amount:`, `expected_remaining:` |
+| `ledger::asset_lock::drawdown_with_waterfall` | `key:`, `amount:`, `expected_remaining:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::expire_with_waterfall` | `key:`, `policy_revision:`, `link_revision:` |
+| `ledger::asset_lock::open` | `key:`, `source:`, `destination:`, `asset_definition:`, `amount:`, `release_until_ms:`, `cancel_not_before_ms:`, `expires_at_ms:` |
 | `ledger::domain::transfer` | `source:`, `domain:`, `destination:` |
 | `ledger::escrow::open_dispute` | `offer:`, `evidence:` (optional) |
 | `ledger::escrow::open_offer` | `offer:`, `asset_definition:`, `amount:`, `evidence:` (optional) |
 | `ledger::escrow::resolve_dispute` | `offer:`, `buyer_amount:`, `seller_amount:`, `evidence:` (optional) |
+| `ledger::fi::link_revision` | `asset_definition:`, `account:`, `expected_fi:` |
+| `ledger::fi::transfer_linked` | `asset_definition:`, `account:`, `amount:`, `policy_revision:`, `link_revision:` |
 | `ledger::governance::build_submit_ballot` | `election_id:`, `ciphertext:`, `nullifier:`, `backend:`, `proof:`, `verification_key:` |
 | `ledger::nft::mint` | `nft:`, `owner:` |
 | `ledger::nft::set_metadata` | `nft:`, `key:`, `value:` |
@@ -1666,8 +1694,9 @@ fingerprint. A rejected positional argument reports
 
 ### Assets
 
-`ledger::asset::register(asset_definition:, name:, spec:, mintable:)` registers
-exactly the definition it names. `name` is the human-readable display name;
+`ledger::asset::register(asset_definition:, name:, spec:, mintable:, owning_domain:)`
+registers exactly the definition it names under the explicit `owning_domain`
+(`DomainId`). `name` is the human-readable display name;
 `spec` is the data model's numeric spec, written with its constructors
 `NumericSpec::unconstrained()`, `NumericSpec::integer()`, or
 `NumericSpec::fractional(scale)` with a constant scale in `0..=28`; `mintable`
@@ -1684,12 +1713,13 @@ mints: issue the initial supply with `ledger::asset::mint` afterwards.
 ```kotodama
 seiyaku RoseIssuer {
     permission RegisterAssetDefinition;
-    kotoage fn issue(AssetDefinitionId rose, AccountId treasury) authorize(RegisterAssetDefinition) {
+    kotoage fn issue(AssetDefinitionId rose, AccountId treasury, DomainId owning_domain) authorize(RegisterAssetDefinition) {
         ledger::asset::register(
             asset_definition: rose,
             name: "Rose",
             spec: NumericSpec::fractional(2),
             mintable: Mintable::Once,
+            owning_domain: owning_domain,
         );
         ledger::asset::mint(account: treasury, asset_definition: rose, amount: 1000);
     }

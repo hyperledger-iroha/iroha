@@ -1,9 +1,11 @@
-//! Joint CA/MAIN ownership inside the unchanged MAIN arithmetic envelope.
+//! Joint CA/MAIN ownership inside the complete prover arithmetic envelope.
 //!
 //! This module requires the retained-cut MAIN replay candidate. Both original
 //! cut owners are already charged by its ordinary plan. Every registration's
 //! coefficient cache loses the complete additional CA/metadata reservation.
 //! The24 MAIN originals are constructed only after registration scratch drops.
+//! The shared plan derives its envelope from these complete phase lifetimes,
+//! including the original CA owners when registration work dominates.
 //! These are allocation admissions, never measured process RSS/address-space
 //! guarantees. The staged caller still owns the fixed source/runtime reserve.
 
@@ -19,6 +21,8 @@ pub(super) enum MainCaBufferPhaseV1 {
     OriginalCommitments,
     /// Each ordinary registration; MAIN24 has not yet been created.
     Registration,
+    /// SHA/RFC and Projection unions after all registration-local owners drop.
+    ShaUnion,
     /// Late MAIN24 construction, private quotient pass and chunk contribution.
     PrivateLinks,
     /// Both compositions, original supplemental DEEP and separate local FRIs.
@@ -67,7 +71,24 @@ impl MainCaJointBufferPlanV1 {
     }
 
     pub(super) fn new_v1(layout: &AggregateProofLayoutV1) -> Result<Self, ZkX509StarkErrorV1> {
-        let common = MainProverBufferPlanV1::new_v1(layout)?;
+        let plan = Self::from_common_v1(MainProverBufferPlanV1::new_v1(layout)?)?;
+        for phase in [
+            MainCaBufferPhaseV1::OriginalCommitments,
+            MainCaBufferPhaseV1::Registration,
+            MainCaBufferPhaseV1::ShaUnion,
+            MainCaBufferPhaseV1::PrivateLinks,
+            MainCaBufferPhaseV1::Finalization,
+        ] {
+            plan.required_v1(phase)?;
+        }
+        Ok(plan)
+    }
+
+    /// Derive concrete joint owners before the common plan selects its peak.
+    /// This does not admit any allocation or recurse into common-plan construction.
+    pub(super) fn from_common_v1(
+        common: MainProverBufferPlanV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
         let request = ca::ca_accumulator_resource_request_v1(
             ca::ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1,
             1,
@@ -103,28 +124,55 @@ impl MainCaJointBufferPlanV1 {
         {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
-        let plan = Self {
+        Ok(Self {
             common,
             ca_originals: CaAwaitingMainAuxiliaryV1::payload_bound_v1()
                 .map_err(|_| ZkX509StarkErrorV1::ProofTooLarge)?,
             main_originals: MainCaOriginalAuxiliaryV1::payload_bound_v1(),
             metadata: Self::METADATA_CAP_V1,
             ca_work: Self::CA_WORK_CAP_V1,
-        };
-        for phase in [
-            MainCaBufferPhaseV1::OriginalCommitments,
-            MainCaBufferPhaseV1::Registration,
-            MainCaBufferPhaseV1::PrivateLinks,
-            MainCaBufferPhaseV1::Finalization,
-        ] {
-            plan.required_v1(phase)?;
-        }
-        Ok(plan)
+        })
     }
 
     /// The MAIN24 cache is absent during every ordinary registration. Charging
     /// it there would exceed the largest registration's remaining headroom.
     pub(super) fn required_v1(
+        &self,
+        phase: MainCaBufferPhaseV1,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let total = self.phase_payload_v1(phase)?;
+        if total > self.common.maximum_live_buffers {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(total)
+    }
+
+    /// Admit serial replay scratch inside an already complete late phase.
+    /// Retained original capacities are checked by the phase's owner guard;
+    /// the caller must finish other replay work before borrowing this budget.
+    pub(super) fn check_replay_subphase_v1(
+        &self,
+        phase: MainCaBufferPhaseV1,
+        replay_payload: usize,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        if !matches!(
+            phase,
+            MainCaBufferPhaseV1::PrivateLinks | MainCaBufferPhaseV1::Finalization
+        ) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.required_v1(phase)?;
+        main_bounded_transform::check_completion_v1(
+            fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+        )?;
+        if replay_payload > self.common.replay_batch {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(())
+    }
+
+    /// Complete simultaneous ownership before applying the common admission cap.
+    pub(super) fn phase_payload_v1(
         &self,
         phase: MainCaBufferPhaseV1,
     ) -> Result<usize, ZkX509StarkErrorV1> {
@@ -137,6 +185,16 @@ impl MainCaJointBufferPlanV1 {
             MainCaBufferPhaseV1::Registration => {
                 sum_v1(&[common.quotient_stage, common.replay_batch])?
             }
+            // All registration matrices and both coefficient caches have dropped.
+            // Keep the complete composition allowance, which includes the outer
+            // coefficient chunks, and the separate replay/source batch. The
+            // union peak belongs inside this arithmetic phase; subtracting it
+            // again from device slack would reserve it twice.
+            MainCaBufferPhaseV1::ShaUnion => sum_v1(&[
+                common.composition,
+                common.replay_batch,
+                super::main_sha_union::MainShaUnionPlanV1::private_owner_charge_v1(),
+            ])?,
             MainCaBufferPhaseV1::PrivateLinks => sum_v1(&[
                 self.main_originals,
                 common.replay_batch,
@@ -153,11 +211,7 @@ impl MainCaJointBufferPlanV1 {
                 common.openings,
             ])?,
         };
-        let total = sum_v1(&[common.masks, common.retained_cuts, extra, transient])?;
-        if total > common.maximum_live_buffers {
-            return Err(ZkX509StarkErrorV1::ProofTooLarge);
-        }
-        Ok(total)
+        sum_v1(&[common.masks, common.retained_cuts, extra, transient])
     }
 
     /// Narrow the canonical registration cache instead of spending the same
@@ -207,7 +261,9 @@ impl MainCaJointBufferPlanV1 {
         }
         match (phase, main_payload) {
             (
-                MainCaBufferPhaseV1::OriginalCommitments | MainCaBufferPhaseV1::Registration,
+                MainCaBufferPhaseV1::OriginalCommitments
+                | MainCaBufferPhaseV1::Registration
+                | MainCaBufferPhaseV1::ShaUnion,
                 None,
             ) => Ok(()),
             (MainCaBufferPhaseV1::PrivateLinks | MainCaBufferPhaseV1::Finalization, Some(main))

@@ -23,13 +23,7 @@ fn sccp_pause_seats_replace_only_unaccepted_in_primary_then_backup_order_at_dead
         &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         "reserve replacement must wait until the exact acceptance deadline"
     );
-    let at = seats(
-        &panel,
-        5,
-        panel.accept_until_ms,
-        u32::MAX & !(1 << 11) & !(1 << 1),
-    )
-    .unwrap();
+    let at = seats(&panel, 5, panel.accept_until_ms, !(1 << 11) & !(1 << 1)).unwrap();
     assert_eq!(
         &at[..10],
         &[10, 1, 12, 13, 14, 5, 6, 7, 8, 9],
@@ -40,7 +34,7 @@ fn sccp_pause_seats_replace_only_unaccepted_in_primary_then_backup_order_at_dead
         &at,
         SccpPanelRoleV1::Primary,
         5,
-        u32::MAX & !(1 << 1),
+        !(1 << 1),
         &panel.drawn[1]
     ));
     assert!(!counts(
@@ -310,8 +304,7 @@ fn sccp_pause_original_account_refusal_survives_scope_retirement_and_carrier_map
         DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
         || accepted_panel(&original, &original.drawn[2], &budget),
     )
-    .err()
-    .expect("actual nested account copy requires decoder allocation");
+    .expect_err("actual nested account copy requires decoder allocation");
     let PauseRecordError::Account(attempt) = &error else {
         panic!("expected the original account-copy attempt: {error:?}");
     };

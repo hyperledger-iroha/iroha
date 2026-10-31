@@ -6,6 +6,10 @@
 macro_rules! capture_world_table_once {
     ($vis:vis $name:ident, $field:ident, $identity:literal) => {
         #[doc = concat!("Capture the complete native rows of `", $identity, "` at a stable generation.")]
+        #[expect(
+            clippy::result_large_err,
+            reason = "Table capture propagates original source and allocation refusal inline without allocating an error box"
+        )]
         $vis fn $name(
             state: &State,
             limits: LeafLimits,
@@ -39,6 +43,10 @@ macro_rules! capture_world_table_once {
                 frozen,
             };
 
+            #[expect(
+                clippy::result_large_err,
+                reason = "Frozen capture retains original refusal custody without allocating an error box"
+            )]
             fn frozen(
                 block: &StateBlock<'_>,
                 limits: LeafLimits,

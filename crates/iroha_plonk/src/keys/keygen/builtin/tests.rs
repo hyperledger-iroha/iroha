@@ -6,7 +6,10 @@ use crate::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector},
     frontend::{Circuit, Error as LayoutError, Layouter, SimpleFloorPlanner, Value},
     keys::pk::CosetCachePolicy,
-    keys::{KeygenConfigV2, ProvingKey, RebuildError, keygen_pk_from_vk_v2, keygen_pk_v2},
+    keys::{
+        KeygenConfigV2, ProvingKey, RebuildError, check_source_v2_cancellable,
+        keygen_pk_from_vk_v2, keygen_pk_v2,
+    },
     pcs::ipa::commit::test_observation::CommitmentProbe,
     verify_full,
 };
@@ -59,7 +62,7 @@ impl<F: PastaField> Circuit<F> for Source<F> {
 }
 
 const PROFILE: &[u8] = b"complete synthetic strict native graph";
-const SOURCE_ID: [u8; 32] = [11; 32];
+const CONTRACT: [u8; 32] = [11; 32];
 const ROLE: &[u32] = &[3, 4, 2];
 
 fn blob(bytes: &[u8]) -> BuiltinBlob {
@@ -161,14 +164,14 @@ fn entries(members: Vec<BuiltinMemberEntry>) -> &'static [BuiltinProfileEntry] {
     Box::leak(
         vec![BuiltinProfileEntry {
             profile: blob(PROFILE),
-            source_identity: SOURCE_ID,
+            contract: CONTRACT,
             members: Box::leak(members.into_boxed_slice()),
         }]
         .into_boxed_slice(),
     )
 }
 fn profile(entries: &'static [BuiltinProfileEntry]) -> BuiltinSourceProfileV1 {
-    select_profile(entries, PROFILE, &SOURCE_ID, true, true, None).unwrap()
+    select_profile(entries, PROFILE, &CONTRACT, true, None).unwrap()
 }
 
 fn parity<C: PastaCurve>() {
@@ -245,15 +248,49 @@ fn compiled_member_preserves_original_and_verified_proof_bytes_on_both_curves() 
     parity::<Eq>();
 }
 
+fn source_verification<C: PastaCurve>() {
+    let f = Fixture::<C>::new();
+    let ordinary = profile(entries(vec![f.entry()]));
+    assert!(!ordinary.member(ROLE).unwrap().verifies_source());
+    let member = ordinary.verifying_sources().member(ROLE).unwrap();
+    assert!(member.verifies_source());
+    assert_eq!(member.role_path(), ROLE);
+    // The selection changes no original check: admission mints the same seal.
+    let probe = CommitmentProbe::start();
+    let (_, _, ordinary_seal) = f
+        .admit(ordinary.member(ROLE).unwrap())
+        .unwrap()
+        .into_parts();
+    let admitted = f.admit(member).unwrap();
+    assert!(admitted.clone().into_parts().2.same_source(&ordinary_seal));
+    // The installed source passes and a same-descriptor fixed change is refused,
+    // exactly as a proof-time rebuild would refuse it, without commitment work.
+    check_source_v2_cancellable(&f.params, &f.source, &admitted.view(), None).unwrap();
+    let changed = Source {
+        fixed: C::ScalarExt::from(8),
+        value: Value::unknown(),
+    };
+    assert_eq!(
+        check_source_v2_cancellable(&f.params, &changed, &admitted.view(), None).err(),
+        Some(RebuildError::Source)
+    );
+    assert_eq!(probe.calls(), 0);
+}
+
+#[test]
+fn source_verifying_profile_marks_members_and_refuses_changed_sources_without_msm() {
+    source_verification::<Ep>();
+    source_verification::<Eq>();
+}
+
 #[test]
 fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
     let f = Fixture::<Ep>::new();
     let registry = entries(vec![f.entry()]);
-    for (actual, identity, complete, supported, expected) in [
+    for (actual, contract, supported, expected) in [
         (
             b"foreign graph".as_slice(),
-            SOURCE_ID,
-            true,
+            CONTRACT,
             true,
             BuiltinSourceErrorV1::UnsupportedProfile,
         ),
@@ -261,31 +298,22 @@ fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
             PROFILE,
             [12; 32],
             true,
-            true,
-            BuiltinSourceErrorV1::StaleSource,
+            BuiltinSourceErrorV1::ContractMismatch,
         ),
         (
             PROFILE,
-            SOURCE_ID,
-            false,
-            true,
-            BuiltinSourceErrorV1::IncompleteSourceClosure,
-        ),
-        (
-            PROFILE,
-            SOURCE_ID,
-            true,
+            CONTRACT,
             false,
             BuiltinSourceErrorV1::UnsupportedTarget,
         ),
     ] {
         assert_eq!(
-            select_profile(registry, actual, &identity, complete, supported, None).err(),
+            select_profile(registry, actual, &contract, supported, None).err(),
             Some(expected)
         );
     }
     assert_eq!(
-        select_profile(&[], PROFILE, &SOURCE_ID, true, true, None).err(),
+        select_profile(&[], PROFILE, &CONTRACT, true, None).err(),
         Some(BuiltinSourceErrorV1::UnsupportedProfile)
     );
     let selected = profile(registry);
@@ -311,19 +339,19 @@ fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
         vec![
             BuiltinProfileEntry {
                 profile: blob(PROFILE),
-                source_identity: SOURCE_ID,
+                contract: CONTRACT,
                 members: registry[0].members,
             },
             BuiltinProfileEntry {
                 profile: blob(PROFILE),
-                source_identity: SOURCE_ID,
+                contract: CONTRACT,
                 members: registry[0].members,
             },
         ]
         .into_boxed_slice(),
     );
     assert_eq!(
-        select_profile(duplicate_profiles, PROFILE, &SOURCE_ID, true, true, None).err(),
+        select_profile(duplicate_profiles, PROFILE, &CONTRACT, true, None).err(),
         Some(BuiltinSourceErrorV1::UnsupportedProfile)
     );
 }
@@ -449,8 +477,7 @@ fn mutations<C: PastaCurve>() {
         select_profile(
             entries(vec![f.entry()]),
             PROFILE,
-            &SOURCE_ID,
-            true,
+            &CONTRACT,
             true,
             Some(&cancelled)
         )
@@ -555,3 +582,10 @@ fn declared_registry_hashes_do_not_bypass_canonical_original_parsing() {
 
 #[path = "tests/metadata.rs"]
 mod metadata;
+
+#[test]
+fn generated_registry_pins_current_mathematical_contract() {
+    for entry in generated::PROFILES {
+        assert_eq!(entry.contract, builtin_contract_v1());
+    }
+}

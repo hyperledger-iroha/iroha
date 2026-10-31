@@ -122,12 +122,14 @@ fn custody_error(
 }
 
 #[cfg(test)]
+type AdmissionProbe = Box<dyn FnOnce(&AllocationBudget, [std::alloc::Layout; 2])>;
+#[cfg(test)]
 thread_local! {
-    static ADMISSION_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce(&AllocationBudget, [std::alloc::Layout; 2])>>> = const { std::cell::RefCell::new(None) };
+    static ADMISSION_PROBE: std::cell::RefCell<Option<AdmissionProbe>> = const { std::cell::RefCell::new(None) };
 }
 /// One observer at the actual copy admission; no refusal is synthesized.
 #[cfg(test)]
-pub(crate) struct ParentServiceCopyAdmissionProbe;
+pub struct ParentServiceCopyAdmissionProbe;
 #[cfg(test)]
 impl Drop for ParentServiceCopyAdmissionProbe {
     fn drop(&mut self) {
@@ -138,7 +140,7 @@ impl Drop for ParentServiceCopyAdmissionProbe {
 }
 /// Observe original demand so controls may occupy genuine original-pool credit.
 #[cfg(test)]
-pub(crate) fn observe_parent_service_copy_admission(
+pub fn observe_parent_service_copy_admission(
     observer: impl FnOnce(&AllocationBudget, [std::alloc::Layout; 2]) + 'static,
 ) -> ParentServiceCopyAdmissionProbe {
     ADMISSION_PROBE.with(|slot| {

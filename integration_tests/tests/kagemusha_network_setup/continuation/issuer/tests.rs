@@ -7,7 +7,7 @@ fn scheme() -> KagemushaWalletSchemeV1 {
         version: 1,
         network_id: *Hash::new(b"issuer selection test").as_ref(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],

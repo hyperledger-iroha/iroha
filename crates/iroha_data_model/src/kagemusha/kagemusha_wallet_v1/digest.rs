@@ -544,7 +544,7 @@ pub fn kagemusha_wallet_freeze_signature_v1(
         }
         KagemushaWalletSignerOutputV1::Raw(raw) => {
             let parsed = P256Signature::from_slice(&raw).map_err(|_| rejected())?;
-            let low_s = parsed.normalize_s().unwrap_or(parsed);
+            let low_s = parsed.normalize_s();
             KagemushaDeviceSignatureV1::from_raw_bytes(low_s.to_bytes().as_slice())
                 .map_err(|_| rejected())?
         }

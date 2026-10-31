@@ -44,12 +44,12 @@ impl DefinitionBinding {
         })
     }
 
-    fn operation_id(&self) -> Result<String> {
+    fn operation_id(&self) -> String {
         use norito::codec::Encode as _;
         // A cap, endpoint or visibility edit must collide with the original operation
         // for validation, never create another independently dispatchable journal.
         // Account JSON is display-profile dependent; canonical binary identity is not.
-        Ok(digest(
+        digest(
             &(
                 "iroha:dataspace-operation:v1",
                 self.network_id,
@@ -57,7 +57,7 @@ impl DefinitionBinding {
                 self.name.clone(),
             )
                 .encode(),
-        ))
+        )
     }
 
     pub(super) fn verify_manifest(&self, manifest: &ManifestV1) -> Result<()> {
@@ -84,7 +84,7 @@ impl DefinitionBinding {
             manifest.network_id == self.network_id
                 && manifest.owner == self.owner
                 && manifest.dataspace.descriptor.alias == self.name
-                && manifest.operation_id.as_deref() == Some(self.operation_id()?.as_str())
+                && manifest.operation_id.as_deref() == Some(self.operation_id().as_str())
                 && manifest.lane.visibility
                     == if self.restricted {
                         LaneVisibility::Restricted
@@ -128,9 +128,9 @@ fn select_lane(baseline: &LaneLifecycleStatusV1, parameters: &Parameters) -> Res
             continue;
         }
         if !baseline.lanes.iter().any(|entry| entry.id == id)
-            && !policy
+            && policy
                 .as_ref()
-                .is_some_and(|policy| policy.fixed_lane(id).is_some())
+                .is_none_or(|policy| policy.fixed_lane(id).is_none())
         {
             lane.checked_add(1)
                 .ok_or_else(|| eyre!("no lane ID remains in the catalog"))?;
@@ -340,7 +340,7 @@ fn replace_unplanned_definition(
 pub(super) fn preflight_identity(journal: &Journal) -> Result<(String, NetworkId, String)> {
     let binding: DefinitionBinding = journal.read_json("definition.json")?;
     require(
-        journal.path.file_name() == Some(std::ffi::OsStr::new(&binding.operation_id()?)),
+        journal.path.file_name() == Some(std::ffi::OsStr::new(&binding.operation_id())),
         "preflight definition belongs to another operation directory",
     )?;
     preflight_binding_identity(&binding)
@@ -376,7 +376,7 @@ pub(super) fn preflight_test_journal(
         trust,
     )
     .unwrap();
-    let journal = Journal::open(&root.join(binding.operation_id().unwrap()), true).unwrap();
+    let journal = Journal::open(&root.join(binding.operation_id()), true).unwrap();
     retain_definition(&journal, &binding, DefinitionAction::Apply).unwrap();
     journal
 }
@@ -443,7 +443,7 @@ fn manifest_inputs(
         payment_asset: iroha_data_model::sns::pricing::payment_asset_definition_id(policy)?,
         max_fee: binding.max_fee.clone(),
         lease_years: binding.lease_years,
-        operation_id: Some(binding.operation_id()?),
+        operation_id: Some(binding.operation_id()),
     })
 }
 
@@ -545,7 +545,7 @@ pub(super) fn run<C: RunContext>(
         context.config().torii_api_url.to_string(),
         &trust,
     )?;
-    let id = binding.operation_id()?;
+    let id = binding.operation_id();
     let requested_root =
         requested_state_root(args.state.as_deref(), std::env::home_dir().as_deref())?;
     // Status never creates state, selects a lane, refreshes quotes or prepares a transaction.
@@ -589,6 +589,8 @@ pub(super) fn run<C: RunContext>(
     let plan: PlanV1 = if (apply || status) && previous.is_some() {
         previous.clone().expect("checked retained plan")
     } else {
+        use iroha_data_model::sns::{ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID};
+
         require(
             !status,
             "dataspace has no saved plan; run dataspace plan first",
@@ -601,7 +603,7 @@ pub(super) fn run<C: RunContext>(
         let parameters = client.get_parameters()?;
         let baseline_overlay = overlay(&parameters, &baseline)?;
         let lane_id = select_lane(&baseline, &parameters)?;
-        use iroha_data_model::sns::{ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID};
+
         let dataspace_policy = client.sns().get_policy(DATASPACE_ALIAS_SUFFIX_ID)?;
         let init = manifest_inputs(&binding, lane_id, &dataspace_policy)?;
         let mut policies = vec![dataspace_policy];
@@ -668,10 +670,12 @@ pub(super) fn run<C: RunContext>(
         &journal,
         &plan,
         preflight_proofs.as_mut(),
-        apply,
-        deadline,
-        &verification_origins,
-        runtime_update.as_ref(),
+        SavedRunOptions {
+            apply,
+            deadline,
+            verification_origins: &verification_origins,
+            runtime_update: runtime_update.as_ref(),
+        },
     )?;
     if let Some(destination) = &args.export_authority {
         authority::export(
@@ -745,7 +749,7 @@ mod tests {
         binding.verify_manifest(&manifest)?;
         let plan = PlanV1 {
             schema_version: 1,
-            operation_id: binding.operation_id()?,
+            operation_id: binding.operation_id(),
             intent_sha256: manifest.intent_digest()?,
             bootstrap_grant: manifest.validate()?,
             catalog_transition: transition(&manifest, &baseline)?,
@@ -836,17 +840,13 @@ mod tests {
         let mut endpoint = original.clone();
         endpoint.network_url = "https://different.example/".into();
         for changed in [&cap, &visibility, &trust, &alias, &lease, &endpoint] {
-            assert_eq!(
-                changed.operation_id().unwrap(),
-                original.operation_id().unwrap()
-            );
+            assert_eq!(changed.operation_id(), original.operation_id());
         }
         for changed in [&cap, &visibility, &trust, &alias, &lease] {
             assert!(changed.verify_manifest(&plan.manifest).is_err());
         }
         let root = private_tempdir();
-        let journal =
-            Journal::open(&root.path().join(original.operation_id().unwrap()), true).unwrap();
+        let journal = Journal::open(&root.path().join(original.operation_id()), true).unwrap();
         retain_definition(&journal, &original, DefinitionAction::Apply).unwrap();
         journal.install_json("plan.json", &plan).unwrap();
         for changed in [&cap, &visibility, &trust, &alias, &lease, &endpoint] {
@@ -870,13 +870,9 @@ mod tests {
         let original = binding(&definition);
         definition.dataspace.max_fee = Quantity::from(20_u32);
         let (corrected, plan) = native_plan(&definition).unwrap();
-        assert_eq!(
-            original.operation_id().unwrap(),
-            corrected.operation_id().unwrap()
-        );
+        assert_eq!(original.operation_id(), corrected.operation_id());
         let root = private_tempdir();
-        let journal =
-            Journal::open(&root.path().join(original.operation_id().unwrap()), true).unwrap();
+        let journal = Journal::open(&root.path().join(original.operation_id()), true).unwrap();
         retain_definition(&journal, &original, DefinitionAction::Plan).unwrap();
         let original_bytes = journal.read_optional("definition.json").unwrap().unwrap();
         let proof_owner = finality::Preflight::new(
@@ -942,8 +938,7 @@ mod tests {
             Some("proof-00000000000000000001.json"),
         ] {
             let root = private_tempdir();
-            let journal =
-                Journal::open(&root.path().join(original.operation_id().unwrap()), true).unwrap();
+            let journal = Journal::open(&root.path().join(original.operation_id()), true).unwrap();
             retain_definition(&journal, &original, DefinitionAction::Plan).unwrap();
             let original_bytes = journal.read_optional("definition.json").unwrap().unwrap();
             if let Some(name) = evidence {
@@ -984,8 +979,7 @@ mod tests {
         let mut corrected = original.clone();
         corrected.max_fee = Quantity::from(21_u32);
         let root = private_tempdir();
-        let journal =
-            Journal::open(&root.path().join(original.operation_id().unwrap()), true).unwrap();
+        let journal = Journal::open(&root.path().join(original.operation_id()), true).unwrap();
         retain_definition(&journal, &original, DefinitionAction::Plan).unwrap();
         let _preflight = finality::Preflight::new(
             &journal,
@@ -1043,8 +1037,7 @@ mod tests {
             Some("proof-00000000000000000001.json"),
         ] {
             let root = private_tempdir();
-            let journal =
-                Journal::open(&root.path().join(binding.operation_id().unwrap()), true).unwrap();
+            let journal = Journal::open(&root.path().join(binding.operation_id()), true).unwrap();
             retain_definition(&journal, &binding, DefinitionAction::Apply).unwrap();
             let _preflight = finality::Preflight::new(
                 &journal,
@@ -1083,8 +1076,7 @@ mod tests {
         definition.dataspace.max_fee = Quantity::from(20_u32);
         let (binding, plan) = native_plan(&definition).unwrap();
         let root = private_tempdir();
-        let journal =
-            Journal::open(&root.path().join(binding.operation_id().unwrap()), true).unwrap();
+        let journal = Journal::open(&root.path().join(binding.operation_id()), true).unwrap();
         retain_definition(&journal, &binding, DefinitionAction::Apply).unwrap();
         let proof_owner = finality::Preflight::new(
             &journal,
@@ -1238,11 +1230,11 @@ mod tests {
         let binding = binding(&definition());
         let first = {
             let _guard = ChainDiscriminantGuard::enter(369);
-            binding.operation_id().unwrap()
+            binding.operation_id()
         };
         let second = {
             let _guard = ChainDiscriminantGuard::enter(901);
-            binding.operation_id().unwrap()
+            binding.operation_id()
         };
         assert_eq!(first, second);
     }
@@ -1266,7 +1258,7 @@ mod tests {
     fn parameters(policy: SumeragiLanePolicy) -> Parameters {
         let mut parameters = Parameters::default();
         let custom = policy.into_custom_parameter();
-        parameters.custom.insert(custom.id.clone(), custom);
+        parameters.custom.insert(custom);
         parameters
     }
 
@@ -1369,7 +1361,7 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let root = state_root(&parent.path().join("state"), true).unwrap();
         let binding = binding(&definition());
-        let directory = root.join(binding.operation_id().unwrap());
+        let directory = root.join(binding.operation_id());
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
         let journal = Journal::open_unpublished(&directory).unwrap();

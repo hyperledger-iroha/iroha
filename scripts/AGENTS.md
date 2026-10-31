@@ -5,17 +5,17 @@ These guidelines apply to the `scripts/` directory.
 ## Purpose and layout
 - Shell and Python helpers that back CI (`ci/`, `buildkite/`), release automation, fixture regeneration, GPU experiments, etc.
 - `test_env.py` provisions a local multi-peer network that is consumed by the Python test suites and manual QA.
+- `dev_doctor.py` (`make doctor`) checks that a machine has the tools these helpers need.
 - `requirements.txt` is the exact pinned Python dependency set shared by the
   scripts (BLAKE3, JSON Schema validation, pytest, requests, the pre-3.11 TOML
-  backport, and `tomli_w`). Its security-patched pytest and HTTP stack require
-  Python 3.10+
-  even though dependency-free helpers may retain an older syntax floor.
+  backport, and `tomli_w`). Repository scripts need Python 3.11+ because several
+  import `tomllib`; `scripts/test_swift_local.py` needs Python 3.12.
   Install it with `python3 -m pip install -r scripts/requirements.txt` before
   running helpers that import Python modules.
 
 ## Development workflow
 - Keep scripts idempotent and portable across macOS/Linux. Prefer POSIX shell or Python 3.11+; for long workflows use Python so we can add tests.
-- For faster local Rust iteration, prefer `scripts/cargo_fast.sh -- <cargo args...>`; it auto-enables `sccache` without restarting a shared daemon and otherwise leaves the cache location and system linker unchanged. Reuse the workspace target by default, or use a stable `--target-slot <name>` for each concurrent build lane instead of creating one-off target directories. Cargo's native jobserver is the default; `--jobs <N>` is an explicit override and one job is intended only for constrained or evidence lanes. Use `--incremental` for repeated focused test builds in the same warm target, `--no-incremental` for sccache-heavy builds, and `--stable-local-metadata` only for non-release local loops where a fixed `VERGEN_GIT_SHA` is acceptable. Alternative linkers remain available through explicit `--linker auto` or `--linker <name>` selection.
+- For faster local Rust iteration, prefer `scripts/cargo_fast.sh --stable-local-metadata --incremental -- <cargo args...>` for non-release local loops. Reuse the workspace target by default, or use a stable `--target-slot <name>` only for concurrent build lanes instead of creating one-off target directories. Dev and test profiles enable incremental compilation, and `dev_workflow.sh` uses the same warm target through the local wrapper. Cargo's native jobserver is the default; `--jobs <N>` is an explicit override and one job is intended only for constrained or evidence lanes. Use `--no-incremental` for memory-constrained or sccache-heavy builds; the wrapper can auto-enable `sccache` without restarting a shared daemon. `--stable-local-metadata` is only for local loops where a fixed `VERGEN_GIT_SHA` is acceptable. `CARGO_FAST_TIMINGS=1` emits Cargo wall time for the persistent-target profiler; native source provenance is audited independently by `audit_native_source_inputs.py` and never gates runtime proof compatibility. The system linker stays unchanged unless `--linker auto` or `--linker <name>` is explicitly selected.
 - Every script must document:
   - Purpose and prerequisites at the top of the file.
   - Required environment variables or paths (e.g., `BIN_IROHAD` overrides in `test_env.py`).
@@ -26,6 +26,6 @@ These guidelines apply to the `scripts/` directory.
 - Treat SDK parity helpers as multi-SDK tooling now: when touching `check_norito_bindings_sync.py`, `check_android_fixtures.py`, `norito_fixture_alignment.py`, or fixture regeneration scripts, keep Java and Kotlin parity expectations aligned.
 
 ## Notes
-- `test_env.py` assumes the Rust workspace has already been built; run `cargo build --workspace` first so it can reuse the binaries.
+- `test_env.py` assumes its binaries are already built; run `cargo build -p irohad -p iroha_cli -p iroha_kagami` first.
 - Long-running orchestration scripts (SoraFS, the Sumeragi soak, Norito feature matrix) capture artefacts under `run/` directories—ensure they clean up on success and clearly report the paths for later inspection.
 - If a script affects build/test flows, mention it in the relevant README or developer doc so other contributors can discover it.

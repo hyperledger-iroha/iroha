@@ -9,7 +9,7 @@ use iroha_data_model::query::error::QueryExecutionFail;
 
 /// Preserve deterministic policy/query refusal separately from local resource deferral.
 #[derive(Debug)]
-pub(crate) enum AssetFiLinkRevisionError {
+pub enum AssetFiLinkRevisionError {
     Execution(InstructionExecutionError),
     Query(QueryExecutionFail),
     Local(crate::execution_attempt::ExecutionDeferred),
@@ -70,7 +70,7 @@ where
 ///
 /// Only the exact currently installed frame named by the wallet owner's enabled
 /// link may read it. FI eligibility and attestation remain current and revision-bound.
-pub(crate) fn link_revision_for_contract(
+pub fn link_revision_for_contract(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractRuntimeExecutionContext,
@@ -158,7 +158,7 @@ pub(crate) fn link_revision_for_contract(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::{
         kura::Kura,
@@ -177,7 +177,7 @@ pub(crate) mod tests {
 
     // Native read fixture only. Direct retained-row setup exercises readers and
     // tampering refusals; it is not an owner-signature/admission qualification.
-    pub(crate) struct Fixture {
+    pub struct Fixture {
         pub(crate) owner: AccountId,
         pub(crate) wallet: AccountId,
         pub(crate) bank: AccountId,
@@ -192,10 +192,10 @@ pub(crate) mod tests {
                 .clone(),
         )
     }
-    pub(crate) fn header() -> BlockHeader {
+    pub fn header() -> BlockHeader {
         BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0)
     }
-    pub(crate) fn ample_budget() -> QueryExecutionBudget {
+    pub fn ample_budget() -> QueryExecutionBudget {
         QueryExecutionBudget::from_weighted_limit(10_000_000, 7, 3)
     }
     impl Fixture {
@@ -223,12 +223,16 @@ pub(crate) mod tests {
                 [asset],
             );
             {
-                let mut parameters = world.parameters.block();
-                parameters
-                    .set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                    .expect("funded original parameter-only fixture block");
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    crate::sumeragi::lanes::routing::test_support::metadata(
                         iroha_data_model::block::consensus::SumeragiRootScope::Global,
-                    ))
-                    .unwrap();
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
                 parameters.commit();
             }
             let state = State::new_for_testing(
@@ -368,10 +372,10 @@ pub(crate) mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
-        let (revision, stats) = f.read(tx.world()).unwrap();
+        let (revision, execution_stats) = f.read(tx.world()).unwrap();
         assert_eq!(revision, u64::MAX);
-        assert_eq!(stats.processed_items(), 10);
-        assert!(stats.processed_bytes() > 0);
+        assert_eq!(execution_stats.processed_items(), 10);
+        assert!(execution_stats.processed_bytes() > 0);
         assert_eq!(
             before,
             tx.world
@@ -503,12 +507,12 @@ pub(crate) mod tests {
         tx.world
             .smart_contract_state
             .insert(key.clone(), vec![0xff; 32 * 1024]);
-        let mut stats = QueryExecutionStats::default();
+        let mut execution_stats = QueryExecutionStats::default();
         let error = metered_read::<AssetFiLinkV1>(
             tx.world(),
             &key,
             QueryExecutionBudget::from_weighted_limit(512, 7, 3),
-            &mut stats,
+            &mut execution_stats,
         )
         .unwrap_err();
         assert!(matches!(
@@ -516,7 +520,7 @@ pub(crate) mod tests {
             AssetFiLinkRevisionError::Query(QueryExecutionFail::GasBudgetExceeded)
         ));
         assert!(
-            stats.processed_bytes() < 32 * 1024,
+            execution_stats.processed_bytes() < 32 * 1024,
             "oversized source refused before decode"
         );
         Fixture::put(&mut tx, key.clone(), &f.link());

@@ -191,7 +191,20 @@ fn original_post_merge_validation_refusal_retains_worker_owner_and_exact_availab
                 block.payload().as_slice(),
                 worker.state,
                 None,
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    worker
+                        .state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .unwrap(),
                 None,
+                &mut Default::default(),
+                &crate::execution_attempt::PolicyDecodeControls::try_new(
+                    &worker.state.ivm_execution_budget(),
+                )
+                .unwrap(),
             )
             .unpack(|_| {})
             .map(|_| ())
@@ -384,6 +397,15 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
     use iroha_model_base::topology::{DataSpaceId, LaneId};
 
     const RETAINED_HISTORY_BLOCKS: usize = 1_024;
+    // The exact capacity probes must retain versions retired while constructing the
+    // signed history, not only versions retired during the probes. Give this long
+    // epoch its own harness so it cannot delay reclamation in unrelated tests.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::executor::validation_refusal_tests::original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry",
+    ) {
+        return;
+    }
+    let _history_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         || {
             let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
@@ -574,6 +596,9 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
             };
@@ -803,6 +828,9 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
             };
@@ -849,7 +877,20 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 block.payload().as_slice(),
                 worker.state,
                 None,
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    worker
+                        .state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .unwrap(),
                 None,
+                &mut Default::default(),
+                &crate::execution_attempt::PolicyDecodeControls::try_new(
+                    &worker.state.ivm_execution_budget(),
+                )
+                .unwrap(),
             )
             .unpack(|event| recorded_events.push(event.into()))
             .expect("actual available proposal seals its real execution and witness");
@@ -889,10 +930,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
             let outcome = worker.retain_validated_execution(
                 &block,
                 hash,
-                valid,
-                overlay,
-                committee,
-                recorded_events,
+                (valid, overlay, committee, recorded_events),
                 due_work_max_lag_ms,
                 max_clock_drift_ms,
                 None, // This isolated handoff does not return an execution verdict.

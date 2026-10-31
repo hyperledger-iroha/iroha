@@ -32,7 +32,7 @@ pub(super) fn java_privacy_validate_exact12_fixture_bundle_bytes(
     validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
 pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
@@ -59,7 +59,7 @@ pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
     }
 }
 pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
     expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
@@ -99,7 +99,7 @@ pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     }
 }
 fn java_privacy_expected_network(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     network: &jni::objects::JByteArray<'_>,
 ) -> Option<[u8; 32]> {
     if network.is_null() || env.get_array_length(network).ok()? != 32 {
@@ -112,23 +112,7 @@ fn java_privacy_manifest_network_matches(
     manifest: &PrivacyExact12CapabilityManifestV1,
     expected_network: &[u8; 32],
 ) -> bool {
-    expected_network[31] & 1 == 1
-        && manifest.qualification.as_ref().is_none_or(|qualification| {
-            java_privacy_deployment_network_matches(
-                &qualification.deployment_qualification.network_id,
-                &qualification.deployment_qualification.genesis_hash,
-                expected_network,
-            )
-        })
-}
-fn java_privacy_deployment_network_matches(
-    network: &NetworkId,
-    genesis_hash: &[u8; 32],
-    expected_network: &[u8; 32],
-) -> bool {
-    expected_network[31] & 1 == 1
-        && network.as_bytes() == expected_network
-        && genesis_hash == expected_network
+    expected_network[31] & 1 == 1 && manifest.network_id.as_bytes() == expected_network
 }
 
 pub(super) fn java_privacy_exact12_capability_tuple_admitted(
@@ -136,37 +120,12 @@ pub(super) fn java_privacy_exact12_capability_tuple_admitted(
     protocol_index: jni::sys::jint,
     expected_network: &[u8; 32],
 ) -> bool {
-    if !validate_privacy_capability_archive_v1(archive).is_valid() {
-        return false;
-    }
-    let Ok(index) = usize::try_from(protocol_index) else {
-        return false;
-    };
-    let Some(expected_protocol) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
-        return false;
-    };
-    let Ok(manifest) = norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(archive)
-    else {
-        return false;
-    };
-    if !java_privacy_manifest_network_matches(&manifest, expected_network) {
-        return false;
-    }
-    let Ok(catalog) = compiled_privacy_profile_catalog_v1() else {
-        return false;
-    };
-    let (Some(committed), Some(local)) =
-        (manifest.protocols.get(index), catalog.protocols.get(index))
-    else {
-        return false;
-    };
-    committed.protocol_id == expected_protocol
-        && local.protocol_id == expected_protocol
-        && committed.is_network_available()
-        && committed.compiled_profile == local.compiled_profile
+    usize::try_from(protocol_index).is_ok_and(|index| {
+        crate::privacy_construction::tuple_admitted(archive, index, expected_network)
+    })
 }
 pub(super) fn java_native_privacy_require_exact12_capability_tuple(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     expected_network: jni::objects::JByteArray<'_>,
@@ -202,55 +161,17 @@ pub(super) fn java_privacy_exact12_submit_proof_admitted(
     instruction_archive: &[u8],
     expected_network: &[u8; 32],
 ) -> bool {
-    if !java_privacy_exact12_capability_tuple_admitted(
-        manifest_archive,
-        protocol_index,
-        expected_network,
-    ) || instruction_archive.is_empty()
-        || instruction_archive.len() > SubmitPrivacyProofV1::canonical_frame_byte_limit_v1()
-    {
-        return false;
-    }
-    let Ok(index) = usize::try_from(protocol_index) else {
-        return false;
-    };
-    let Some(expected_protocol) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
-        return false;
-    };
-    let Ok(manifest) =
-        norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(manifest_archive)
-    else {
-        return false;
-    };
-    let Some(committed) = manifest.protocols.get(index) else {
-        return false;
-    };
-    let Some(activation) = committed.activation.as_ref() else {
-        return false;
-    };
-    let Ok(instruction) = norito::decode_canonical::<SubmitPrivacyProofV1>(instruction_archive)
-    else {
-        return false;
-    };
-    instruction.envelope.protocol_id == expected_protocol
-        && instruction
-            .envelope
-            .statement
-            .context()
-            .network_id
-            .as_bytes()
-            == expected_network
-        && instruction
-            .envelope
-            .validate_against_activation(
-                activation,
-                &manifest.consensus_policy.current_limits,
-                manifest.committed_height,
-            )
-            .is_ok()
+    usize::try_from(protocol_index).is_ok_and(|index| {
+        crate::privacy_construction::construction_admitted(
+            manifest_archive,
+            index,
+            instruction_archive,
+            expected_network,
+        )
+    })
 }
 pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     manifest_archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     instruction_archive: jni::objects::JByteArray<'_>,
@@ -280,7 +201,7 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     if manifest_len == 0
         || manifest_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
         || instruction_len == 0
-        || instruction_len > SubmitPrivacyProofV1::canonical_frame_byte_limit_v1()
+        || instruction_len > privacy_x509_request::construction_frame_limit()
     {
         return JNI_FALSE;
     }
@@ -345,7 +266,7 @@ pub(super) fn java_privacy_exact12_capability_manifest_inspection(
         .map_err(|error| format!("failed to encode exact-12 capability inspection: {error}"))
 }
 pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     if archive.is_null() {
@@ -381,7 +302,7 @@ pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
     }
 }
 pub(super) fn java_native_privacy_compiled_profile_catalog(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_compiled_profile_catalog_archive()?;
@@ -401,7 +322,7 @@ pub(super) fn java_native_privacy_compiled_profile_catalog(
     }
 }
 pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
@@ -425,7 +346,7 @@ pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
     }
 }
 pub(super) fn java_native_privacy_exact12_fixture_bundle(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_exact12_fixture_bundle_archive()?;

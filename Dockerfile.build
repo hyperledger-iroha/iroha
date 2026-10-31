@@ -4,6 +4,7 @@ FROM ${IROHA_CI_BUILDER_IMAGE}
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
+    RUSTUP_TOOLCHAIN=1.99.1 \
     PATH=/usr/local/cargo/bin:$PATH \
     POETRY_HOME=/opt/poetry \
     TORII_API_PORT_MIN=8080 \
@@ -11,13 +12,36 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 ENV PATH=$POETRY_HOME/bin:$PATH
 
-RUN pacman -Syu rustup mold openssl libgit2 jq unzip \
+RUN pacman -Syu rustup mold openssl libgit2 jq unzip curl ca-certificates tar bzip2 \
     git docker docker-buildx docker-compose \
     python python-pip --noconfirm --disable-download-timeout && \
-    curl -sSL https://install.python-poetry.org | python3 -
-RUN rustup component add --toolchain stable \
-    llvm-tools-preview clippy rust-src rustfmt
-RUN cargo install grcov
+    install -d /usr/local/share/iroha-ci && \
+    pacman -Q > /usr/local/share/iroha-ci/arch-packages.txt
+RUN rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal \
+    --component llvm-tools-preview --component clippy --component rust-src --component rustfmt && \
+    rustup default "$RUSTUP_TOOLCHAIN"
+
+# grcov 0.10.8 is an upstream release, but is not published to crates.io.
+# Verify the official Linux release bytes before extracting either architecture.
+RUN case "$(uname -m)" in \
+      x86_64) grcov_arch=x86_64; grcov_sha=25ef3d08b660fe82cd7306dd5af4fa59aa7342718fe89d98ef95064c557e28ab ;; \
+      aarch64) grcov_arch=aarch64; grcov_sha=c23533dbca2e1500ebbedc6d89b9926a5193faa772f849ade9291d5365af31e6 ;; \
+      *) exit 1 ;; \
+    esac && \
+    curl --fail --show-error --location --retry 3 \
+      "https://github.com/mozilla/grcov/releases/download/v0.10.8/grcov-${grcov_arch}-unknown-linux-gnu.tar.bz2" \
+      --output /tmp/grcov.tar.bz2 && \
+    printf '%s  /tmp/grcov.tar.bz2\n' "$grcov_sha" | sha256sum --check --strict && \
+    mkdir /tmp/grcov && tar --extract --bzip2 --no-same-owner --file /tmp/grcov.tar.bz2 --directory /tmp/grcov && \
+    install -m 0755 /tmp/grcov/grcov /usr/local/cargo/bin/grcov && \
+    grcov --version && rm -rf /tmp/grcov /tmp/grcov.tar.bz2
+
+COPY scripts/ci_image_poetry.lock /tmp/ci_image_poetry.lock
+RUN python3 -c 'import sys; assert sys.version_info[:2] == (3, 14), "CI Poetry lock requires Python 3.14"' && \
+    python3 -m venv "$POETRY_HOME" && \
+    "$POETRY_HOME/bin/python" -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /tmp/ci_image_poetry.lock && \
+    "$POETRY_HOME/bin/python" -m pip check && \
+    poetry --version && rm /tmp/ci_image_poetry.lock
 
 ARG BUILDER_USER=iroha
 ARG BUILDER_UID=1000

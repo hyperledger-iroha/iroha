@@ -54,7 +54,7 @@ fn test_message(
     std::sync::Arc<tokio::sync::Semaphore>,
 ) {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     let key = KeyPair::try_from_seed(vec![81; 32], Algorithm::BlsNormal).unwrap();
     let peer = Peer::new("127.0.0.1:9911".parse().unwrap(), key.public_key().clone());
     let mut message =

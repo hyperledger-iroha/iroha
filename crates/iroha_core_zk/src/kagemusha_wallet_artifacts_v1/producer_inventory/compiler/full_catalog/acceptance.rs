@@ -81,9 +81,16 @@ fn active_imports(
         // Each use rereads all three signed originals and rebuilds the key from
         // its qualified seal; the result is exactly the signed original.
         let before = originals.reads;
-        let owner = qualified
-            .import_sigma(u8::try_from(selector).unwrap(), originals, config)
-            .unwrap();
+        // Runtime operation imports and speculative bindings share this wallet boundary.
+        // A general importer's Eager request must not invalidate the wallet's memory bound.
+        let eager = ReadConfig {
+            coset_cache: iroha_plonk::keys::CosetCachePolicy::Eager,
+            ..config
+        };
+        let selected = u8::try_from(selector).unwrap();
+        let owner = qualified.import_sigma(selected, originals, eager).unwrap();
+        assert!(!owner.proving_key().has_coset_cache());
+        assert_eq!(owner.proving_key().coset_cache_bytes(), 0);
         assert_eq!(
             originals.reads - before,
             3,
@@ -100,6 +107,17 @@ fn active_imports(
         );
         drop(original);
         drop(owner);
+        let before_bind = originals.reads;
+        let rebound = qualified
+            .bind_sigma_cancellable(selected, eager, None)
+            .unwrap();
+        assert!(!rebound.proving_key().has_coset_cache());
+        assert_eq!(rebound.proving_key().coset_cache_bytes(), 0);
+        assert_eq!(
+            originals.reads, before_bind,
+            "sealed binding performs no source I/O"
+        );
+        drop(rebound);
     }
     let mut programs = std::collections::BTreeSet::new();
     let mut q_imports = 0;
@@ -136,7 +154,7 @@ fn active_imports(
                         .is_err_and(|error| error.is_unavailable())
                 );
             }
-            drop(qualified.import_q(route, stage, originals, config).unwrap());
+            let _ = qualified.import_q(route, stage, originals, config).unwrap();
             q_imports += 1;
         }
     }
@@ -165,7 +183,7 @@ pub(super) fn accept(
         scheme_id: draft.scheme().scheme_id(),
         role: KagemushaWalletSignerRoleV1::Artifact,
         key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            artifact.verifying_key().to_encoded_point(false).as_bytes(),
+            artifact.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         serial: 1,
@@ -336,7 +354,7 @@ fn qualify_signed_wallet_catalog_from_pinned_originals() {
 }
 
 /// Exact owners returned only after genuine pinned engineering source admission.
-pub(crate) type EngineeringWalletSources = (
+pub type EngineeringWalletSources = (
     std::sync::Arc<InstalledVerifierPackV1>,
     std::sync::Arc<QualifiedWalletSourcesV1>,
     SumeragiFinalityVerifier,
@@ -433,7 +451,7 @@ fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
 /// the complete capability through the ordinary production source constructor.
 /// This is an engineering fixture: it grants no deployment authority and cannot
 /// return a grant from marker files, a subset, or a caller-provided verdict.
-pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> EngineeringWalletSources {
+pub fn open_pinned_engineering_wallet_sources(output: &Path) -> EngineeringWalletSources {
     let PinnedEngineeringInputs {
         installed,
         authenticated,
@@ -494,7 +512,7 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
 /// opens strict read-only originals, repeats the complete ordinary qualification and all active
 /// import controls, and writes evidence only into this process's fresh admission directory.
 /// A refused original is never replaced, copied from another source or accepted from a cache.
-pub(crate) fn reopen_pinned_engineering_wallet_sources(
+pub fn reopen_pinned_engineering_wallet_sources(
     output: &Path,
     originals: &Path,
 ) -> EngineeringWalletSources {
@@ -601,7 +619,7 @@ fn requalify_signed_wallet_catalog_from_retained_originals() {
 }
 
 /// Native finality owner selected independently of any proving original.
-pub(crate) type EngineeringFinalitySources = (
+pub type EngineeringFinalitySources = (
     std::sync::Arc<InstalledVerifierPackV1>,
     QualifiedReceiptSourceV1,
     SumeragiFinalityVerifier,
@@ -609,9 +627,7 @@ pub(crate) type EngineeringFinalitySources = (
 );
 
 /// Bind a signed engineering wallet installation to authenticated native genesis.
-pub(crate) fn open_pinned_engineering_finality_sources(
-    output: &Path,
-) -> EngineeringFinalitySources {
+pub fn open_pinned_engineering_finality_sources(output: &Path) -> EngineeringFinalitySources {
     let PinnedEngineeringInputs {
         installed,
         authenticated,

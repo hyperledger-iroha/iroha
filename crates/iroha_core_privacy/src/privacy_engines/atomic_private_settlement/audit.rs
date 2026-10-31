@@ -143,8 +143,8 @@ pub fn seal_private_settlement_audit_capsule_v1_with_rng<R: TryCryptoRng>(
     let mut wrapped_deks = Vec::with_capacity(policy.body.auditors.len());
     for auditor in &policy.body.auditors {
         let recipient = auditor.encryption_key.to_hybrid()?;
-        let (kem, derived) =
-            hybrid_encapsulate(HYBRID_SUITE_V1, &recipient, rng).map_err(map_hybrid_seal_error)?;
+        let (kem, derived) = hybrid_encapsulate(HYBRID_SUITE_V1, &recipient, rng)
+            .map_err(|error| map_hybrid_seal_error(&error))?;
         let mut wrap_nonce = [0_u8; 24];
         fill_nonzero_random(rng, &mut wrap_nonce)?;
         let wrap_aad = dek_wrap_aad_bytes(&aad, auditor.auditor_id.clone(), &recipient, &kem)?;
@@ -378,7 +378,7 @@ fn aead_decrypt(
         .map_err(|_| PrivateSettlementAuditCryptoErrorV1::CryptographicFailure)
 }
 
-fn map_hybrid_seal_error(error: HybridError) -> PrivateSettlementAuditCryptoErrorV1 {
+fn map_hybrid_seal_error(error: &HybridError) -> PrivateSettlementAuditCryptoErrorV1 {
     match error {
         HybridError::RandomBytes { .. } => {
             PrivateSettlementAuditCryptoErrorV1::RandomnessUnavailable
@@ -440,7 +440,7 @@ mod tests {
         PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
         PrivateSettlementHybridPublicKeyV1,
     };
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
 
     struct Fixture {
         policy: PrivateSettlementAuditPolicyV1,
@@ -669,7 +669,9 @@ mod tests {
         .enumerate()
         {
             let maximum = maximum_plaintext_bytes(padding);
-            let mut rng = iroha_crypto::rng_from_seed_slice(&[0x91 + index as u8]);
+            let mut rng = iroha_crypto::rng_from_seed_slice(&[
+                0x91 + u8::try_from(index).expect("audit fixture index")
+            ]);
             let typed_result = seal_private_settlement_audit_capsule_v1_with_rng(
                 &fixture.plaintext,
                 fixture.aad,
@@ -727,6 +729,7 @@ mod tests {
     #[derive(Debug)]
     struct InjectedRngError;
 
+    impl std::error::Error for InjectedRngError {}
     impl core::fmt::Display for InjectedRngError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected private-settlement audit RNG failure")
@@ -735,7 +738,7 @@ mod tests {
 
     struct FailingRng;
 
-    impl TryRngCore for FailingRng {
+    impl TryRng for FailingRng {
         type Error = InjectedRngError;
 
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {

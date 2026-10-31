@@ -82,7 +82,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
-use rand::{Rng as _, SeedableRng as _};
+use rand::{RngExt as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 use std::{fmt, string::String, sync::OnceLock, vec::Vec};
 use thiserror::Error;
@@ -38475,9 +38475,10 @@ mod shared_arithmetic_adapter_tests {
 mod first_release_hard_cut_tests {
     use super::*;
     use sha3::{
-        Sha3_256, Shake256,
+        Sha3_256,
         digest::{ExtendableOutput as _, XofReader as _},
     };
+    use shake::Shake256;
 
     #[test]
     fn full_bootstrap_statement_hash_trace_limbs_are_injective() {

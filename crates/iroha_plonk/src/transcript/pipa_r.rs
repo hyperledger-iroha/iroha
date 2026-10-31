@@ -30,7 +30,7 @@ impl<C: PastaCurve> TranscriptRepr<C> {
     #[must_use]
     pub fn derive(v2: bool, profile: TranscriptV2, digest: &[u8; 32], vk: &[u8]) -> Self {
         let persona = if v2 {
-            b"Iroha-PlonkVK-v2"
+            crate::contract::VK_TRANSCRIPT_DOMAIN
         } else {
             b"Iroha-PlonkVK-v1"
         };
@@ -54,7 +54,7 @@ impl<C: PastaCurve> TranscriptRepr<C> {
     ) -> Result<Self, iroha_pasta::Cancelled> {
         iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let persona = if v2 {
-            b"Iroha-PlonkVK-v2"
+            crate::contract::VK_TRANSCRIPT_DOMAIN
         } else {
             b"Iroha-PlonkVK-v1"
         };
@@ -107,7 +107,7 @@ where
     /// A fresh state, with the PIPA-R tag as its first buffered element.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_domain(*b"pipa-rb1")
+        Self::with_domain(crate::contract::PIPA_R_PROOF_DOMAIN)
     }
     /// Squeezes the raw base-field value before the scalar challenge map.
     /// Protocol owners must retain this from the same admitted verification;

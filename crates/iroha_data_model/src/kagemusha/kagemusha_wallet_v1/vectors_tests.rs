@@ -30,7 +30,7 @@ use std::{path::PathBuf, sync::OnceLock};
 
 use norito::json::{Map, Number, Value};
 use p256::{
-    FieldBytes, ProjectivePoint, Scalar, U256,
+    FieldBytes, ProjectivePoint, Scalar,
     ecdsa::{Signature as P256Signature, SigningKey, VerifyingKey, signature::Verifier as _},
     elliptic_curve::{Field as _, PrimeField as _, ops::Reduce, point::AffineCoordinates as _},
 };
@@ -1546,8 +1546,10 @@ fn signature_verdicts(
 /// `n - s` of a low-S signature: its high-S twin.
 fn high_s_twin(signature: &KagemushaDeviceSignatureV1) -> [u8; 64] {
     let raw = signature.as_raw_bytes();
-    let s = Option::<Scalar>::from(Scalar::from_repr(*FieldBytes::from_slice(&raw[32..])))
-        .expect("s scalar");
+    let s = Option::<Scalar>::from(Scalar::from_repr(
+        FieldBytes::try_from(&raw[32..]).expect("32-byte signature scalar"),
+    ))
+    .expect("s scalar");
     let mut twin = *raw;
     twin[32..].copy_from_slice(&(-s).to_repr());
     twin
@@ -1665,16 +1667,12 @@ fn boundary_transcript() -> Vec<u8> {
 fn boundary_vector() -> BoundaryVector {
     let transcript = boundary_transcript();
     let message = kagemusha_wallet_signing_message_v1(BOUNDARY_DOMAIN, &transcript);
-    let k = <Scalar as Reduce<U256>>::reduce_bytes(FieldBytes::from_slice(&BOUNDARY_NONCE));
+    let k = <Scalar as Reduce<FieldBytes>>::reduce((&BOUNDARY_NONCE).into());
     let r_point = (ProjectivePoint::GENERATOR * k).to_affine();
-    let r = <Scalar as Reduce<U256>>::reduce_bytes(&r_point.x());
-    let e = <Scalar as Reduce<U256>>::reduce_bytes(FieldBytes::from_slice(
-        Sha256::digest(message).as_slice(),
-    ));
-    let s = Option::<Scalar>::from(Scalar::from_repr(*FieldBytes::from_slice(&bytes32(
-        HALF_ORDER_HEX,
-    ))))
-    .expect("half order is a scalar");
+    let r = <Scalar as Reduce<FieldBytes>>::reduce(&r_point.x());
+    let e = <Scalar as Reduce<FieldBytes>>::reduce(&Sha256::digest(message));
+    let s = Option::<Scalar>::from(Scalar::from_repr(bytes32(HALF_ORDER_HEX).into()))
+        .expect("half order is a scalar");
     let r_inverse = Option::<Scalar>::from(r.invert()).expect("r is nonzero");
     let d = (s * k - e) * r_inverse;
     assert!(!bool::from(d.is_zero()), "derived key is nonzero");
@@ -1702,8 +1700,7 @@ fn boundary_cases(boundary: &BoundaryVector) -> Vec<(&'static str, [u8; 64], boo
     let order = bytes32(ORDER_HEX);
     let half = bytes32(HALF_ORDER_HEX);
     let r = boundary.r.to_repr();
-    let half_scalar =
-        Option::<Scalar>::from(Scalar::from_repr(*FieldBytes::from_slice(&half))).expect("half");
+    let half_scalar = Option::<Scalar>::from(Scalar::from_repr(half.into())).expect("half");
     let half_plus_one = (-half_scalar).to_repr();
     vec![
         ("s_half_order", raw_pair(&r, &half), true, true),
@@ -4756,7 +4753,6 @@ fn kagemusha_wallet_v1_vectors_file_matches_the_generated_vectors() {
             path.display()
         );
     };
-    // TODO(blacklist-local G5): regenerate fixtures/kagemusha/wallet_v1_vectors.json.
     if existing != text {
         let line = existing
             .lines()

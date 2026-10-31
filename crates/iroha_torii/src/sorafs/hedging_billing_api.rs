@@ -1,4 +1,4 @@
-//! Authenticated, projection-only SoraFS hedging and billing HTTP boundary.
+//! Authenticated, projection-only `SoraFS` hedging and billing HTTP boundary.
 //!
 //! Every data read is served only while the supervised finalized-ledger projector passes its live
 //! head and freshness fence; payload-free health remains observable while unready. Statement
@@ -226,7 +226,7 @@ async fn billing_status_inner(
     uri: Uri,
     raw_query: Option<String>,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::GET) {
+    if let Err(response) = require_method(&method, &(Method::GET)) {
         return response;
     }
     let _verified = match require_canonical_auth(&state, &headers, &method, &uri, &[]) {
@@ -245,7 +245,7 @@ async fn billing_status_inner(
         Err(response) => return response,
     };
     match run_runtime_call(move || runtime.daemon_status()).await {
-        Ok(status) => bounded_json_response(status),
+        Ok(status) => bounded_json_response(&(status)),
         Err(response) => response,
     }
 }
@@ -267,7 +267,7 @@ async fn billing_statements_inner(
     uri: Uri,
     raw_query: Option<String>,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::GET) {
+    if let Err(response) = require_method(&method, &(Method::GET)) {
         return response;
     }
     let verified = match require_canonical_auth(&state, &headers, &method, &uri, &[]) {
@@ -293,7 +293,7 @@ async fn billing_statements_inner(
         expected_checkpoint_fingerprint: query.expected_checkpoint_fingerprint,
     };
     match run_runtime_call(move || runtime.list_statements(&request)).await {
-        Ok(page) => bounded_json_response(page),
+        Ok(page) => bounded_json_response(&(page)),
         Err(response) => response,
     }
 }
@@ -317,7 +317,7 @@ async fn billing_statement_inner(
     uri: Uri,
     raw_query: Option<String>,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::GET) {
+    if let Err(response) = require_method(&method, &(Method::GET)) {
         return response;
     }
     let verified = match require_canonical_auth(&state, &headers, &method, &uri, &[]) {
@@ -392,7 +392,7 @@ async fn billing_statement_acknowledgement_inner(
     raw_query: Option<String>,
     body: Bytes,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::POST) {
+    if let Err(response) = require_method(&method, &(Method::POST)) {
         return response;
     }
     if let Err(response) = validate_norito_request_headers_and_bound(&headers, &body) {
@@ -435,7 +435,7 @@ async fn billing_statement_acknowledgement_inner(
     };
     match run_runtime_call(move || runtime.acknowledge_statement(&request, server_time_unix)).await
     {
-        Ok(response) => bounded_json_response(response),
+        Ok(response) => bounded_json_response(&(response)),
         Err(response) => response,
     }
 }
@@ -457,7 +457,7 @@ async fn billing_reconciliation_inner(
     uri: Uri,
     raw_query: Option<String>,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::GET) {
+    if let Err(response) = require_method(&method, &(Method::GET)) {
         return response;
     }
     let verified = match require_canonical_auth(&state, &headers, &method, &uri, &[]) {
@@ -475,7 +475,7 @@ async fn billing_reconciliation_inner(
         Err(response) => return response,
     };
     match run_runtime_call(move || runtime.reconciliation_status()).await {
-        Ok(status) => bounded_json_response(status),
+        Ok(status) => bounded_json_response(&(status)),
         Err(response) => response,
     }
 }
@@ -530,7 +530,7 @@ async fn hedging_projection_inner(
     raw_query: Option<String>,
     kind: ProjectionKind,
 ) -> Response {
-    if let Err(response) = require_method(&method, Method::GET) {
+    if let Err(response) = require_method(&method, &(Method::GET)) {
         return response;
     }
     let verified = match require_canonical_auth(&state, &headers, &method, &uri, &[]) {
@@ -556,13 +556,13 @@ async fn hedging_projection_inner(
     match kind {
         ProjectionKind::Exposure => {
             match run_runtime_call(move || runtime.exposure_page(&request)).await {
-                Ok(page) => bounded_json_response(page),
+                Ok(page) => bounded_json_response(&(page)),
                 Err(response) => response,
             }
         }
         ProjectionKind::Intents => {
             match run_runtime_call(move || runtime.hedge_intent_page(&request)).await {
-                Ok(page) => bounded_json_response(page),
+                Ok(page) => bounded_json_response(&(page)),
                 Err(response) => response,
             }
         }
@@ -893,7 +893,7 @@ fn reject_query(raw: Option<&str>) -> Result<(), QueryInputError> {
     clippy::result_large_err,
     reason = "HTTP rejections retain the complete Axum response at this transport boundary."
 )]
-fn require_method(actual: &Method, expected: Method) -> Result<(), Response> {
+fn require_method(actual: &Method, expected: &Method) -> Result<(), Response> {
     if actual == expected {
         Ok(())
     } else {
@@ -943,11 +943,11 @@ fn fixed_error(status: StatusCode, code: &'static str) -> Response {
     )
         .into_response()
 }
-fn bounded_json_response<T>(value: T) -> Response
+fn bounded_json_response<T>(value: &T) -> Response
 where
     T: norito::json::JsonSerialize,
 {
-    let bytes = match norito::json::to_vec(&value) {
+    let bytes = match norito::json::to_vec(value) {
         Ok(bytes) if bytes.len() <= MAX_JSON_RESPONSE_BYTES_V1 => bytes,
         Ok(_) | Err(_) => return runtime_unavailable_response(),
     };
@@ -1053,15 +1053,15 @@ mod tests {
     }
     #[test]
     fn routes_require_the_exact_http_method() {
-        assert!(require_method(&Method::GET, Method::GET).is_ok());
+        assert!(require_method(&Method::GET, &(Method::GET)).is_ok());
         assert_eq!(
-            require_method(&Method::HEAD, Method::GET)
+            require_method(&Method::HEAD, &(Method::GET))
                 .expect_err("HEAD must not dispatch a GET operation")
                 .status(),
             StatusCode::METHOD_NOT_ALLOWED
         );
         assert_eq!(
-            require_method(&Method::GET, Method::POST)
+            require_method(&Method::GET, &(Method::POST))
                 .expect_err("GET must not dispatch a POST operation")
                 .status(),
             StatusCode::METHOD_NOT_ALLOWED

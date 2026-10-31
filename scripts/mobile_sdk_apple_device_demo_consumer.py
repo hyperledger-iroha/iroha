@@ -54,14 +54,14 @@ def prepare_record(artifact_directory: Path, *, allow_source_head_drift: bool) -
             or manifest.get("source_root") != str(ROOT)
             or manifest.get("target_triple") != "aarch64-apple-ios"
             or type(manifest.get("native_bridge_abi_version")) is not int
-            or manifest["native_bridge_abi_version"] != 31):
+            or manifest["native_bridge_abi_version"] != 33):
         raise ValueError("the original physical iOS Debug producer metadata differs")
     archive_hash = sha256(artifact / "ios-arm64/libNoritoBridge.a")
     if manifest.get("hashes") != {"ios-arm64": archive_hash}:
         raise ValueError("the original archive hash differs")
     evidence = manifest.get("evidence")
     names = {"producer-launch.json", "producer-record.json", "cargo-messages.jsonl",
-             "pqcrypto-normalization.json", "consumer", "source-observation.json"}
+             "native-archive-audit.json", "consumer", "source-observation.json"}
     if not isinstance(evidence, dict) or set(evidence) != names:
         raise ValueError("the original producer evidence inventory differs")
     if any(sha256(artifact / "evidence" / name) != value for name, value in evidence.items()):
@@ -77,7 +77,7 @@ def prepare_record(artifact_directory: Path, *, allow_source_head_drift: bool) -
         "current_source_commit": current,
         "allow_source_head_drift": allow_source_head_drift,
         "source_head_drifted": current != original,
-        "native_bridge_abi_version": 31,
+        "native_bridge_abi_version": 33,
         "target_triple": "aarch64-apple-ios",
         "archive_sha256": archive_hash,
         "artifact_manifest_sha256": manifest_hash,

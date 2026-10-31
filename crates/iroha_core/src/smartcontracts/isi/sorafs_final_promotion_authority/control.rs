@@ -50,7 +50,7 @@ pub(super) fn prepare(
         invalidated.execution = super::execution(tx, authority, Some(&active.record.execution))?;
         invalidated.execution_origin = None;
         invalidated.outcome = FinalPromotionOperationOutcomeV1::Invalidated;
-        stage_operation(tx, head, Some(&active.record), invalidated, writes)?;
+        stage_operation(tx, head, Some(&active.record), &(invalidated), writes)?;
     }
     Ok(())
 }

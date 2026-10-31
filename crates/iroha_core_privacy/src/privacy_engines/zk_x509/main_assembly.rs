@@ -9,7 +9,6 @@
 //! Assembly is not proof verification. Native reference validation here is a
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
 
 use super::{
@@ -23,6 +22,7 @@ use super::{
         certificate_slot_2_active_v1, rfc5280_io_witnesses_v1, trace_bytes_v1,
     },
     der_stark::{ZkX509DerStarkBaseV1, ZkX509DerStarkErrorV1, build_zk_x509_der_stark_base_v1},
+    errors::ZkX509RelationErrorV1,
     io_air::{
         IoAccessV1, ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1,
         ZkX509IoSegmentRoleV1, build_zk_x509_io_base_tables_v1,
@@ -50,10 +50,7 @@ use super::{
         ZkX509ProjectionTraceV1, ZkX509ProjectionWitnessV1, build_zk_x509_projection_trace_v1,
         projection_io_witnesses_v1,
     },
-    relation::{
-        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
-        validate_reference_relation_v1,
-    },
+    relation::{ZkX509GovernanceV1, ZkX509RelationOutputV1, validate_reference_relation_v1},
     rfc5280_stark::{
         ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkErrorV1,
         build_zk_x509_rfc5280_stark_base_material_v1,
@@ -65,7 +62,7 @@ use super::{
     stark::{
         ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1, construct_zk_x509_main_verifier_profile_v1,
     },
-    verifier_profile::rfc_statement_with_crl_number_v1,
+    verifier_profile::{ZkX509CrlPublicInputsV1, rfc_statement_with_crl_number_v1},
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
@@ -130,6 +127,8 @@ impl Drop for ZkX509MainIoBaseMaterialV1 {
 }
 /// Complete challenge-independent native material for one MAIN proof.
 pub struct ZkX509MainTraceAssemblyV1 {
+    /// Public digest and timestamp endpoints selected from the governed CRL revision.
+    pub(crate) crl_public_inputs: ZkX509CrlPublicInputsV1,
     /// Successful native differential projection.
     pub(crate) relation_output: ZkX509RelationOutputV1,
     /// Strict DER/RFC owner trace.
@@ -335,7 +334,7 @@ fn projection_witness_v1(
     for certificate in &trace.certificates {
         projection.chain_spki_der.push(certificate.spki_der.clone());
     }
-    projection.leaf_serial = leaf.serial.clone();
+    projection.leaf_serial.clone_from(&leaf.serial);
     Ok(projection)
 }
 fn erase_assembly_byte_rows_v1(rows: &mut [Vec<u8>]) {
@@ -539,11 +538,11 @@ fn p256_witness_v1(
     signature_der: &[u8],
     digest_be: [u8; 32],
 ) -> Result<P256EcdsaWitnessV1, ZkX509MainAssemblyErrorV1> {
-    let (public_key_x_be, public_key_y_be) = public_key_words_v1(public_key)?;
+    let (public_key_abscissa, public_key_ordinate) = public_key_words_v1(public_key)?;
     let (r_be, s_be) = strict_signature_words_v1(signature_der)?;
     Ok(P256EcdsaWitnessV1 {
-        public_key_x_be,
-        public_key_y_be,
+        public_key_x_be: public_key_abscissa,
+        public_key_y_be: public_key_ordinate,
         r_be,
         s_be,
         digest_be,
@@ -554,12 +553,12 @@ fn p256_witness_rs_v1(
     signature_rs: &[u8; 64],
     digest_be: [u8; 32],
 ) -> Result<P256EcdsaWitnessV1, ZkX509MainAssemblyErrorV1> {
-    let (public_key_x_be, public_key_y_be) = public_key_words_v1(public_key)?;
+    let (public_key_abscissa, public_key_ordinate) = public_key_words_v1(public_key)?;
     let signature =
         P256Signature::from_slice(signature_rs).map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
     Ok(P256EcdsaWitnessV1 {
-        public_key_x_be,
-        public_key_y_be,
+        public_key_x_be: public_key_abscissa,
+        public_key_y_be: public_key_ordinate,
         r_be: signature.r().to_bytes().into(),
         s_be: signature.s().to_bytes().into(),
         digest_be,
@@ -608,7 +607,7 @@ fn build_p256_material_v1(
     selected
         .try_reserve_exact(P256_SIGNATURES_V1)
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
-    for slot in 0..2 {
+    for (slot, sha_witness) in sha_witnesses.iter().take(2).enumerate() {
         let certificate = trace
             .certificates
             .get(slot)
@@ -617,7 +616,7 @@ fn build_p256_material_v1(
         selected.push(p256_witness_v1(
             &signer.public_key,
             &certificate.signature.encoded,
-            sha_witnesses[slot].digest,
+            sha_witness.digest,
         )?);
     }
     let slot_2_active = certificate_slot_2_active_v1(trace)?;
@@ -795,7 +794,7 @@ pub fn build_zk_x509_main_trace_assembly_v1(
         ZkX509CaAccumulatorStatementV1 {
             governed_root: *statement.ca_membership_root.as_bytes(),
         },
-        ZkX509CaAccumulatorWitnessV1 {
+        &ZkX509CaAccumulatorWitnessV1 {
             root_spki_der,
             path: witness.ca_membership_path,
         },
@@ -821,6 +820,7 @@ pub fn build_zk_x509_main_trace_assembly_v1(
         statement.disclosed_attributes.len(),
     )?;
     Ok(ZkX509MainTraceAssemblyV1 {
+        crl_public_inputs: ZkX509CrlPublicInputsV1::from_record_v1(governance.crl),
         relation_output,
         rfc_trace,
         der_base,
@@ -1067,6 +1067,7 @@ mod tests {
             .each_ref()
             .map(|material| (material.role, material.assigned));
         let verifier_profile = assembly.verifier_profile;
+        let crl_public_inputs = assembly.crl_public_inputs;
         let io_logical_active_rows = assembly.io.logical_active_rows;
         assembly.zeroize_private_v1();
         assert!(assembly.private_is_zeroized_v1());
@@ -1092,6 +1093,7 @@ mod tests {
             p256_topology
         );
         assert_eq!(assembly.verifier_profile, verifier_profile);
+        assert_eq!(assembly.crl_public_inputs, crl_public_inputs);
         assert_eq!(assembly.io.logical_active_rows, io_logical_active_rows);
         assert_eq!(
             construct_zk_x509_main_verifier_profile_v1()

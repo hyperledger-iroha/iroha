@@ -277,8 +277,7 @@ fn missing_foreign_orphan_and_wrong_status_members_fail_in_both_original_images(
                 },
                 mismatch: match mutation {
                     0 | 3 => GroupMismatch::MissingMember,
-                    1 => GroupMismatch::ForeignMember,
-                    2 => GroupMismatch::ForeignMember,
+                    1 | 2 => GroupMismatch::ForeignMember,
                     _ => unreachable!(),
                 },
             };

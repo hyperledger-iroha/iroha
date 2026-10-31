@@ -258,7 +258,7 @@ def validate_common(common: dict[str, object]) -> None:
         fail("Apple slice enabled Cargo incremental compilation")
     if environment["cargo_net_offline"] is not True:
         fail("Apple slice was not built in Cargo offline mode")
-    if environment["rust_toolchain_channel"] != "1.93.1":
+    if environment["rust_toolchain_channel"] != "1.99.1":
         fail("Apple slice used the wrong Rust toolchain")
     for key in (
         "hermetic_runner_sha256",
@@ -292,11 +292,11 @@ def validate_common(common: dict[str, object]) -> None:
         value = environment[key]
         if not isinstance(value, str) or VERSION.fullmatch(value) is None:
             fail(f"{key} has a non-canonical version")
-    if environment["cargo_release"] != "1.93.1":
+    if environment["cargo_release"] != "1.99.1":
         fail("Apple slice Cargo release differs from the pinned toolchain")
-    if environment["rustc_release"] != "1.93.1":
+    if environment["rustc_release"] != "1.99.1":
         fail("Apple slice rustc release differs from the pinned toolchain")
-    if environment["rustdoc_release"] != "1.93.1":
+    if environment["rustdoc_release"] != "1.99.1":
         fail("Apple slice rustdoc release differs from the pinned toolchain")
     if environment["rustdoc_commit_hash"] != environment["rustc_commit_hash"]:
         fail("Apple slice rustdoc and rustc commits differ")

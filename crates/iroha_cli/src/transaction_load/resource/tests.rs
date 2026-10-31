@@ -114,7 +114,7 @@ fn poll<T>(future: &mut std::pin::Pin<Box<impl Future<Output = T>>>) -> Poll<T> 
         .as_mut()
         .poll(&mut Context::from_waker(futures::task::noop_waker_ref()))
 }
-fn reply(request: Request, outcome: &str, manifest: Value) -> Vec<u8> {
+fn reply(request: Request, outcome: &str, manifest: &Value) -> Vec<u8> {
     let mut bytes = json::to_vec(
         &norito::json!({"schema": RESPONSE_SCHEMA, "kind": (request.kind.text()),
         "sequence": (request.sequence), "outcome": outcome, "manifest": manifest}),
@@ -164,15 +164,15 @@ fn sampler_brackets_every_fixed_sample_through_complete_drain_then_closes() {
     for (index, row) in observations.iter().enumerate() {
         assert_eq!(
             row.get("scheduled_offset_ns").and_then(Value::as_i64),
-            Some(index as i64 * 100)
+            Some(i64::try_from(index).expect("fixed sample index fits i64") * 100)
         );
         assert_eq!(
             row.get("start_offset_ns").and_then(Value::as_i64),
-            Some(index as i64 * 100)
+            Some(i64::try_from(index).expect("fixed sample index fits i64") * 100)
         );
         assert_eq!(
             row.get("end_offset_ns").and_then(Value::as_i64),
-            Some(index as i64 * 100 + 10)
+            Some(i64::try_from(index).expect("fixed sample index fits i64") * 100 + 10)
         );
         assert!(json::to_vec(row).unwrap().len() < MAX_EVENT_BYTES);
     }
@@ -283,7 +283,7 @@ fn response_protocol_rejects_wrong_sequence_identity_shape_and_unbounded_referen
         sequence: 7,
         timeout_ms: 400,
     };
-    let valid = reply(request, "complete", reference(request));
+    let valid = reply(request, "complete", &(reference(request)));
     assert_eq!(
         parse_response(request, &valid).unwrap().outcome,
         Outcome::Complete
@@ -317,12 +317,12 @@ fn response_protocol_rejects_wrong_sequence_identity_shape_and_unbounded_referen
             .as_object_mut()
             .unwrap()
             .insert(key.to_owned(), replacement);
-        assert!(parse_response(request, &reply(request, "complete", manifest)).is_err());
+        assert!(parse_response(request, &reply(request, "complete", &(manifest))).is_err());
     }
-    assert!(parse_response(request, &reply(request, "complete", Value::Null)).is_err());
-    assert!(parse_response(request, &reply(request, "unavailable", Value::Null)).is_err());
+    assert!(parse_response(request, &reply(request, "complete", &(Value::Null))).is_err());
+    assert!(parse_response(request, &reply(request, "unavailable", &(Value::Null))).is_err());
     assert_eq!(
-        parse_response(request, &reply(request, "failed", Value::Null))
+        parse_response(request, &reply(request, "failed", &(Value::Null)))
             .unwrap()
             .outcome,
         Outcome::Failed
@@ -347,12 +347,12 @@ fn protocol_finish_has_no_manifest_and_preflight_uses_sequence_zero() {
     assert!(
         parse_response(
             preflight,
-            &reply(preflight, "complete", reference(preflight))
+            &reply(preflight, "complete", &(reference(preflight)))
         )
         .is_ok()
     );
-    assert!(parse_response(finish, &reply(finish, "complete", Value::Null)).is_ok());
-    assert!(parse_response(finish, &reply(finish, "complete", reference(finish))).is_err());
+    assert!(parse_response(finish, &reply(finish, "complete", &(Value::Null))).is_ok());
+    assert!(parse_response(finish, &reply(finish, "complete", &(reference(finish)))).is_err());
     let line = preflight.line().unwrap();
     assert!(line.len() < MAX_IPC_BYTES);
     let value: Value = json::from_slice(&line).unwrap();
@@ -452,10 +452,9 @@ fn delayed_final_start_cannot_extend_the_endpoint_completion_deadline() {
             let events = memory.values.lock().unwrap();
             let last = events
                 .iter()
-                .filter(|value| {
+                .rfind(|value| {
                     value.get("event").and_then(Value::as_str) == Some("resource_observation")
                 })
-                .last()
                 .unwrap();
             assert_eq!(
                 last.get("scheduled_offset_ns").and_then(Value::as_i64),
@@ -477,10 +476,10 @@ fn response_decoder_rejects_duplicate_keys_before_exact_shape_validation() {
         sequence: 7,
         timeout_ms: 400,
     };
-    let valid = reply(request, "complete", reference(request));
+    let valid = reply(request, "complete", &(reference(request)));
     assert!(parse_response(request, &valid).is_ok());
     let text = String::from_utf8(valid).unwrap();
-    let duplicate = text.replacen("{", "{\"sequence\":7,", 1);
+    let duplicate = text.replacen('{', "{\"sequence\":7,", 1);
     assert!(parse_response(request, duplicate.as_bytes()).is_err());
     let nested_duplicate = text.replacen("\"manifest\":{", "\"manifest\":{\"bytes\":1,", 1);
     assert_ne!(nested_duplicate, text);

@@ -765,10 +765,26 @@ def _git_nul_paths(command: Sequence[str], *, root: Path) -> tuple[str, ...]:
     return tuple(path for path in _run(command, cwd=root).stdout.split("\0") if path)
 
 
+def configured_base_ref(root: Path = ROOT) -> str | None:
+    """Return the integration branch recorded in ci/default_base_ref, when there is one."""
+
+    try:
+        lines = (root / "ci" / "default_base_ref").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        value = line.split("#", 1)[0].strip()
+        if value:
+            return value
+    return None
+
+
 def default_base(root: Path = ROOT) -> str | None:
     """Choose a discoverable local comparison base without network access."""
 
-    for reference in ("origin/main", "@{upstream}", "HEAD^"):
+    configured = configured_base_ref(root)
+    references = (*((configured,) if configured else ()), "origin/main", "@{upstream}", "HEAD^")
+    for reference in references:
         result = subprocess.run(
             ("git", "rev-parse", "--verify", "--quiet", reference),
             cwd=root,
@@ -963,8 +979,9 @@ def run_checks(
     root: Path = ROOT,
     dry_run: bool = False,
     workspace: bool = False,
+    local: bool = False,
 ) -> None:
-    """Execute locked Cargo checks for a deterministic package set."""
+    """Execute locked checks, optionally reusing the local incremental build lane."""
 
     inventory = workspace_check_features(root)
     if workspace:
@@ -976,6 +993,11 @@ def run_checks(
         print("No affected Rust packages; Cargo validation is not required.")
         return
     for command in commands:
+        if local:
+            command = [
+                str(root / "scripts" / "cargo_fast.sh"),
+                "--stable-local-metadata", "--incremental", "--", *command[1:],
+            ]
         print("+", " ".join(command), flush=True)
         if not dry_run:
             _run(command, cwd=root, capture_output=False)
@@ -1172,6 +1194,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dry-run", action="store_true", help="print commands without executing them"
     )
+    run.add_argument(
+        "--local", action="store_true",
+        help="use cargo_fast with stable development metadata and incremental reuse",
+    )
     binaries = subparsers.add_parser(
         "build-binaries", help="build selected binaries with their declared feature isolation"
     )
@@ -1214,6 +1240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _parse_checks(args.checks),
                 dry_run=args.dry_run,
                 workspace=args.workspace,
+                local=args.local,
             )
         elif args.command == "build-binaries":
             build_binaries(_parse_packages(args.binaries), args.output_dir)

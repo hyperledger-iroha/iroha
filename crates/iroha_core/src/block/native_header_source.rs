@@ -3,7 +3,7 @@
 /// Fixed source identity minted from an exact native proposal. This is not finality authority:
 /// the pristine schedule capture rechecks the instance, epoch and committed parent/result.
 /// No native Header/skipped-leader list or body allocation is cloned into this token.
-pub(crate) struct NativeHeaderSource<'state> {
+pub struct NativeHeaderSource<'state> {
     state: &'state State,
     generation: u64,
     header: BlockHeader,
@@ -16,6 +16,10 @@ pub(crate) struct NativeHeaderSource<'state> {
 }
 impl NativeHeaderSource<'_> {
     #[cfg(test)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn validate_body(&self, block: &SignedBlock) -> Result<(), BlockValidationError> {
         if !block.is_resultless_proposal()
             || block.header() != self.header
@@ -46,11 +50,16 @@ impl NativeHeaderSource<'_> {
 impl ValidBlock {
     /// Bind every original proposal byte to its actual native header before expansion or effects.
     /// The returned source does not authorize another body or replace schedule/certificate checks.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     pub(crate) fn native_header_source<'state>(
         block: &SignedBlock,
         state: &'state State,
         native_header: &iroha_sumeragi::message::BlockHeader,
         native_payload: &[u8],
+        successor_context: &mut crate::sumeragi::certified_chain::SuccessorContextPreparation,
     ) -> Result<NativeHeaderSource<'state>, BlockValidationError> {
         let matches = block
             .matches_resultless_proposal_wire(native_payload)
@@ -78,11 +87,16 @@ impl ValidBlock {
         };
         let generation = state.state_view_generation();
         let view = state.query_view();
-        let authenticated = crate::sumeragi::schedule::authenticate_successor_context(
-            &view,
-            &block.header(),
-            &expected_context,
-        );
+        let authenticated = successor_context
+            .authenticate(&view, &block.header(), &expected_context)
+            .and_then(|()| {
+                successor_context.prepare_continuation(
+                    &view,
+                    &block.header(),
+                    pulse,
+                    expected_context,
+                )
+            });
         let observed_generation = state.state_view_generation();
         if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
             return Err(BlockValidationError::NativeSourceChanged {

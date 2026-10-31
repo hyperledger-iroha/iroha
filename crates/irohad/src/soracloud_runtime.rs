@@ -40,9 +40,7 @@ use iroha_core::soracloud_runtime::{
     SoracloudRuntimeSnapshot,
 };
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
-use iroha_core::{
-    executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
-};
+use iroha_core::{executor::quote_nexus_fee_admission_draft, queue::Queue};
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
@@ -123,7 +121,7 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::{Mutex, RwLock};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 #[cfg(any(target_os = "linux", test))]
 use sorafs_car::bundle_archive::{
     BundleArchiveEntry, BundleArchiveEntryKind, BundleArchiveLimits, visit_gzip_ustar,
@@ -833,22 +831,10 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
                     "external signer refused internal Soracloud runtime mutation at `{endpoint}`: {error:?}"
                 )
             })?;
-        let (max_clock_drift, transaction_params, crypto) = {
-            let world = self.state.world_view();
-            let params = world.parameters();
-            (
-                params.sumeragi().max_clock_drift(),
-                params.transaction(),
-                self.state.crypto(),
-            )
-        };
-        let accepted = AcceptedTransaction::accept(
-            tx,
-            self.state.network_id_ref(),
-            max_clock_drift,
-            transaction_params,
-            crypto.as_ref(),
-        )
+        let accepted = {
+            let parameters = self.state.transaction_admission_parameters();
+            crate::accept_internal_transaction(tx, self.state.network_id_ref(), &parameters)
+        }
         .wrap_err_with(|| format!("accept internal Soracloud runtime mutation at `{endpoint}`"))?;
         self.queue
             .push_with_lane_with_state(accepted, self.state.as_ref())
@@ -15495,7 +15481,7 @@ fn create_unique_inrou_disk_staging_file(
     validate_inrou_single_component(OsStr::new(final_file_name))?;
     for _ in 0..128 {
         let mut suffix = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut suffix)
             .map_err(|error| eyre::eyre!("Inrou disk staging OS RNG failed: {error}"))?;
         let name = OsString::from(format!(
@@ -15688,7 +15674,7 @@ fn write_inrou_sidecar_no_replace_at(
     let final_display = directory.path().join(final_name);
     for _ in 0..128 {
         let mut suffix = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut suffix)
             .map_err(|error| eyre::eyre!("{label} staging OS RNG failed: {error}"))?;
         let staging_name = OsString::from(format!(
@@ -19461,7 +19447,7 @@ fn query_inrou_qmp_host_forward(
 #[cfg(any(target_os = "linux", test))]
 fn random_inrou_materialization_name(root_name: &OsStr, role: &str) -> io::Result<OsString> {
     let mut suffix = [0_u8; 16];
-    OsRng.try_fill_bytes(&mut suffix).map_err(|error| {
+    SysRng.try_fill_bytes(&mut suffix).map_err(|error| {
         io::Error::other(format!(
             "Inrou materialization transaction OS RNG failed: {error}"
         ))

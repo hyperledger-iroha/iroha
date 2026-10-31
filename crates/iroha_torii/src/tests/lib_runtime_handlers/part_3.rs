@@ -465,7 +465,7 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         );
         let owned = norito::to_bytes(&(
             "torii:proxy:v1",
-            process_session.clone(),
+            process_session,
             ingress_peer.clone(),
             7_u64,
             request.clone(),
@@ -613,10 +613,10 @@ async fn certified_transaction_batch_invalid_later_signature_does_not_admit_pref
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -1204,11 +1204,22 @@ async fn current_native_ingress_revalidates_expiry_and_current_signing_policy() 
         error,
         Error::AcceptTransaction(AcceptTransactionFail::TransactionExpired { .. })
     ));
-    let mut crypto = app.state.crypto().as_ref().clone();
-    crypto
-        .allowed_signing
-        .retain(|algorithm| *algorithm != Algorithm::Ed25519);
-    app.state.set_crypto(crypto);
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        Algorithm::Secp256k1,
+    ])
+    .expect("explicit committed policy excludes this Ed25519 signer");
+    let pool = app.state.view().execution_budget();
+    let mut parameters = iroha_core::state::parameter_cell_block_for_testing(&app.state.world)
+        .expect("fund the original parameter publication");
+    iroha_core::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        policy
+            .into_parameter()
+            .expect("canonical replacement policy"),
+        &pool,
+    )
+    .expect("replace original committed policy");
+    parameters.commit();
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("pending identity cannot bypass the current signing policy");

@@ -15,12 +15,13 @@ fn quantity_to_nanos_checked_rejects_sub_nano_precision() {
 struct FailingSorafsCliNonceRng;
 #[derive(Debug)]
 struct FailingSorafsCliNonceRngError;
+impl std::error::Error for FailingSorafsCliNonceRngError {}
 impl fmt::Display for FailingSorafsCliNonceRngError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("failing SoraFS CLI nonce RNG")
     }
 }
-impl TryRngCore for FailingSorafsCliNonceRng {
+impl TryRng for FailingSorafsCliNonceRng {
     type Error = FailingSorafsCliNonceRngError;
     fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
         Err(FailingSorafsCliNonceRngError)

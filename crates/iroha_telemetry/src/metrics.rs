@@ -2232,10 +2232,8 @@ fields {
     pub p2p_handshake_error_total: gauge_vec(&["kind"]);
     /// Topic frame cap violations
     pub p2p_frame_cap_violations_total: gauge_vec(&["topic"]);
-    /// Runtime: upgrade lifecycle events (labeled by kind: proposed|activated|canceled)
+    /// Runtime: lifecycle events (labeled by kind: scheduled|canceled|attested|contained)
     pub runtime_upgrade_events_total: int_counter_vec(&["kind"]);
-    /// Runtime: provenance rejection events (labeled by reason)
-    pub runtime_upgrade_provenance_rejections_total: int_counter_vec(&["reason"]);
     /// Runtime: ABI version accepted by this node.
     pub runtime_abi_version: gauge();
     /// IVM opcode pre-decode cache hits (cumulative)
@@ -3651,8 +3649,7 @@ construct {
     [p2p_queue_depth p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum
         p2p_handshake_ms_count p2p_handshake_error_total p2p_frame_cap_violations_total]
         // Runtime upgrade metrics
-    [runtime_upgrade_events_total runtime_upgrade_provenance_rejections_total
-        runtime_abi_version]
+    [runtime_upgrade_events_total runtime_abi_version]
         // Sumeragi instances: the global instance and every lane instance (`lane` label)
     [sumeragi_round_height sumeragi_round_view sumeragi_round_stage sumeragi_pacemaker_level
         sumeragi_pacemaker_start_level sumeragi_retransmit_interval_ms sumeragi_committed_height
@@ -4016,7 +4013,7 @@ initialize (metrics) {
         tx_gossip_caps p2p_scion_inbound_total p2p_scion_outbound_total p2p_queue_depth
         p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum p2p_handshake_ms_count
         p2p_handshake_error_total p2p_frame_cap_violations_total runtime_upgrade_events_total
-        runtime_upgrade_provenance_rejections_total runtime_abi_version
+        runtime_abi_version
         trace_status sumeragi_mode_tag state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
         ivm_cache_hits ivm_cache_misses ivm_cache_evictions ivm_cache_decoded_streams
         ivm_cache_decoded_ops_total ivm_cache_decode_failures ivm_cache_decode_time_ns_total
@@ -4210,12 +4207,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 659;
-const METRIC_CATALOG_V2_REGISTERED: usize = 626;
-const METRIC_CATALOG_V2_BYTES: usize = 89_669;
+const METRIC_CATALOG_V2_ROWS: usize = 658;
+const METRIC_CATALOG_V2_REGISTERED: usize = 625;
+const METRIC_CATALOG_V2_BYTES: usize = 89_511;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "5ecc66f1e8ab0318d6a7c046a3db1affddb7fb09445f2832b97b43c0a7f13ba0";
+    "0c305bc81afcb9164602121144d76176d94524836dc8e81cec818e568b81e594";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

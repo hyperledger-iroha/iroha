@@ -226,14 +226,14 @@ impl<'a> ReadOnlyWorkspace<'a> {
 
 impl ObjectWorkspace for ReadOnlyWorkspace<'_> {
     fn read_staged_object(&mut self, key: &[u8; 32], maximum: usize) -> Result<Vec<u8>, Error> {
-        if let Some(batch) = self.batch {
-            if let Ok(position) = batch.objects.binary_search_by_key(key, |(key, _)| *key) {
-                let original = &batch.objects[position].1;
-                if original.len() > maximum {
-                    return Err(Error::WitnessLost("replayed batch read bound"));
-                }
-                return copy_fallible(original);
+        if let Some(batch) = self.batch
+            && let Ok(position) = batch.objects.binary_search_by_key(key, |(key, _)| *key)
+        {
+            let original = &batch.objects[position].1;
+            if original.len() > maximum {
+                return Err(Error::WitnessLost("replayed batch read bound"));
             }
+            return copy_fallible(original);
         }
         checked_read(self.source, key, maximum)
     }

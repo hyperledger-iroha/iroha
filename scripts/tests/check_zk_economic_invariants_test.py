@@ -344,7 +344,7 @@ class Protocols(Base):
         self.assert_fails(run("check_protocols", matrix), "`fn gone(` is not in")
 
     def test_answer_that_is_not_defined_needs_an_open_defect(self) -> None:
-        matrix = edited(lambda m: protocol(m, "orchard")["lifecycle"]["exits"]["policy_revocation"].pop("defects"))
+        matrix = edited(lambda m: protocol(m, "orchard")["lifecycle"]["exits"]["correction"].pop("defects"))
         self.assert_fails(run("check_protocols", matrix), "an answer that is not defined cites an open defect")
         matrix = edited(lambda m: protocol(m, "orchard")["lifecycle"]["exits"]["correction"].update(defects=["D-UNKNOWN"]))
         self.assert_fails(run("check_protocols", matrix), "defect `D-UNKNOWN` is not recorded")
@@ -370,7 +370,9 @@ class ClosedLists(Base):
         self.assert_fails(run("check_closed_lists", overrides=overrides), "closed_lists.ledger_effects: source has ['BridgeMint'] unrecorded")
 
     def test_value_free_arm_that_starts_moving_value_fails(self) -> None:
-        overrides = inserted_after(HANDLERS, X509_ARM, "\n                let _fee = Quantity::from(1_u32);")
+        overrides = inserted_after("crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+                                   "    let trust_anchor = snapshot.trust_anchor();",
+                                   "\n    let _fee = Quantity::from(1_u32);")
         errors = run("check_closed_lists", overrides=overrides)
         self.assert_fails(errors, "closed_lists.ledger_effects.ZkX509Certificate: the arm names `Quantity`")
 
@@ -452,16 +454,20 @@ class ClosedLists(Base):
         matrix = edited(lambda m: m["closed_lists"]["pool_state"].update(struct="Gone"))
         self.assert_fails(run("check_closed_lists", matrix), "struct Gone is not in")
 
-    def test_lifecycle_state_added_or_removed_fails(self) -> None:
-        overrides = replaced(PROTOCOL_MODEL, "    Suspended(PrivacySuspendedLifecycleV1),", "    Frozen(PrivacySuspendedLifecycleV1),")
-        errors = run("check_closed_lists", overrides=overrides)
-        self.assert_fails(errors, "closed_lists.lifecycle_states: source has ['Frozen'] unrecorded, the matrix has ['Suspended'] stale")
+    def test_implementation_readiness_variant_added_or_removed_fails(self) -> None:
+        path = "crates/iroha_data_model/src/privacy/capability_manifest.rs"
+        overrides = replaced(path, "    Available,", "    Unknown,")
+        self.assert_fails(run("check_closed_lists", overrides=overrides),
+                          "closed_lists.implementation_readiness: source has ['Unknown'] unrecorded, the matrix has ['Available'] stale")
 
-    def test_state_that_admits_no_value_effect_is_a_recorded_switch(self) -> None:
+    def test_native_unavailability_is_not_reported_as_available_or_a_lifecycle(self) -> None:
         def edit(matrix: dict) -> None:
-            found = matrix["root_policy"]["generic_suspension_switch"]["found"]
-            matrix["root_policy"]["generic_suspension_switch"]["found"] = [item for item in found if item["state"] != "Suspended"]
-        self.assert_fails(run("check_closed_lists", edited(edit)), "closed_lists.lifecycle_states.Suspended: a state that admits no value effect")
+            states = matrix["closed_lists"]["implementation_readiness"]["states"]
+            next(row for row in states if row["variant"] == "Unavailable")["native_implementation_available"] = True
+        self.assert_fails(run("check_closed_lists", edited(edit)),
+                          "closed_lists.implementation_readiness.Unavailable: availability must match")
+        matrix = edited(lambda m: m["closed_lists"].update(lifecycle_states={}))
+        self.assert_fails(run("check_closed_lists", matrix), "closed_lists.lifecycle_states is retired")
 
     def test_value_balance_direction_is_checked(self) -> None:
         overrides = replaced(STATEMENTS, "    /// Private value leaves the pool.\n    OutOfPool,",
@@ -479,8 +485,8 @@ class Effects(Base):
         self.assert_fails(run("check_effects", overrides=overrides), "effect orchard.pool_bootstrap: handler: `impl Execute for BootstrapPrivacyOrchardPoolV1`")
 
     def test_effect_status_must_agree_with_the_operation_inventory(self) -> None:
-        matrix = edited(lambda m: effect(m, "orchard.unshield").update(effect_status="implemented"))
-        self.assert_fails(run("check_effects", matrix), "effect_status implemented contradicts the operation inventory, which records gated")
+        matrix = edited(lambda m: effect(m, "orchard.unshield").update(effect_status="gated"))
+        self.assert_fails(run("check_effects", matrix), "effect_status gated contradicts the operation inventory, which records implemented")
         matrix = edited(lambda m: effect(m, "confidential_assets.unshield").update(effect_status="gated"))
         self.assert_fails(run("check_effects", matrix), "contradicts the operation inventory, which records absent")
 
@@ -707,30 +713,55 @@ class MutationTests(Base):
 
 
 class RootPolicy(Base):
+    def with_recorded_switch(self, edit):
+        """Exercise open-switch validation using an explicit synthetic inventory row."""
+        matrix = copy.deepcopy(MATRIX)
+        site = {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_admitted_v1("}
+        matrix["defects"].append({
+            "id": "TEST-SUSPENSION", "kind": "suspension_switch", "owner": ["F.4"],
+            **site, "summary": "Synthetic switch for checker mutation tests.",
+            "required": "Reject unowned suspension switches.",
+        })
+        matrix["root_policy"]["generic_suspension_switch"].update(holds=False, found=[{
+            "id": "test.switch", "state": "node_configuration", "site": site,
+            "consulted_at": [], "effect_on_roots": "Synthetic root suspension.",
+            "effect_on_exits": "Synthetic exit suspension.", "defect": "TEST-SUSPENSION",
+            "census": "cfg.nexus.settlement_activation",
+        }])
+        edit(matrix)
+        return matrix
+
+    def test_retired_node_activation_has_no_remaining_switch_or_defect(self) -> None:
+        switch = MATRIX["root_policy"]["generic_suspension_switch"]
+        self.assertEqual(switch["found"], [])
+        self.assertIs(switch["holds"], True)
+        self.assertNotIn("D-SETTLEMENT-NODE-ACTIVATION", {row["id"] for row in MATRIX["defects"]})
+        self.assertEqual(run("check_root_policy"), [])
+
     def test_required_answer_is_none_and_holds_is_false_while_a_switch_is_recorded(self) -> None:
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"].update(required="allowed"))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"].update(required="allowed"))
         self.assert_fails(run("check_root_policy", matrix), "required must be `none`")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"].update(holds=True))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"].update(holds=True))
         self.assert_fails(run("check_root_policy", matrix), "holds must be false while a switch is recorded")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"].update(found=[]))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"].update(found=[]))
         self.assert_fails(run("check_root_policy", matrix), "holds must be true when no switch is recorded")
 
     def test_switch_needs_site_effects_and_an_owned_defect(self) -> None:
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].pop("defect"))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].pop("defect"))
         self.assert_fails(run("check_root_policy", matrix), "a suspension switch is an open defect with an owner")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].pop("effect_on_exits"))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].pop("effect_on_exits"))
         self.assert_fails(run("check_root_policy", matrix), "`effect_on_exits` is missing")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0]["site"].update(symbol="Gone(State),"))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0]["site"].update(symbol="Gone(State),"))
         self.assert_fails(run("check_root_policy", matrix), "`Gone(State),` is not in")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].update(defect="D-POOL-NO-TURNSTILE-OR-CAP"))
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].update(defect="D-POOL-NO-TURNSTILE-OR-CAP"))
         self.assert_fails(run("check_root_policy", matrix), "is not of kind suspension_switch")
 
     def test_cited_census_entry_must_exist_and_be_open(self) -> None:
         census = document(C.CENSUS)
-        next(entry for entry in census["entries"] if entry["id"] == "privacy.activation")["status"] = "done"
-        errors = run("check_root_policy", overrides={C.CENSUS: json.dumps(census)})
-        self.assert_fails(errors, "census entry `privacy.activation` is done; the switch is recorded as open here")
-        matrix = edited(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].update(census="privacy.gone"))
+        next(entry for entry in census["entries"] if entry["id"] == "cfg.nexus.settlement_activation")["status"] = "done"
+        errors = run("check_root_policy", self.with_recorded_switch(lambda m: None), overrides={C.CENSUS: json.dumps(census)})
+        self.assert_fails(errors, "census entry `cfg.nexus.settlement_activation` is done; the switch is recorded as open here")
+        matrix = self.with_recorded_switch(lambda m: m["root_policy"]["generic_suspension_switch"]["found"][0].update(census="privacy.gone"))
         self.assert_fails(run("check_root_policy", matrix), "census entry `privacy.gone` is not in")
 
     def test_new_suspension_word_in_a_recorded_file_fails(self) -> None:
@@ -748,10 +779,16 @@ class RootPolicy(Base):
         self.assert_fails(run("check_root_policy", edited(edit)), f"{HANDLERS} is recorded and has no suspension word")
 
     def test_census_file_needs_class_note_and_defect(self) -> None:
-        matrix = edited(lambda m: m["root_policy"]["suspension_census"]["files"][0].update({"class": "other"}))
-        self.assert_fails(run("check_root_policy", matrix), "needs `class` in")
-        matrix = edited(lambda m: m["root_policy"]["suspension_census"]["files"][0].pop("defects"))
-        self.assert_fails(run("check_root_policy", matrix), "is a lifecycle switch and cites no defect")
+        # The retired protocol lifecycle has no production suspension words.
+        # Inject a new candidate switch so the classifier still rejects it.
+        overrides = inserted_after(HANDLERS, "impl Execute for PublishPrivacyRootV1 {", "\n    fn suspend_pool_roots() {}\n")
+        def with_row(matrix: dict) -> None:
+            matrix["root_policy"]["suspension_census"]["files"].append(
+                {"path": HANDLERS, "count": 1, "class": "other", "note": "new switch"})
+        matrix = edited(with_row)
+        self.assert_fails(run("check_root_policy", matrix, overrides), "needs `class` in")
+        matrix["root_policy"]["suspension_census"]["files"][0]["class"] = "lifecycle_switch"
+        self.assert_fails(run("check_root_policy", matrix, overrides), "is a lifecycle switch and cites no defect")
 
     def test_publication_and_history_sites_are_checked(self) -> None:
         matrix = edited(lambda m: m["root_policy"]["publication"].update(sites=[]))
@@ -876,6 +913,59 @@ class Readers(Base):
     def test_line_of_counts_from_one(self) -> None:
         self.assertEqual(C.line_of("a\nb\nc", 0), 1)
         self.assertEqual(C.line_of("a\nb\nc", 4), 3)
+
+
+class OriginalInvocationEconomics(Base):
+    """The economic matrix follows the original signed invocation and its consumer."""
+
+    ID = "privacy::BootstrapPrivacyPgcAccountsV1"
+    NATIVE = "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs"
+
+    def pgc_operation(self) -> dict:
+        return next(item for item in document(C.OPERATIONS)["operations"] if item["id"] == self.ID)
+
+    def test_effect_handler_is_the_checked_execution_entry(self) -> None:
+        checker = C.Checker(MATRIX, C.readers.Tree())
+        operation = self.pgc_operation()
+        self.assertEqual(checker.operation_handler(operation), operation["invocation"]["entry"])
+        self.assertEqual(effect(MATRIX, "anonymous_pgc.bootstrap")["handler"], operation["invocation"]["entry"])
+        self.assertIsNone(checker.operation_handler({"id": "absent"}))
+        ordinary = next(item for item in document(C.OPERATIONS)["operations"] if item.get("handler") and not item.get("invocation"))
+        self.assertEqual(checker.operation_handler(ordinary), ordinary["handler"])
+        self.assert_clean(checker.errors)
+
+    def test_matrix_cannot_point_back_to_the_detached_refusal(self) -> None:
+        matrix = edited(lambda m: effect(m, "anonymous_pgc.bootstrap").update(handler=self.pgc_operation()["handler"]))
+        self.assert_fails(run("check_effects", matrix), "effect anonymous_pgc.bootstrap: handler differs")
+
+    def test_economic_check_also_rejects_a_detached_success(self) -> None:
+        old = 'Err(invalid_privacy_parameter(\n            "PGC bootstrap requires its original signed invocation context",\n        ))'
+        self.assert_fails(run("check_effects", overrides=replaced(HANDLERS, old, "Ok(())")),
+                          "detached handler must retain its exact unconditional refusal")
+
+    def test_native_verified_supply_and_table_checks_are_anchored(self) -> None:
+        for old in ("verified.total_supply() != bootstrap.total_supply",
+                    "verified.account_count() != bootstrap.accounts.len()",
+                    "verified.bootstrap_table_digest() != native.bootstrap_table_digest()",
+                    "return Err(BootstrapError::VerifiedValuesMismatch);"):
+            with self.subTest(old=old):
+                self.assert_fails(run("check_effects", overrides=replaced(self.NATIVE, old, "false")),
+                                  "effect anonymous_pgc.bootstrap: invariant 0 (fixed_public_supply)")
+
+    def test_transparent_asset_movement_cannot_hide_in_native_consumer(self) -> None:
+        overrides = inserted_after(self.NATIVE, "let verified = verify_bootstrap_encoded(&native, proof)?;",
+                                   "\n        withdraw_numeric_asset();")
+        self.assert_fails(run("check_effects", overrides=overrides),
+                          "the invariant no longer holds by absence")
+
+    def test_value_tripwire_reads_the_actual_execution_entry(self) -> None:
+        checker = C.Checker(MATRIX, C.readers.Tree())
+        operation = self.pgc_operation()
+        self.assertIn("total_supply", checker.value_tokens(operation))
+        detached = copy.deepcopy(operation)
+        detached.pop("invocation")
+        self.assertNotIn("total_supply", checker.value_tokens(detached))
+        self.assert_clean(checker.errors)
 
 
 if __name__ == "__main__":

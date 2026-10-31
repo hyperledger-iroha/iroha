@@ -13,7 +13,7 @@
 #   dataspaces are registered at runtime, never baked into genesis;
 # - four authenticated non-validator ingress sources and twelve external committee peers;
 # - Nexus fee and stake custody is fixed by the profile instead of derived from each genesis
-#   key (see `[genesis_recipe.root_fees]` and `[static.nexus.staking]`);
+#   key (see `[genesis_recipe.root_fees]` and `[genesis_recipe.public_lane_staking]`);
 # - the governance accounts and the VPN operator are keyless role accounts instead of the
 #   published sample key (see `[static.gov]`).
 #
@@ -56,13 +56,8 @@ max_frame_bytes_other = 131072
 signature_batch_max_bls = 4
 
 [static.crypto]
-allowed_signing = ["ed25519", "secp256k1", "bls_normal"]
 
-# Empty: parsing derives the curve ids from `allowed_signing` (ed25519 1, bls_normal 3,
-# secp256k1 4), as Kagami's Taira configs list them. The code default omits bls_normal, and the
-# bls_normal id only exists in builds with the data model's `bls` feature, so it is not written.
-[static.crypto.curves]
-allowed_curve_ids = []
+# Ordinary signature and controller policy is authored in signed genesis.
 
 [static.confidential]
 enabled = true
@@ -74,8 +69,10 @@ lane_count = 4
 [static.nexus.fusion]
 exit_teu = 50000000
 
-[static.nexus.staking]
-# SCCP validity plus evidence grace; part of the signed consensus policy.
+[genesis_recipe.public_lane_staking]
+min_validator_stake = "1"
+max_stake_shares_per_validator = 256
+max_pending_unbonds_per_share = 8
 unbonding_delay_ms = 1814400000
 max_slash_bps = 10000
 stake_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"

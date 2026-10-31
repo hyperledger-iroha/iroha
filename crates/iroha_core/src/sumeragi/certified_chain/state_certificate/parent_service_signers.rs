@@ -386,13 +386,15 @@ impl ParentServiceSignersPreparation {
 }
 
 #[cfg(test)]
+type AdmissionProbe = Box<dyn FnOnce(&AllocationBudget, usize)>;
+#[cfg(test)]
 thread_local! {
-    static ADMISSION_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce(&AllocationBudget, usize)>>> = const { std::cell::RefCell::new(None) };
+    static ADMISSION_PROBE: std::cell::RefCell<Option<AdmissionProbe>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 /// Remove an unconsumed test observation without changing production admission.
-pub(crate) struct ParentServiceSignersAdmissionProbe;
+pub struct ParentServiceSignersAdmissionProbe;
 #[cfg(test)]
 impl Drop for ParentServiceSignersAdmissionProbe {
     fn drop(&mut self) {
@@ -403,7 +405,7 @@ impl Drop for ParentServiceSignersAdmissionProbe {
 }
 #[cfg(test)]
 /// Observe real signer admission; the callback may occupy actual original-pool capacity.
-pub(crate) fn observe_parent_service_signers_admission(
+pub fn observe_parent_service_signers_admission(
     callback: impl FnOnce(&AllocationBudget, usize) + 'static,
 ) -> ParentServiceSignersAdmissionProbe {
     ADMISSION_PROBE.with(|slot| {

@@ -61,7 +61,7 @@ impl JindoRnsPolynomialV1 {
     }
     /// Build from two canonical residue rows.
     pub(crate) fn from_residues(
-        residues: [[u64; JINDO_RING_DEGREE_V1]; 2],
+        residues: &[[u64; JINDO_RING_DEGREE_V1]; 2],
         moduli: [JindoPrimeModulusV1; 2],
     ) -> Option<Self> {
         for (row, prime) in residues.iter().zip(moduli) {
@@ -69,16 +69,18 @@ impl JindoRnsPolynomialV1 {
                 return None;
             }
         }
-        Some(Self { residues })
+        Some(Self {
+            residues: *residues,
+        })
     }
     /// Build from balanced coefficients whose magnitudes fit below both RNS products.
     pub(crate) fn from_balanced_coefficients(
-        coefficients: [i128; JINDO_RING_DEGREE_V1],
+        coefficients: &[i128; JINDO_RING_DEGREE_V1],
         moduli: [JindoPrimeModulusV1; 2],
     ) -> Self {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         for (row, prime) in residues.iter_mut().zip(moduli) {
-            for (out, coefficient) in row.iter_mut().zip(coefficients) {
+            for (out, coefficient) in row.iter_mut().zip(coefficients.iter().copied()) {
                 *out = reduce_i128_to_u64_mod(coefficient, prime.modulus);
             }
         }
@@ -235,14 +237,14 @@ mod tests {
     use super::*;
     /// Schoolbook reference in wide integers; it shares no code with `iroha_fhe`.
     fn naive_negacyclic(
-        left: [u64; JINDO_RING_DEGREE_V1],
-        right: [u64; JINDO_RING_DEGREE_V1],
+        left: &[u64; JINDO_RING_DEGREE_V1],
+        right: &[u64; JINDO_RING_DEGREE_V1],
         modulus: u64,
     ) -> [u64; JINDO_RING_DEGREE_V1] {
         let wide_modulus = u128::from(modulus);
         let mut out = [0_u128; JINDO_RING_DEGREE_V1];
-        for (left_index, left_value) in left.into_iter().enumerate() {
-            for (right_index, right_value) in right.into_iter().enumerate() {
+        for (left_index, left_value) in left.iter().copied().enumerate() {
+            for (right_index, right_value) in right.iter().copied().enumerate() {
                 let product = u128::from(left_value) * u128::from(right_value) % wide_modulus;
                 let index = left_index + right_index;
                 if index < JINDO_RING_DEGREE_V1 {
@@ -303,7 +305,7 @@ mod tests {
             }
             assert_eq!(
                 negacyclic_mul(left, right, prime),
-                naive_negacyclic(left, right, prime.modulus),
+                naive_negacyclic(&left, &right, prime.modulus),
                 "modulus {}",
                 prime.modulus
             );
@@ -334,8 +336,10 @@ mod tests {
                 product - 2,
                 product - 1,
             ] {
-                let residue_zero = (value % u128::from(moduli[0].modulus)) as u64;
-                let residue_one = (value % u128::from(moduli[1].modulus)) as u64;
+                let residue_zero = u64::try_from(value % u128::from(moduli[0].modulus))
+                    .expect("residue is below u64 modulus");
+                let residue_one = u64::try_from(value % u128::from(moduli[1].modulus))
+                    .expect("residue is below u64 modulus");
                 assert_eq!(
                     crt_reconstruct(residue_zero, residue_one, moduli),
                     value,
@@ -346,7 +350,7 @@ mod tests {
             residues[0][0] = moduli[0].modulus - 1;
             residues[1][0] = moduli[1].modulus - 1;
             let polynomial =
-                JindoRnsPolynomialV1::from_residues(residues, moduli).expect("canonical");
+                JindoRnsPolynomialV1::from_residues(&residues, moduli).expect("canonical");
             assert_eq!(polynomial.balanced_abs_coefficient(0, moduli), 1);
         }
     }
@@ -354,7 +358,7 @@ mod tests {
     fn residue_decoder_rejects_noncanonical_coefficients() {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         residues[1][173] = JINDO_INNER_MODULI_V1[1].modulus;
-        assert!(JindoRnsPolynomialV1::from_residues(residues, JINDO_INNER_MODULI_V1).is_none());
+        assert!(JindoRnsPolynomialV1::from_residues(&residues, JINDO_INNER_MODULI_V1).is_none());
     }
     #[test]
     fn ring_add_sub_mul_obey_basic_identities() {
@@ -367,8 +371,8 @@ mod tests {
                 right_rows[row_index][coefficient] = (coefficient as u64 * 47 + 9) % prime.modulus;
             }
         }
-        let left = JindoRnsPolynomialV1::from_residues(left_rows, moduli).expect("left");
-        let right = JindoRnsPolynomialV1::from_residues(right_rows, moduli).expect("right");
+        let left = JindoRnsPolynomialV1::from_residues(&left_rows, moduli).expect("left");
+        let right = JindoRnsPolynomialV1::from_residues(&right_rows, moduli).expect("right");
         let mut sum = left.clone();
         sum.add_assign(&right, moduli);
         sum.sub_assign(&right, moduli);
@@ -384,7 +388,7 @@ mod tests {
         let mut monomial = [0_i128; JINDO_RING_DEGREE_V1];
         monomial[JINDO_RING_DEGREE_V1 - 1] = -1;
         assert!(
-            JindoRnsPolynomialV1::from_balanced_coefficients(monomial, JINDO_OUTER_MODULI_V1)
+            JindoRnsPolynomialV1::from_balanced_coefficients(&monomial, JINDO_OUTER_MODULI_V1)
                 .is_unit(JINDO_OUTER_MODULI_V1)
         );
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
@@ -393,7 +397,7 @@ mod tests {
         residues[0][1] = 1;
         residues[1][0] = 1;
         let vanishes_at_first_root =
-            JindoRnsPolynomialV1::from_residues(residues, JINDO_OUTER_MODULI_V1)
+            JindoRnsPolynomialV1::from_residues(&residues, JINDO_OUTER_MODULI_V1)
                 .expect("canonical residues");
         assert!(!vanishes_at_first_root.is_unit(JINDO_OUTER_MODULI_V1));
     }

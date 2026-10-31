@@ -493,3 +493,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(in crate::kagemusha_wallet_state_v1::native_owner) use tests::{
+    initialize_ledger_load_fixture, ledger_load_fixture,
+};

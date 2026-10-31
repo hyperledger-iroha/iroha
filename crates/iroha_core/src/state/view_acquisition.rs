@@ -1,7 +1,7 @@
 //! One nonblocking State reader engine with original physical release custody.
 
 use super::*;
-use iroha_allocation::release::{DeferredReleaseBatch, ReleaseWait};
+use iroha_allocation::release::{DeferredReleaseBatch, ReleaseRegistration, ReleaseWait};
 
 /// An unfinished physical State read is distinct from an invalid runtime projection.
 #[derive(Debug, thiserror::Error)]
@@ -36,9 +36,74 @@ impl From<mv::PublicationPreparationError<std::convert::Infallible>> for StateVi
     }
 }
 
+/// One admitted worker's prepaid wait for a refused State acquisition to release.
+///
+/// The reusable registration node is charged to the caller's own request pool
+/// before any acquisition and is bound to the thread that builds it; the waiter
+/// never moves to another thread. A wait ends at the exact busy owner's release,
+/// the caller's absolute deadline or its stop flag, whichever comes first, and
+/// extends neither bound. Whoever sets the stop flag must also unpark the thread.
+/// Nothing from the refused attempt is held while parked, and a release grants
+/// nothing: every retry acquires its original State owners again.
+pub struct StateViewWaiter {
+    registration: ReleaseRegistration,
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl StateViewWaiter {
+    /// Exact waiter node layout the caller prepays from its own request pool.
+    #[must_use]
+    pub fn allocation_layout() -> std::alloc::Layout {
+        ReleaseRegistration::allocation_layout()
+    }
+
+    /// Bind one prepaid waiter to the current physical worker thread.
+    ///
+    /// # Errors
+    /// Returns the exact reservation shortage or allocator refusal; nothing waits.
+    pub fn for_current_thread(
+        reservation: &mut iroha_allocation::AllocationReservation,
+    ) -> Result<Self, iroha_allocation::PrepaidSharedError> {
+        let mut registration = ReleaseRegistration::from_reservation(reservation)?;
+        registration.bind_thread(std::thread::current());
+        Ok(Self {
+            registration,
+            _thread: std::marker::PhantomData,
+        })
+    }
+
+    /// Park until `release` completes; `false` once `deadline` passes or `stop` is set.
+    ///
+    /// Spurious and foreign wakes recheck the same release and never reset time.
+    pub fn wait(&mut self, release: &ReleaseWait, deadline: Instant, stop: &AtomicBool) -> bool {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let released = loop {
+            if stop.load(Ordering::Acquire) {
+                break false;
+            }
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+            else {
+                break false;
+            };
+            if self
+                .registration
+                .poll_wait(release, &mut context)
+                .is_ready()
+            {
+                break true;
+            }
+            std::thread::park_timeout(remaining);
+        };
+        self.registration.cancel();
+        released
+    }
+}
+
 /// The exhaustive World inventory selects each field's actual reader-release owner.
 /// Cell reads are lock-free EBR pins; collector allocation remains a separate owner.
-pub(crate) trait StateFieldReader {
+pub trait StateFieldReader {
     type Releases;
     type View<'a>
     where
@@ -74,7 +139,7 @@ impl<V: mv::Value, C: Send + Sync + 'static> StateFieldReader for Cell<V, C> {
     where
         Self: 'a;
     fn reader_releases(&self) {}
-    fn try_read_field(&self, _: &mut ()) -> Result<Self::View<'_>, StateViewError> {
+    fn try_read_field(&self, (): &mut ()) -> Result<Self::View<'_>, StateViewError> {
         Ok(self.view())
     }
 }

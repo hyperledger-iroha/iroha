@@ -15,7 +15,7 @@ struct KagemushaQRRenderedFrame {
 enum KagemushaQRRenderer {
   enum Failure: Error { case text, encoding, roundTrip, capacity }
   static func render(_ text: String) throws -> KagemushaQRRenderedFrame {
-    guard (text.hasPrefix("IQR1:") || text.hasPrefix("IAK1:")), text.hasSuffix(":"),
+    guard text.hasPrefix("IQR1:"), text.hasSuffix(":"),
       !text.isEmpty, text.utf8.count <= 700,
       text.utf8.allSatisfy({ (32...90).contains($0) }) else { throw Failure.text }
     let context = CIContext()

@@ -1,4 +1,4 @@
-//! GC scheduler runtime wiring for Torii-managed SoraFS nodes.
+//! GC scheduler runtime wiring for Torii-managed `SoraFS` nodes.
 #[cfg(feature = "app_api")]
 use crate::sorafs::unix_now_secs;
 #[cfg(feature = "app_api")]
@@ -107,7 +107,7 @@ impl GcSweeperRuntime {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown_signal.receive() => {
+                    () = shutdown_signal.receive() => {
                         return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                     _ = ticker.tick() => {

@@ -9,7 +9,7 @@ use crate::{
 };
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 struct RecordedMask {
     bits: u64,
@@ -87,7 +87,7 @@ fn check<F: PastaField>() {
     };
     let mut masks = vec![0, u64::MAX, 0xaaaa_aaaa_aaaa_aaaa, 0x5555_5555_5555_5555];
     for _ in 0..12 {
-        use rand_core_06::RngCore as _;
+        use rand_core::Rng as _;
         masks.push(rng.next_u64());
     }
     for count in [0, 7, 8, 9, 15, 16, 17, 23, 24, 25] {

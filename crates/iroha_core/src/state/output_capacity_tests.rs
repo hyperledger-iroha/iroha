@@ -26,17 +26,15 @@ fn parameter(maximum: u32) -> Parameter {
 }
 
 fn state(maximum: u32) -> State {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(parameter(maximum))
+    state
+        .world
+        .set_parameter_for_testing(parameter(maximum))
         .expect("valid fixture parameters");
-    parameters.commit();
     state
 }
 
@@ -55,13 +53,16 @@ fn set_parameter(block: &mut StateBlock<'_>, maximum: u32) {
 #[test]
 fn captured_time_count_is_independent_from_network_transaction_limit() {
     let state = state(17);
-    let mut parameters = state.world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::MaxTransactions(
             NonZeroU64::new(u64::MAX).unwrap(),
-        )))
-        .expect("valid fixture parameters");
+        )),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let block = state.block(header());
     assert_eq!(block.time_trigger_invocation_limit().unwrap(), 17);
@@ -133,9 +134,7 @@ fn replacement_limit_comes_from_reverted_world_and_its_own_stage() {
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(parameter(9))
+            .set_parameter_for_testing(parameter(9))
             .expect("valid fixture parameters");
         world.commit();
     }
@@ -245,13 +244,16 @@ fn foreign_source_or_invalid_restored_capacity_cannot_mint_a_plan() {
     drop(block);
     {
         // A malformed restored value cannot become a matching/output capability.
-        let mut parameters = state.world.parameters.block();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
         policy.max_outputs = 1;
-        parameters
-            .get_mut()
-            .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)))
-            .expect("valid fixture parameters");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let policy = state.world.parameters.view().get().block();
@@ -356,6 +358,19 @@ fn actual_register_counts_disabled_pipeline_and_time_actions_before_loading() {
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     let state = state(2);
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("fixture crypto policy parameter"),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture crypto policy");
+        parameters.commit();
+    }
     let mut block = state.block(header());
     let mut tx = block.transaction();
     Register::account(Account::new(ALICE_ID.clone()))
@@ -427,10 +442,14 @@ fn gas_limit_is_frozen_from_the_actual_world_before_start_effects() {
         ))
     };
     {
-        let mut parameters = state.world.parameters.block();
-        parameters
-            .set_parameter(gas(11))
-            .expect("valid fixture parameters");
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("fund original parameter Cell acquisition");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            gas(11),
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("valid fixture parameters");
         parameters.commit();
     }
     let block = state
@@ -438,9 +457,7 @@ fn gas_limit_is_frozen_from_the_actual_world_before_start_effects() {
             assert_eq!(block.gas_limit_per_block, 11);
             block
                 .world
-                .parameters
-                .get_mut()
-                .set_parameter(gas(22))
+                .set_parameter_for_testing(gas(22))
                 .expect("valid fixture parameters");
             Ok::<(), core::convert::Infallible>(())
         })
@@ -467,18 +484,14 @@ fn replacement_gas_limit_comes_from_the_reverted_world() {
     {
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(gas(11))
+            .set_parameter_for_testing(gas(11))
             .expect("valid fixture parameters");
         world.commit();
     }
     let mut tip = state.block(header());
     assert_eq!(tip.gas_limit_per_block, 11);
     tip.world
-        .parameters
-        .get_mut()
-        .set_parameter(gas(22))
+        .set_parameter_for_testing(gas(22))
         .expect("valid fixture parameters");
     tip.commit_world_overlay_for_testing().unwrap();
     assert_eq!(state.block(header()).gas_limit_per_block, 22);
@@ -493,40 +506,36 @@ fn replacement_gas_limit_comes_from_the_reverted_world() {
 }
 
 #[test]
-fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
+fn try_block_rejects_an_unpublished_host_profile_and_releases_the_overlay() {
     use iroha_data_model::{
-        executor::IvmAdmissionError,
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
-        },
+        executor::IvmAdmissionError, runtime::definition::DefinitionDescriptorV1,
     };
+    use mv::storage::StorageReadOnly;
     let state = state(2);
-    let id = RuntimeUpgradeId([7; 32]);
-    {
-        let mut upgrades = state.world.runtime_upgrades.block();
-        upgrades.insert(
-            id,
-            RuntimeUpgradeRecord {
-                manifest: RuntimeUpgradeManifest {
-                    name: "invalid-window".into(),
-                    description: "fixture".into(),
-                    abi_version: 1,
-                    abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                    added_syscalls: vec![],
-                    added_pointer_types: vec![],
-                    start_height: 1,
-                    end_height: 1,
-                    sbom_digests: vec![],
-                    slsa_attestation: vec![],
-                    provenance: vec![],
-                },
-                status: RuntimeUpgradeStatus::Proposed,
-                proposer: ALICE_ID.clone(),
-                created_height: 0,
-            },
-        );
-        upgrades.commit();
-    }
+    let host_profile = {
+        let selection = state.world.runtime_selection.view();
+        let definitions = state.world.runtime_definitions.view();
+        selection
+            .get()
+            .active
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    definitions.get(id),
+                    Some(DefinitionDescriptorV1::HostProfile(_))
+                )
+            })
+            .expect("the baseline activates a host profile")
+    };
+    let descriptor = {
+        let mut definitions = state.world.runtime_definitions.block();
+        let descriptor = definitions
+            .remove(host_profile)
+            .expect("published host profile");
+        definitions.commit();
+        descriptor
+    };
     assert!(matches!(
         state.try_block(header()),
         Err(crate::state::StateBlockStartError::Stage(
@@ -535,13 +544,12 @@ fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
     ));
     // A failed constructor releases every acquired guard and leaves the input
     // unchanged; repairing the actual fixture store permits a fresh constructor.
-    let mut upgrades = state.world.runtime_upgrades.block();
-    assert!(upgrades.get(&id).is_some());
-    upgrades.remove(id);
-    upgrades.commit();
+    let mut definitions = state.world.runtime_definitions.block();
+    assert!(definitions.get(&host_profile).is_none());
+    definitions.insert(host_profile, descriptor);
+    definitions.commit();
     let block = state.try_block(header()).unwrap();
     assert!(block.start_of_block_effects_applied);
-    assert!(block.world.runtime_upgrades.is_empty());
     assert!(block.execution_output_plan.is_none());
 }
 
@@ -559,19 +567,15 @@ fn same_genesis_parameter_writes_cannot_replace_either_frozen_profile() {
                 let mut transaction = block.transaction();
                 transaction
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(
+                    .set_parameter_for_testing(Parameter::Block(BlockParameter::ExecutionOutput(
                         changed_output,
                     )))
                     .expect("valid fixture parameters");
                 transaction
                     .world
-                    .parameters
-                    .get_mut()
-                    .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
-                        nonzero!(1_u32),
-                    )))
+                    .set_parameter_for_testing(Parameter::Block(
+                        BlockParameter::MaxTimeTriggerInvocations(nonzero!(1_u32)),
+                    ))
                     .expect("valid fixture parameters");
                 transaction.apply();
                 Ok::<(), String>(())

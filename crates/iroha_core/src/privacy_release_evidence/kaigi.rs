@@ -5,7 +5,7 @@
 //! or grants authority. Callers must obtain the complete record and NetworkId from the real
 //! network and submit every resulting instruction with the correct account signature.
 //! Fixed private fixture blindings are unsuitable for production; no witness bytes are exported.
-//! TODO: Run and qualify the real four-validator lifecycle against the exact candidate daemon.
+//! TODO: Qualify the four-validator lifecycle with release-profile evidence for the exact candidate.
 
 use crate::zk::hash_vk;
 use ff::PrimeField as _;
@@ -106,7 +106,7 @@ pub struct KaigiReleaseAuthorizationV1 {
     pub nullifier: KaigiParticipantNullifier,
     /// Exact pre-action roster root supplied by the caller.
     pub root: Hash,
-    /// Canonical real OpenVerifyEnvelope proof bytes.
+    /// Canonical real `OpenVerifyEnvelope` proof bytes.
     pub proof: Vec<u8>,
 }
 impl KaigiReleaseAuthorizationV1 {
@@ -115,8 +115,8 @@ impl KaigiReleaseAuthorizationV1 {
     pub fn create(&self, call: NewKaigi) -> CreateKaigi {
         CreateKaigi {
             call,
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -127,8 +127,8 @@ impl KaigiReleaseAuthorizationV1 {
         JoinKaigi {
             call_id: call_id.clone(),
             participant: participant.clone(),
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -139,8 +139,8 @@ impl KaigiReleaseAuthorizationV1 {
         LeaveKaigi {
             call_id: call_id.clone(),
             participant: participant.clone(),
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }
@@ -151,8 +151,8 @@ impl KaigiReleaseAuthorizationV1 {
         EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: None,
-            commitment: Some(self.commitment.clone()),
-            nullifier: Some(self.nullifier.clone()),
+            commitment: Some(self.commitment),
+            nullifier: Some(self.nullifier),
             roster_root: Some(self.root),
             proof: Some(self.proof.clone()),
         }

@@ -11,7 +11,6 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamErrorV1;
 #[cfg(test)]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
@@ -20,8 +19,8 @@ pub use super::privacy_outer_hash::{PrivacyOuterDigestV1, PrivacyOuterProofFamil
 use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
 };
-use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
-use rand::TryRngCore;
+use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1, PrivacyProtocolIdV1};
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -88,16 +87,16 @@ impl TransparentStarkDigestContextV1 {
         }
     }
     /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
-    pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
+    pub(crate) fn maximum_proof_bytes_v1() -> usize {
         iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
     }
-    pub(crate) fn catalog_v1(self) -> [u8; 48] {
+    pub(crate) fn catalog_v1() -> [u8; 32] {
         exact12_catalog_commitment_bytes_v1()
     }
     /// Borrow a checked canonical domain while its catalog backing remains alive.
     pub(crate) fn domain_v1<'a>(
         self,
-        catalog: &'a [u8; 48],
+        catalog: &'a [u8; 32],
         role: &'a [u8],
         phase: &'a [u8],
         level: u64,
@@ -105,7 +104,7 @@ impl TransparentStarkDigestContextV1 {
         counter: u64,
     ) -> Result<PrivacyOuterDomainV1<'a>, TransparentStarkErrorV1> {
         self.validate()?;
-        if *catalog != self.catalog_v1()
+        if *catalog != crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1()
             || role.is_empty()
             || phase.is_empty()
             || u16::try_from(role.len()).is_err()
@@ -177,6 +176,7 @@ pub struct TransparentStarkWorkSecurityV1 {
     pub(crate) max_random_oracle_query_log2: u16,
 }
 /// Canonical Goldilocks field element.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GoldilocksFieldV1(pub(crate) u64);
 impl zeroize::Zeroize for GoldilocksFieldV1 {
@@ -204,7 +204,7 @@ impl GoldilocksFieldV1 {
     /// congruent `2^32 - 1`; the final value needs at most one subtraction.
     /// This is exact for every `u128`, not only products of canonical residues.
     pub(crate) fn reduce(value: u128) -> Self {
-        let low = value as u64;
+        let low = u64::try_from(value & u128::from(u64::MAX)).expect("low limb fits u64");
         let high = (value >> 64) as u64;
         let high_high = high >> 32;
         let high_low = high & GOLDILOCKS_EPSILON_V1;
@@ -285,7 +285,6 @@ impl GoldilocksFieldV1 {
     /// or reject noncanonical inputs before entering this constructor helper.
     /// The field operations and their compiled callers still need independent
     /// side-channel review; this helper is not a whole-prover timing guarantee.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn inverse_or_zero_canonical_v1(self) -> Self {
         fn square<const N: usize>(mut value: GoldilocksFieldV1) -> GoldilocksFieldV1 {
             for _ in 0..N {
@@ -862,7 +861,6 @@ pub fn goldilocks_fft_v1(
 }
 /// In-place FFT for a column whose bounded batch already owns parallelism.
 /// Validation and arithmetic use the same kernel as the single-column route.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_fft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -879,7 +877,6 @@ pub struct GoldilocksFftPowersV1 {
     root: GoldilocksFieldV1,
     size: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl GoldilocksFftPowersV1 {
     /// Minimum public payload, including the inline owner, before allocation.
     pub(crate) fn required_payload_bytes_v1(size: usize) -> Result<usize, TransparentStarkErrorV1> {
@@ -936,7 +933,6 @@ impl GoldilocksFftPowersV1 {
 }
 
 /// Coarse FFT using an admitted public power table and the original shared kernel.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_fft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -947,7 +943,6 @@ pub fn goldilocks_fft_coarse_with_powers_v1(
 
 /// Coarse inverse FFT using a table constructed from the inverse public root.
 /// Original root validation, inversion, domain checks and scaling retain their order.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_ifft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1036,7 +1031,6 @@ pub fn goldilocks_ifft_v1(
     goldilocks_ifft_with_inner_parallelism_v1::<true>(values, root)
 }
 /// In-place inverse FFT for a column in an already parallel bounded batch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub fn goldilocks_ifft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1093,15 +1087,101 @@ fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: boo
     {
         return Err(TransparentStarkErrorV1::NonCanonicalField);
     }
+    // Keep the original dense kernel for small or nearly full polynomials.
+    // Large fourfold-or-greater expansions have enough public zero suffix to
+    // amortize DIF traversal; MAIN's common22 geometries all meet this bound.
+    let use_prefix_fft = size >= 1 << 18 && coefficients.len() <= size / 4;
+    if use_prefix_fft {
+        // Reject malformed roots before populating witness-bearing output.
+        // Coefficient validation retains its original precedence.
+        if root.0 >= GOLDILOCKS_MODULUS_V1
+            || root.pow(size as u128) != GoldilocksFieldV1::ONE
+            || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
+        {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+    }
     let mut evaluations = vec![GoldilocksFieldV1::ZERO; size];
     let mut shift_power = GoldilocksFieldV1::ONE;
     for (target, coefficient) in evaluations.iter_mut().zip(coefficients.iter().copied()) {
         *target = coefficient.mul(shift_power);
         shift_power = shift_power.mul(shift);
     }
-    goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
+    if use_prefix_fft {
+        // Only the public coefficient extent selects work; neither coefficient
+        // values nor masked trace contents are inspected.
+        goldilocks_fft_zero_padded_v1::<PARALLEL_INNER>(&mut evaluations, root, coefficients.len());
+    } else {
+        goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
+    }
     Ok(evaluations)
 }
+
+/// Transform a validated coefficient prefix followed by caller-initialized zeros.
+/// DIF preserves that public prefix bound in both children, allowing the zero
+/// suffix butterflies to be omitted. One final in-place permutation restores
+/// natural evaluation order; no field allocation or secret-dependent work is added.
+fn goldilocks_fft_zero_padded_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    prefix: usize,
+) {
+    goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(values, root, prefix);
+    let size = values.len();
+    let mut reversed = 0_usize;
+    for index in 1..size {
+        let mut bit = size >> 1;
+        while reversed & bit != 0 {
+            reversed ^= bit;
+            bit >>= 1;
+        }
+        reversed ^= bit;
+        if index < reversed {
+            values.swap(index, reversed);
+        }
+    }
+}
+
+/// Infallible DIF over disjoint slices after domain and coefficient validation.
+fn goldilocks_fft_prefix_dif_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    prefix: usize,
+) {
+    if values.len() == 1 || prefix == 0 {
+        return;
+    }
+    let half = values.len() / 2;
+    let pairs = prefix.min(half);
+    let (left, right) = values.split_at_mut(half);
+    let mut twiddle = GoldilocksFieldV1::ONE;
+    for (even, odd) in left[..pairs].iter_mut().zip(&mut right[..pairs]) {
+        let original_even = *even;
+        let original_odd = *odd;
+        *even = original_even.add(original_odd);
+        *odd = original_even.sub(original_odd).mul(twiddle);
+        twiddle = twiddle.mul(root);
+    }
+    let child_root = root.mul(root);
+    // Split by the public remaining output extent, including short prefixes:
+    // those prefixes still expand to the entire output domain. Coarse recursive
+    // tasks avoid a second nested task set for individual butterfly windows.
+    if PARALLEL_INNER && half >= FFT_PARALLEL_MIN_VALUES_V1 / 2 && rayon::current_num_threads() > 1
+    {
+        rayon::join(
+            || goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(left, child_root, pairs),
+            || goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(right, child_root, pairs),
+        );
+    } else {
+        goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(left, child_root, pairs);
+        goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(right, child_root, pairs);
+    }
+}
+
+#[cfg(test)]
+#[path = "transparent_stark_prefix_fft_tests.rs"]
+mod prefix_fft_tests;
+
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are
@@ -1227,7 +1307,7 @@ pub fn goldilocks_batch_invert_v1(
     Ok(())
 }
 /// Draw one unbiased canonical Goldilocks field element.
-pub fn random_goldilocks_v1<R: TryRngCore>(
+pub fn random_goldilocks_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
@@ -1241,7 +1321,7 @@ pub fn random_goldilocks_v1<R: TryRngCore>(
     Err(TransparentStarkErrorV1::RandomnessUnavailable)
 }
 /// Draw one uniform quartic-extension element, including zero.
-pub fn random_goldilocks_fp4_v1<R: TryRngCore>(
+pub fn random_goldilocks_fp4_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
     let mut coefficients = zeroize::Zeroizing::new([GoldilocksFieldV1::ZERO; 4]);
@@ -1253,7 +1333,7 @@ pub fn random_goldilocks_fp4_v1<R: TryRngCore>(
 }
 /// Draw one uniform nonzero quartic-extension element.
 #[cfg(test)]
-pub fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
+pub fn random_nonzero_goldilocks_fp4_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
@@ -1442,7 +1522,7 @@ impl Drop for ReplayableTraceMaskV1 {
 /// Streaming provers keep these few coefficients until post-query openings are reconstructed,
 /// instead of retaining the entire LDE column. Callers should drop them as soon as proof
 /// construction completes; [`Drop`] overwrites the backing allocation before release.
-pub fn sample_trace_mask_v1<R: TryRngCore>(
+pub fn sample_trace_mask_v1<R: TryRng>(
     mask_degree: usize,
     rng: &mut R,
 ) -> Result<ReplayableTraceMaskV1, TransparentStarkErrorV1> {
@@ -1463,7 +1543,7 @@ pub fn sample_trace_mask_v1<R: TryRngCore>(
 }
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
 #[cfg(test)]
-pub fn masked_trace_lde_column_v1<R: TryRngCore>(
+pub fn masked_trace_lde_column_v1<R: TryRng>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
     lde_log_size: u8,
@@ -1478,10 +1558,8 @@ pub fn masked_trace_lde_column_v1<R: TryRngCore>(
         mask.coefficients(),
     )
 }
-fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
-    fastpq_isi::GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
-        .expect("the pinned Exact12 catalog commitment is canonical")
-        .to_le_bytes()
+fn exact12_catalog_commitment_bytes_v1() -> [u8; 32] {
+    PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1
 }
 
 /// Hash one fully typed native-STARK frame with the opaque SHA3-384 digest.
@@ -1502,7 +1580,8 @@ pub fn privacy_outer_digest_frame_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     PrivacyOuterFrameV1::new(
         PrivacyOuterDomainV1 {
             catalog: &catalog,
@@ -1527,12 +1606,11 @@ pub fn privacy_outer_last_field_stream_v1(
     context: TransparentStarkDigestContextV1,
     role: &[u8],
     phase: &[u8],
-    level: u64,
-    index: u64,
-    counter: u64,
+    position: (u64, u64, u64),
     prefix_fields: &[&[u8]],
     final_field_len: usize,
 ) -> Result<PrivacyOuterLastFieldStreamV1, TransparentStarkErrorV1> {
+    let (level, index, counter) = position;
     context.validate()?;
     if role.is_empty()
         || phase.is_empty()
@@ -1541,7 +1619,8 @@ pub fn privacy_outer_last_field_stream_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     PrivacyOuterLastFieldStreamV1::new(
         PrivacyOuterDomainV1 {
             catalog: &catalog,
@@ -1561,7 +1640,6 @@ pub fn privacy_outer_last_field_stream_v1(
 }
 
 /// Map a canonical digest-stream failure without exposing an alternate hash path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub const fn map_digest_stream_error_v1(
     error: PrivacyOuterLastFieldStreamErrorV1,
 ) -> TransparentStarkErrorV1 {
@@ -1630,7 +1708,6 @@ impl PrivacyOuterMerkleTreeV1 {
     }
     /// Exact allocated tree storage, including all retained vector capacities.
     /// Callers can charge this public commitment owner alongside private LDEs.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_payload_bytes_v1(&self) -> Result<usize, TransparentStarkErrorV1> {
         let lists = self
             .levels
@@ -1906,7 +1983,9 @@ impl TransparentTranscriptV1 {
             return Ok(Vec::new());
         }
         self.context.validate()?;
-        let catalog = self.context.catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain =
             self.context
                 .domain_v1(&catalog, TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1, label, 0, 0, 0)?;
@@ -2230,7 +2309,8 @@ pub fn grind_nonce_v1(
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
     context.validate()?;
-    let catalog = context.catalog_v1();
+    let catalog =
+        crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
     let prefix = PrivacyOuterDomainPrefixV1::new(context.domain_v1(
         &catalog,
         GRINDING_DOMAIN_V1,
@@ -2391,7 +2471,8 @@ pub fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4V1) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     const TEST_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
         TransparentStarkDigestContextV1::new(
             PrivacyProtocolIdV1::PqMaspStarkV1,
@@ -2411,7 +2492,7 @@ mod tests {
                 base = base * base % modulus;
                 exponent >>= 1;
             }
-            result as u64
+            u64::try_from(result).expect("reduced reference residue")
         }
         let mut values = (0..=1024_u64).collect::<Vec<_>>();
         values.extend((GOLDILOCKS_MODULUS_V1 - 256)..GOLDILOCKS_MODULUS_V1);
@@ -2505,13 +2586,14 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedRngError;
+    impl std::error::Error for InjectedRngError {}
     impl core::fmt::Display for InjectedRngError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected transparent-STARK RNG failure")
         }
     }
     struct FailingTryRng;
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = InjectedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedRngError)
@@ -2561,7 +2643,7 @@ mod tests {
         draws: usize,
         panic_on_failure: bool,
     }
-    impl TryRngCore for PartialMaskRng {
+    impl TryRng for PartialMaskRng {
         type Error = InjectedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             unreachable!("field sampler requests bytes")
@@ -2639,27 +2721,33 @@ mod tests {
         assert_eq!(rng.draws, 2);
     }
     struct MaxValueRng;
-    impl RngCore for MaxValueRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for MaxValueRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xff);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0xff);
+            })
         }
     }
     struct ZeroRng;
-    impl RngCore for ZeroRng {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0);
+            })
         }
     }
     #[test]
@@ -2833,17 +2921,18 @@ mod tests {
                 assert!(product.0 < GOLDILOCKS_MODULUS_V1);
             }
         }
-        let mut rng = StdRng::from_seed([0x6D; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x6D; 32]);
         for sample in 0..200_000 {
-            let value = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
+            let value = (u128::from(rng.try_next_u64().expect("test RNG draw succeeds")) << 64)
+                | u128::from(rng.try_next_u64().expect("test RNG draw succeeds"));
             let reduced = GoldilocksFieldV1::reduce(value);
             assert_eq!(
                 u128::from(reduced.0),
                 value % modulus,
                 "arbitrary reduction sample {sample}"
             );
-            let left = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
-            let right = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
+            let left = rng.try_next_u64().expect("test RNG draw succeeds") % GOLDILOCKS_MODULUS_V1;
+            let right = rng.try_next_u64().expect("test RNG draw succeeds") % GOLDILOCKS_MODULUS_V1;
             let sum = GoldilocksFieldV1(left).add(GoldilocksFieldV1(right));
             let product = GoldilocksFieldV1(left).mul(GoldilocksFieldV1(right));
             assert_eq!(
@@ -3192,8 +3281,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(predicate_exhausted.state(), initial_state);
-        let mut first_rng = StdRng::from_seed([0x44; 32]);
-        let mut replay_rng = StdRng::from_seed([0x44; 32]);
+        let mut first_rng = ChaCha12Rng::from_seed([0x44; 32]);
+        let mut replay_rng = ChaCha12Rng::from_seed([0x44; 32]);
         assert_eq!(
             random_goldilocks_fp4_v1(&mut first_rng).expect("random Fp4"),
             random_goldilocks_fp4_v1(&mut replay_rng).expect("replayed random Fp4")
@@ -3331,10 +3420,10 @@ mod tests {
     #[test]
     fn masked_trace_lde_is_randomized_and_preserves_degree_capacity() {
         let base = (0..16).map(GoldilocksFieldV1).collect::<Vec<_>>();
-        let mut first_rng = StdRng::from_seed([0x11; 32]);
-        let mut second_rng = StdRng::from_seed([0x22; 32]);
+        let mut first_rng = ChaCha12Rng::from_seed([0x11; 32]);
+        let mut second_rng = ChaCha12Rng::from_seed([0x22; 32]);
         let first = masked_trace_lde_column_v1(&base, 4, 7, 7, &mut first_rng).expect("first mask");
-        let mut replay_rng = StdRng::from_seed([0x11; 32]);
+        let mut replay_rng = ChaCha12Rng::from_seed([0x11; 32]);
         let replay_mask = sample_trace_mask_v1(7, &mut replay_rng).expect("replayable mask");
         let replay = masked_trace_lde_column_with_mask_v1(&base, 4, 7, replay_mask.coefficients())
             .expect("replayed mask");
@@ -3650,7 +3739,7 @@ mod tests {
         ] {
             for nonce in [[0; 32], [0xa7; 32]] {
                 let context = TransparentStarkDigestContextV1::x509_scoped_v1(nonce, family);
-                let catalog = context.catalog_v1();
+                let catalog = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
                 let domain = context
                     .domain_v1(&catalog, b"scope-leaf", b"scope-phase", 2, 11, 7)
                     .unwrap();
@@ -3681,9 +3770,7 @@ mod tests {
                     context,
                     b"scope-leaf",
                     b"scope-phase",
-                    2,
-                    11,
-                    7,
+                    (2, 11, 7),
                     &[b"prefix"],
                     payload.len(),
                 )
@@ -3791,7 +3878,7 @@ mod tests {
         }
         assert_eq!(
             hex::encode(digest.to_bytes()),
-            "31634e1993f3ade92bf2f8cb3343b7807de1b15a3871c651e444282efbcc475138991e40d6aee681dc6e3a92594300cd",
+            "f505216aaefec2d72cbeabc4e808c8433262d6c07a3fa6f7e9304367df5e161dd1ee9043a3e4ad19fd9ef25a2419f8d2",
             "independent SHA3 byte-frame reference"
         );
     }

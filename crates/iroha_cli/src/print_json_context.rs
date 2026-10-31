@@ -1,3 +1,7 @@
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The output context retains independent parsed CLI options."
+)]
 struct PrintJsonContext<W, E> {
     write: W,
     err_write: E,

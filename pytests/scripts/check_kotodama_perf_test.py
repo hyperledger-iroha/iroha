@@ -991,7 +991,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "  representative-regression:\n", 1
         )[1]
         self.assertIn('      CARGO_BUILD_JOBS: "1"', representative_job)
-        self.assertIn('      RUSTUP_TOOLCHAIN: "1.93.1"', representative_job)
+        self.assertIn('      RUSTUP_TOOLCHAIN: "1.99.1"', representative_job)
 
         comparison_marker = "      - name: Check out comparison base\n"
         self.assertEqual(representative_job.count(comparison_marker), 1)
@@ -1033,7 +1033,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )[0]
         self.assertIn(
             "uses: actions/setup-python@"
-            "a26af69be951a213d495a4c3e4e4022e16d87065",
+            "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
             python_step,
         )
         self.assertIn('          python-version: "3.12"', python_step)
@@ -1048,7 +1048,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn("          toolchain: 1.93.1", toolchain_step)
+        self.assertIn("          toolchain: 1.99.1", toolchain_step)
         self.assertNotIn("Install the candidate benchmark harness", workflow)
         self.assertNotIn(
             "cp candidate/crates/ivm/benches/bench_kotodama.rs", workflow
@@ -1175,7 +1175,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )[0]
         self.assertIn(
             "uses: actions/upload-artifact@"
-            "ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
             upload_step,
         )
         self.assertIn("target-kotodama-perf/criterion", upload_step)

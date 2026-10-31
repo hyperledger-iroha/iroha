@@ -200,21 +200,20 @@ async fn run_mock_actor(
             Message::UpdateWithDTO { dto, respond_to } => {
                 // Update the exposed Norito-RPC summary if provided; ignore the rest to
                 // keep the mock lightweight.
-                if let Some(transport) = dto.transport.as_ref() {
-                    if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
-                        if let Some(enabled) = norito_rpc.enabled {
-                            dto_snapshot.transport.norito_rpc.enabled = enabled;
-                        }
-                        if let Some(stage) = norito_rpc.stage.as_ref() {
-                            dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
-                        }
-                        if let Some(require_mtls) = norito_rpc.require_mtls {
-                            dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
-                        }
-                        if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
-                            dto_snapshot.transport.norito_rpc.canary_allowlist_size =
-                                allowlist.len();
-                        }
+                if let Some(transport) = dto.transport.as_ref()
+                    && let Some(norito_rpc) = transport.norito_rpc.as_ref()
+                {
+                    if let Some(enabled) = norito_rpc.enabled {
+                        dto_snapshot.transport.norito_rpc.enabled = enabled;
+                    }
+                    if let Some(stage) = norito_rpc.stage.as_ref() {
+                        dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
+                    }
+                    if let Some(require_mtls) = norito_rpc.require_mtls {
+                        dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
+                    }
+                    if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
+                        dto_snapshot.transport.norito_rpc.canary_allowlist_size = allowlist.len();
                     }
                 }
                 let _ = respond_to.send(Ok(()));
@@ -282,7 +281,7 @@ pub enum Error {
     Communication(#[from] oneshot::error::RecvError),
     /// Configuration validation failed: {0}
     Validation(String),
-    /// SoraNet handshake runtime update failed: {0}
+    /// `SoraNet` handshake runtime update failed: {0}
     SoranetHandshakeRuntime(String),
 }
 struct Actor {
@@ -716,11 +715,9 @@ mod tests {
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::{
-        block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
-    };
+    use iroha_data_model::{block::BlockHeader, sorafs::pricing::PricingScheduleRecord};
     use iroha_logger::Level;
-    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::{chain::ChainId, peer::Peer};
     use iroha_primitives::addr::socket_addr;
     use iroha_torii_shared::configuration::{
         ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,
@@ -1044,6 +1041,7 @@ mod tests {
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
                 query_fanout_max_working_set_bytes:
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES,
+                finality_max_working_set_bytes: iroha_config::parameters::defaults::torii::FINALITY_MAX_WORKING_SET_BYTES,
                 sccp_history_cache_max_bytes: iroha_config::parameters::defaults::torii::SCCP_HISTORY_CACHE_MAX_BYTES,
                 app_api_routed_read_body_read_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
@@ -1400,6 +1398,7 @@ mod tests {
                 resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
                 verification_public_key: None,
                 signing_private_key: None,
+                upgrade_checkpoint: Default::default(),
             },
             telemetry_profile: iroha_config::parameters::actual::TelemetryProfile::Disabled,
             telemetry: None,
@@ -1771,8 +1770,6 @@ mod tests {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
-                runtime_upgrade_provenance:
-                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pin_fee_asset_id:

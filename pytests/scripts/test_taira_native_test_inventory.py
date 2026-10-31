@@ -132,7 +132,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 627)
+        self.assertEqual(len(names), 633)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS
@@ -203,7 +203,7 @@ class NativeInventoryTests(unittest.TestCase):
         names = inventory.validate_native_source_inventory(ROOT, owners=owners)
         self.assertEqual(names, {prefix + '::' + leaf for _, _, _, prefix, leaves in expected.values() for leaf in leaves})
 
-    def test_kaigi_relay_deferral_owners_bind_all_nine_actual_control_declarations(self):
+    def test_kaigi_relay_deferral_owners_bind_all_ten_actual_control_declarations(self):
         expected = {
             'native Kaigi relay instruction and allowlist deferral': (
                 'smartcontracts/isi/kaigi.rs', 'smartcontracts/isi/kaigi/relay_typed_deferral_tests.rs',
@@ -215,6 +215,7 @@ class NativeInventoryTests(unittest.TestCase):
                     'feedback_refusal_preserves_both_original_relay_rows_and_retry',
                     'allowlist_refusal_prevents_domain_metadata_publication_and_retries_original_json',
                     'checked_record_writer_refusal_keeps_original_create_unpublished_and_retries',
+                    'relay_component_fixture_owns_crypto_without_committed_genesis',
                 )),
             'native Kaigi relay World restore deferral': (
                 'state/deserialize_world.rs', 'state/deserialize_world_kaigi_relay_deferral_tests.rs',

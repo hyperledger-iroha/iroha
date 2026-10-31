@@ -3,7 +3,8 @@
 package org.hyperledger.iroha.sdk.offline.wallet
 
 /** Test-actor timing gate. A transport completion is never a durable monetary acknowledgment. */
-internal class KagemushaNearbyAttemptGate(private val recovery: Boolean) {
+internal class KagemushaNearbyAttemptGate(private val recovery: Boolean, private val continuation: Boolean = false) {
+    init { require(!recovery || !continuation) }
     private var authorization: Long? = null
     private var dispatched = recovery
     private var released = false
@@ -47,12 +48,15 @@ internal class KagemushaNearbyAttemptGate(private val recovery: Boolean) {
         authorization?.let { check(ticks >= it) }
         arrival = ticks
     }
-    /** Native exact-Send delivery admission is required even for an authenticated radio message. */
-    fun creditedAdmitted(ticks: Long) {
+    /** A positive exact-Send Native projection completes delivery before any separate Archive. */
+    fun creditedAdmitted(ticks: Long, projection: KagemushaWalletCreditProjectionV1) {
+        check(projection.archive != KagemushaWalletCreditProjectionV1.Archive.RECEIVER &&
+            projection.evidence in setOf(KagemushaWalletCreditProjectionV1.Evidence.UNFOLDED,
+                KagemushaWalletCreditProjectionV1.Evidence.CREDITED)) { "nearby-delivery-not-positive" }
         check(admitted == null && arrival != null && ticks >= arrival!!)
         admitted = ticks
     }
-    /** Recovery never invents an original process clock anchor. */
-    fun elapsedNanos(): Long? = if (authorization != null && admitted != null) admitted!! - authorization!! else null
-    fun arrivalElapsedNanos(): Long? = if (authorization != null && admitted != null) arrival!! - authorization!! else null
+    /** Recovery and newly approved continuation never reuse the original attempt clock. */
+    fun elapsedNanos(): Long? = if (!continuation && authorization != null && admitted != null) admitted!! - authorization!! else null
+    fun arrivalElapsedNanos(): Long? = if (!continuation && authorization != null && admitted != null) arrival!! - authorization!! else null
 }

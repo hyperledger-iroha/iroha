@@ -1,12 +1,13 @@
 //! Bounded, clearing accumulator for canonically ordered MAIN residues.
 
 use super::super::super::sha_residue_output::ShaResidueSinkV1;
+use super::main_composition_mix::MainResidueMixV1;
 use super::{E, F, ZkX509StarkErrorV1};
 
 /// One partial quotient contribution; never publish an incomplete emission.
 pub(super) struct MainResidueFoldV1<'a> {
     alphas: &'a [E],
-    sum: E,
+    mix: MainResidueMixV1,
     emitted: usize,
     refused: bool,
 }
@@ -15,7 +16,7 @@ impl<'a> MainResidueFoldV1<'a> {
     pub(super) fn new_v1(alphas: &'a [E]) -> Self {
         Self {
             alphas,
-            sum: E::ZERO,
+            mix: MainResidueMixV1::new_v1(),
             emitted: 0,
             refused: false,
         }
@@ -25,7 +26,7 @@ impl<'a> MainResidueFoldV1<'a> {
         if self.refused || self.emitted != self.alphas.len() {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        Ok(self.sum.mul_base(inverse))
+        Ok(self.mix.finish_v1().mul_base(inverse))
     }
 }
 
@@ -42,18 +43,11 @@ impl ShaResidueSinkV1<F> for MainResidueFoldV1<'_> {
             return;
         };
         if let Some(alpha) = self.alphas.get(self.emitted) {
-            // This is the original serial fold, without reassociation.
-            self.sum = self.sum.add(alpha.mul_base(value));
+            self.mix.push_v1(value, alpha);
         } else {
             self.refused = true;
         }
         self.emitted = next;
-    }
-}
-
-impl Drop for MainResidueFoldV1<'_> {
-    fn drop(&mut self) {
-        super::super::super::private_table::zeroize_words_v1(core::slice::from_mut(&mut self.sum));
     }
 }
 
@@ -68,7 +62,7 @@ mod tests {
 
     #[test]
     fn streamed_fold_matches_the_exact_ordered_vector_fold() {
-        for count in [1, 155, 335, 564, 772] {
+        for count in [1, 155, 335, 593, 801, 1024, 1025, 2145] {
             let alphas = (0..count).map(|i| alpha(i as u64)).collect::<Vec<_>>();
             let values = (0..count)
                 .map(|i| F((i * i + 3) as u64))
@@ -124,7 +118,7 @@ mod tests {
                 })
             });
             assert_eq!(result.is_err(), outcome == 2);
-            assert!(erased.iter().any(|r| r.cells == 1 && r.nonzero_before == 1));
+            assert!(erased.iter().any(|r| r.cells == 4 && r.nonzero_before > 0));
             assert!(erased.iter().all(|r| r.nonzero_after == 0));
         }
     }

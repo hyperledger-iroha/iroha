@@ -3,12 +3,12 @@
 use ff::PrimeField;
 use iroha_pasta::{CancellationToken, PastaCurve, PastaField};
 use iroha_plonk_recursion::FoldTape;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use zeroize::Zeroizing;
 
 /// Resource and cancellation errors are not a proof-invalid verdict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Error {
+pub enum Error {
     /// The attempt's cancellation owner stopped the operation.
     Cancelled,
     /// The OS refused entropy or the bounded sampler exhausted its draws.
@@ -16,7 +16,7 @@ pub(crate) enum Error {
 }
 /// Obtain one OS candidate; no silent infallible RNG fallback.
 pub(crate) fn os_entropy(bytes: &mut [u8; 32]) -> Result<(), Error> {
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(bytes)
         .map_err(|_| Error::Unavailable)
 }
@@ -51,7 +51,7 @@ fn sample_into<F: PastaField>(
 /// platform assumption. Checkpoint replay must restore retained bytes, never call this.
 /// # Errors
 /// Preserves cancellation and fallible entropy refusal; there is no retry-on-failure.
-pub(crate) fn sample_tape<C: PastaCurve>(
+pub fn sample_tape<C: PastaCurve>(
     cancellation: Option<&CancellationToken>,
     mut fill: impl FnMut(&mut [u8; 32]) -> Result<(), Error>,
 ) -> Result<FoldTape<C>, Error> {
@@ -64,14 +64,14 @@ mod tests {
     use ff::Field;
     use iroha_pasta::{Ep, Eq};
     fn schedule<C: PastaCurve>() {
-        let mut calls = 0;
+        let mut calls = 0_u64;
         let tape = sample_tape::<C>(None, |bytes| {
             let n = calls;
             calls += 1;
             *bytes = if n == 0 {
                 [255; 32]
             } else {
-                C::ScalarExt::from(n as u64 - 1).to_repr()
+                C::ScalarExt::from(n - 1).to_repr()
             };
             Ok(())
         })
@@ -139,8 +139,8 @@ mod tests {
                 calls += 1;
                 *bytes = [0; 32];
                 if n == position {
-                    cancellation.cancel()
-                };
+                    cancellation.cancel();
+                }
                 Ok(())
             });
             assert!(matches!(result, Err(Error::Cancelled)));

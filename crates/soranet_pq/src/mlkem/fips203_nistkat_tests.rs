@@ -10,9 +10,10 @@
 use super::*;
 use crate::nistkat_sha256;
 use sha3::{
-    Sha3_512, Shake256,
+    Sha3_512,
     digest::{ExtendableOutput as _, Update as _, XofReader as _},
 };
+use shake::Shake256;
 
 const INPUTS: &str = include_str!("../../tests/fixtures/nistkat/inputs.txt");
 

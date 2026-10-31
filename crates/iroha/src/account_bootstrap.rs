@@ -67,7 +67,7 @@ impl Client {
         })
     }
 
-    /// Discover the exact network identity and admitted default signing algorithm without an account.
+    /// Discover the exact network identity and admitted signing algorithms without an account.
     ///
     /// # Errors
     /// Rejects transport, HTTP, representation, schema or inconsistent admission responses.
@@ -170,24 +170,18 @@ fn validate_context(endpoint: &Url, timeout: Duration) -> Result<()> {
 }
 
 fn validate_capabilities(policy: &AccountCapabilitiesV1) -> Result<()> {
-    if policy.schema_version != 1
-        || policy.network_prefix == 0
-        || policy.default_signing != "ed25519"
-        || !policy
-            .allowed_signing
-            .iter()
-            .any(|name| name == &policy.default_signing)
-        || policy
-            .allowed_signing
-            .windows(2)
-            .any(|pair| pair[0] >= pair[1])
-        || policy
-            .allowed_signing
-            .iter()
-            .any(|name| name.parse::<iroha_crypto::Algorithm>().is_err())
-    {
+    let mut seen = std::collections::BTreeSet::new();
+    let canonical_algorithms = !policy.allowed_signing.is_empty()
+        && policy.allowed_signing.len() <= iroha_crypto::Algorithm::ALL.len()
+        && policy.allowed_signing.iter().all(|name| {
+            name.parse::<iroha_crypto::Algorithm>()
+                .is_ok_and(|algorithm| {
+                    name == algorithm.as_static_str() && seen.insert(algorithm as u8)
+                })
+        });
+    if policy.schema_version != 1 || policy.network_prefix == 0 || !canonical_algorithms {
         return Err(eyre!(
-            "network does not advertise the canonical first-release account signing policy"
+            "network does not advertise a canonical account signing policy"
         ));
     }
     Ok(())

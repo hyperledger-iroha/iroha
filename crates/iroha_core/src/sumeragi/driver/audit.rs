@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn prepare_qc(view: u64, block_hash: Hash32, result: Hash32) -> Qc {
-        let mut qc = commit_qc(&block(7, Hash32([1; 32]), Hash32([2; 32]), vec![1]), result);
+        let mut qc = commit_qc(&block(7, Hash32([1; 32]), Hash32([2; 32]), &[1]), result);
         qc.kind = VoteKind::Prepare;
         qc.instance = INSTANCE;
         qc.height = 7;
@@ -358,7 +358,7 @@ mod tests {
                 )
                 .is_ok()
             );
-            let body = block(8, Hash32([1; 32]), Hash32([2; 32]), vec![3]);
+            let body = block(8, Hash32([1; 32]), Hash32([2; 32]), &[3]);
             assert!(perform(&records, &bodies, &crypto, Write::Body(Box::new(body))).is_ok());
         });
         assert_eq!(written.len(), 1, "{written:?}");
@@ -377,7 +377,7 @@ mod tests {
         };
         let mut executor = FakeExecutor::new(Hash32([0xa0; 32]), Hash32([0xa1; 32]), config);
         let blocks = FakeBlocks::default();
-        let applied = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), vec![9, 9]);
+        let applied = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), &[9, 9]);
         let qc = commit_qc(&applied, Hash32([0xe1; 32]));
         let commit = Arc::new(Commit {
             block: applied.clone(),

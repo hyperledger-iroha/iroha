@@ -770,6 +770,19 @@ pub fn prepare<'q>(
     query: &'q ListQuery,
     limits: &Limits,
 ) -> Result<Prepared<'q>, CollectionError> {
+    struct SortText<'a>(&'a [iroha_torii_shared::list_query::SortKey]);
+    impl core::fmt::Display for SortText<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            for (index, key) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.write_str(",")?;
+                }
+                write!(out, "{key}")?;
+            }
+            Ok(())
+        }
+    }
+
     query.validate()?;
     let plan_charge = admit_query_plan(spec, query, limits.bytes)?;
     let mut scratch = plan_charge;
@@ -831,18 +844,7 @@ pub fn prepare<'q>(
         .transpose()?
         .unwrap_or_default();
     scratch = memory::add(scratch, aggregate_text.capacity())?;
-    struct SortText<'a>(&'a [iroha_torii_shared::list_query::SortKey]);
-    impl core::fmt::Display for SortText<'_> {
-        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            for (index, key) in self.0.iter().enumerate() {
-                if index != 0 {
-                    out.write_str(",")?;
-                }
-                write!(out, "{key}")?;
-            }
-            Ok(())
-        }
-    }
+
     let sort_text = BytePolicy {
         scratch_bytes: limits.bytes.scratch_bytes - scratch,
         ..limits.bytes
@@ -1069,6 +1071,11 @@ fn sort_plan_bytes(spec: &CollectionSpec, query: &ListQuery) -> Result<usize, Co
     Ok(charge)
 }
 
+/// Collections whose pages may continue strictly below a completely examined public block.
+fn continues_at_block_boundaries(spec: &CollectionSpec) -> bool {
+    spec.tag == super::specs::ACCOUNT_HISTORY.tag || spec.tag == super::specs::ASSET_MOVEMENTS.tag
+}
+
 fn decode_position(
     spec: &CollectionSpec,
     digest: &[u8; DIGEST_BYTES],
@@ -1076,10 +1083,10 @@ fn decode_position(
     allocation_bytes: usize,
 ) -> Result<Vec<u64>, CursorError> {
     let values = cursor::decode(token, spec.tag, digest, spec.positioned, allocation_bytes)?;
-    // Account-history scans may finish between complete public blocks without
-    // seeing an account movement. Null coordinates name that block boundary,
-    // never a hidden transaction or movement inside it.
-    if spec.tag == super::specs::ACCOUNT_HISTORY.tag
+    // Account-history and asset-movement pages may finish between complete public
+    // blocks without seeing a visible movement. Null coordinates name that block
+    // boundary, never a hidden transaction or movement inside it.
+    if continues_at_block_boundaries(spec)
         && matches!(values.as_slice(), [_, Value::Null, Value::Null])
     {
         let height = values[0]
@@ -1098,16 +1105,43 @@ fn decode_position(
     Ok(position)
 }
 
-fn narrow_height_range(expr: &FilterExpr, range: &mut (u64, u64)) {
+/// Inclusive range of `height_field` implied by `filter`'s top-level
+/// conjuncts: `(0, u64::MAX)` when nothing bounds it, `low > high` for a
+/// contradiction. Disjunctions and negations never narrow it, so every row
+/// the complete filter matches stays inside the range and a height-ordered
+/// walk may start at its top and stop below its bottom.
+pub(crate) fn conjunctive_height_range(
+    filter: Option<&FilterExpr>,
+    height_field: &str,
+) -> (u64, u64) {
+    let mut range = (0, u64::MAX);
+    if let Some(filter) = filter {
+        narrow_height_range(height_field, filter, &mut range);
+    }
+    range
+}
+
+fn narrow_height_range(height_field: &str, expr: &FilterExpr, range: &mut (u64, u64)) {
+    // Quoted bounds narrow only in the canonical decimal spelling the row
+    // filter compares numerically; fractions and integers wider than `u64`
+    // leave the walk unbounded on that side.
     let bound = |field: &FieldPath, value: &Value| {
-        (field.0 == POSITION_FIELDS[0])
-            .then(|| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        (field.0 == height_field)
+            .then(|| {
+                value.as_u64().or_else(|| {
+                    value
+                        .as_str()
+                        .filter(|text| is_decimal_text(text))?
+                        .parse()
+                        .ok()
+                })
+            })
             .flatten()
     };
     match expr {
         FilterExpr::And(list) => list
             .iter()
-            .for_each(|nested| narrow_height_range(nested, range)),
+            .for_each(|nested| narrow_height_range(height_field, nested, range)),
         FilterExpr::Eq(field, value) => {
             if let Some(height) = bound(field, value) {
                 range.0 = range.0.max(height);
@@ -1478,7 +1512,8 @@ impl Prepared<'_> {
             .map(|position| (position[0], position[1], position[2]))
     }
 
-    /// Account history continues strictly below this completely scanned public block.
+    /// Account history and asset movements continue strictly below this completely
+    /// scanned public block.
     pub(crate) fn resume_before_block(&self) -> Option<u64> {
         self.after_position
             .as_ref()
@@ -1492,7 +1527,7 @@ impl Prepared<'_> {
         items: Vec<Map>,
         height: u64,
     ) -> Result<RowPage, CollectionError> {
-        if self.spec.tag != super::specs::ACCOUNT_HISTORY.tag || height == 0 {
+        if !continues_at_block_boundaries(self.spec) || height == 0 {
             return Err(cursor_error(CursorError::Malformed));
         }
         Ok(RowPage {
@@ -1536,11 +1571,7 @@ impl Prepared<'_> {
     /// Inclusive `block_height` range implied by the filter's top-level
     /// conjuncts; history walks start at its top and stop below its bottom.
     pub(crate) fn height_range(&self) -> (u64, u64) {
-        let mut range = (0, u64::MAX);
-        if let Some(filter) = &self.query.filter {
-            narrow_height_range(filter, &mut range);
-        }
-        range
+        conjunctive_height_range(self.query.filter.as_ref(), POSITION_FIELDS[0])
     }
 
     /// The cursor after `row`.
@@ -1945,10 +1976,10 @@ impl Prepared<'_> {
             charge,
         });
         *seq += 1;
-        if kept.len() > self.limit + 1 {
-            if let Some(evicted) = kept.pop() {
-                *retained -= evicted.charge;
-            }
+        if kept.len() > self.limit + 1
+            && let Some(evicted) = kept.pop()
+        {
+            *retained -= evicted.charge;
         }
         Ok(())
     }
@@ -2260,7 +2291,9 @@ where
                 format!("the aggregate would produce more than {max_groups} groups; add a filter"),
             ));
         }
-        let new_group = if !groups.contains_key(&key) {
+        let new_group = if groups.contains_key(&key) {
+            None
+        } else {
             let previous =
                 norito::core::owned_btree_allocation_bytes::<Vec<String>, Group>(groups.len())
                     .map_err(|_| memory::capacity("group tree"))?;
@@ -2319,8 +2352,6 @@ where
             }
             retained = admitted;
             Some(Group { values, metrics })
-        } else {
-            None
         };
         let group = match groups.entry(key) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
@@ -2979,6 +3010,27 @@ mod tests {
     }
 
     #[test]
+    fn asset_movement_pages_continue_below_public_block_boundaries() {
+        let spec = &super::super::specs::ASSET_MOVEMENTS;
+        let query = ListQuery::new().filter(field("kind").eq("TRANSFER"));
+        let prepared = prepare(spec, "coin", &query, &LIMITS).unwrap();
+        let token = prepared
+            .block_boundary_page(Vec::new(), 70)
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        let next = query.clone().cursor(token);
+        let resumed = prepare(spec, "coin", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_before_block(), Some(70));
+        assert_eq!(resumed.resume_subrow_position(), None);
+        assert!(prepare(spec, "other", &next, &LIMITS).is_err());
+        let page = prepared.subrow_page(Vec::new(), Some((70, 2, 8))).unwrap();
+        let next = query.clone().cursor(page.next_cursor.unwrap());
+        let resumed = prepare(spec, "coin", &next, &LIMITS).unwrap();
+        assert_eq!(resumed.resume_subrow_position(), Some((70, 2, 8)));
+    }
+
+    #[test]
     fn movement_cursors_keep_the_intra_transaction_position_and_scope() {
         // Both collections accept the filter, so cross-collection replay reaches
         // cursor validation instead of stopping at an unknown field.
@@ -3062,6 +3114,63 @@ mod tests {
         assert_eq!(range("not block_height < 5"), (0, u64::MAX));
         let (low, high) = range("block_height > 9 and block_height < 9");
         assert!(low > high, "contradictory bounds select nothing");
+    }
+
+    #[test]
+    fn conjunctive_height_range_narrows_only_the_named_field() {
+        let range = |text: &str, field: &str| {
+            conjunctive_height_range(Some(&FilterExpr::parse(text).unwrap()), field)
+        };
+        assert_eq!(conjunctive_height_range(None, "height"), (0, u64::MAX));
+        assert_eq!(
+            range("height >= 901 and height <= 1000", "height"),
+            (901, 1000)
+        );
+        assert_eq!(
+            range("height >= 901 and height <= 1000", "block_height"),
+            (0, u64::MAX),
+            "another field's bounds never narrow this walk"
+        );
+        assert_eq!(
+            range(
+                "(height > 10 and transactions_total > 0) and height < 20",
+                "height"
+            ),
+            (11, 19),
+            "nested conjunctions still bound the walk"
+        );
+        assert_eq!(
+            range("height = 5 or transactions_rejected > 0", "height"),
+            (0, u64::MAX)
+        );
+        assert_eq!(range("height <= 3.5", "height"), (0, u64::MAX));
+    }
+
+    #[test]
+    fn conjunctive_height_range_reads_quoted_and_extreme_bounds_like_the_row_filter() {
+        let range = |filter: FilterExpr| conjunctive_height_range(Some(&filter), "height");
+        assert_eq!(
+            range(field("height").gte("51").and(field("height").lte("100"))),
+            (51, 100),
+            "canonical decimal text narrows like a number"
+        );
+        for spelling in ["051", "+51", " 51", "50.5", "-1"] {
+            assert_eq!(
+                range(field("height").gte(spelling)),
+                (0, u64::MAX),
+                "{spelling:?} is not a u64 height in the row filter's spelling"
+            );
+        }
+        assert_eq!(range(field("height").gte(-1)), (0, u64::MAX));
+        assert_eq!(
+            range(field("height").gte(u128::from(u64::MAX) + 1)),
+            (0, u64::MAX),
+            "wider integers arrive as decimal text and never wrap into a bound"
+        );
+        assert_eq!(range(field("height").gt(u64::MAX)), (u64::MAX, u64::MAX));
+        assert_eq!(range(field("height").lt(0_u64)), (0, 0));
+        assert_eq!(range(field("height").eq(u64::MAX)), (u64::MAX, u64::MAX));
+        assert_eq!(range(field("height").lte(u64::MAX)), (0, u64::MAX));
     }
 
     #[test]

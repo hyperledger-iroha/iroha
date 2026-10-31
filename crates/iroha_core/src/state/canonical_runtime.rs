@@ -30,7 +30,41 @@ pub(super) struct CanonicalRuntimeProjection {
     pub(super) lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     pub(super) samples: VecDeque<AutoscaleSampleRecord>,
     pub(super) manifests: LaneManifestRegistryHandle,
-    pub(super) privacy: LanePrivacyRegistryHandle,
+}
+
+/// Preserve original local failures without widening cloneable history errors.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum CanonicalRuntimeAcquisitionError {
+    #[error(transparent)]
+    Admission(#[from] StateAdmissionError),
+    #[error(transparent)]
+    Runtime(LaneLifecycleError),
+}
+
+impl<E: std::fmt::Debug> From<CanonicalRuntimeAcquisitionError> for StateBlockStartError<E> {
+    fn from(error: CanonicalRuntimeAcquisitionError) -> Self {
+        match error {
+            CanonicalRuntimeAcquisitionError::Admission(original) => original.into(),
+            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(
+                original,
+            )) => Self::ExecutionDeferred(original),
+            CanonicalRuntimeAcquisitionError::Runtime(invalid) => Self::Policy(invalid.to_string()),
+        }
+    }
+}
+
+impl From<CanonicalRuntimeAcquisitionError> for MergeLedgerCommitError {
+    fn from(error: CanonicalRuntimeAcquisitionError) -> Self {
+        match error {
+            CanonicalRuntimeAcquisitionError::Admission(original) => original.into(),
+            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(
+                original,
+            )) => Self::ExecutionDeferred(original),
+            CanonicalRuntimeAcquisitionError::Runtime(invalid) => {
+                Self::ExecutionStatePublication(invalid.to_string())
+            }
+        }
+    }
 }
 
 /// Immutable inputs for checking a carrier's runtime projections after execution.
@@ -423,10 +457,7 @@ impl State {
         configured: &iroha_config::parameters::actual::Nexus,
     ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
         let catalog = runtime_catalog_from_world(world)?;
-        let nexus = crate::pipeline_gas_policy::with_root_fees(
-            record.nexus_projection_with_catalog(configured, catalog.as_ref())?,
-            world.parameters(),
-        );
+        let nexus = record.nexus_projection_with_catalog(configured, catalog.as_ref())?;
         if let Some(catalog) = &catalog
             && catalog.baseline_manifests_hash
                 != Hash::prehashed(baseline.baseline_consensus_policy_digest())
@@ -436,16 +467,13 @@ impl State {
             ));
         }
         let manifests = if let Some(catalog) = &catalog {
-            Arc::new(
-                baseline
-                    .with_runtime_additions(
-                        &catalog.manifests,
-                        &nexus.lane_catalog,
-                        &nexus.dataspace_catalog,
-                        &nexus.governance,
-                    )
-                    .map_err(runtime_catalog_invalid)?,
-            )
+            Arc::new(runtime_catalog_manifest_registry(
+                baseline.as_ref(),
+                &catalog.manifests,
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+                &nexus.governance,
+            )?)
         } else {
             rebind_lane_manifests_for_lifecycle(
                 baseline.as_ref(),
@@ -462,9 +490,6 @@ impl State {
             &activation_heights,
             &lineage,
         )?;
-        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(
-            manifests.as_ref(),
-        ));
         Ok(CanonicalRuntimeProjection {
             nexus,
             incarnations,
@@ -472,14 +497,13 @@ impl State {
             lineage,
             samples: record.autoscale_sample_history.iter().copied().collect(),
             manifests,
-            privacy,
         })
     }
 
     pub(super) fn acquire_canonical_runtime_block(
         &self,
         replacement: bool,
-    ) -> Result<AcquiredRuntimeBlock<'_>, StateAdmissionError> {
+    ) -> Result<AcquiredRuntimeBlock<'_>, CanonicalRuntimeAcquisitionError> {
         loop {
             let generation = self.state_view_generation();
             if !generation.is_multiple_of(2) {
@@ -494,8 +518,14 @@ impl State {
             // All constructors use the same order. Every guard is dropped before
             // retry; a World-only generation check cannot bind the predecessor.
             // Hash construction detaches its private tree before waiting for World.
-            let block_hashes = self.block_hashes.try_next_block(replacement)?;
-            let membership = self.transactions.prepare_next_block(replacement)?;
+            let block_hashes = self
+                .block_hashes
+                .try_next_block(replacement)
+                .map_err(StateAdmissionError::from)?;
+            let membership = self
+                .transactions
+                .prepare_next_block(replacement)
+                .map_err(StateAdmissionError::from)?;
             // Projection payloads outlive joint physical retirement on refusal
             // and unwind. Every Cell slot remains in this caller while initializing.
             let projection_result;
@@ -506,7 +536,7 @@ impl State {
                 // The same original prepared generation returns to its sole
                 // preparation slot only after every physical sibling releases.
                 pending.retain_refused_membership();
-                return Err(error);
+                return Err(error.into());
             }
             projection_result = self.project_canonical_runtime_with_manifests(
                 pending.canonical_runtime().get(),
@@ -521,16 +551,38 @@ impl State {
                 std::thread::yield_now();
                 continue;
             }
-            projection = Some(
-                projection_result.expect("persisted canonical runtime projection must be valid"),
-            );
+            let prepared = match projection_result {
+                Ok(projection) => projection,
+                Err(error) => {
+                    drop(pending);
+                    return Err(CanonicalRuntimeAcquisitionError::Runtime(error));
+                }
+            };
+            // Read-only views need no privacy copy. Only the retained block owner
+            // admits this exact manifest projection, under its original World pool.
+            let privacy = match LanePrivacyRegistry::try_from_manifest_registry(
+                &prepared.manifests,
+                pending
+                    .world()
+                    .sccp_committee_generations
+                    .allocation_budget(),
+            ) {
+                Ok(privacy) => privacy,
+                Err(original) => {
+                    drop(pending);
+                    return Err(CanonicalRuntimeAcquisitionError::Runtime(
+                        LaneLifecycleError::ParameterDeferred(original),
+                    ));
+                }
+            };
+            projection = Some(prepared);
             pending.world_mut().dataspace_catalog = projection
                 .as_ref()
                 .expect("original prepared runtime projection")
                 .nexus
                 .dataspace_catalog
                 .clone();
-            return Ok(pending.finish(&mut projection));
+            return Ok(pending.finish(&mut projection, privacy));
         }
     }
 }

@@ -1,11 +1,10 @@
+use crate::EncodingLengthError;
 use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
     hedged_chacha20_rng_from_rng,
 };
 use core::{fmt, str::FromStr};
-use pqcrypto_mlkem as _;
-use pqcrypto_traits::Error as PqError;
-use rand_core::{RngCore, TryCryptoRng};
+use rand_core::{Rng, TryCryptoRng};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -321,7 +320,7 @@ impl MlKemSuite {
             .ok_or_else(|| {
                 MlKemError::bad_encoding(
                     self.public_key_kind(),
-                    PqError::BadLength {
+                    EncodingLengthError {
                         name: self.public_key_kind(),
                         actual: public_key.len(),
                         expected: self.public_key_len(),
@@ -340,7 +339,7 @@ impl MlKemSuite {
         if remainder_len != 0 {
             return Err(MlKemError::bad_encoding(
                 kind,
-                PqError::BadLength {
+                EncodingLengthError {
                     name: kind,
                     actual: bytes.len(),
                     expected: bytes
@@ -627,9 +626,9 @@ pub enum MlKemError {
     BadEncoding {
         /// Identifier of the field that failed to decode.
         kind: &'static str,
-        /// Original `PQClean` error.
+        /// Encoded field length diagnostic.
         #[source]
-        source: Box<PqError>,
+        source: Box<EncodingLengthError>,
     },
     /// Public key and secret key encodings were individually well-formed but not paired.
     #[error("{suite} public key does not match secret key")]
@@ -667,22 +666,20 @@ pub enum MlKemError {
         /// Identifier of the key material that was all zero.
         kind: &'static str,
     },
-    /// The ML-KEM backend returned a nonzero status for an operation.
-    #[error("{suite} backend {operation} failed with status {status}")]
+    /// The ML-KEM backend rejected an encoded input.
+    #[error("{suite} backend {operation} failed")]
     BackendFailure {
         /// ML-KEM parameter set being used.
         suite: MlKemSuite,
         /// Backend operation name.
         operation: &'static str,
-        /// Nonzero backend status code.
-        status: i32,
     },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
-    Rng(#[from] RngError),
+    RngExt(#[from] RngError),
 }
 impl MlKemError {
-    fn bad_encoding(kind: &'static str, source: PqError) -> Self {
+    fn bad_encoding(kind: &'static str, source: EncodingLengthError) -> Self {
         MlKemError::BadEncoding {
             kind,
             source: Box::new(source),
@@ -695,7 +692,7 @@ fn validate_len(kind: &'static str, actual: usize, expected: usize) -> Result<()
     } else {
         Err(MlKemError::bad_encoding(
             kind,
-            PqError::BadLength {
+            EncodingLengthError {
                 name: kind,
                 actual,
                 expected,
@@ -714,21 +711,6 @@ fn validate_mlkem_seed_material_not_all_zero(
         });
     }
     Ok(())
-}
-fn mlkem_backend_status(
-    suite: MlKemSuite,
-    operation: &'static str,
-    status: i32,
-) -> Result<(), MlKemError> {
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(MlKemError::BackendFailure {
-            suite,
-            operation,
-            status,
-        })
-    }
 }
 /// Generate an ML-KEM keypair for the given parameter set.
 ///
@@ -819,7 +801,7 @@ fn generate_mlkem_keypair_from_coins_into(
         secret.bytes.len(),
         suite.secret_key_len(),
     )?;
-    mlkem_ffi::keypair_derand(suite, public_key, secret.bytes, coins)?;
+    backend::keypair_derand(suite, public_key, secret.bytes, coins)?;
     suite.validate_key_pair(public_key, secret.bytes)?;
     secret.complete();
     Ok(())
@@ -828,17 +810,17 @@ fn generate_mlkem_keypair_from_coins_into(
 /// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or another ML-KEM error when
+/// Returns [`MlKemError::RngExt`] when the initial OS seed draw fails, or another ML-KEM error when
 /// generated material fails validation or the backend reports key-generation failure.
 pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair, MlKemError> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     generate_mlkem_keypair_from_rng(suite, &mut rng)
 }
 /// Generate an ML-KEM keypair using caller-supplied seed entropy plus live OS
 /// entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the required seed draw fails, or another ML-KEM error when
+/// Returns [`MlKemError::RngExt`] when the required seed draw fails, or another ML-KEM error when
 /// generated material fails validation or the backend reports key-generation failure.
 pub fn generate_mlkem_keypair_from_rng<R: TryCryptoRng + ?Sized>(
     suite: MlKemSuite,
@@ -951,7 +933,7 @@ fn encapsulate_mlkem_from_coins_into(
         ciphertext.len(),
         suite.ciphertext_len(),
     )?;
-    mlkem_ffi::encapsulate_derand(suite, ciphertext, shared.bytes, public_key, coins)?;
+    backend::encapsulate_derand(suite, ciphertext, shared.bytes, public_key, coins)?;
     suite.validate_key_material_not_all_zero(suite.shared_secret_kind(), shared.bytes)?;
     suite.validate_ciphertext(ciphertext)?;
     shared.complete();
@@ -961,20 +943,20 @@ fn encapsulate_mlkem_from_coins_into(
 /// Encapsulate using seed material plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or [`MlKemError::BadEncoding`]
+/// Returns [`MlKemError::RngExt`] when the initial OS seed draw fails, or [`MlKemError::BadEncoding`]
 /// or [`MlKemError::NonCanonicalEncoding`] when the public key encoding is invalid, or
 /// [`MlKemError::BackendFailure`] when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem_from_os(
     suite: MlKemSuite,
     public_key: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     encapsulate_mlkem_from_rng(suite, public_key, &mut rng)
 }
 /// Encapsulate using caller-supplied seed entropy plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the required seed draw fails, or [`MlKemError::BadEncoding`] or
+/// Returns [`MlKemError::RngExt`] when the required seed draw fails, or [`MlKemError::BadEncoding`] or
 /// [`MlKemError::NonCanonicalEncoding`] when the public key encoding is invalid, or
 /// [`MlKemError::BackendFailure`] when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem_from_rng<R: TryCryptoRng + ?Sized>(
@@ -1055,7 +1037,7 @@ pub fn decapsulate_mlkem_into(
         shared.bytes.len(),
         suite.shared_secret_len(),
     )?;
-    mlkem_ffi::decapsulate(suite, shared.bytes, ciphertext, secret_key)?;
+    backend::decapsulate(suite, shared.bytes, ciphertext, secret_key)?;
     suite.validate_key_material_not_all_zero(suite.shared_secret_kind(), shared.bytes)?;
     shared.complete();
     Ok(())
@@ -1109,151 +1091,13 @@ pub fn validate_mlkem_key_pair(
 ) -> Result<(), MlKemError> {
     suite.validate_key_pair(public_key, secret_key)
 }
-#[allow(unsafe_code)]
-mod mlkem_ffi {
-    use super::{MlKemError, MlKemSuite, mlkem_backend_status};
-    use core::ffi::c_int;
-    pub fn keypair_derand(
-        suite: MlKemSuite,
-        public_key: &mut [u8],
-        secret_key: &mut [u8],
-        coins: &[u8; 64],
-    ) -> Result<(), MlKemError> {
-        let status = unsafe {
-            match suite {
-                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(
-                    public_key.as_mut_ptr(),
-                    secret_key.as_mut_ptr(),
-                    coins.as_ptr(),
-                ),
-                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair_derand(
-                    public_key.as_mut_ptr(),
-                    secret_key.as_mut_ptr(),
-                    coins.as_ptr(),
-                ),
-                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair_derand(
-                    public_key.as_mut_ptr(),
-                    secret_key.as_mut_ptr(),
-                    coins.as_ptr(),
-                ),
-            }
-        };
-        mlkem_backend_status(suite, "derandomized keygen", status)
-    }
-    pub fn encapsulate_derand(
-        suite: MlKemSuite,
-        ciphertext: &mut [u8],
-        shared_secret: &mut [u8],
-        public_key: &[u8],
-        coins: &[u8; 32],
-    ) -> Result<(), MlKemError> {
-        let status = unsafe {
-            match suite {
-                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(
-                    ciphertext.as_mut_ptr(),
-                    shared_secret.as_mut_ptr(),
-                    public_key.as_ptr(),
-                    coins.as_ptr(),
-                ),
-                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc_derand(
-                    ciphertext.as_mut_ptr(),
-                    shared_secret.as_mut_ptr(),
-                    public_key.as_ptr(),
-                    coins.as_ptr(),
-                ),
-                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc_derand(
-                    ciphertext.as_mut_ptr(),
-                    shared_secret.as_mut_ptr(),
-                    public_key.as_ptr(),
-                    coins.as_ptr(),
-                ),
-            }
-        };
-        mlkem_backend_status(suite, "derandomized encapsulation", status)
-    }
-    pub fn decapsulate(
-        suite: MlKemSuite,
-        shared_secret: &mut [u8],
-        ciphertext: &[u8],
-        secret_key: &[u8],
-    ) -> Result<(), MlKemError> {
-        let status = unsafe {
-            match suite {
-                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(
-                    shared_secret.as_mut_ptr(),
-                    ciphertext.as_ptr(),
-                    secret_key.as_ptr(),
-                ),
-                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec(
-                    shared_secret.as_mut_ptr(),
-                    ciphertext.as_ptr(),
-                    secret_key.as_ptr(),
-                ),
-                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec(
-                    shared_secret.as_mut_ptr(),
-                    ciphertext.as_ptr(),
-                    secret_key.as_ptr(),
-                ),
-            }
-        };
-        mlkem_backend_status(suite, "decapsulation", status)
-    }
-    unsafe extern "C" {
-        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(
-            pk: *mut u8,
-            sk: *mut u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(
-            ct: *mut u8,
-            ss: *mut u8,
-            pk: *const u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(
-            ss: *mut u8,
-            ct: *const u8,
-            sk: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair_derand(
-            pk: *mut u8,
-            sk: *mut u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc_derand(
-            ct: *mut u8,
-            ss: *mut u8,
-            pk: *const u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec(
-            ss: *mut u8,
-            ct: *const u8,
-            sk: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair_derand(
-            pk: *mut u8,
-            sk: *mut u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc_derand(
-            ct: *mut u8,
-            ss: *mut u8,
-            pk: *const u8,
-            coins: *const u8,
-        ) -> c_int;
-        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec(
-            ss: *mut u8,
-            ct: *const u8,
-            sk: *const u8,
-        ) -> c_int;
-    }
-}
+#[path = "mlkem_backend.rs"]
+mod backend;
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     #[derive(Debug)]
     struct FailingPqSeedRng;
     #[derive(Debug)]
@@ -1264,7 +1108,7 @@ mod tests {
         }
     }
     impl std::error::Error for FailingPqSeedRngError {}
-    impl TryRngCore for FailingPqSeedRng {
+    impl TryRng for FailingPqSeedRng {
         type Error = FailingPqSeedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingPqSeedRngError)
@@ -1280,7 +1124,7 @@ mod tests {
     struct FixedPqSeedRng {
         seed: [u8; 32],
     }
-    impl TryRngCore for FixedPqSeedRng {
+    impl TryRng for FixedPqSeedRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
@@ -1350,7 +1194,7 @@ mod tests {
             MlKemError::BadEncoding { kind, source } => {
                 assert!(kind.contains("public key"));
                 match *source {
-                    PqError::BadLength {
+                    EncodingLengthError {
                         name,
                         actual,
                         expected,
@@ -1359,29 +1203,28 @@ mod tests {
                         assert_eq!(actual, 2);
                         assert_eq!(expected, 3);
                     }
-                    other => panic!("unexpected partial-group error: {other:?}"),
                 }
             }
             other => panic!("unexpected partial-group validation result: {other:?}"),
         }
     }
     #[test]
-    fn backend_status_reports_nonzero_failures() {
-        mlkem_backend_status(MlKemSuite::MlKem768, "test operation", 0)
-            .expect("zero status succeeds");
-        let err = mlkem_backend_status(MlKemSuite::MlKem768, "test operation", 7)
-            .expect_err("nonzero status fails");
-        match err {
-            MlKemError::BackendFailure {
-                suite,
-                operation,
-                status,
-            } => {
-                assert_eq!(suite, MlKemSuite::MlKem768);
-                assert_eq!(operation, "test operation");
-                assert_eq!(status, 7);
-            }
-            other => panic!("unexpected backend status error: {other:?}"),
+    fn backend_rejects_malformed_encapsulation_key_without_output() {
+        for suite in [
+            MlKemSuite::MlKem512,
+            MlKemSuite::MlKem768,
+            MlKemSuite::MlKem1024,
+        ] {
+            let mut ciphertext = vec![0x5a; suite.ciphertext_len()];
+            let mut shared = [0x5a; 32];
+            let err =
+                backend::encapsulate_derand(suite, &mut ciphertext, &mut shared, &[], &[7; 32])
+                    .expect_err("invalid key length must fail");
+            assert!(
+                matches!(err, MlKemError::BackendFailure { suite: actual, operation: "encapsulation key decoding" } if actual == suite)
+            );
+            assert!(ciphertext.iter().all(|byte| *byte == 0x5a));
+            assert_eq!(shared, [0x5a; 32]);
         }
     }
     #[test]
@@ -1477,7 +1320,7 @@ mod tests {
     fn from_rng_keypair_reports_seed_failure() {
         let mut rng = FailingPqSeedRng;
         match generate_mlkem_keypair_from_rng(MlKemSuite::MlKem512, &mut rng) {
-            Err(MlKemError::Rng(RngError)) => {}
+            Err(MlKemError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-KEM keypair seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-KEM RNG error, got {other:?}"),
         }
@@ -1486,7 +1329,7 @@ mod tests {
     fn from_rng_keypair_rejects_all_zero_seed_material() {
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
         match generate_mlkem_keypair_from_rng(MlKemSuite::MlKem512, &mut rng) {
-            Err(MlKemError::Rng(RngError)) => {}
+            Err(MlKemError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-KEM keypair all-zero seed material must be rejected"),
             Err(other) => panic!("expected ML-KEM inert seed RNG error, got {other:?}"),
         }
@@ -1502,7 +1345,7 @@ mod tests {
         .expect("seeded ML-KEM keypair generation should succeed");
         let mut rng = FailingPqSeedRng;
         match encapsulate_mlkem_from_rng(suite, keypair.public_key(), &mut rng) {
-            Err(MlKemError::Rng(RngError)) => {}
+            Err(MlKemError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-KEM encapsulation seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-KEM encapsulation RNG error, got {other:?}"),
         }
@@ -1518,7 +1361,7 @@ mod tests {
         .expect("seeded ML-KEM keypair generation should succeed");
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
         match encapsulate_mlkem_from_rng(suite, keypair.public_key(), &mut rng) {
-            Err(MlKemError::Rng(RngError)) => {}
+            Err(MlKemError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-KEM encapsulation all-zero seed material must be rejected"),
             Err(other) => panic!("expected ML-KEM inert encapsulation seed error, got {other:?}"),
         }
@@ -1718,7 +1561,7 @@ mod tests {
                 panic!("unexpected key-pair mismatch")
             }
             MlKemError::BackendFailure { .. } => panic!("unexpected backend failure"),
-            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+            MlKemError::RngExt(_) => panic!("unexpected RNG error"),
         }
     }
     #[test]
@@ -1782,7 +1625,7 @@ mod tests {
                 panic!("unexpected key-pair mismatch")
             }
             MlKemError::BackendFailure { .. } => panic!("unexpected backend failure"),
-            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+            MlKemError::RngExt(_) => panic!("unexpected RNG error"),
         }
         let short_ciphertext = &ciphertext.as_bytes()[..ciphertext.as_bytes().len() - 1];
         let err =
@@ -1796,7 +1639,7 @@ mod tests {
                 panic!("unexpected key-pair mismatch")
             }
             MlKemError::BackendFailure { .. } => panic!("unexpected backend failure"),
-            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+            MlKemError::RngExt(_) => panic!("unexpected RNG error"),
         }
     }
     #[test]
@@ -1892,7 +1735,7 @@ mod tests {
                 panic!("unexpected key-pair mismatch")
             }
             MlKemError::BackendFailure { .. } => panic!("unexpected backend failure"),
-            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+            MlKemError::RngExt(_) => panic!("unexpected RNG error"),
         }
     }
     #[test]
@@ -2395,3 +2238,6 @@ mod initialized_output_tests;
 
 #[cfg(test)]
 mod fips203_nistkat_tests;
+
+#[cfg(test)]
+mod fips203_acvp_tests;

@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 #[derive(Default, Debug)]
-pub(crate) struct Counts {
+pub struct Counts {
     pub(crate) frames: Vec<u64>,
     pub(crate) qcs: Vec<u64>,
 }
@@ -23,7 +23,7 @@ pub(super) fn qc(height: u64) {
         }
     });
 }
-pub(crate) fn measure<T>(run: impl FnOnce() -> T) -> (T, Counts) {
+pub fn measure<T>(run: impl FnOnce() -> T) -> (T, Counts) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {

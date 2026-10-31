@@ -1,7 +1,7 @@
 //! Native MCP endpoint support for Torii.
 //!
 //! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to existing Torii
-//! HTTP routes. OpenAPI supplies operation schemas, but an HTTP operation becomes an MCP tool only
+//! HTTP routes. `OpenAPI` supplies operation schemas, but an HTTP operation becomes an MCP tool only
 //! after its exact method/path pair opts into the catalog's MCP projection. Purpose-built `iroha.*`
 //! tools form a separate, explicit allowlist.
 //!
@@ -678,9 +678,7 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     let authority = if effect == ToolEffect::Operator {
         AuthorityClass::Operator
     } else {
-        route
-            .map(authority_for_route)
-            .unwrap_or(AuthorityClass::ListenerCredential)
+        route.map_or(AuthorityClass::ListenerCredential, authority_for_route)
     };
     // TODO: Move audited `AdditiveOnly` declarations into explicit curated capability entries as
     // each legacy `ToolEffect` descriptor is migrated. Unknown mutations stay destructive.
@@ -982,7 +980,7 @@ static VALIDATED_MCP_ROUTE_CATALOG: LazyLock<()> = LazyLock::new(|| {
         }
     }
 });
-/// Build the MCP tool registry from OpenAPI operations.
+/// Build the MCP tool registry from `OpenAPI` operations.
 pub fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec<ToolSpec> {
     LazyLock::force(&VALIDATED_MCP_ROUTE_CATALOG);
     let mut tools = Vec::new();
@@ -1082,7 +1080,6 @@ pub fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec
     tools.push(iroha_runtime_metrics_tool());
     tools.push(iroha_runtime_upgrades_list_tool());
     tools.push(iroha_runtime_upgrades_propose_tool());
-    tools.push(iroha_runtime_upgrades_activate_tool());
     tools.push(iroha_runtime_upgrades_cancel_tool());
     tools.push(iroha_bridge_finality_proof_tool());
     tools.push(iroha_bridge_finality_bundle_tool());
@@ -1456,11 +1453,10 @@ fn is_tool_allowed_by_policy(
     }
     let semantics = tool_semantics(tool);
     let profile_allowed = match (cfg.profile, semantics.operation(), semantics.authority()) {
-        (ToriiMcpProfile::Operator, _, _) => true,
-        (ToriiMcpProfile::Writer, _, AuthorityClass::Operator) => false,
-        (ToriiMcpProfile::Writer, _, _) => true,
-        (ToriiMcpProfile::ReadOnly, OperationKind::Observe | OperationKind::Construct, _) => true,
-        (ToriiMcpProfile::ReadOnly, OperationKind::Mutate, _) => false,
+        (ToriiMcpProfile::Writer, _, AuthorityClass::Operator)
+        | (ToriiMcpProfile::ReadOnly, OperationKind::Mutate, _) => false,
+        (ToriiMcpProfile::Operator | ToriiMcpProfile::Writer, _, _)
+        | (ToriiMcpProfile::ReadOnly, OperationKind::Observe | OperationKind::Construct, _) => true,
     };
     if !profile_allowed {
         return false;
@@ -1925,18 +1921,18 @@ pub async fn handle_validated_jsonrpc_request(
                 .and_then(|request| request.get("params"))
                 .and_then(Value::as_object)
                 .is_some_and(|params| params.len() == 1 && params.contains_key("_meta"));
-            if !only_meta {
+            if only_meta {
+                let visible_tools = visible_tools_for_app(&app);
+                JsonRpcRequestOutcome::Response(jsonrpc_result_response(
+                    id,
+                    modern_discovery_payload(&visible_tools),
+                ))
+            } else {
                 JsonRpcRequestOutcome::Response(jsonrpc_error_response(
                     id,
                     JSONRPC_INVALID_PARAMS,
                     "server/discover accepts no params beyond standard _meta",
                     None,
-                ))
-            } else {
-                let visible_tools = visible_tools_for_app(&app);
-                JsonRpcRequestOutcome::Response(jsonrpc_result_response(
-                    id,
-                    modern_discovery_payload(&visible_tools),
                 ))
             }
         }
@@ -2167,9 +2163,8 @@ pub fn handle_cancelled_notification(
 
 fn is_jsonrpc_id(id: &Value) -> bool {
     match id {
-        Value::String(_) => true,
         Value::Number(json::native::Number::U128(value)) => u64::try_from(*value).is_ok(),
-        Value::Number(_) => true,
+        Value::String(_) | Value::Number(_) => true,
         _ => false,
     }
 }
@@ -2413,23 +2408,23 @@ async fn handle_named_tool_call(
                 dispatch_iroha_transactions_inspect(&app, arguments)
             }
         }
-        .map_or_else(mcp_tool_error, mcp_tool_success);
+        .map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
     let purpose_built_dispatch = match validate_purpose_built_dispatch_backing(tool_spec) {
         Ok(purpose_built_dispatch) => purpose_built_dispatch,
         Err(error) => {
-            return jsonrpc_result_response(id, mcp_tool_error(error));
+            return jsonrpc_result_response(id, mcp_tool_error(&(error)));
         }
     };
     if !purpose_built_dispatch {
         let tool_result = dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments)
             .await
-            .map_or_else(mcp_tool_error, mcp_tool_success);
+            .map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
     let result = select_purpose_built_tool_dispatch(&app, inbound_headers, name, arguments).await;
-    let tool_result = result.map_or_else(mcp_tool_error, mcp_tool_success);
+    let tool_result = result.map_or_else(|value| mcp_tool_error(&value), mcp_tool_success);
     jsonrpc_result_response(id, tool_result)
 }
 /// Select one heap-owned handler before polling its forwarded HTTP route.
@@ -2566,11 +2561,6 @@ fn select_purpose_built_tool_dispatch<'a>(
             arguments,
         )),
         "iroha.runtime.upgrades.propose" => Box::pin(dispatch_iroha_runtime_upgrades_propose(
-            app,
-            inbound_headers,
-            arguments,
-        )),
-        "iroha.runtime.upgrades.activate" => Box::pin(dispatch_iroha_runtime_upgrades_activate(
             app,
             inbound_headers,
             arguments,
@@ -2778,6 +2768,51 @@ fn select_purpose_built_tool_dispatch<'a>(
             inbound_headers,
             arguments,
         )),
+        "iroha.explorer.accounts.query" => Box::pin(dispatch_iroha_explorer_accounts_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.domains.query" => Box::pin(dispatch_iroha_explorer_domains_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.asset_definitions.query" => Box::pin(
+            dispatch_iroha_explorer_asset_definitions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.assets.query" => Box::pin(dispatch_iroha_explorer_assets_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.nfts.query" => Box::pin(dispatch_iroha_explorer_nfts_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.rwas.query" => Box::pin(dispatch_iroha_explorer_rwas_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.blocks.query" => Box::pin(dispatch_iroha_explorer_blocks_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.transactions.query" => Box::pin(
+            dispatch_iroha_explorer_transactions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.transactions.latest.query" => Box::pin(
+            dispatch_iroha_explorer_transactions_latest_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.instructions.query" => Box::pin(
+            dispatch_iroha_explorer_instructions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.instructions.latest.query" => Box::pin(
+            dispatch_iroha_explorer_instructions_latest_query(app, inbound_headers, arguments),
+        ),
         "iroha.transactions.query" => Box::pin(dispatch_iroha_transactions_query(
             app,
             inbound_headers,
@@ -3521,8 +3556,7 @@ fn mcp_tool_success(structured: Value) -> Value {
     let mut structured = structured;
     if is_http_error && let Some(map) = structured.as_object_mut() {
         let error_code = status
-            .map(http_status_error_code)
-            .unwrap_or("http_error")
+            .map_or("http_error", http_status_error_code)
             .to_owned();
         map.entry("error_code".into())
             .or_insert(Value::String(error_code));
@@ -3543,9 +3577,9 @@ fn mcp_tool_success(structured: Value) -> Value {
         "structuredContent": structured
     })
 }
-fn mcp_tool_error(message: String) -> Value {
-    let error_message = message.clone();
-    let error_code = match message.as_str() {
+fn mcp_tool_error(message: &str) -> Value {
+    let error_message = message.to_owned();
+    let error_code = match message {
         TARGET_RESPONSE_TOO_LARGE_MESSAGE => MCP_RESPONSE_TOO_LARGE_CODE,
         TARGET_RESPONSE_READ_FAILED_MESSAGE => MCP_RESPONSE_READ_FAILED_CODE,
         TARGET_RESPONSE_TIMEOUT_MESSAGE => MCP_RESPONSE_TIMEOUT_CODE,
@@ -3553,7 +3587,7 @@ fn mcp_tool_error(message: String) -> Value {
     };
     let envelope = error_envelope_value(
         error_code,
-        error_message.as_str(),
+        &error_message,
         Some(norito::json!({
             "layer": "mcp"
         })),
@@ -3584,10 +3618,9 @@ fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
                 .get("required")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let schema = param
-                .get("schema")
-                .map(|schema| inline_openapi_schema(spec, schema, 0))
-                .unwrap_or_else(string_schema);
+            let schema = param.get("schema").map_or_else(string_schema, |schema| {
+                inline_openapi_schema(spec, schema, 0)
+            });
             Some(ParameterInfo {
                 name: name.to_owned(),
                 location: location.to_owned(),
@@ -3647,13 +3680,7 @@ fn build_input_schema(
         query_schema.insert("additionalProperties".into(), Value::Bool(false));
         properties.insert("query".into(), Value::Object(query_schema));
     }
-    if !header_props.is_empty() {
-        let mut headers_schema = Map::new();
-        headers_schema.insert("type".into(), Value::String("object".to_owned()));
-        headers_schema.insert("properties".into(), Value::Object(header_props));
-        headers_schema.insert("additionalProperties".into(), Value::Bool(false));
-        properties.insert("headers".into(), Value::Object(headers_schema));
-    } else {
+    if header_props.is_empty() {
         properties.insert(
             "headers".into(),
             norito::json!({
@@ -3661,6 +3688,12 @@ fn build_input_schema(
                 "additionalProperties": false
             }),
         );
+    } else {
+        let mut headers_schema = Map::new();
+        headers_schema.insert("type".into(), Value::String("object".to_owned()));
+        headers_schema.insert("properties".into(), Value::Object(header_props));
+        headers_schema.insert("additionalProperties".into(), Value::Bool(false));
+        properties.insert("headers".into(), Value::Object(headers_schema));
     }
     if let Some(request_body) = request_body {
         let request_body_descriptor = deref_openapi_value(spec, request_body);
@@ -5164,9 +5197,6 @@ declare_mcp_dispatch_wrappers! {
     }
     list_query {
         dispatch_iroha_contracts_state_get => "/v1/contracts/state";
-        dispatch_iroha_assets_list => "/v1/explorer/assets";
-        dispatch_iroha_nfts_list => "/v1/explorer/nfts";
-        dispatch_iroha_rwas_list => "/v1/explorer/rwas";
     }
     collection_get {
         dispatch_iroha_subscriptions_list => "/v1/subscriptions";
@@ -5176,6 +5206,12 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_asset_definitions => "/v1/assets/definitions";
         dispatch_iroha_nfts_chain_list => "/v1/nfts";
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
+        dispatch_iroha_assets_list => "/v1/explorer/assets";
+        dispatch_iroha_nfts_list => "/v1/explorer/nfts";
+        dispatch_iroha_rwas_list => "/v1/explorer/rwas";
+        dispatch_iroha_transactions_list => "/v1/explorer/transactions";
+        dispatch_iroha_instructions_list => "/v1/explorer/instructions";
+        dispatch_iroha_blocks_list => "/v1/explorer/blocks";
     }
     collection_post {
         dispatch_iroha_subscriptions_plans_query => "/v1/subscriptions/plans/query";
@@ -5188,6 +5224,17 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_transactions_query => "/v1/transactions/query";
         dispatch_iroha_contracts_activity_query => "/v1/contracts/activity/query";
         dispatch_iroha_contracts_events_query => "/v1/contracts/events/query";
+        dispatch_iroha_explorer_accounts_query => "/v1/explorer/accounts/query";
+        dispatch_iroha_explorer_domains_query => "/v1/explorer/domains/query";
+        dispatch_iroha_explorer_asset_definitions_query => "/v1/explorer/asset-definitions/query";
+        dispatch_iroha_explorer_assets_query => "/v1/explorer/assets/query";
+        dispatch_iroha_explorer_nfts_query => "/v1/explorer/nfts/query";
+        dispatch_iroha_explorer_rwas_query => "/v1/explorer/rwas/query";
+        dispatch_iroha_explorer_blocks_query => "/v1/explorer/blocks/query";
+        dispatch_iroha_explorer_transactions_query => "/v1/explorer/transactions/query";
+        dispatch_iroha_explorer_transactions_latest_query => "/v1/explorer/transactions/latest/query";
+        dispatch_iroha_explorer_instructions_query => "/v1/explorer/instructions/query";
+        dispatch_iroha_explorer_instructions_latest_query => "/v1/explorer/instructions/latest/query";
     }
     path_get {
         dispatch_iroha_bridge_finality_proof => (
@@ -5352,97 +5399,6 @@ fn single_path_route(template: &str, key: &str, value: String) -> Result<String,
     let mut path_args = Map::new();
     path_args.insert(key.into(), Value::String(value));
     fill_path_template(template, Some(&Value::Object(path_args)))
-}
-async fn dispatch_explorer_history_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-    route: &str,
-    query_fields: &[&str],
-    context: &str,
-) -> Result<Value, String> {
-    let route = append_explorer_history_query_arguments(
-        route.to_owned(),
-        arguments,
-        query_fields,
-        context,
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/transactions",
-        &[
-            "cursor",
-            "limit",
-            "authority",
-            "block",
-            "status",
-            "asset_id",
-        ],
-        "Explorer transaction history request",
-    )
-    .await
-}
-async fn dispatch_iroha_instructions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/instructions",
-        &[
-            "cursor",
-            "limit",
-            "authority",
-            "account",
-            "transaction_hash",
-            "transaction_status",
-            "block",
-            "kind",
-            "asset_id",
-        ],
-        "Explorer instruction history request",
-    )
-    .await
-}
-async fn dispatch_iroha_blocks_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/blocks",
-        &["cursor", "limit"],
-        "Explorer block history request",
-    )
-    .await
 }
 /// Render an exact MCP account input into the strict ASCII auth-header form.
 fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, String> {
@@ -5818,19 +5774,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
             .get("accept")
             .and_then(Value::as_str)
             .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_runtime_upgrades_activate(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_runtime_upgrades_action(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/runtime/upgrades/activate/{id}",
     )
     .await
 }
@@ -6993,9 +6936,10 @@ async fn wait_for_transaction_applied(
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(poll_interval.min(remaining)).await;
     }
-    let last_kind = last_kind
-        .map(|kind| format!(" (last status kind: `{kind}`)"))
-        .unwrap_or_else(|| " (last status kind: `not_observed`)".to_owned());
+    let last_kind = last_kind.map_or_else(
+        || " (last status kind: `not_observed`)".to_owned(),
+        |kind| format!(" (last status kind: `{kind}`)"),
+    );
     Err(format!(
         "timed out waiting for state-resolved Applied after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
@@ -7434,13 +7378,13 @@ fn require_governance_openapi_json_body(arguments: &Map) -> Result<&Value, Strin
                 .to_owned(),
         );
     }
-    if let Some(content_type) = arguments.get("content_type") {
-        if content_type.as_str() != Some("application/json") {
-            return Err(
-                "governance MCP identifier preflight requires `content_type` to be `application/json`"
-                    .to_owned(),
-            );
-        }
+    if let Some(content_type) = arguments.get("content_type")
+        && content_type.as_str() != Some("application/json")
+    {
+        return Err(
+            "governance MCP identifier preflight requires `content_type` to be `application/json`"
+                .to_owned(),
+        );
     }
     arguments
         .get("body")
@@ -8281,7 +8225,7 @@ async fn response_to_value(
     structured.insert("headers".into(), headers_value);
     structured.insert(
         "content_type".into(),
-        content_type.map(Value::String).unwrap_or(Value::Null),
+        content_type.map_or(Value::Null, Value::String),
     );
     structured.insert("body".into(), body_value);
     Ok(Value::Object(structured))
@@ -8427,11 +8371,11 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     match url.scheme() {
         "http" => {
             url.set_scheme("ws")
-                .map_err(|_| "failed to convert http->ws".to_owned())?;
+                .map_err(|()| "failed to convert http->ws".to_owned())?;
         }
         "https" => {
             url.set_scheme("wss")
-                .map_err(|_| "failed to convert https->wss".to_owned())?;
+                .map_err(|()| "failed to convert https->wss".to_owned())?;
         }
         "ws" | "wss" => {}
         other => {
@@ -8443,7 +8387,7 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 79;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 78;
 // Includes the fully typed account-onboarding receipt schemas in the embedded catalog.
 const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
@@ -8919,7 +8863,6 @@ manual_tool! {
     iroha_connect_session_delete_tool => "iroha.connect.session.delete";
     iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
     iroha_da_manifests_get_tool => "iroha.da.manifests.get";
-    iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";
     iroha_runtime_upgrades_cancel_tool => "iroha.runtime.upgrades.cancel";
     iroha_bridge_finality_proof_tool => "iroha.bridge.finality.proof";
     iroha_bridge_finality_bundle_tool => "iroha.bridge.finality.bundle";
@@ -9417,16 +9360,16 @@ fn iroha_runtime_metrics_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.runtime.upgrades.list",
-        "List runtime upgrades (`/v1/runtime/upgrades`).",
+        "List the committed runtime selection and every recorded change set (`/v1/runtime/upgrades`).",
         "/v1/runtime/upgrades",
     )
 }
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.runtime.upgrades.propose",
-        "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); the request payload is the required `body` object.",
+        "Draft the Parliament proposal that schedules a runtime change set (`/v1/runtime/upgrades/propose`); the required `body` object is `{change_set, provenance}`: the change set and the trusted release signers' endorsements the committed provenance policy requires.",
         "/v1/runtime/upgrades/propose",
-        "Raw runtime-upgrade proposal payload.",
+        "Runtime change set to schedule.",
     )
 }
 fn iroha_proofs_query_tool() -> ToolSpec {
@@ -9836,14 +9779,15 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
                         definition.path
                     )
                 });
-            let body_schema = build_request_body_schema(spec, request_body)
-                .map(|schema| inline_openapi_schema(spec, &schema, 0))
-                .unwrap_or_else(|| {
+            let body_schema = build_request_body_schema(spec, request_body).map_or_else(
+                || {
                     panic!(
                         "Musubi V1 OpenAPI operation {} has no JSON request schema",
                         definition.path
                     )
-                });
+                },
+                |schema| inline_openapi_schema(spec, &schema, 0),
+            );
             ToolSpec::route(
                 definition.name.to_owned(),
                 definition.description.to_owned(),
@@ -10178,7 +10122,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 "timeout_ms": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 600000,
+                    "maximum": 600_000,
                     "description": "Polling timeout in milliseconds (default 30000, max 600000)."
                 },
                 "poll_interval_ms": {

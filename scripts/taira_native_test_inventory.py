@@ -18,7 +18,7 @@ NATIVE_CORE_TEST_OWNERS = (
 
     ('native retained parent-service signer output and original retry custody', 'sumeragi/certified_chain/state_certificate/parent_service_signers.rs', 'sumeragi/certified_chain/state_certificate/parent_service_signers/tests.rs', 'tests', 'sumeragi::certified_chain::state_certificate::parent_service_signers::tests', ('original_signer_late_capacity_retains_prefix_waiter_and_same_pool_retry', 'original_signer_physical_array_root_and_later_key_refusals_keep_exact_charges', 'original_signer_lend_refuses_same_wire_source_pool_cut_and_selection_substitution')),
     ('native retained parent-service Worker source and semantic QC custody', 'sumeragi/executor.rs', 'sumeragi/executor_parent_service_custody_tests.rs', 'parent_service_custody_tests', 'sumeragi::executor::parent_service_custody_tests', ('parent_service_validation_retains_original_receipts_without_waking_its_own_retry', 'parent_service_assembly_retains_original_parent_and_queue_before_capacity_retry', 'parent_service_worker_cancellation_retires_the_same_original_partial_graph', 'parent_service_preparation_refuses_foreign_original_owner_without_replacing_receipts', 'parent_service_errors_keep_original_waiter_and_permanent_source_classification', 'parent_service_worker_replacement_retires_only_the_superseded_original_attempt', 'parent_service_busy_view_keeps_completed_payload_and_original_preparation', 'parent_service_completed_payload_rechecks_actual_predecessor_slot_before_lending', 'parent_service_missing_predecessor_retries_original_tip_and_refuses_nontip_preparation', 'parent_service_validation_busy_view_retains_original_receipts_before_parent_lookup', 'parent_service_semantic_qc_worker_keeps_partial_owner_and_exact_refusal_until_retry', 'parent_service_signer_worker_keeps_paid_prefix_before_overlay_and_external_release', 'parent_service_producer_copy_refusal_precedes_queue_lease_and_retries_same_input')),
-    ('native retained parent-service semantic QC source and typed refusal', 'sumeragi/certified_chain/state_certificate/parent_service_qc.rs', 'sumeragi/certified_chain/state_certificate/parent_service_qc/tests.rs', 'tests', 'sumeragi::certified_chain::state_certificate::parent_service_qc::tests', ('semantic_qc_requires_original_admitted_source_and_rejects_same_wire_substitution', 'semantic_qc_error_transport_retains_exact_original_capacity_and_allocator_fields')),
+    ('native retained parent-service semantic QC source and typed refusal', 'sumeragi/certified_chain/state_certificate/parent_service_qc.rs', 'sumeragi/certified_chain/state_certificate/parent_service_qc/tests.rs', 'tests', 'sumeragi::certified_chain::state_certificate::parent_service_qc::tests', ('semantic_qc_requires_original_admitted_source_and_rejects_same_wire_substitution', 'semantic_qc_error_transport_retains_exact_original_capacity_and_allocator_fields', 'semantic_qc_projected_lend_preserves_original_source_pool_and_proposal_checks', 'semantic_qc_projection_refusal_retains_first_input_before_any_rebinding')),
     ('native AMX typed multisig semantic rejection', 'sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/multisig_semantic.rs', 'multisig_semantic', 'sumeragi::amx::native::tests::multisig_semantic', ('native_multisig_semantic_cause_is_terminal_and_preserves_exact_diagnostic',)),
     ('native original AMX Worker partial and completed retry custody', 'sumeragi/executor.rs', 'sumeragi/executor_amx_retry_tests.rs', 'amx_retry_tests', 'sumeragi::executor::amx_retry_tests', (
         'original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry',
@@ -49,6 +49,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'feedback_refusal_preserves_both_original_relay_rows_and_retry',
         'allowlist_refusal_prevents_domain_metadata_publication_and_retries_original_json',
         'checked_record_writer_refusal_keeps_original_create_unpublished_and_retries',
+        'relay_component_fixture_owns_crypto_without_committed_genesis',
     )),
     ('native Kaigi relay World restore deferral', 'state/deserialize_world.rs', 'state/deserialize_world_kaigi_relay_deferral_tests.rs', 'kaigi_relay_typed_deferral_tests', 'state::deserialize::kaigi_relay_typed_deferral_tests', (
         'restored_registration_refusal_retains_original_snapshot_and_retry',
@@ -341,6 +342,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'binding_refuses_unpublished_execution_and_captures_the_published_tip',
     )),
     ('native original execution and undo', 'state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests', (
+        'authenticated_root_scope_requires_native_execution_and_survives_publication',
         'original_genesis_and_worker_publish_exact_tip_with_undo',
         'rejected_original_preparation_and_discard_preserve_committed_tip',
         'replacement_reads_exact_tip_undo_and_abandonment_restores_original_cut',
@@ -350,6 +352,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'funded_tip_admission_is_atomic_and_original_pool_bound',
         'snapshot_json_preserves_genesis_undo_absence_distinction',
         'restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix',
+        'restore_requires_the_certified_successor_of_the_snapshot_tip',
+        'restore_passes_each_certified_height_once_to_its_observer',
         'restore_preserves_original_pool_refusal_release_and_same_source_retry',
         'restore_preserves_cumulative_prefix_decode_refusal_and_same_source_retry',
         'restore_keeps_corrupt_native_history_a_completed_schema_rejection',
@@ -453,6 +457,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'expansion_refuses_equivalent_foreign_state_and_changed_publication',
         'merged_rejection_event_retains_the_original_native_proposal_header',
         'leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work',
+        'admissibility_retains_original_committed_policy_and_limits_across_publication',
+        'admissibility_defers_missing_original_policy_after_later_policy_publication',
     )),
     ('native lane signer custody', 'sumeragi/lanes/custody.rs', 'sumeragi/lanes/custody/tests.rs', 'tests', 'sumeragi::lanes::custody::tests', (
         'lane_obligation_never_moves_to_a_later_registration_sharing_key_and_account',

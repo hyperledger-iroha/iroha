@@ -174,19 +174,54 @@ fn native_snapshot_reader_busy_retries_the_complete_original_certified_cut() {
     assert_eq!(refused_callbacks, 1);
     assert_eq!(read_budget.reserved_bytes(), retained_bytes);
 
-    // Equal capacity cannot replace the State's original pool or reach its consumer.
-    let foreign = AllocationBudget::new(read_budget.limit_bytes());
+    // Request capacity funds the snapshot, while the State retains its original
+    // storage pool. Equal capacity still cannot replace that pool at the World boundary.
+    let request = AllocationBudget::new(read_budget.limit_bytes());
+    assert!(!request.same_pool(&read_budget));
+    let mut request_callbacks = 0;
+    state
+        .with_native_stream_token_custody_snapshot_v1(
+            &tip,
+            provider,
+            &request,
+            |snapshot, owner, current| {
+                snapshot
+                    .authenticate(&verified)
+                    .map_err(|error| error.to_string())?
+                    .verify_table_value("world.provider_owners", &provider, owner)
+                    .map_err(|error| error.to_string())?;
+                assert!(current.is_none());
+                assert!(request.reserved_bytes() > 0);
+                assert!(read_budget.reserved_bytes() > retained_bytes);
+                request_callbacks += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(request_callbacks, 1);
+    assert_eq!(request.reserved_bytes(), 0);
+    assert_eq!(read_budget.reserved_bytes(), retained_bytes);
+    assert!(matches!(
+        state.world.try_block(&request),
+        Err(mv::storage::AdmittedStorageError::ScopeIdentity)
+    ));
+    assert_eq!(request.reserved_bytes(), 0);
+
+    // Original State credits cannot fund an empty caller request or reach its consumer.
+    let empty_request = AllocationBudget::new(0);
     let refused: std::result::Result<(), WorldStateSnapshotError> = state
-        .with_native_stream_token_custody_snapshot_v1(&tip, provider, &foreign, |_, _, _| {
-            panic!("foreign allocation identity must not reach the custody consumer")
+        .with_native_stream_token_custody_snapshot_v1(&tip, provider, &empty_request, |_, _, _| {
+            panic!("empty request capacity must not reach the custody consumer")
         });
     assert!(matches!(
         refused,
-        Err(WorldStateSnapshotError::Acquisition(
-            mv::storage::AdmittedStorageError::ScopeIdentity
+        Err(WorldStateSnapshotError::Buffer(
+            iroha_allocation::ChargedBufferError::Admission(
+                iroha_allocation::AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. }
+            )
         ))
     ));
-    assert_eq!(foreign.reserved_bytes(), 0);
+    assert_eq!(empty_request.reserved_bytes(), 0);
     assert_eq!(read_budget.reserved_bytes(), retained_bytes);
 
     let refused: std::result::Result<(), WorldStateSnapshotError> = state

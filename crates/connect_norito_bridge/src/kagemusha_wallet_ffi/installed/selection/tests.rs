@@ -166,10 +166,8 @@ fn g1_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes((&[seed; 32]).into()).unwrap()
 }
 fn g1_public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .unwrap()
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .unwrap()
 }
 fn g1_sign(key: &SigningKey, bytes: &[u8]) -> KagemushaWalletSignerOutputV1<'static> {
     let signature: G1Signature = key.sign(bytes);
@@ -1110,7 +1108,7 @@ fn session_originals_for(
     proof_iat: u64,
 ) -> [Vec<u8>; 3] {
     let proof_key = g1_key(proof_seed);
-    let point = proof_key.verifying_key().to_encoded_point(false);
+    let point = proof_key.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
     let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
     let jwk = format!("{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}");

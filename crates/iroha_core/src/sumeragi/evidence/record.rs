@@ -43,7 +43,7 @@ impl EvidenceRecordBodyFields {
 #[path = "sccp_record.rs"]
 mod sccp_record;
 use sccp_record::SccpRecordBody;
-pub(crate) use sccp_record::{PreparedSccpRecord, prepare_claim as prepare_sccp_claim};
+pub use sccp_record::{PreparedSccpRecord, prepare_claim as prepare_sccp_claim};
 
 #[derive(Clone)]
 enum RecordOwner {
@@ -594,7 +594,8 @@ fn parse_proof(
                 if content.is_some() {
                     return Err(duplicate("value"));
                 }
-                content = Some(object.parse_value_with_parser(|parser| parser.raw_value_slice())?);
+                content =
+                    Some(object.parse_value_with_parser(norito::json::Parser::raw_value_slice)?);
             }
             _ => return Err(invalid("unknown evidence JSON field")),
         }
@@ -706,7 +707,7 @@ fn parse_native_record(
 }
 
 /// Read the closed discriminator first; a branch's decoder is never a fallback.
-pub(crate) fn parse_record(
+pub fn parse_record(
     parser: &mut Parser<'_>,
     budget: &AllocationBudget,
 ) -> Result<RetainedEvidenceRecord, EvidenceRecordRestoreError> {
@@ -793,7 +794,7 @@ fn parse_undo(
 /// Restore both explicit graph generations before installing either original map.
 /// TODO(S8): activate admitted input/table custody with the coordinated field/caller
 /// cutover; canonical JSON comparison now streams without scratch allocation.
-pub(crate) fn restore_storage(
+pub fn restore_storage(
     raw: &str,
     budget: &AllocationBudget,
 ) -> Result<
@@ -841,6 +842,6 @@ mod tests;
 
 /// Structurally valid SCCP DATA for ownership tests; its all-zero signature is invalid.
 #[cfg(test)]
-pub(crate) fn sccp_storage_claim_for_testing() -> EvidenceRecord {
+pub fn sccp_storage_claim_for_testing() -> EvidenceRecord {
     sccp_record::fixture_record()
 }

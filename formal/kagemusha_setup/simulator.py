@@ -79,8 +79,9 @@ def simulate(case, instances, coins, *, allow_large=False):
     The caller supplies one explicit bit source; no default seed or per-call
     reseeding exists. The public setup supplies every fixed/sigma polynomial.
     No witness is supplied.
-    Point identity, zero IPA challenge and prefix denominator/xi exceptions stop
-    this attempt; no favorable whole-proof retry is performed.
+    Absorbed point identity and entropy exhaustion stop this attempt. Named role
+    maps are total; the unabsorbed full-group generator may be identity. No
+    favorable whole-proof retry is performed.
     """
     checked_sources()
     require(type(allow_large) is bool, 'explicit large flag')
@@ -108,11 +109,14 @@ def simulate(case, instances, coins, *, allow_large=False):
             super().__init__(curve, 2, b'')
             self.output = bytearray()
 
-        def write_point(self, point, absorb=True):
+        def write_point(self, point):
             require(point[2] != 0, 'native point identity stop')
             self.output.extend(curve.encode(point))
-            if absorb:
-                self.common_point(point)
+            self.common_point(point)
+
+        def write_generator(self, point):
+            """Only the final unabsorbed G uses the full-group encoding."""
+            self.output.extend(curve.encode(point))
 
         def write_scalar(self, value):
             require(type(value) is int and 0 <= value < m, 'write canonical scalar')
@@ -170,7 +174,8 @@ def simulate(case, instances, coins, *, allow_large=False):
     h_points = [fresh('h_piece/%d' % i) for i in range(d['quotient_pieces'])]
     for point in h_points:
         t.write_point(point.point)
-    x = t.squeeze(); xn = pow(x, d.n, m)
+    x = case.transcript.evaluation_challenge(t.squeeze(), m)
+    xn = pow(x, d.n, m)
     require(x != 0 and xn != 1, 'prefix evaluation challenge stop')
     fixed, sigma = verifier.key_points(d, case.key)
     commitments['h', 0] = total('h_combined', [(pow(xn, i, m), p) for i, p in enumerate(h_points)])
@@ -207,7 +212,7 @@ def simulate(case, instances, coins, *, allow_large=False):
     individual = {(slot, rotations.index(rot)): ev for (slot, rot), ev in zip(queries, evaluations)}
     x1, x2 = t.squeeze(), t.squeeze()
     qprime = fresh('qprime'); t.write_point(qprime.point)
-    x3 = t.squeeze()
+    x3 = case.transcript.multiopening_challenge(t.squeeze(), m)
     require(x3 not in points and pow(x3, d.n, m) != 1, 'prefix opening challenge stop')
     qt, public_only_sets = [], []
     for i in range(len(sets)):
@@ -254,7 +259,7 @@ def simulate(case, instances, coins, *, allow_large=False):
         value = (value+weight*qt[group]) % m
     opening = total('opening', terms)
     cs = fresh('S'); t.write_point(cs.point)
-    xi, zeta = t.squeeze(), t.squeeze()
+    xi, zeta = case.transcript.nonzero_challenge(t.squeeze(), m), t.squeeze()
     require(xi != 0, 'prefix masking challenge stop')
     g0 = retain('ipa_g0', params.g[0], case.logs['g'][0])
     ipa_terms = [(1, opening), (-value, g0), (xi, cs)]
@@ -263,7 +268,7 @@ def simulate(case, instances, coins, *, allow_large=False):
         # Both points are sampled before the ordinary fixed-Poseidon challenge.
         left, right = fresh('L/%d' % j), fresh('R/%d' % j)
         t.write_point(left.point); t.write_point(right.point)
-        challenge = t.squeeze()
+        challenge = case.transcript.nonzero_challenge(t.squeeze(), m)
         require(challenge != 0, 'native zero IPA challenge stop')
         rounds.append(challenge)
         ipa_terms += [(pow(challenge, -1, m), left), (challenge, right)]
@@ -273,7 +278,6 @@ def simulate(case, instances, coins, *, allow_large=False):
         weights = [v for weight in weights for v in (weight, weight*challenge % m)]
     generator = retain('folded_G', curve.sum(zip(weights, params.g)),
                        sum(weight*log for weight, log in zip(weights, case.logs['g'])))
-    require(generator.point[2] != 0, 'native folded generator identity stop')
     b, power = 1, x3
     for challenge in reversed(rounds):
         b = b*(1+challenge*power) % m
@@ -282,7 +286,7 @@ def simulate(case, instances, coins, *, allow_large=False):
     c = 0 if collapsed else rand()
     f = ((lhs.scalar - c*generator.scalar - c*b*zeta*case.logs['u']) *
          pow(case.logs['w'], -1, m)) % m
-    t.write_scalar(c); t.write_scalar(f); t.write_point(generator.point, absorb=False)
+    t.write_scalar(c); t.write_scalar(f); t.write_generator(generator.point)
     proof = bytes(t.output)
     args = dict(descriptor=d.raw, version=2, key=case.key, parameter_bytes=case.raw_params,
                 instances=instances, proof=proof)
@@ -297,7 +301,7 @@ def simulate(case, instances, coins, *, allow_large=False):
             'exact supplied transcript replay')
     require(curve.equal(result.generator, generator.point), 'complete generator replay')
     adapter = getattr(t, 'test_only_challenge_adapter', None)
-    record = {'scope': 'Historical public relation under chosen outer setup only; no C12/current-parameter claim',
+    record = {'scope': 'Selected total-role/norm equations under chosen outer setup; no C12/current-parameter claim',
               'proof_bytes': len(proof), 'simulated_draw_budget': budget,
               'contradictory': getattr(case, 'contradictory', False),
               'source_descriptor_sha256': case.source_descriptor_sha256,
@@ -306,7 +310,8 @@ def simulate(case, instances, coins, *, allow_large=False):
               'public_original_sha256': setup.original_sha256,
               'proof_sha256': hashlib.sha256(proof).hexdigest(), 'fixed_poseidon': adapter is None,
               'oracle_programs': 0, 'rounds': rounds, 'challenges': list(t.challenges),
-              'opening_point': x3, 'rank_collapsed': collapsed, 'c': c, 'f': f,
+              'evaluation_point': x, 'opening_point': x3, 'masking_challenge': xi,
+              'rank_collapsed': collapsed, 'c': c, 'f': f,
               'opening_sets': [list(v) for v in sets], 'derived_logs': ledger,
               'descriptor_sha256': hashlib.sha256(d.raw).hexdigest(),
               'parameter_sha256': hashlib.sha256(case.raw_params).hexdigest()}

@@ -276,22 +276,22 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
         assert!(state.world.da_pin_intents_by_ticket.view().is_empty());
         let next = parent.apply_block(prepared.world()).unwrap();
         assert_eq!(
-            next.root(),
+            next.baseline_root(),
             WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
-                .root()
+                .baseline_root()
         );
         let diff = prepared.world().tiered_snapshot_diff();
         assert!(diff.entries().iter().any(|key| matches!(key, TieredKeyHandle::SmartContractState(path) if path.as_ref() == "da/prepared-quota")));
         let payload = prepared.world().tiered_snapshot_payload();
         assert!(TieredSnapshotDiff::from(&payload).entries().iter().any(|key| matches!(key, TieredKeyHandle::SmartContractState(path) if path.as_ref() == "da/prepared-quota")));
-        roots.push(next.root());
+        roots.push(next.baseline_root());
         prepared.commit();
         assert_eq!(
-            next.root(),
+            next.baseline_root(),
             WorldStateAccumulator::capture(&state.world.block())
                 .unwrap()
-                .root()
+                .baseline_root()
         );
         let cache = state.da_pin_intents.read();
         let record = cache.get_by_ticket(&pin.storage_ticket).unwrap();
@@ -317,7 +317,7 @@ fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
     let pin = intent(&state, &key, 0, None);
     let before = WorldStateAccumulator::capture(&state.world.block())
         .unwrap()
-        .root();
+        .baseline_root();
     let nexus = state.nexus_snapshot();
     let pending = pending(vec![pin]);
     {
@@ -337,7 +337,7 @@ fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
         before,
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root()
+            .baseline_root()
     );
     assert_eq!(state.da_pin_intents.read().len(), 0);
     assert!(
@@ -356,7 +356,7 @@ fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
         before,
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root()
+            .baseline_root()
     );
     assert_eq!(state.da_pin_intents.read().len(), 0);
 }
@@ -434,6 +434,7 @@ fn cleanup_fixture(state: &State, reset: LaneId) -> PendingAutoscaleLaneLifecycl
             replaced_lane_ids: BTreeSet::new(),
         },
         updated_lane_manifests: state.lane_manifests.read().clone(),
+        updated_lane_privacy: state.lane_privacy_registry.read().clone(),
         plan: iroha_data_model::nexus::LaneLifecyclePlan::default(),
         transition: PendingAutoscaleTransition::Manual,
         transition_height: 1,
@@ -543,15 +544,17 @@ fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
     let next = parent.apply_block(prepared.world()).unwrap();
     prepared.commit();
     assert_eq!(
-        next.root(),
+        next.baseline_root(),
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root()
+            .baseline_root()
     );
     let reverted = state.world.block_and_revert();
     assert_eq!(
-        parent.root(),
-        WorldStateAccumulator::capture(&reverted).unwrap().root()
+        parent.baseline_root(),
+        WorldStateAccumulator::capture(&reverted)
+            .unwrap()
+            .baseline_root()
     );
 }
 
@@ -717,7 +720,7 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
     let activations = state.lane_incarnation_activation_heights_snapshot();
     let before = WorldStateAccumulator::capture(&state.world.block())
         .unwrap()
-        .root();
+        .baseline_root();
     let (expected_root, expected_records) = {
         let prepared = PreparedWorldCommit::prepare(
             &state,
@@ -732,14 +735,14 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         (
             WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
-                .root(),
+                .baseline_root(),
             prepared.effects.da_pins.clone(),
         )
     };
     assert_eq!(
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root(),
+            .baseline_root(),
         before
     );
     {
@@ -760,7 +763,9 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         assert_eq!(effects.da_pins, expected_records);
         assert_eq!(effects.da_pins.len(), 1);
         assert_eq!(
-            WorldStateAccumulator::capture(&world).unwrap().root(),
+            WorldStateAccumulator::capture(&world)
+                .unwrap()
+                .baseline_root(),
             expected_root
         );
         assert_eq!(state.da_pin_intents.read().len(), 0);
@@ -768,7 +773,7 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
     assert_eq!(
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root(),
+            .baseline_root(),
         before
     );
     assert_eq!(state.da_pin_intents.read().len(), 0);
@@ -893,7 +898,7 @@ fn local_cursor_reset_watermark_cannot_veto_captured_world_admission() {
         roots.push(
             WorldStateAccumulator::capture(prepared.world())
                 .unwrap()
-                .root(),
+                .baseline_root(),
         );
         drop(prepared);
         let reset_cut = BTreeMap::from([(LaneId::SINGLE, 1)]);

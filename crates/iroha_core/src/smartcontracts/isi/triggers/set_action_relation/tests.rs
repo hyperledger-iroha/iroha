@@ -25,6 +25,10 @@ pub(super) fn fixture() -> Set {
         ..Default::default()
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
+)]
 pub(super) fn checked(set: &Set) -> Result<(), TriggerContractError> {
     let pool = AllocationBudget::new(16 * 1024 * 1024);
     let outcome = CheckedActions::capture(set, u64::MAX, &pool).map(|_| ());

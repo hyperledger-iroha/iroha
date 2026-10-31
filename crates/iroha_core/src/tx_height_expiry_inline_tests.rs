@@ -9,9 +9,17 @@ fn transaction_height_expiry_is_exclusive_when_height_expiry_is_optional() {
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(false, false);
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-        );
+        let budget = world.sccp_committee_generations.allocation_budget();
+        let parameters = crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+            &crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
+            budget,
+        )
+        .expect("fund the complete height-expiry fixture parameters");
+        let controls = mv::cell::CellInitialization::<
+            crate::pipeline_gas_policy::RetainedStateParameters,
+        >::try_reserve(budget)
+        .expect("fund the pre-chain parameter cell controls");
+        world.parameters = controls.initialize(parameters, None);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "ttl-check-chain".parse().unwrap();
@@ -51,14 +59,17 @@ fn transaction_height_expiry_is_exclusive_when_height_expiry_is_optional() {
             default_limits.max_metadata_depth(),
         )
         .with_ingress_enforcement(false, false);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let time_source = TimeSource::new_fixed(tx.creation_time());
         let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &chain.network_id(),
             Duration::from_secs(0),
             limits,
-            &crypto_cfg,
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .expect("stateless checks accept optional but present height expiry");

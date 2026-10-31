@@ -17,7 +17,9 @@ use super::{
 };
 use crate::privacy_engines::atomic_private_settlement::audit::private_settlement_audit_plaintext_commitment_v1;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::privacy_engines::proof_managed_accumulator::plan_two_leaf_proof_managed_transition_v1;
+use crate::privacy_engines::proof_managed_accumulator::{
+    plan_two_leaf_proof_managed_inputs_v1, plan_two_leaf_proof_managed_transition_v1,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
@@ -38,8 +40,8 @@ use iroha_data_model::privacy::{
     PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
 use iroha_data_model::privacy::{PrivacyEncryptedOutputV1, PrivacyNullifierV1};
-use rand_core_06::CryptoRng;
-use rand_core_06::RngCore;
+use rand_core::TryCryptoRng;
+use rand_core::TryRng;
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -80,7 +82,7 @@ impl AtomicPrivateSettlementInputSecretV1 {
     pub fn new(
         spending_secret: [u8; 32],
         leaf_position: u32,
-        authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
+        authentication_path: &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
     ) -> Result<Self, AtomicPrivateSettlementWalletErrorV1> {
         if spending_secret.iter().all(|byte| *byte == 0)
             || authentication_path
@@ -92,7 +94,7 @@ impl AtomicPrivateSettlementInputSecretV1 {
         Ok(Self {
             spending_secret,
             leaf_position,
-            authentication_path,
+            authentication_path: *authentication_path,
         })
     }
 }
@@ -672,7 +674,7 @@ pub fn derive_atomic_private_settlement_input_nullifiers_v1(
 /// Rejects a substituted context, wrong fixed shape, malformed note/view key,
 /// or unavailable/unsafe encryption randomness.
 pub fn prepare_atomic_private_settlement_outputs_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
@@ -718,12 +720,12 @@ pub fn plan_atomic_private_settlement_bootstrap_v1(
         AtomicPrivateSettlementInputSecretV1::new(
             input_spending_secrets[0],
             planned.input_positions[0],
-            planned.authentication_paths[0],
+            &planned.authentication_paths[0],
         )?,
         AtomicPrivateSettlementInputSecretV1::new(
             input_spending_secrets[1],
             planned.input_positions[1],
-            planned.authentication_paths[1],
+            &planned.authentication_paths[1],
         )?,
     ];
     Ok(AtomicPrivateSettlementBootstrapPlanV1 {
@@ -761,18 +763,18 @@ pub fn plan_atomic_private_settlement_initial_inputs_v1(
                 .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?,
         }),
     );
-    let planned = plan_two_leaf_proof_managed_transition_v1(namespace, initial_commitments, &[])
+    let planned = plan_two_leaf_proof_managed_inputs_v1(namespace, initial_commitments)
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
     Ok([
         AtomicPrivateSettlementInputSecretV1::new(
             spending_secrets[0],
             planned.input_positions[0],
-            planned.authentication_paths[0],
+            &planned.authentication_paths[0],
         )?,
         AtomicPrivateSettlementInputSecretV1::new(
             spending_secrets[1],
             planned.input_positions[1],
-            planned.authentication_paths[1],
+            &planned.authentication_paths[1],
         )?,
     ])
 }
@@ -1040,7 +1042,7 @@ fn decode_owner_bundle(
         inputs.push(AtomicPrivateSettlementInputSecretV1::new(
             spending_secret,
             leaf_position,
-            authentication_path,
+            &authentication_path,
         )?);
     }
     cursor.finish()?;
@@ -1082,7 +1084,7 @@ pub fn encode_atomic_private_settlement_wallet_bundle_v1(
     validate_wallet_id(wallet_id)?;
     let mut inspection =
         validate_public_artifacts(manifest, statement, capsule, policy, audit_plaintext)?;
-    inspection.wallet_id = wallet_id.to_owned();
+    wallet_id.clone_into(&mut inspection.wallet_id);
     if audit_plaintext.inputs.len() != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 {
         return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
     }
@@ -1178,7 +1180,7 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
         policy,
         &decoded.audit_plaintext,
     )?;
-    expected.wallet_id = expected_wallet_id.to_owned();
+    expected_wallet_id.clone_into(&mut expected.wallet_id);
     if decoded.inspection != expected {
         return Err(if decoded.inspection.wallet_id == expected.wallet_id {
             AtomicPrivateSettlementWalletErrorV1::PublicBinding
@@ -1191,13 +1193,13 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
         AtomicPrivateSettlementInputWitnessV1::new(
             first.spending_secret,
             first.leaf_position,
-            first.authentication_path,
+            &first.authentication_path,
         )
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?,
         AtomicPrivateSettlementInputWitnessV1::new(
             second.spending_secret,
             second.leaf_position,
-            second.authentication_path,
+            &second.authentication_path,
         )
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?,
     ];
@@ -1250,7 +1252,8 @@ mod tests {
         PrivateSettlementLegCommitmentV1,
     };
     use iroha_data_model::privacy::{PrivacyNullifierV1, PrivacyRootV1};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
 
     #[test]
     fn funding_note_survives_later_authority_context_and_virtual_dummy() {
@@ -1297,13 +1300,13 @@ mod tests {
             AtomicPrivateSettlementInputSecretV1::new(
                 [0x81; 32],
                 0,
-                core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
+                &core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
             )
             .expect("first secret"),
             AtomicPrivateSettlementInputSecretV1::new(
                 [0x82; 32],
                 1,
-                core::array::from_fn(|level| [0x80 + u8::try_from(level).unwrap(); 32]),
+                &core::array::from_fn(|level| [0x80 + u8::try_from(level).unwrap(); 32]),
             )
             .expect("second secret"),
         ]
@@ -1516,7 +1519,7 @@ mod tests {
             statement.audit_input_commitment,
         );
         let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
-        let mut output_rng = StdRng::seed_from_u64(0x4150_535f_5741_4c4c);
+        let mut output_rng = ChaCha12Rng::seed_from_u64(0x4150_535f_5741_4c4c);
         let mut encrypted_outputs = Vec::with_capacity(plaintext.outputs.len());
         for (index, (output, memo)) in plaintext.outputs.iter_mut().zip(output_memos).enumerate() {
             output.note.memo_digest = memo;
@@ -1594,9 +1597,9 @@ mod tests {
         statement.validate().expect("valid proof statement");
 
         let inputs = [
-            AtomicPrivateSettlementInputSecretV1::new([0x81; 32], 0, first_path)
+            AtomicPrivateSettlementInputSecretV1::new([0x81; 32], 0, &first_path)
                 .expect("first membership secret"),
-            AtomicPrivateSettlementInputSecretV1::new([0x82; 32], 1, second_path)
+            AtomicPrivateSettlementInputSecretV1::new([0x82; 32], 1, &second_path)
                 .expect("second membership secret"),
         ];
         let encoded = encode_atomic_private_settlement_wallet_bundle_v1(
@@ -2077,7 +2080,7 @@ fn prepare_input_openings_from_bound_context_v1(
 }
 
 fn prepare_outputs_from_bound_context_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
 ) -> Result<Vec<PrivacyEncryptedOutputV1>, AtomicPrivateSettlementWalletErrorV1> {

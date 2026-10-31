@@ -18,7 +18,7 @@ pub(super) use dispatch::intake::{
     DRAFT_OBJECTS as INTAKE_DRAFT_OBJECTS,
 };
 mod intent;
-pub(crate) use intent::ArchiveIntentV1;
+pub use intent::ArchiveIntentV1;
 pub use intent::NativeIntentV1;
 
 /// Upper bound for a persisted native preparation plan, including exact local originals.
@@ -33,6 +33,25 @@ pub enum RequestStatusV1 {
     Preparing,
     /// Existing authoritative Advance lookup result, including its distinct Pending state.
     Outcome(Completion),
+}
+
+/// An exact request already bound by the authenticated permanent preparation index.
+/// Absence is deliberately not a status: it cannot authorize another dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundRequestStatusV1 {
+    /// The exact intent is bound, but no authoritative outcome is selected.
+    Preparing,
+    /// The existing operation's current authoritative outcome; no new execution occurred.
+    Outcome(Completion),
+}
+
+/// Result of consuming a request-bound financial review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewedExecutionV1 {
+    /// This review admitted the fresh request through the ordinary single dispatcher.
+    Executed(Completion),
+    /// The request was already bound; this review performed no planning or execution.
+    Existing(BoundRequestStatusV1),
 }
 
 /// Actual selected source, supplied exclusively by the coordinator under its owner lock.

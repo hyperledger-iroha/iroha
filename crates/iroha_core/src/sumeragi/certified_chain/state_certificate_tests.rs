@@ -1583,6 +1583,9 @@ fn original_walk_keeps_semantic_gas_rejection_and_refunds_partial_coordinates() 
 
 #[test]
 fn state_certificate_consuming_completion_waits_for_original_walk_and_refunds_receipts() {
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let (chain, _) = chain();
     let view = chain.state().view();
     let latest_id = chain.committed(5).id();
@@ -1640,6 +1643,9 @@ fn state_certificate_consuming_completion_waits_for_original_walk_and_refunds_re
 
 #[test]
 fn admitted_receipt_malformed_frame_preserves_rejection_and_refunds_original_slots() {
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let (chain, _) = chain();
     let original = frame(&chain, 5);
     let malformed = with_parts(&original, |header, _, _| header.height = 6);

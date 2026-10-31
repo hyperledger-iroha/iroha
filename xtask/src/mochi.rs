@@ -551,6 +551,10 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
         drop(retained_bundle(result)?);
+        developer_smoke::publication_smoke::run(
+            &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
+        )?;
+        drop(retained_bundle(result)?);
         developer_smoke::cold_start_smoke::run(
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
@@ -1265,9 +1269,13 @@ fn create_archive(
     // moving the original output root away and back must not authenticate a different tree.
     let namespace = ReaderDirectory::open(parent.path())?;
     let namespace_snapshot = namespace.snapshot()?;
-    let status = Command::new("tar")
-        .arg("-czf")
-        .arg("-")
+    let mut tar = Command::new("tar");
+    tar.arg("-czf").arg("-");
+    // macOS copyfile metadata creates extra AppleDouble members outside the inventory.
+    // Preserve the packaged file bytes without importing host-only extended attributes.
+    #[cfg(target_os = "macos")]
+    tar.args(["--no-mac-metadata", "--no-xattrs"]);
+    let status = tar
         .arg("-C")
         .arg(output_root)
         .arg(bundle_name)
@@ -2395,17 +2403,14 @@ mod tests {
     }
     #[test]
     fn explicit_installed_profiles_are_canonical_and_covered_by_the_bundle_inventory() {
-        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_deploy::bootstrap::{InstalledNetworkProfile, InstalledNetworkProfiles};
         let root = tempdir().unwrap();
         let profiles = InstalledNetworkProfiles::new(vec![
             InstalledNetworkProfile::new(
                 "fixture".into(),
-                KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
-                7,
-                "https://release.example/checkpoint.nrt",
+                "https://network.example/",
+                "fixture-chain".into(),
+                369,
             )
             .unwrap(),
         ])
@@ -2491,6 +2496,15 @@ mod tests {
         let tempdir = tempdir().expect("tempdir");
         let result = bundle_fixture(tempdir.path(), false, None);
         let bundle_name = &result.bundle_name;
+        #[cfg(target_os = "macos")]
+        assert!(
+            Command::new("/usr/bin/xattr")
+                .args(["-w", "com.iroha.devex-archive-test", "host-only-metadata"])
+                .arg(&result.bundle_root)
+                .status()
+                .expect("set archive regression metadata")
+                .success()
+        );
         let before = generate_manifest_json(&result.bundle_root, "debug").unwrap();
         let manifest = fs::read(&result.manifest_path).unwrap();
         let (archive_path, _custody) =
@@ -2507,6 +2521,12 @@ mod tests {
             listing.status
         );
         let stdout = String::from_utf8(listing.stdout).expect("utf8 listing");
+        assert!(
+            stdout
+                .lines()
+                .all(|line| line.split('/').all(|part| !part.starts_with("._"))),
+            "archive must not synthesize unlisted AppleDouble files: {stdout}"
+        );
         assert!(
             stdout.lines().any(|line| line
                 == format!(
@@ -2528,6 +2548,17 @@ mod tests {
             .expect("archive extraction");
         assert!(status.success(), "archive extraction failed: {status:?}");
         let installed = extracted.path().join(bundle_name);
+        #[cfg(target_os = "macos")]
+        assert!(
+            !Command::new("/usr/bin/xattr")
+                .args(["-p", "com.iroha.devex-archive-test"])
+                .arg(&installed)
+                .output()
+                .expect("inspect extracted metadata")
+                .status
+                .success(),
+            "host-only extended attributes must not be installed"
+        );
         assert_eq!(fs::read(installed.join("manifest.json")).unwrap(), manifest);
         assert_eq!(
             generate_manifest_json(&installed, "debug").unwrap()["files"],

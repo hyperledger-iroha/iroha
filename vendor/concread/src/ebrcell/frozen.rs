@@ -122,7 +122,7 @@ impl<T: Clone + Send + Sync + 'static, C: Send + Sync + 'static> Clone for EbrCe
         // Refuse overflow without changing the count or losing original custody.
         unsafe { self.pointer.as_ref() }
             .frozen_owners
-            .fetch_update(Relaxed, Relaxed, |count| {
+            .try_update(Relaxed, Relaxed, |count| {
                 (count < isize::MAX as usize).then(|| count + 1)
             })
             .expect("frozen EBR ownership count exhausted");

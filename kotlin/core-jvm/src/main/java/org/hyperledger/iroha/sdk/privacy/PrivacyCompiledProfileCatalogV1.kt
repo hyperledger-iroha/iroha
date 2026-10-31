@@ -432,6 +432,8 @@ object PrivacyCompiledProfileCatalogCodecV1 {
                     encoder.writeUInt(0L, 32)
                 PrivacyCompiledProfileUnavailableReasonV1.PROFILE_INITIALIZATION_FAILED ->
                     encoder.writeUInt(1L, 32)
+                PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE ->
+                    encoder.writeUInt(3L, 32)
                 PrivacyCompiledProfileUnavailableReasonV1.STATEMENT_SCHEMA_INVALID -> {
                     encoder.writeUInt(2L, 32)
                     encodeSizedField(
@@ -461,6 +463,10 @@ object PrivacyCompiledProfileCatalogCodecV1 {
                         4L,
                         "statement-schema error",
                     ),
+                )
+                3L -> PrivacyCompiledProfileResultV1.Unavailable(
+                    PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+                    null,
                 )
                 else -> throw IllegalArgumentException(
                     "unknown compiled-profile unavailable-reason discriminant: $tag",

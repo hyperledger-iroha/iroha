@@ -28,7 +28,7 @@ use quinn::{
     crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 #[cfg(feature = "local-quic-proxy")]
 use rcgen::generate_simple_self_signed;
 #[cfg(feature = "local-quic-proxy")]
@@ -346,7 +346,7 @@ struct ProxyClientCapability([u8; PROXY_CLIENT_CAPABILITY_LEN]);
 #[cfg(feature = "local-quic-proxy")]
 impl ProxyClientCapability {
     fn generate() -> Result<Self, ProxyError> {
-        Self::generate_with_rng(&mut OsRng)
+        Self::generate_with_rng(&mut SysRng)
     }
     fn generate_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, ProxyError> {
         let mut bytes = [0_u8; PROXY_CLIENT_CAPABILITY_LEN];
@@ -1580,9 +1580,11 @@ pub fn spawn_local_quic_proxy(
     let cert_der: CertificateDer<'static> = cert.der().clone();
     let private_key = PrivateKeyDer::try_from(signing_key.serialize_der())
         .map_err(|err| ProxyError::PrivateKey(err.to_string()))?;
-    let mut tls_config = quinn::rustls::ServerConfig::builder_with_protocol_versions(&[
-        &quinn::rustls::version::TLS13,
-    ])
+    let mut tls_config = quinn::rustls::ServerConfig::builder_with_provider(Arc::new(
+        quinn::rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&quinn::rustls::version::TLS13])
+    .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?
     .with_no_client_auth()
     .with_single_cert(vec![cert_der.clone()], private_key)
     .map_err(|err| ProxyError::QuinnConfig(err.to_string()))?;
@@ -1739,6 +1741,21 @@ async fn run_accept_loop(
     }
 }
 #[cfg(feature = "local-quic-proxy")]
+async fn await_finished_handshake_reply(send_stream: &quinn::SendStream) -> Result<(), ProxyError> {
+    // finish() only queues the FIN. Retain connection custody until the peer
+    // acknowledges the reply, bounded by the existing control-frame timeout.
+    match timeout(PROXY_CONTROL_FRAME_TIMEOUT, send_stream.stopped()).await {
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some(code))) => Err(ProxyError::Handshake(format!(
+            "handshake reply stopped: {code}"
+        ))),
+        Ok(Err(error)) => Err(ProxyError::Handshake(error.to_string())),
+        Err(_) => Err(ProxyError::Handshake(
+            "handshake reply delivery timed out".into(),
+        )),
+    }
+}
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_connection(
     connection: quinn::Connection,
     manifest_template: Option<BrowserManifestTemplate>,
@@ -1774,6 +1791,7 @@ async fn handle_connection(
             .map_err(|err| ProxyError::Handshake(err.to_string()))?;
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
+        await_finished_handshake_reply(&send_stream).await?;
         record_transport_event(telemetry_label, "handshake_reject", "unsupported_version");
         return Ok(());
     }
@@ -1794,6 +1812,7 @@ async fn handle_connection(
             .map_err(|err| ProxyError::Handshake(err.to_string()))?;
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
+        await_finished_handshake_reply(&send_stream).await?;
         record_transport_event(telemetry_label, "handshake_reject", "authentication");
         return Ok(());
     }
@@ -1813,6 +1832,7 @@ async fn handle_connection(
             .map_err(ProxyError::Handshake)?;
         let _ = send_stream.finish();
         let _ = recv_stream.stop(VarInt::from_u32(0));
+        await_finished_handshake_reply(&send_stream).await?;
         record_transport_event(telemetry_label, "handshake_reject", "invalid_field");
         return Ok(());
     }
@@ -1855,6 +1875,7 @@ async fn handle_connection(
         return Err(ProxyError::Handshake(err.to_string()));
     }
     if matches!(session.mode, ProxyMode::MetadataOnly) {
+        await_finished_handshake_reply(&send_stream).await?;
         record_transport_event(telemetry_label, "bridge_disabled", "metadata_only");
         return Ok(());
     }
@@ -2220,15 +2241,25 @@ fn parse_public_tcp_authority(authority: &str) -> Result<(String, u16), String> 
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || url.path() != "/"
+        || !url.path().is_empty()
     {
         return Err("credentials, paths, queries, and fragments are not permitted".into());
     }
-    let host = match url
-        .host()
-        .ok_or_else(|| "authority host is missing".to_string())?
+    let authority_host = url
+        .host_str()
+        .ok_or_else(|| "authority host is missing".to_string())?;
+    if authority_host.contains('%') {
+        return Err("authority host must not contain percent escapes".into());
+    }
+    // Non-special tcp URLs expose numeric IPv4 as an opaque domain. Parse the
+    // host before DNS validation so numeric spellings cannot bypass IP policy.
+    let host = match Host::parse(authority_host)
+        .map_err(|_| "authority host is not canonical".to_string())?
     {
         Host::Ipv4(ip) => {
+            if ip.to_string() != authority_host {
+                return Err("authority IPv4 address is not canonical".into());
+            }
             let ip = IpAddr::V4(ip);
             if !is_public_ip(ip) {
                 return Err("authority IP is not publicly routable".into());
@@ -2243,7 +2274,7 @@ fn parse_public_tcp_authority(authority: &str) -> Result<(String, u16), String> 
             ip.to_string()
         }
         Host::Domain(host) => {
-            validate_public_dns_name(host).map_err(|error| error.to_string())?;
+            validate_public_dns_name(&host).map_err(|error| error.to_string())?;
             host.to_ascii_lowercase()
         }
     };
@@ -2827,7 +2858,7 @@ fn extract_stream_target(open_frame: &ProxyStreamOpenV1) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 fn generate_session_id() -> Result<String, ProxyError> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     generate_session_id_with_rng(&mut rng)
 }
 fn generate_session_id_with_rng<R: TryCryptoRng + ?Sized>(
@@ -2842,7 +2873,7 @@ fn generate_session_id_with_rng<R: TryCryptoRng + ?Sized>(
     Ok(bytes.encode_hex::<String>())
 }
 fn generate_cache_salt() -> Result<String, ProxyError> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     generate_cache_salt_with_rng(&mut rng)
 }
 fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
@@ -3072,7 +3103,7 @@ mod json_key_tests {
 #[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
     use super::*;
-    use rand::rand_core::TryRngCore;
+    use rand::rand_core::TryRng;
     use std::{net::SocketAddr, sync::Arc, time::Duration};
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, task::JoinHandle};
@@ -3089,7 +3120,7 @@ mod tests {
         }
     }
     impl std::error::Error for FailingProxyRngError {}
-    impl TryRngCore for FailingProxyRng {
+    impl TryRng for FailingProxyRng {
         type Error = FailingProxyRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingProxyRngError)
@@ -3101,7 +3132,7 @@ mod tests {
             Err(FailingProxyRngError)
         }
     }
-    impl TryRngCore for ZeroProxyRng {
+    impl TryRng for ZeroProxyRng {
         type Error = std::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(0)
@@ -3126,7 +3157,16 @@ mod tests {
             "relay.local:443",
             "user:secret@relay.example.org:443",
             "relay.example.org:443/path",
+            "relay.example.org:443/",
             "relay.example.org:443?query=1",
+            "relay.example.org:443#fragment",
+            "127.1:443",
+            "2130706433:443",
+            "0x7f000001:443",
+            "0177.0.0.1:443",
+            "093.184.216.34:443",
+            "%31%32%37.0.0.1:443",
+            "[::ffff:127.0.0.1]:443",
             "relay.example.org",
             "relay.example.org:0",
         ] {
@@ -3142,6 +3182,11 @@ mod tests {
         assert_eq!(
             parse_public_tcp_authority("relay.example.org:443").expect("public DNS authority"),
             ("relay.example.org".into(), 443)
+        );
+        assert_eq!(
+            parse_public_tcp_authority("[2606:4700:4700::1111]:443")
+                .expect("public IPv6 authority"),
+            ("2606:4700:4700::1111".into(), 443)
         );
     }
     #[test]
@@ -3169,16 +3214,17 @@ mod tests {
     }
     #[tokio::test]
     async fn bridge_file_open_is_bounded_and_detects_mutation() {
-        let root = TempDir::new().expect("tempdir");
-        let path = root.path().join("payload.norito");
+        let directory = TempDir::new().expect("tempdir");
+        let root = canonical_bridge_root(directory.path()).expect("canonical owned root");
+        let path = root.join("payload.norito");
         tokio::fs::write(&path, b"payload")
             .await
             .expect("write payload");
         assert!(matches!(
-            open_bridge_file(root.path(), path.clone(), 3).await,
+            open_bridge_file(&root, path.clone(), 3).await,
             Err(BridgeFileError::TooLarge { .. })
         ));
-        let opened = open_bridge_file(root.path(), path.clone(), 64)
+        let opened = open_bridge_file(&root, path.clone(), 64)
             .await
             .expect("open regular payload");
         #[cfg(windows)]
@@ -3206,13 +3252,14 @@ mod tests {
     }
     #[tokio::test]
     async fn bridge_file_open_detects_replacement() {
-        let root = TempDir::new().expect("tempdir");
-        let path = root.path().join("payload.car");
-        let replacement = root.path().join("replacement.car");
+        let directory = TempDir::new().expect("tempdir");
+        let root = canonical_bridge_root(directory.path()).expect("canonical owned root");
+        let path = root.join("payload.car");
+        let replacement = root.join("replacement.car");
         tokio::fs::write(&path, b"original")
             .await
             .expect("write payload");
-        let opened = open_bridge_file(root.path(), path.clone(), 64)
+        let opened = open_bridge_file(&root, path.clone(), 64)
             .await
             .expect("open regular payload");
         tokio::fs::write(&replacement, b"replaced")
@@ -3245,19 +3292,20 @@ mod tests {
     #[tokio::test]
     async fn bridge_file_open_rejects_symlinks_and_symlink_roots() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let root = TempDir::new().expect("tempdir");
-        let real = root.path().join("real.norito");
-        let link = root.path().join("link.norito");
+        let directory = TempDir::new().expect("tempdir");
+        let root = canonical_bridge_root(directory.path()).expect("canonical owned root");
+        let real = root.join("real.norito");
+        let link = root.join("link.norito");
         tokio::fs::write(&real, b"payload")
             .await
             .expect("write payload");
         symlink(&real, &link).expect("create payload symlink");
         assert!(matches!(
-            open_bridge_file(root.path(), link, 64).await,
+            open_bridge_file(&root, link, 64).await,
             Err(BridgeFileError::Unsafe)
         ));
-        let root_link = root.path().with_extension("link");
-        symlink(root.path(), &root_link).expect("create root symlink");
+        let root_link = root.with_extension("link");
+        symlink(&root, &root_link).expect("create root symlink");
         assert!(canonical_bridge_root(&root_link).is_err());
         std::fs::remove_file(root_link).expect("remove root symlink");
 
@@ -3269,7 +3317,7 @@ mod tests {
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o666))
             .expect("make payload unsafe");
         assert!(matches!(
-            open_bridge_file(root.path(), real, 64).await,
+            open_bridge_file(&root, real, 64).await,
             Err(BridgeFileError::Unsafe)
         ));
     }
@@ -3316,11 +3364,14 @@ mod tests {
         let cert_der: CertificateDer<'static> = cert.der().clone();
         let private_key =
             PrivateKeyDer::try_from(signing_key.serialize_der()).expect("private key");
-        let mut tls_config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![cert_der], private_key)
-                .expect("server tls config");
+        let mut tls_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], private_key)
+        .expect("server tls config");
         tls_config.max_early_data_size = u32::MAX;
         tls_config.alpn_protocols = vec![PROXY_ALPN_LABEL.as_bytes().to_vec()];
         let crypto =
@@ -3939,10 +3990,14 @@ mod tests {
     async fn connect_proxy_client(proxy_addr: SocketAddr) -> (Endpoint, quinn::Connection) {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
-        let mut tls_config = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+        let mut tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("test TLS provider")
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
         tls_config.alpn_protocols = vec![PROXY_ALPN_LABEL.as_bytes().to_vec()];
         let tls_config = Arc::new(tls_config);
         let crypto =

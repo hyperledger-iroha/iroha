@@ -83,28 +83,48 @@ pub(super) fn append_tile_v1(
 fn append_tile_with_cut_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     nodes: &mut [PrivacyOuterDigestV1],
-    mut cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
+    cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
 ) -> Result<(), AggregateStarkErrorV1> {
     let first = accumulator.next_leaf;
+    let level = reduce_tile_at_level_v1(accumulator, nodes, first, 0, cut)?;
+    accumulator.append_subtree_v1(level, nodes[0])
+}
+
+/// Reduce a bounded aligned tile at its original tree level, capturing every
+/// lower frontier node before overwriting it. The caller owns ordered append.
+pub(super) fn reduce_tile_at_level_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    nodes: &mut [PrivacyOuterDigestV1],
+    first: usize,
+    initial_level: usize,
+    mut cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
+) -> Result<usize, AggregateStarkErrorV1> {
+    let span = nodes
+        .len()
+        .checked_shl(
+            u32::try_from(initial_level).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
+        )
+        .filter(|&span| span != 0)
+        .ok_or(AggregateStarkErrorV1::InvalidProofShape)?;
     if accumulator.node_prefixes.capacity() > usize::BITS as usize
         || nodes.is_empty()
         || nodes.len() > TILE_ROWS
         || !nodes.len().is_power_of_two()
-        || !first.is_multiple_of(nodes.len())
+        || !first.is_multiple_of(span)
         || first
-            .checked_add(nodes.len())
+            .checked_add(span)
             .is_none_or(|end| end > accumulator.leaf_count)
     {
         return Err(AggregateStarkErrorV1::InvalidProofShape);
     }
     let mut width = nodes.len();
-    let mut level = 0;
+    let mut level = initial_level;
     while width > 1 {
         let global_start = first >> level;
-        if level == retained_commitment::CUT_LEVEL_V1 {
-            if let Some(cut) = cut.as_deref_mut() {
-                cut.capture_v1(global_start, &nodes[..width])?;
-            }
+        if level == retained_commitment::CUT_LEVEL_V1
+            && let Some(cut) = cut.as_deref_mut()
+        {
+            cut.capture_v1(global_start, &nodes[..width])?;
         }
         for (offset, &node) in nodes[..width].iter().enumerate() {
             accumulator.capture(level, global_start + offset, node)?;
@@ -118,18 +138,20 @@ fn append_tile_with_cut_v1(
             .enumerate()
             .map(|(offset, pair)| {
                 let index = (global_start >> 1) + offset;
-                match prefix.hash_at_with_counter(
-                    index as u64,
-                    0,
-                    &[pair[0].as_bytes(), pair[1].as_bytes()],
-                ) {
-                    Some(parent) => {
-                        pair[0] = parent;
-                        pair[1].zeroize_v1();
-                        None
-                    }
-                    None => Some((index, AggregateStarkErrorV1::InvalidLayout)),
-                }
+                prefix
+                    .hash_at_with_counter(
+                        index as u64,
+                        0,
+                        &[pair[0].as_bytes(), pair[1].as_bytes()],
+                    )
+                    .map_or(
+                        Some((index, AggregateStarkErrorV1::InvalidLayout)),
+                        |parent| {
+                            pair[0] = parent;
+                            pair[1].zeroize_v1();
+                            None
+                        },
+                    )
             })
             .reduce(|| None, first_error_v1);
         if let Some((_, error)) = failure {
@@ -145,12 +167,33 @@ fn append_tile_with_cut_v1(
         width /= 2;
         level += 1;
     }
-    if level == retained_commitment::CUT_LEVEL_V1 {
-        if let Some(cut) = cut {
-            cut.capture_v1(first >> level, &nodes[..1])?;
-        }
+    if level == retained_commitment::CUT_LEVEL_V1
+        && let Some(cut) = cut
+    {
+        cut.capture_v1(first >> level, &nodes[..1])?;
     }
-    accumulator.append_subtree_v1(level, nodes[0])
+    Ok(level)
+}
+
+/// Verify all retained subtree roots without serializing their upper Merkle
+/// reductions. The existing clearing tile and worker reserve cover this copy.
+pub(super) fn append_retained_subtrees_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    roots: &[PrivacyOuterDigestV1],
+    level: usize,
+) -> Result<(), AggregateStarkErrorV1> {
+    if roots.is_empty() || !roots.len().is_power_of_two() {
+        return Err(AggregateStarkErrorV1::InvalidProofShape);
+    }
+    let mut tile = DigestTileV1::new(roots.len().min(TILE_ROWS))?;
+    for chunk in roots.chunks(tile.0.len()) {
+        tile.0.copy_from_slice(chunk);
+        let first = accumulator.next_leaf;
+        let top = reduce_tile_at_level_v1(accumulator, &mut tile.0, first, level, None)?;
+        accumulator.append_subtree_v1(top, tile.0[0])?;
+        tile.clear_v1();
+    }
+    Ok(())
 }
 
 /// Tree input remains in exact order; all excess and short streams still fail.

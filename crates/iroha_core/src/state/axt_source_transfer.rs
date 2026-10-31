@@ -22,7 +22,7 @@ use super::State;
 /// a complete State root, an issuer, or a remote spend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) struct FinalizedAxtSourceTransferFactV1 {
+pub struct FinalizedAxtSourceTransferFactV1 {
     /// Canonical height that owns the source execution.
     pub(crate) height: u64,
     /// Header hash selected by the State-owned canonical history.
@@ -44,7 +44,7 @@ pub(crate) struct FinalizedAxtSourceTransferFactV1 {
 /// Failure to confirm a claimed physical transfer against finalized execution.
 #[derive(Debug, Error)]
 #[allow(dead_code)]
-pub(crate) enum FinalizedAxtSourceTransferErrorV1 {
+pub enum FinalizedAxtSourceTransferErrorV1 {
     /// The original finalized-history read is unfinished because its local resources are occupied.
     #[error("AXT finalized source history deferred: {0}")]
     Deferred(crate::execution_attempt::ExecutionDeferred),

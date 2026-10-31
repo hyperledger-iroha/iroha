@@ -136,6 +136,7 @@ impl<'a> Encoder<'a> {
     // destination, never a process/thread mode inherited by unrelated encoders.
     #[inline]
     pub(super) fn count_measured_bytes(&mut self, length: usize) -> Result<bool, Error> {
+        super::encode_work::charge(0)?;
         if !self.is_counting() {
             return Ok(false);
         }
@@ -161,6 +162,7 @@ impl<'a> Encoder<'a> {
     /// whether [`Write`] happens to be imported at the derive site.
     #[inline]
     pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        super::encode_work::charge(bytes.len())?;
         if self.rejected_write {
             return Err(self.reject_overrun());
         }
@@ -239,6 +241,7 @@ impl<'a> Encoder<'a> {
 impl Write for Encoder<'_> {
     #[inline]
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        super::encode_work::charge(bytes.len())?;
         if self.rejected_write {
             return Err(self.reject_overrun());
         }
@@ -262,6 +265,7 @@ impl Write for Encoder<'_> {
         Encoder::write_all(self, bytes)
     }
     fn flush(&mut self) -> io::Result<()> {
+        super::encode_work::charge(0)?;
         match &mut self.sink {
             EncoderSink::Buffer(_) | EncoderSink::ByteSink(_) | EncoderSink::Counting(_) => Ok(()),
             EncoderSink::Writer(writer) => writer.flush(),

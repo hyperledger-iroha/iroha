@@ -16,11 +16,7 @@ fn invalid_key() -> Error {
 
 pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
     let valid = match algorithm {
-        Algorithm::Ed25519 => {
-            signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
-                .map(drop)
-                .is_ok()
-        }
+        Algorithm::Ed25519 => super::ed25519_decode_cache::validate(payload).is_ok(),
         Algorithm::Secp256k1 => {
             signature::secp256k1::EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload)
                 .is_ok()
@@ -40,6 +36,20 @@ pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
         }
         #[cfg(feature = "sm")]
         Algorithm::Sm2 => super::sm::verification::BorrowedKey::parse(payload).is_ok(),
+        #[cfg(not(feature = "bls"))]
+        Algorithm::BlsNormal | Algorithm::BlsSmall => {
+            return Err(Error::UnsupportedFeature(algorithm.as_static_str()));
+        }
+        #[cfg(not(feature = "gost"))]
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC
+        | Algorithm::Gost3410_2012_512ParamSetA
+        | Algorithm::Gost3410_2012_512ParamSetB => {
+            return Err(Error::UnsupportedFeature(algorithm.as_static_str()));
+        }
+        #[cfg(not(feature = "sm"))]
+        Algorithm::Sm2 => return Err(Error::UnsupportedFeature(algorithm.as_static_str())),
     };
     valid.then_some(()).ok_or_else(invalid_key)
 }
@@ -184,7 +194,8 @@ impl PublicKey {
     /// # Errors
     ///
     /// Returns a decode-resource error when the active budget or allocator
-    /// rejects the compact destination, and a fixed parse error otherwise.
+    /// rejects the compact destination, a fixed parse error for invalid encoding,
+    /// or `UnsupportedFeature` when the known algorithm lacks a local parser.
     #[doc(hidden)]
     pub fn from_bytes_for_decode(
         algorithm: Algorithm,

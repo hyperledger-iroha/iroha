@@ -16,6 +16,7 @@ use iroha_sumeragi::{
 struct RefusingHistory {
     blocks: FakeBlocks,
     refusal: Mutex<Option<ExecutionDeferred>>,
+    reads: Mutex<Vec<u64>>,
 }
 impl BodyReader for RefusingHistory {
     fn begin_read(
@@ -39,6 +40,7 @@ impl BlockStore for RefusingHistory {
         self.blocks.committed_body(height)
     }
     fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<std::io::Error>> {
+        self.reads.lock().push(height);
         let original = { self.refusal.lock().take() };
         if let Some(original) = original {
             return Err(Attempt::Deferred(original));
@@ -66,9 +68,10 @@ fn startup_history_refusal_retains_installed_vectors_and_exact_original_release_
     let original = RefusingHistory {
         blocks: FakeBlocks::default(),
         refusal: Mutex::new(Some(refusal.into())),
+        reads: Mutex::new(Vec::new()),
     };
     let genesis = (Hash32([1; 32]), Hash32([2; 32]));
-    let body = block(1, genesis.0, genesis.1, vec![9]);
+    let body = block(1, genesis.0, genesis.1, &[9]);
     let qc = commit_qc(&body, Hash32([3; 32]));
     original.append(&body, &qc).unwrap();
     let records = vec![(
@@ -127,4 +130,32 @@ fn startup_history_refusal_retains_installed_vectors_and_exact_original_release_
     assert_eq!(budget.reserved_bytes(), 0);
     drop(registration);
     assert_eq!(watcher.reserved_bytes(), 0);
+}
+
+#[test]
+fn startup_history_reads_descending_once_and_returns_original_ascending_window() {
+    let original = RefusingHistory {
+        blocks: FakeBlocks::default(),
+        refusal: Mutex::new(None),
+        reads: Mutex::new(Vec::new()),
+    };
+    let genesis = (Hash32([1; 32]), Hash32([2; 32]));
+    let mut parent = genesis;
+    let mut expected = Vec::new();
+    for height in 1..=6 {
+        let body = block(height, parent.0, parent.1, &[height as u8]);
+        let qc = commit_qc(&body, Hash32([height as u8 + 2; 32]));
+        parent = (qc.block_hash, qc.result);
+        expected.push(body.header().clone());
+        original.append(&body, &qc).unwrap();
+    }
+    let history = assemble_startup_history(&original, 0, genesis, 2).unwrap();
+    assert_eq!(history.tip.height, 6);
+    assert_eq!(history.tip.header.as_ref(), expected.last());
+    assert_eq!(history.recent_headers, expected[2..]);
+    assert_eq!(
+        *original.reads.lock(),
+        vec![6, 5, 4, 3],
+        "startup must read each original header once in descending order",
+    );
 }

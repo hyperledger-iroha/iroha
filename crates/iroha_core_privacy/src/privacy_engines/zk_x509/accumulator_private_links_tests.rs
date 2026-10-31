@@ -109,11 +109,14 @@ fn all_ca_calls_end_at_native_memory_rows_with_no_source_or_digest_event() {
             assert_eq!(
                 link.main,
                 MainCaColumnV1::Rfc {
-                    column: (252 + lane) as u16
+                    column: u16::try_from(252 + lane).expect("protocol-bounded index fits u16")
                 }
             );
             assert_eq!(link.main_start, None);
-            assert_eq!(plan.ca_openings[link.ca].column, (124 + lane) as u16);
+            assert_eq!(
+                plan.ca_openings[link.ca].column,
+                u16::try_from(124 + lane).expect("protocol-bounded index fits u16")
+            );
             assert_eq!(plan.ca_openings[link.ca].multiplier, root.pow(13_185));
             assert_eq!(
                 plan.ca_openings[link.ca].multiplier.mul(link.endpoint),

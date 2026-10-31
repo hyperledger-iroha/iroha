@@ -181,8 +181,8 @@ impl OriginalCompletion {
             {
                 let height = matching_applied_height(
                     &retained.transaction_hash,
-                    &observed.global_status,
-                    &observed.peer_status,
+                    (observed.global_status).as_ref(),
+                    (observed.peer_status).as_ref(),
                 )?
                 .ok_or_else(|| eyre!("completion contains a pending phase"))?;
                 require(

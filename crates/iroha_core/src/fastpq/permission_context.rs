@@ -13,7 +13,7 @@ use super::{PERMISSION_TABLE_ROOT_DOMAIN, PermissionTableEntry};
 
 /// Finite refusal before publishing a source-context commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PermissionContextError {
+pub enum PermissionContextError {
     /// Checked size, original pool or exact physical backing admission failed.
     Capacity,
     /// Canonical field encoding failed; no partial digest is returned.
@@ -21,7 +21,7 @@ pub(crate) enum PermissionContextError {
 }
 
 /// Exact sort backing demand before any source capture allocation.
-pub(crate) fn permission_table_backing_layout<'a, I>(
+pub fn permission_table_backing_layout<'a, I>(
     roles: I,
 ) -> Result<std::alloc::Layout, PermissionContextError>
 where
@@ -49,7 +49,7 @@ where
         reason = "TODO: connect funded permission-context capture to finalized proof preparation; preserve exact original-pool sort admission"
     )
 )]
-pub(crate) fn funded_permission_table_root<'a, I>(
+pub fn funded_permission_table_root<'a, I>(
     roles: impl Fn() -> I,
     budget: &AllocationBudget,
 ) -> Result<[u8; 32], PermissionContextError>
@@ -71,7 +71,7 @@ where
 /// The public sorted root remains the existing canonical commitment. This local
 /// seal adds no public input and creates no authority from supplied tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PermissionContextSeal {
+pub struct PermissionContextSeal {
     root: [u8; 32],
     traversal: [u8; 32],
     count: usize,
@@ -122,7 +122,7 @@ impl PermissionContextSeal {
 }
 
 /// Consume exact original backing and return the unchanged public sorted root.
-pub(crate) fn prepaid_permission_table_root<'a, I>(
+pub fn prepaid_permission_table_root<'a, I>(
     roles: impl Fn() -> I,
     reservation: &mut AllocationReservation,
 ) -> Result<[u8; 32], PermissionContextError>
@@ -134,7 +134,7 @@ where
 
 /// Derive the public root and private traversal seal from the same original
 /// admitted entries; fixed sort scratch is released before return.
-pub(crate) fn prepaid_permission_table_seal<'a, I>(
+pub fn prepaid_permission_table_seal<'a, I>(
     roles: impl Fn() -> I,
     reservation: &mut AllocationReservation,
 ) -> Result<PermissionContextSeal, PermissionContextError>

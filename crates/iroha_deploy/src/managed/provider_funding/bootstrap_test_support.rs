@@ -1,11 +1,8 @@
 //! Test-only complete economics using the sole funding selection and each actual child owner.
 use super::*;
 use crate::managed::native_operation::Terms;
-use crate::managed::native_operation::test_support::native_fixture::{
-    NativeFixture, NativeReadHttp,
-};
+use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
 use iroha_wallet::operations::BoundedTransactionOptions;
-use std::sync::Arc;
 
 impl ProviderFundingBootstrap {
     // Finish all genuine child production before freshly recovering retained originals.
@@ -58,8 +55,7 @@ impl ProviderFundingBootstrap {
                 self.authority.provider_id().unwrap(),
             )
             .unwrap();
-            let mut http =
-                NativeReadHttp::start_config(&operator, Arc::clone(native.chain.state()));
+            let mut http = native.read_http(&operator);
             let signed = request
                 .funding_prepare(&intent, child_utc, &child_options, &current, &verifier)
                 .unwrap();
@@ -98,7 +94,7 @@ impl ProviderFundingBootstrap {
                 self.authority.provider_id().unwrap(),
             )
             .unwrap();
-            let mut http = NativeReadHttp::start_config(&manager, Arc::clone(native.chain.state()));
+            let mut http = native.read_http(&manager);
             let signed = approval
                 .funding_prepare(
                     &history,
@@ -139,7 +135,7 @@ impl ProviderFundingBootstrap {
             self.authority.provider_id().unwrap(),
         )
         .unwrap();
-        let mut http = NativeReadHttp::start_config(&manager, Arc::clone(native.chain.state()));
+        let mut http = native.read_http(&manager);
         let signed = credit
             .funding_prepare(&intent, child_utc, &child_options, &current, &verifier)
             .unwrap();
@@ -154,7 +150,7 @@ impl ProviderFundingBootstrap {
             self.authority.provider_id().unwrap(),
         )
         .unwrap();
-        let mut http = NativeReadHttp::start_config(&operator, Arc::clone(native.chain.state()));
+        let mut http = native.read_http(&operator);
         let signed = capacity
             .funding_prepare(
                 policy,

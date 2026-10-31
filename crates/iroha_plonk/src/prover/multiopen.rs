@@ -14,7 +14,7 @@
 
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, PastaField, msm::MemoryBudget};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 
 use super::{
     ProverError,
@@ -201,7 +201,7 @@ impl<F: PastaField> Opened<'_, F> {
     where
         C: PastaCurve<ScalarExt = F>,
         T: TranscriptWrite<C>,
-        R: RngCore + CryptoRng,
+        R: Rng + CryptoRng,
     {
         let plan = protocol.plan();
         let points = plan.points(x, pk.domain().omega());

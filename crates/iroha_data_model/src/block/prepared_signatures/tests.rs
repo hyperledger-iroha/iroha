@@ -862,13 +862,13 @@ fn prepared_block_counter_physical_refusals_keep_original_charges_prefix_source_
         }
         drop(observation);
         drop(blocker);
-        let decoded = decoder
+        let block = decoder
             .decode(&source, span, norito::canonical_decode_limits(wire.len()))
             .unwrap();
         assert_eq!(source.as_slice().as_ptr(), source_pointer);
-        assert_eq!(decoded.encode_wire().unwrap(), wire);
-        assert!(decoded.signatures_admitted_to(&pool));
-        drop(decoded);
+        assert_eq!(block.encode_wire().unwrap(), wire);
+        assert!(block.signatures_admitted_to(&pool));
+        drop(block);
         drop(decoder);
         assert_eq!(pool.reserved_bytes(), source_floor);
         drop(source);

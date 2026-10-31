@@ -783,7 +783,7 @@ impl ActivationStaging {
                 history.write_activation(&body_root, ordinal, Some(retirement), turn, deadline);
             let handles = owners.revalidate();
             owner.authority.validate_profile()?;
-            let publication = require_retained_material(handles).and_then(|()| publication)?;
+            let publication = require_retained_material(handles).and(publication)?;
             // Full C is mandatory before signing, expiry return or any other usable owner.
             // A changed wallet/history may now refuse after unsigned local staging metadata;
             // crash/error recovery also uses this same canonical parser before any authority.

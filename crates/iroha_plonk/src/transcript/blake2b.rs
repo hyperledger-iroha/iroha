@@ -20,7 +20,7 @@ use core::{fmt, marker::PhantomData};
 
 use blake2::{
     Blake2bVarCore,
-    digest::core_api::{Buffer, UpdateCore, VariableOutputCore},
+    digest::block_api::{Buffer, UpdateCore, VariableOutputCore},
 };
 use ff::{FromUniformBytes, PrimeField};
 use iroha_pasta::{PastaAffine, PastaCurve};
@@ -119,7 +119,7 @@ impl<C: PastaCurve> TranscriptHash<C> for Blake2bHash<C> {
 
 #[cfg(test)]
 mod tests {
-    use group::{Curve, Group, prime::PrimeCurveAffine};
+    use group::{Curve, CurveAffine, Group};
     use iroha_pasta::{Ep, EpAffine, Fq};
 
     use super::*;

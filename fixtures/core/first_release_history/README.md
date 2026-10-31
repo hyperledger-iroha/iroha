@@ -13,12 +13,13 @@ signed-availability messages use the allowlisted SHA-256/DST_SIG consensus suite
 Changes to these canonical wire, State or signature formats require a fresh
 genesis and store for this first release.
 
-The 2026-10-22 capture was produced by `capture_pinned_first_release_history`
-with four real validators, the current compiled SCCP profiles and the
-confidential-policy digest. Its signed genesis uses a 16 MiB block cap,
-10 MiB transaction cap and 64 KiB block reserve. Strict replay reproduces the
-pinned World root and execution tip and rejects altered stored frames. Its digest
-is recorded in `specs/first_release_history_cutover.json`.
+The capture is produced by `capture_pinned_first_release_history` with four
+real validators, the current compiled SCCP profiles and the confidential-policy
+digest. Its signed genesis carries exactly one `crypto_admission_policy_v1`
+parameter with Ed25519, Secp256k1 and BLS-normal enabled, a 16 MiB block cap,
+10 MiB transaction cap and 64 KiB block reserve. Strict replay must reproduce
+the pinned World root and execution tip and reject altered stored frames. The
+actual capture digest is recorded in `specs/first_release_history_cutover.json`.
 
 This local fixture cutover does not reset or change a live network. The producer,
 replay check and regeneration procedure are defined in

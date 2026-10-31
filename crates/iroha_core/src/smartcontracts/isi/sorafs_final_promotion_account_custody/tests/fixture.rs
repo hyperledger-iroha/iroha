@@ -82,6 +82,15 @@ pub(super) fn fixture() -> Fixture {
             .account_permissions
             .insert(account.clone(), permissions);
     }
+    // Native account retirement checks both monetary policies from the block's
+    // original cut. Author this component input before any custody transaction.
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            crate::smartcontracts::isi::domain::monetary_test_support::staking()
+                .into_custom_parameter()
+                .expect("explicit component staking policy"),
+        ))
+        .expect("retain original component staking policy");
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -142,7 +151,7 @@ pub(super) fn transact(
         now,
         0,
     );
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut tx = block.transaction();
     call(&mut tx);
     tx.apply();
@@ -153,7 +162,7 @@ pub(super) fn transact(
         .try_build_with_signature(0, key(0xFE).private_key())
         .expect("executed fixture block");
     let hash = signed.hash();
-    let header = signed.header().clone();
+    let header = signed.header();
     state
         .kura()
         .store_block(

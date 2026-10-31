@@ -910,7 +910,8 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         source = (
             REPO_ROOT / ".github" / "workflows" / name
         ).read_text(encoding="utf-8")
-        assert "image: ${{ vars.IROHA_CI_IMAGE }}" in source
+        assert "image: ${{ needs.ci_image.outputs.image }}" in source
+        assert "uses: ./.github/workflows/ci_image_preflight.yml" in source
         assert "IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}" in source
         assert '--builder "$IROHA_CI_IMAGE"' in source
         assert '--runtime "$IROHA_CI_IMAGE"' in source

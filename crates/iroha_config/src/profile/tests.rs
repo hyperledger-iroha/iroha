@@ -225,11 +225,17 @@ fn sora_nexus_v1_literals_are_the_defaults_for_discriminant_369() {
     let custody = protocol_custody_account(ProfileId::SoraNexusV1)
         .to_i105_for_discriminant(369)
         .unwrap();
-    for key in [
-        "nexus.staking.stake_escrow_account_id",
-        "nexus.staking.slash_sink_account_id",
+    for account in [
+        &profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_escrow_account_id,
+        &profile
+            .genesis_recipe()
+            .public_lane_staking
+            .slash_sink_account_id,
     ] {
-        assert_eq!(string_at(static_config, key), custody, "{key}");
+        assert_eq!(account.to_i105_for_discriminant(369).unwrap(), custody);
     }
     for account in [
         &profile.genesis_recipe().root_fees.fee_sink_account_id,
@@ -276,11 +282,19 @@ fn sora_nexus_v1_literals_are_the_defaults_for_discriminant_369() {
         asset("universal.universal")
     );
     assert_eq!(
-        string_at(static_config, "nexus.staking.stake_asset_id"),
-        defaults::nexus::staking::stake_asset_id()
+        profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_asset_id
+            .canonical_address(),
+        defaults::nexus::fees::fee_asset_id()
     );
     assert_eq!(
-        string_at(static_config, "nexus.staking.stake_asset_id"),
+        profile
+            .genesis_recipe()
+            .public_lane_staking
+            .stake_asset_id
+            .canonical_address(),
         asset("universal.universal")
     );
 }
@@ -338,41 +352,28 @@ fn keyless_role_accounts_are_distinct_and_profile_scoped() {
     );
 }
 
-/// `crypto.curves.allowed_curve_ids` must follow each profile's `allowed_signing`; omitting the
-/// curves section would keep the code default, which drops `bls_normal`. The `bls_normal` curve id
-/// exists only in builds with the data model's `bls` feature, so the profile must request the
-/// derivation explicitly (an empty list) rather than rely on what this build derives.
+/// Profiles configure local implementations, while signed genesis owns ordinary admission.
 #[test]
-fn every_profile_derives_curve_ids_from_its_signing_algorithms() {
+fn profiles_do_not_install_local_crypto_admission_authorities() {
     use iroha_config_base::util::Emitter;
     for id in ProfileId::ALL {
         let profile = Profile::compiled(id).unwrap();
-        assert_eq!(
-            value_at(profile.static_config(), "crypto.curves.allowed_curve_ids").as_array(),
-            Some(&Vec::new()),
-            "{id} must derive crypto.curves.allowed_curve_ids from crypto.allowed_signing"
-        );
-        let crypto = profile
+        let table = profile
             .static_config()
             .get("crypto")
             .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_else(|| panic!("{id} sets [static.crypto]"));
+            .expect("profile local crypto options")
+            .clone();
+        assert!(!table.contains_key("allowed_signing"));
+        assert!(!table.contains_key("curves"));
         let user = ConfigReader::new()
             .without_env()
-            .with_toml_source(TomlSource::inline(crypto))
+            .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<user::Crypto>()
-            .unwrap_or_else(|report| panic!("{id}: {report:?}"));
+            .expect("local options parse");
         let mut emitter = Emitter::new();
-        let crypto = user.parse(&mut emitter);
-        emitter
-            .into_result()
-            .unwrap_or_else(|report| panic!("{id}: {report:?}"));
-        assert_eq!(
-            crypto.allowed_curve_ids,
-            defaults::crypto::derive_curve_ids_from_algorithms(&crypto.allowed_signing),
-            "{id}"
-        );
+        let _local = user.parse(&mut emitter);
+        emitter.into_result().unwrap();
     }
 }
 
@@ -601,12 +602,12 @@ fn digests_are_pinned() {
     let profile = sora();
     // The first-release profile admits complete 17 MiB transaction-gossip frames.
     // Pipeline fee and ZK validity policies belong to committed parameters.
-    // The static SCCP staking policy binds 21-day unbonding and 10000-bps maximum slashing.
+    // The signed staking recipe binds 21-day unbonding and 10000-bps maximum slashing.
     // The root fee policy is part of the signed genesis recipe (`[genesis_recipe.root_fees]`),
     // with sponsor-vault custody and an explicit, empty fee-exemption set.
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "34eaf875a5c6e3601cd783a9aee740b2ee919af2deb8ee0566267a3bded999cb"
+        "83ac8c1633eac71099af70e34acef54a2d9dd63458fd9fea2771978c9c29a14b"
     );
     // The retired Torii KAGEMUSHA command policy is absent from this canonical input.
     // Native proof-backend selection above does not change this separate policy input.
@@ -621,62 +622,37 @@ fn compiled_sccp_staking_policy_is_bound_into_consensus_digest() {
     let profile = sora();
     let consensus = profile.consensus_digest(4).unwrap();
     let policy = profile.policy_digest().unwrap();
-    for (key, required, altered) in [
-        (
-            "nexus.staking.unbonding_delay_ms",
-            1_814_400_000,
-            1_814_399_999,
-        ),
-        ("nexus.staking.max_slash_bps", 10_000, 9_999),
-    ] {
-        assert_eq!(integer_at(&profile.static_config, key), required, "{key}");
-        // Change one typed consensus input at a time without changing any policy leaf.
-        // This clone tests hashing sensitivity; it is never admitted as a node profile.
+    let original = &profile.genesis_recipe.public_lane_staking;
+    assert_eq!(original.unbonding_delay_ms, 1_814_400_000);
+    assert_eq!(original.max_slash_bps, 10_000);
+    for field in ["unbonding_delay_ms", "max_slash_bps"] {
         let mut changed = profile.clone();
-        set(
-            &mut changed.static_config,
-            key,
-            toml::Value::Integer(altered),
-        );
-        assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "{key}");
-        assert_eq!(changed.policy_digest().unwrap(), policy, "{key}");
+        let staking = &mut changed.genesis_recipe.public_lane_staking;
+        match field {
+            "unbonding_delay_ms" => staking.unbonding_delay_ms -= 1,
+            "max_slash_bps" => staking.max_slash_bps -= 1,
+            _ => unreachable!(),
+        }
+        assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "{field}");
+        assert_eq!(changed.policy_digest().unwrap(), policy, "{field}");
     }
-
-    // Removing the two staking leaves must change the current consensus input, and
-    // restoring exactly those leaves must recover it. Other signed profile fields can
-    // evolve independently; the full-profile golden is pinned in `digests_are_pinned`.
-    // This altered clone is never admitted as a node profile.
-    let mut omitted = profile.clone();
-    let staking = omitted
-        .static_config
-        .get_mut("nexus")
-        .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .get_mut("staking")
-        .unwrap()
-        .as_table_mut()
-        .unwrap();
-    assert_eq!(
-        staking.remove("unbonding_delay_ms"),
-        Some(toml::Value::Integer(1_814_400_000))
-    );
-    assert_eq!(
-        staking.remove("max_slash_bps"),
-        Some(toml::Value::Integer(10_000))
-    );
-    assert_ne!(omitted.consensus_digest(4).unwrap(), consensus);
-    assert_eq!(omitted.policy_digest().unwrap(), policy);
-
-    for (key, value) in [
-        ("nexus.staking.unbonding_delay_ms", 1_814_400_000),
-        ("nexus.staking.max_slash_bps", 10_000),
-    ] {
-        set(&mut omitted.static_config, key, toml::Value::Integer(value));
-    }
-    assert_eq!(omitted.static_config, profile.static_config);
-    assert_eq!(omitted.consensus_digest(4).unwrap(), consensus);
-    assert_eq!(omitted.policy_digest().unwrap(), policy);
+    let mut altered = profile.clone();
+    altered
+        .genesis_recipe
+        .public_lane_staking
+        .unbonding_delay_ms = 0;
+    altered.genesis_recipe.public_lane_staking.max_slash_bps = 0;
+    assert_ne!(altered.consensus_digest(4).unwrap(), consensus);
+    assert_eq!(altered.policy_digest().unwrap(), policy);
+    altered
+        .genesis_recipe
+        .public_lane_staking
+        .unbonding_delay_ms = original.unbonding_delay_ms;
+    altered.genesis_recipe.public_lane_staking.max_slash_bps = original.max_slash_bps;
+    assert_eq!(altered.static_config, profile.static_config);
+    assert_eq!(altered.genesis_recipe, profile.genesis_recipe);
+    assert_eq!(altered.consensus_digest(4).unwrap(), consensus);
+    assert_eq!(altered.policy_digest().unwrap(), policy);
 }
 
 #[test]
@@ -741,6 +717,44 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
 }
 
 #[test]
+fn genesis_fee_authoring_orders_exemptions_and_rejects_duplicates() {
+    let discriminant = defaults::common::chain_discriminant();
+    let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+    let defaults = defaults::nexus::fees::genesis_policy();
+    let mut accounts = [
+        defaults.fee_sink_account_id.clone(),
+        defaults.sponsor_vault_custody_account_id.clone(),
+    ];
+    accounts.sort();
+    let author = |exemptions: Vec<String>| GenesisRootFeesFile {
+        fee_asset_id: defaults.fee_asset_id.canonical_address(),
+        fee_sink_account_id: defaults.fee_sink_account_id.to_string(),
+        sponsor_vault_custody_account_id: defaults.sponsor_vault_custody_account_id.to_string(),
+        successful_claim_fee_exempt_authorities: exemptions,
+        base_fee: defaults.base_fee.clone(),
+        per_byte_fee: defaults.per_byte_fee.clone(),
+        per_instruction_fee: defaults.per_instruction_fee.clone(),
+        per_gas_unit_fee: defaults.per_gas_unit_fee.clone(),
+    };
+    let policy = author(accounts.iter().rev().map(ToString::to_string).collect())
+        .into_policy(discriminant)
+        .expect("unordered authored exemptions are canonicalized");
+    assert_eq!(
+        policy
+            .successful_claim_fee_exempt_authorities
+            .iter()
+            .collect::<Vec<_>>(),
+        accounts.iter().collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        author(vec![accounts[0].to_string(), accounts[0].to_string()])
+            .into_policy(discriminant)
+            .unwrap_err(),
+        "genesis fee exemptions repeat an account",
+    );
+}
+
+#[test]
 fn consensus_digest_binds_every_signed_root_fee_field() {
     let base = sora();
     let consensus = base.consensus_digest(4).unwrap();
@@ -762,7 +776,8 @@ fn consensus_digest_binds_every_signed_root_fee_field() {
             2 => fees.sponsor_vault_custody_account_id = alternate.clone(),
             3 => {
                 fees.successful_claim_fee_exempt_authorities
-                    .insert(alternate.clone());
+                    .try_insert(alternate.clone())
+                    .expect("fixture fee exemption");
             }
             4 => fees.base_fee = 17_u32.into(),
             5 => fees.per_byte_fee = 19_u32.into(),
@@ -1146,4 +1161,147 @@ fn table_helpers_merge_and_enumerate() {
     assert_eq!(to_usize(7), 7);
     assert_eq!(parse_consensus_mode("npos"), Some(ConsensusMode::Npos));
     assert_eq!(parse_consensus_mode("other"), None);
+}
+
+#[test]
+fn signed_staking_recipe_survives_fee_exemption_authoring_and_duplicate_retry() {
+    let base = sora();
+    let original = parse_profile_text(ProfileId::SoraNexusV1).unwrap();
+    let mut accounts = [
+        keyless_role_account(ProfileId::SoraNexusV1, KeylessRole::ALL[0]),
+        keyless_role_account(ProfileId::SoraNexusV1, KeylessRole::ALL[1]),
+    ];
+    accounts.sort();
+    assert_ne!(accounts[0], accounts[1]);
+    let literals: Vec<_> = accounts
+        .iter()
+        .map(|account| {
+            account
+                .to_i105_for_discriminant(base.chain_discriminant())
+                .unwrap()
+        })
+        .collect();
+    let mut authored = original.clone();
+    set(
+        &mut authored,
+        "genesis_recipe.root_fees.successful_claim_fee_exempt_authorities",
+        toml::Value::Array(
+            literals
+                .iter()
+                .rev()
+                .cloned()
+                .map(toml::Value::String)
+                .collect(),
+        ),
+    );
+    let loaded = Profile::from_table(ProfileId::SoraNexusV1, authored.clone()).unwrap();
+    let mut expected_fees = base.genesis_recipe.root_fees.clone();
+    expected_fees.successful_claim_fee_exempt_authorities =
+        iroha_data_model::block::consensus::RootFeeExemptions::try_from_iter(accounts).unwrap();
+    assert_eq!(loaded.genesis_recipe.root_fees, expected_fees);
+    assert_eq!(
+        loaded.genesis_recipe.public_lane_staking,
+        base.genesis_recipe.public_lane_staking,
+    );
+    let mut duplicate = authored.clone();
+    set(
+        &mut duplicate,
+        "genesis_recipe.root_fees.successful_claim_fee_exempt_authorities",
+        toml::Value::Array(vec![
+            toml::Value::String(literals[0].clone()),
+            toml::Value::String(literals[0].clone()),
+        ]),
+    );
+    assert_eq!(
+        Profile::from_table(ProfileId::SoraNexusV1, duplicate).unwrap_err(),
+        ProfileError::Malformed {
+            profile: ProfileId::SoraNexusV1,
+            message: "genesis fee exemptions repeat an account".to_owned(),
+        },
+    );
+    let retry = Profile::from_table(ProfileId::SoraNexusV1, authored).unwrap();
+    assert_eq!(retry.genesis_recipe, loaded.genesis_recipe);
+    assert_eq!(
+        Profile::from_table(ProfileId::SoraNexusV1, original)
+            .unwrap()
+            .genesis_recipe,
+        base.genesis_recipe,
+    );
+}
+
+/// Emit exact public compiled-profile inputs for independently replayable golden refreshes.
+/// The capture does not update expectations or certify a network or a release.
+#[test]
+#[ignore = "explicit native capture of public profile bytes; redirect stdout to a retained report"]
+fn capture_compiled_profile_digest_preimages() {
+    for id in ProfileId::ALL {
+        let profile = Profile::compiled(id).expect("compiled profile");
+        let geometry = profile.derive(4).expect("four-validator geometry");
+        let consensus = ConsensusDigestInputV1 {
+            profile: id.as_str().to_owned(),
+            version: profile.version(),
+            chain_discriminant: profile.chain_discriminant(),
+            static_config: CanonicalTableV1::from_table(profile.static_config()).unwrap(),
+            derived_config: CanonicalTableV1::from_table(&profile.derived_config(&geometry))
+                .unwrap(),
+            geometry,
+            genesis_recipe: profile.genesis_recipe().clone(),
+        };
+        let policy = PolicyDigestInputV1 {
+            profile: id.as_str().to_owned(),
+            version: profile.version(),
+            node_tunable: profile.node_tunable().to_vec(),
+            policy: CanonicalTableV1::from_table(profile.policy()).unwrap(),
+            host: profile.host().clone(),
+            roles: ProfileRole::ALL
+                .into_iter()
+                .map(|role| {
+                    (
+                        role.as_str().to_owned(),
+                        CanonicalTableV1::from_table(profile.role(role)).unwrap(),
+                    )
+                })
+                .collect(),
+        };
+        let consensus_bytes = norito::encode_canonical(&consensus).unwrap();
+        let decoded: ConsensusDigestInputV1 = norito::decode_canonical(&consensus_bytes).unwrap();
+        assert_eq!(decoded, consensus);
+        let policy_bytes = norito::encode_canonical(&policy).unwrap();
+        let decoded: PolicyDigestInputV1 = norito::decode_canonical(&policy_bytes).unwrap();
+        assert_eq!(decoded, policy);
+        for (kind, domain, encoded, expected, fields) in [
+            (
+                "profile_consensus",
+                CONSENSUS_DIGEST_DOMAIN,
+                consensus_bytes,
+                profile.consensus_digest(4).unwrap(),
+                format!("{consensus:#?}"),
+            ),
+            (
+                "profile_policy",
+                POLICY_DIGEST_DOMAIN,
+                policy_bytes,
+                profile.policy_digest().unwrap(),
+                format!("{policy:#?}"),
+            ),
+        ] {
+            let preimage = [domain, encoded.as_slice()].concat();
+            assert_eq!(<[u8; 32]>::from(Hash::new(&preimage)), expected.0);
+            let record = norito::json!({
+                "schema_version": 1,
+                "kind": kind,
+                "case": (id.as_str()),
+                "validators": 4,
+                "domain_hex": (hex::encode(domain)),
+                "encoded_hex": (hex::encode(&encoded)),
+                "preimage_hex": (hex::encode(&preimage)),
+                "digest_hex": (expected.to_string()),
+                "canonical_fields": fields,
+            });
+            println!(
+                "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                norito::json::to_json(&record).unwrap()
+            );
+        }
+    }
 }

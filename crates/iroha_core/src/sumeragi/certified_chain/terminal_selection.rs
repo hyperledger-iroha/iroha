@@ -78,10 +78,9 @@ impl<'kura> OriginalReceipt<'kura> {
                 &mut prefix.validation,
                 budget,
             ) {
+                // SPEC: §13.4 HC232 drops the completed slot on a later local refusal.
                 #[cfg(all(test, sumeragi_core_mutation = "HC232"))]
                 if matches!(&cause, ExecutionAttemptError::Deferred(_)) {
-                    // Deliberately retire only the pending verification slots. Source,
-                    // body, decoder limits, authentication and refusal identity remain.
                     self.frame = AdmittedFrameRead::default();
                 }
                 return Err(cause);

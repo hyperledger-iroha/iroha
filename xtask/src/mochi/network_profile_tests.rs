@@ -1,18 +1,15 @@
 //! Desktop matrix and staging preserve the shared original preset selection.
 
 use super::*;
-use iroha_crypto::{Algorithm, KeyPair};
 use iroha_deploy::bootstrap::InstalledNetworkProfile;
 
 fn image(name: &str) -> Vec<u8> {
     InstalledNetworkProfiles::new(vec![
         InstalledNetworkProfile::new(
             name.into(),
-            KeyPair::from_seed(vec![27; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-            7,
-            "https://fixture.invalid/checkpoint.nrt",
+            "https://fixture.invalid/",
+            "fixture-chain".into(),
+            369,
         )
         .unwrap(),
     ])

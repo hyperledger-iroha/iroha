@@ -128,16 +128,11 @@ impl ReplayCacheConfig {
         }
     }
     fn default_capacity() -> NonZeroUsize {
-        match NonZeroUsize::new(Self::DEFAULT_CAPACITY) {
-            Some(capacity) => capacity,
-            None => NonZeroUsize::MIN,
-        }
+        NonZeroUsize::new(Self::DEFAULT_CAPACITY).map_or(NonZeroUsize::MIN, |capacity| capacity)
     }
     fn default_lane_epoch_capacity() -> NonZeroUsize {
-        match NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) {
-            Some(capacity) => capacity,
-            None => NonZeroUsize::MIN,
-        }
+        NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY)
+            .map_or(NonZeroUsize::MIN, |capacity| capacity)
     }
     /// Override the per-lane capacity.
     #[must_use]
@@ -310,15 +305,15 @@ impl ReplayCache {
             generation
         });
         let lane_state = guard.lanes.entry(key.lane_epoch).or_default();
-        if let Some(floor) = lane_state.stale_floor {
-            if key.sequence <= floor {
-                return (
-                    ReplayInsertOutcome::StaleSequence {
-                        highest_observed: lane_state.highest_sequence.max(floor),
-                    },
-                    None,
-                );
-            }
+        if let Some(floor) = lane_state.stale_floor
+            && key.sequence <= floor
+        {
+            return (
+                ReplayInsertOutcome::StaleSequence {
+                    highest_observed: lane_state.highest_sequence.max(floor),
+                },
+                None,
+            );
         }
         if lane_state.highest_sequence >= key.sequence {
             let lag = lane_state.highest_sequence.saturating_sub(key.sequence);

@@ -27,6 +27,11 @@ manifest hashes, and all four routed identities without submitting a mutation
 or ping.
 ``citizens`` acts for the genesis citizens (invitation responses and
 endorsements) through their generated client configs.
+``governance-drive --iroha /path/to/iroha [--citizen 0]`` runs one optional
+SCCP Parliament driver poll in this managed disposable devnet. It can submit
+fee-paying governance transactions using the selected generated citizen's
+client config; it preserves the native driver's network and ballot-availability
+checks. Completion reports a driver poll, not governance enactment.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
@@ -499,11 +504,10 @@ class TrustedInrouGuestArtifact:
 CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "kagami",
-        ("localnet", "generate"),
+        ("sora-network", "generate"),
         (
             "--out-dir",
-            "--sora-profile",
-            "--consensus-mode",
+            "--profile",
             "--peers",
             "--bind-host",
             "--public-host",
@@ -2608,14 +2612,12 @@ def generate_network(
     run(
         [
             str(kagami),
-            "localnet",
+            "sora-network",
             "generate",
             "--out-dir",
             str(target),
-            "--sora-profile",
+            "--profile",
             "nexus",
-            "--consensus-mode",
-            "npos",
             "--peers",
             str(PEER_COUNT),
             "--bind-host",
@@ -2649,8 +2651,8 @@ def generate_network(
 # genesis. This script refuses a network whose profile or citizens cannot seat
 # every body, and acts for the citizens (invitation responses and endorsements)
 # through ``iroha gov parliament`` with each citizen's own generated client config.
-# TODO(ws42): run the SCCP Parliament driver (`iroha sccp governance drive`)
-# for the devnet.
+# The optional SCCP driver (§4.14.5 item 4) runs one poll through the explicit
+# `governance-drive` command; `up` and `check` do not start a background driver.
 # ---------------------------------------------------------------------------
 
 PARLIAMENT_GENESIS_CITIZENS = 16
@@ -8927,6 +8929,40 @@ def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, An
     }
 
 
+def governance_drive(
+    args: argparse.Namespace,
+    *,
+    run: Runner = run_command,
+) -> dict[str, Any]:
+    """Run one fee-paying SCCP driver poll as one managed devnet citizen."""
+
+    root = managed_root(args.dir, create=False)
+    target = require_network_bundle(root)
+    require_parliament_seating(target)
+    citizen = _select_citizens(parliament_citizens(target), [args.citizen])[0]
+    iroha = require_executable(args.iroha.expanduser().absolute())
+    subcommands = ("sccp", "governance", "drive")
+    try:
+        help_result = run([str(iroha), *subcommands, "--help"], cwd=REPO_ROOT, timeout=20)
+    except DevnetError as error:
+        fail(f"`iroha sccp governance drive` is not available in this CLI build: {error}")
+    help_text = "\n".join((help_result.stdout or "", help_result.stderr or ""))
+    if not help_has_option(help_text, "--polls"):
+        fail("`iroha sccp governance drive` lacks its documented --polls option")
+    completed = run(
+        [*_citizen_command(iroha, citizen, subcommands), "--polls", "1"],
+        cwd=target,
+        timeout=180,
+    )
+    return {
+        "action": "governance-drive",
+        "citizen_index": citizen["index"],
+        "account_id": citizen["account_id"],
+        "polls": 1,
+        "output": (completed.stdout or "").strip(),
+    }
+
+
 def citizens(
     args: argparse.Namespace,
     *,
@@ -9041,6 +9077,23 @@ def parser() -> argparse.ArgumentParser:
         "down", help="stop the disposable peers and destroy the generated network"
     )
     down_parser.set_defaults(handler=down)
+
+    drive_parser = commands.add_parser(
+        "governance-drive",
+        help="run one SCCP driver poll; may submit fee-paying devnet governance transactions",
+        description=(
+            "Run one optional SCCP driver poll using one generated citizen config in the "
+            "managed disposable devnet. This can submit fee-paying governance transactions; "
+            "native network and ballot-availability checks still apply."
+        ),
+    )
+    drive_parser.add_argument(
+        "--iroha", type=Path, required=True, help="compiled iroha CLI of this devnet"
+    )
+    drive_parser.add_argument(
+        "--citizen", type=int, default=0, help="generated citizen index to pay fees (default: 0)"
+    )
+    drive_parser.set_defaults(handler=governance_drive)
 
     citizens_parser = commands.add_parser(
         "citizens",

@@ -17,7 +17,7 @@ guard let packageManifestPath = canonicalExistingFilesystemPath(#filePath) else 
 }
 let packageDirectory = URL(fileURLWithPath: packageManifestPath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
-let requiredBridgeAbiVersion = 31
+let requiredBridgeAbiVersion = 33
 let repositoryDirectory = packageDirectory.deletingLastPathComponent()
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path
@@ -260,7 +260,7 @@ func validateDeviceDemoArtifact(
         localUnitSHA256(artifactRoot.appendingPathComponent(identifier + "/libNoritoBridge.a")) == hashes[identifier],
         let evidence = manifest["evidence"] as? [String: String],
         Set(evidence.keys) == Set(["producer-launch.json", "producer-record.json", "cargo-messages.jsonl",
-                                  "pqcrypto-normalization.json", "consumer", "source-observation.json"])
+                                  "native-archive-audit.json", "consumer", "source-observation.json"])
     else { return "error: physical-device demo metadata or archive is not exact." }
     guard let currentCommit = deviceDemoSourceCommit()
     else { return "error: unable to observe the selected source commit." }
@@ -579,18 +579,12 @@ if configuredLocalUnitArtifactDirectory != nil {
     swiftSettings.append(.define("IROHASWIFT_LOCAL_UNIT_ARTIFACT"))
     swiftSettings.append(.define("IROHASWIFT_LOCAL_UNIT_DEBUG", .when(configuration: .debug)))
 }
-// Keep Google's Apple Nearby implementation deterministic for fresh Xcode
-// checkouts. Nearby's transitive Abseil branch is additionally locked by the
-// checked-in Package.resolved file.
+// The pinned Nearby source package binds its current BoringSSL provider directly,
+// including when an application consumes this SDK as a transitive dependency.
+// Its upstream source identities are recorded in vendor/nearby/UPSTREAM.json;
+// the transitive Abseil branch is locked by Package.resolved.
 let packageDependencies: [Package.Dependency] = [
-    .package(
-        url: "https://github.com/google/nearby.git",
-        revision: "53568fe88281d4408e48e3ebec7d8560bed7077d"
-    ),
-    .package(
-        url: "https://github.com/firebase/boringssl-SwiftPM.git",
-        exact: "0.7.2"
-    )
+    .package(path: "../vendor/nearby")
 ]
 let mobileTransportDependencies: [Target.Dependency] = [
     "IrohaSwift",

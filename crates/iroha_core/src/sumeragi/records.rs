@@ -131,10 +131,7 @@ pub fn create_dir_durable(faults: &dyn Faults, dir: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
         Err(error) => return Err(error),
     }
-    match parent {
-        Some(parent) => sync_dir(faults, parent),
-        None => Ok(()),
-    }
+    parent.map_or(Ok(()), |parent| sync_dir(faults, parent))
 }
 
 /// Replace `dir/name` with `bytes` atomically and durably: write and fsync `dir/name.tmp`,
@@ -279,6 +276,9 @@ pub struct FileRecordStore {
     faults: Arc<dyn Faults>,
     /// Serializes installation-log appends.
     log_lock: Mutex<()>,
+    /// Serializes installation (the store-id check, installation events and store-id writes)
+    /// of every instance that shares this store.
+    installation: Mutex<()>,
     /// Directories whose entry in their parent was made durable by this process.
     durable_dirs: Mutex<BTreeSet<PathBuf>>,
 }
@@ -328,6 +328,7 @@ impl FileRecordStore {
             log_path,
             faults,
             log_lock: Mutex::new(()),
+            installation: Mutex::new(()),
             durable_dirs: Mutex::new(BTreeSet::new()),
         })
     }
@@ -401,14 +402,18 @@ impl RecordStore for FileRecordStore {
 
     fn store_id(&self) -> io::Result<Option<u128>> {
         match fs::read(self.records_dir.join(STORE_ID_FILE)) {
-            Ok(bytes) => norito::decode_canonical::<StoreIdV1>(&bytes)
-                .map(|id| Some(id.store_id))
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("corrupt sumeragi store-id file: {e}"),
-                    )
-                }),
+            Ok(bytes) => match norito::decode_canonical::<StoreIdV1>(&bytes) {
+                Ok(id) => Ok(Some(id.store_id)),
+                // An unreadable id describes no record files. Like a missing one, it makes the
+                // store-id check mark every logged key imported, which is always safe (§7.4).
+                Err(error) => {
+                    iroha_logger::warn!(
+                        %error,
+                        "sumeragi store-id file is corrupt; it counts as missing"
+                    );
+                    Ok(None)
+                }
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
@@ -423,6 +428,10 @@ impl RecordStore for FileRecordStore {
 
     fn log(&self) -> io::Result<Vec<LogEntry>> {
         Ok(self.read_log()?.0)
+    }
+
+    fn installation(&self) -> Option<parking_lot::MutexGuard<'_, ()>> {
+        Some(self.installation.lock())
     }
 
     fn append_log(&self, entry: &LogEntry) -> io::Result<()> {
@@ -530,6 +539,7 @@ pub fn register_generated_key<R: RecordStore + ?Sized>(
     store: &R,
     key: &PublicKey,
 ) -> io::Result<()> {
+    let _installation = store.installation();
     let mut log = store.log()?;
     reconcile_store_id(store, &mut log, &mut fresh_store_id)?;
     let store_id = fresh_store_id();
@@ -709,11 +719,81 @@ mod tests {
         assert_eq!(store.store_id().unwrap(), None);
         store.set_store_id(u128::MAX - 7).unwrap();
         assert_eq!(store.store_id().unwrap(), Some(u128::MAX - 7));
+        // An unreadable id file counts as missing.
         fs::write(node.records().join(STORE_ID_FILE), b"garbage").unwrap();
+        assert_eq!(store.store_id().unwrap(), None);
+    }
+
+    #[test]
+    fn corrupt_store_id_marks_every_key_imported_and_is_rewritten() {
+        let crypto = FakeCrypto::new();
+        let node = Node::new();
+        let store = node.open();
+        let k = key(1);
+        register_generated_key(&store, &k).unwrap();
+        let epoch = iroha_sumeragi::testing::TEST_EPOCH.id;
+        let got = install(&store, &crypto, &I, epoch, &[(k.clone(), false)], 1, None).unwrap();
+        assert!(matches!(got[0].1, RecordState::Present(_)));
+        // A torn id file, as concurrent installations once left it.
+        fs::write(node.records().join(STORE_ID_FILE), b"garbage").unwrap();
+        let store = node.open();
+        let got = install(&store, &crypto, &J, epoch, &[(k.clone(), false)], 1, None).unwrap();
         assert_eq!(
-            store.store_id().unwrap_err().kind(),
-            io::ErrorKind::InvalidData
+            got[0].1,
+            RecordState::Absent,
+            "an imported key gets no initial record"
         );
+        assert_eq!(generated(&store, &k), Some(false));
+        let newest = store.log().unwrap().last().map(LogEntry::store_id);
+        assert!(newest.is_some());
+        assert_eq!(store.store_id().unwrap(), newest);
+    }
+
+    #[test]
+    fn concurrent_installations_keep_one_whole_store_id() {
+        let crypto = Arc::new(FakeCrypto::new());
+        for _ in 0..8 {
+            let node = Node::new();
+            let store = Arc::new(node.open());
+            let k = key(1);
+            register_generated_key(&*store, &k).unwrap();
+            let instances: Vec<Hash32> = (1..=8).map(|byte| Hash32([byte; 32])).collect();
+            let threads: Vec<_> = instances
+                .iter()
+                .map(|instance| {
+                    let (store, crypto, k, instance) = (
+                        Arc::clone(&store),
+                        Arc::clone(&crypto),
+                        k.clone(),
+                        *instance,
+                    );
+                    std::thread::spawn(move || {
+                        install(
+                            &*store,
+                            &*crypto,
+                            &instance,
+                            iroha_sumeragi::testing::TEST_EPOCH.id,
+                            &[(k, false)],
+                            1,
+                            None,
+                        )
+                    })
+                })
+                .collect();
+            for thread in threads {
+                let got = thread.join().unwrap().expect("every installation succeeds");
+                assert!(matches!(got[0].1, RecordState::Present(_)));
+            }
+            let reopened = node.open();
+            let newest = reopened.log().unwrap().last().map(LogEntry::store_id);
+            assert!(newest.is_some());
+            assert_eq!(reopened.store_id().unwrap(), newest, "no torn or stale id");
+            assert!(
+                instances
+                    .iter()
+                    .all(|instance| started(&reopened, instance, &k))
+            );
+        }
     }
 
     #[test]

@@ -41,9 +41,9 @@ fn final_promotion_setup_executes_scoped_grants_without_native_history() {
     let (manager, operator, observer) = (account(1), account(2), account(3));
     let fixture = NativeCheckTestFixtureV1::with_final_promotion_accounts(
         "promotion-primary",
-        manager.clone(),
-        operator.clone(),
-        observer.clone(),
+        &(manager.clone()),
+        &(operator.clone()),
+        &(observer.clone()),
     );
     // Only the signed genesis is committed; it is the first floor.
     let (height, block_hash, _) = fixture.finalized_floor();

@@ -3,6 +3,42 @@
 use super::*;
 
 #[test]
+fn late_replay_subphases_keep_exact_payload_and_phase_boundaries() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.common.replay_batch, 310_494_720);
+    for phase in [
+        MainCaBufferPhaseV1::PrivateLinks,
+        MainCaBufferPhaseV1::Finalization,
+    ] {
+        plan.check_replay_subphase_v1(phase, plan.common.replay_batch)
+            .unwrap();
+        for oversized in [plan.common.replay_batch + 1, usize::MAX] {
+            assert_eq!(
+                plan.check_replay_subphase_v1(phase, oversized),
+                Err(ZkX509StarkErrorV1::ProofTooLarge)
+            );
+        }
+        let mut bad = plan;
+        bad.common.maximum_live_buffers = plan.required_v1(phase).unwrap() - 1;
+        assert_eq!(
+            bad.check_replay_subphase_v1(phase, 0),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        );
+    }
+    for phase in [
+        MainCaBufferPhaseV1::OriginalCommitments,
+        MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
+    ] {
+        assert_eq!(
+            plan.check_replay_subphase_v1(phase, 0),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        );
+    }
+}
+
+#[test]
 fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
@@ -10,7 +46,10 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
         plan.common,
         MainProverBufferPlanV1::new_v1(&layout).unwrap()
     );
-    assert_eq!(plan.common.maximum_live_buffers, 3_697_993_184);
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
     assert_eq!(
         plan.ca_originals,
         823 * (6196 * core::mem::size_of::<F>() + core::mem::size_of::<Vec<F>>())
@@ -50,6 +89,7 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -65,6 +105,54 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
         plan.required_v1(MainCaBufferPhaseV1::Registration).unwrap() + plan.main_originals
             > plan.common.maximum_live_buffers,
         "creating all24 original MAIN columns during a registration exceeds the unchanged ceiling"
+    );
+}
+
+#[test]
+fn joint_phase_forecasts_precede_admission_and_retain_two_cache_batches() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let mut unadmitted = plan.common;
+    unadmitted.maximum_live_buffers = 0;
+    let forecast = MainCaJointBufferPlanV1::from_common_v1(unadmitted).unwrap();
+    for phase in [
+        MainCaBufferPhaseV1::OriginalCommitments,
+        MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
+        MainCaBufferPhaseV1::PrivateLinks,
+        MainCaBufferPhaseV1::Finalization,
+    ] {
+        assert_eq!(forecast.phase_payload_v1(phase), plan.required_v1(phase));
+        assert_eq!(
+            forecast.required_v1(phase),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        );
+    }
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        plan.common.masks
+            + plan.common.retained_cuts
+            + plan.ca_originals
+            + plan.metadata
+            + plan.common.quotient_stage
+            + plan.common.replay_batch
+            + plan.common.quotient_cache_reserve
+    );
+    let rfc = layout
+        .registered_segment(SegmentAdapterIdV1::Rfc5280, 0)
+        .unwrap();
+    let cache = plan.quotient_cache_plan_v1(&layout, rfc).unwrap();
+    assert_eq!(
+        cache.base_columns + cache.aux_columns,
+        2 * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+    );
+    // The complete maximum assembly is built and admitted by the resource
+    // fixture test. Here exercise this forecast's exact allocation boundary.
+    let assembly_limit = (12_usize << 30) - plan.common.check_before_sources_v1(0).unwrap();
+    assert!(plan.common.check_before_sources_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.common.check_before_sources_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
     );
 }
 
@@ -116,6 +204,7 @@ fn joint_phase_arithmetic_fails_closed_on_overflow_and_oversized_owners() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -149,6 +238,7 @@ fn phase_ownership_requires_actual_capacity_and_disallows_early_main24() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -188,8 +278,11 @@ fn phase_ownership_requires_actual_capacity_and_disallows_early_main24() {
 fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
-    assert_eq!(plan.common.maximum_live_buffers, 3_697_993_184);
-    assert_eq!(plan.common.retained_cuts, 25_165_984);
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
+    assert_eq!(plan.common.retained_cuts, 201_326_752);
     // Independent floor arithmetic is constant throughout this inline-owner
     // interval. The native type must remain in that interval for these pins.
     assert!(core::mem::size_of::<CaAwaitingMainAuxiliaryV1>() <= 65_536);
@@ -227,7 +320,7 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
             assert_eq!((cache.base_columns, cache.aux_columns), (211, 72));
         }
         if segment.base_width == 285 && segment.aux_width == 280 {
-            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (26, 0));
+            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (25, 0));
             assert_eq!((cache.base_columns, cache.aux_columns), (16, 0));
         }
         let ordinary_cached = (ordinary.base_columns + ordinary.aux_columns) as u64;
@@ -243,7 +336,7 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
             assert_eq!(cached, 0);
         }
         if cached != ordinary_cached {
-            assert_eq!(ordinary_cached - cached, 10);
+            assert_eq!(ordinary_cached - cached, 9);
             assert_eq!(stripes, 4);
             changed += 1;
         }
@@ -258,15 +351,80 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
         quotient_rows += m;
     }
     assert_eq!(layout.registered_segments.len(), 49);
-    assert_eq!(columns, 5_811);
-    assert_eq!(native_cells, 2_116_723_200);
-    assert_eq!(masked_cells, 2_127_275_976);
+    assert_eq!(columns, 5_831);
+    assert_eq!(native_cells, 2_125_242_880);
+    assert_eq!(masked_cells, 2_135_831_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(ordinary_cached_columns, 3_428);
+    assert_eq!(ordinary_cached_columns, 3_443);
     assert_eq!(changed, 1);
     // The five arithmetic registrations retain all their columns. Only RFC
-    // loses ten cache columns, adding 10 * (4 - 1) = 30 native IFFTs.
-    assert_eq!(cached_columns, 3_418);
-    assert_eq!(native_iffts, 7_458);
-    assert_eq!(native_butterflies, 28_220_568_064);
+    // loses nine cache columns, adding 9 * (4 - 1) = 27 native IFFTs.
+    assert_eq!(cached_columns, 3_434);
+    assert_eq!(native_iffts, 7_478);
+    assert_eq!(native_butterflies, 28_301_242_880);
+}
+
+#[test]
+fn sha_union_admits_measured_maximum_assembly_with_all_original_joint_owners() {
+    use super::super::main_sha_union::MainShaUnionPlanV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let phase = MainCaBufferPhaseV1::ShaUnion;
+    let expected = plan.common.masks
+        + plan.common.retained_cuts
+        + plan.ca_originals
+        + plan.metadata
+        + plan.common.composition
+        + plan.common.replay_batch
+        + MainShaUnionPlanV1::private_owner_charge_v1();
+    assert_eq!(plan.required_v1(phase).unwrap(), expected);
+    assert!(expected < plan.required_v1(MainCaBufferPhaseV1::Registration).unwrap());
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
+    let measured_assembly = 215_244_730;
+    let admitted = plan
+        .common
+        .check_before_sources_v1(measured_assembly)
+        .unwrap();
+    let ceiling = 12_usize << 30;
+    assert!(admitted <= ceiling);
+    // Device slack is outside the complete global arithmetic peak. No union
+    // or CA owner is discharged from the6GiB/1GiB/1GiB source/scratch/runtime
+    // reservation, and no registration cache survives into this phase.
+    let phase_total = admitted - plan.common.maximum_live_buffers + expected;
+    assert!(phase_total + (ceiling - admitted) <= ceiling);
+    plan.check_original_payloads_v1(phase, plan.ca_originals, None)
+        .unwrap();
+    assert!(
+        plan.check_original_payloads_v1(phase, plan.ca_originals, Some(plan.main_originals))
+            .is_err()
+    );
+    assert!(
+        plan.check_original_payloads_v1(phase, plan.ca_originals + 1, None)
+            .is_err()
+    );
+    let mut exact = plan;
+    exact.common.maximum_live_buffers = expected;
+    assert_eq!(exact.required_v1(phase).unwrap(), expected);
+    exact.common.maximum_live_buffers -= 1;
+    assert_eq!(
+        exact.required_v1(phase),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+    for oversized in [usize::MAX, plan.common.maximum_live_buffers] {
+        let mut bad = plan;
+        bad.common.composition = oversized;
+        assert!(bad.required_v1(phase).is_err());
+        let mut bad = plan;
+        bad.common.replay_batch = oversized;
+        assert!(bad.required_v1(phase).is_err());
+    }
+    let assembly_limit = ceiling - plan.common.check_before_sources_v1(0).unwrap();
+    assert!(plan.common.check_before_sources_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.common.check_before_sources_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
 }

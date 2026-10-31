@@ -386,10 +386,14 @@ mod tests {
             LaneId::new(lane),
             epoch,
             sequence,
-            BlobDigest::new([lane as u8; 32]),
-            ManifestDigest::new([epoch as u8; 32]),
+            BlobDigest::new([u8::try_from(lane).expect("fixture lane fits in a digest byte"); 32]),
+            ManifestDigest::new(
+                [u8::try_from(epoch).expect("fixture epoch fits in a digest byte"); 32],
+            ),
             DaProofScheme::MerkleSha256,
-            Hash::prehashed([sequence as u8; 32]),
+            Hash::prehashed(
+                [u8::try_from(sequence).expect("fixture sequence fits in a digest byte"); 32],
+            ),
             None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),
@@ -1185,6 +1189,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_commitment_history_capacity_is_retryable_for_prove_and_verify() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use axum::response::IntoResponse as _;
         let record = sample_record(1, 1, 1);
         let request = DaCommitmentProofRequest {
@@ -1201,7 +1208,7 @@ mod tests {
             .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
             .unwrap();
         for error in [
-            handler_prove_commitment(State(app.clone()), NoritoJson(request.clone()))
+            handler_prove_commitment(State(app.clone()), NoritoJson(request))
                 .await
                 .unwrap_err(),
             handler_verify_commitment(State(app.clone()), NoritoJson(proof.clone()))
@@ -1428,6 +1435,15 @@ mod tests {
     }
     #[tokio::test]
     async fn commitment_post_routes_reject_oversized_bodies() {
+        use axum::{
+            Router,
+            body::Body,
+            extract::DefaultBodyLimit,
+            http::{Method, Request, StatusCode, header},
+            routing::post,
+        };
+        use tower::ServiceExt as _;
+
         crate::frame_test_support::assert_current_frame(
             &DaCommitmentListRequest {
                 limit: std::num::NonZeroU64::new(7),
@@ -1444,14 +1460,6 @@ mod tests {
             },
             "iroha_torii::da::commitments::DaCommitmentProofRequest",
         );
-        use axum::{
-            Router,
-            body::Body,
-            extract::DefaultBodyLimit,
-            http::{Method, Request, StatusCode, header},
-            routing::post,
-        };
-        use tower::ServiceExt as _;
         let app = mk_app_state_for_tests();
         let router = Router::new()
             .route(

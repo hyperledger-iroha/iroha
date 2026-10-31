@@ -5,6 +5,9 @@ use super::*;
 #[path = "intake_tests.rs"]
 mod intake;
 
+#[path = "receive_retry_tests.rs"]
+mod receive_retry;
+
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1 as object_digest;
 
 /// Which mock derivation a proof consumed.
@@ -64,6 +67,25 @@ impl NativePreparation for TestProofs {
         }
         if let Some(archive) = request.archive_request().filter(|_| self.archive_plans) {
             let plan = archive::encode(&archive_step(source, archive)?)?;
+            let prepared = TestPreparedV1 {
+                plan: object_digest(&plan),
+                origin: TestOriginV1::Plan,
+            };
+            return Ok((plan, prepared));
+        }
+        if let Some(OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.refuse_receive_admission
+        {
+            return Err(Error::Invalid(
+                crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL,
+            ));
+        }
+        if let Some(action @ OperationActionV1::Receive { .. }) =
+            request.user_request().map(|request| &request.action)
+            && self.receive_plans
+        {
+            let plan = archive::encode(&receive_retry::receive_step(source, action)?)?;
             let prepared = TestPreparedV1 {
                 plan: object_digest(&plan),
                 origin: TestOriginV1::Plan,
@@ -132,6 +154,11 @@ impl NativePreparation for TestProofs {
         } else {
             request.user_request().map(|request| &request.action)
                 == Some(&OperationActionV1::Retire)
+                || self.receive_plans
+                    && matches!(
+                        request.user_request().map(|request| &request.action),
+                        Some(OperationActionV1::Receive { .. })
+                    )
         };
         if !planned
             || prepared.capsule.body().predecessor_capsule_digest
@@ -290,10 +317,12 @@ fn speculation(wallet: &mut Wallet) -> TestSpeculativeV1 {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -326,9 +355,13 @@ fn a_confirmed_speculation_is_the_durable_plan_and_skips_the_proof() {
     let speculative = speculation(&mut wallet);
     let plan = speculative.plan.clone();
     let signatures = wallet.custody.signatures;
-    let complete = wallet
-        .execute_speculated(request(), Some(speculative))
-        .unwrap();
+    let checkpoint = wallet.manifest().unwrap().0;
+    let ReviewedExecutionV1::Executed(complete) = wallet
+        .execute_reviewed_unbound(request(), Some(speculative), checkpoint)
+        .unwrap()
+    else {
+        panic!("fresh reviewed dispatch");
+    };
     assert!(matches!(complete, Completion::Complete(_)));
     assert_eq!(
         *wallet.proofs.proof_origins.lock().unwrap(),
@@ -370,6 +403,261 @@ fn a_declined_speculation_leaves_no_plan_signature_or_debit() {
 }
 
 #[test]
+fn reviewed_unbound_dispatch_observes_every_existing_phase_without_adopting_it() {
+    for phase in 0..4 {
+        let mut wallet = prepared_wallet();
+        let calls = wallet.custody.publication_calls;
+        match phase {
+            0 => wallet.custody.fail_publication_at = Some((calls + 1, true)),
+            1 => wallet.proofs.fail_preparation_proof = true,
+            2 => wallet.custody.pause = true,
+            _ => {}
+        }
+        let _ = wallet.execute(request());
+        wallet.proofs.fail_preparation_proof = false;
+        let mut wallet = restart(wallet);
+        let status = wallet.bound_review_request(&request()).unwrap().unwrap();
+        assert!(matches!(
+            (&status, phase),
+            (BoundRequestStatusV1::Preparing, 0 | 1)
+                | (BoundRequestStatusV1::Outcome(Completion::Pending), 2)
+                | (BoundRequestStatusV1::Outcome(Completion::Complete(_)), 3)
+        ));
+        let checkpoint = wallet.manifest().unwrap().0;
+        let before = (
+            derivations(&wallet),
+            wallet.custody.signatures,
+            wallet.custody.publication_calls,
+        );
+        assert_eq!(
+            wallet
+                .execute_reviewed_unbound(request(), None, checkpoint)
+                .unwrap(),
+            ReviewedExecutionV1::Existing(status)
+        );
+        assert_eq!(
+            (
+                derivations(&wallet),
+                wallet.custody.signatures,
+                wallet.custody.publication_calls
+            ),
+            before
+        );
+        let mut conflict = request();
+        conflict.action = OperationActionV1::Unload {
+            amount: 1,
+            charge: None,
+        };
+        assert!(matches!(
+            wallet.bound_review_request(&conflict),
+            Err(Error::OperationConflict)
+        ));
+        assert!(matches!(
+            wallet.execute_reviewed_unbound(conflict, None, checkpoint),
+            Err(Error::OperationConflict)
+        ));
+        assert_eq!(
+            (
+                derivations(&wallet),
+                wallet.custody.signatures,
+                wallet.custody.publication_calls
+            ),
+            before
+        );
+    }
+}
+
+#[test]
+fn reviewed_dispatch_fixed_binding_uncertainty_never_authorizes_a_second_attempt() {
+    for published in [false, true] {
+        let mut wallet = prepared_wallet();
+        let checkpoint = wallet.manifest().unwrap().0;
+        wallet.custody.fail_publication = Some(published);
+        assert!(
+            wallet
+                .execute_reviewed_unbound(request(), None, checkpoint)
+                .is_err()
+        );
+        assert_eq!(derivations(&wallet), 0);
+        assert_eq!(wallet.custody.signatures, 1);
+        let mut wallet = restart(wallet);
+        let checkpoint = wallet.manifest().unwrap().0;
+        let status = wallet.bound_review_request(&request()).unwrap();
+        assert_eq!(status, published.then_some(BoundRequestStatusV1::Preparing));
+        let outcome = wallet
+            .execute_reviewed_unbound(request(), None, checkpoint)
+            .unwrap();
+        if published {
+            assert_eq!(
+                outcome,
+                ReviewedExecutionV1::Existing(BoundRequestStatusV1::Preparing)
+            );
+            assert_eq!(derivations(&wallet), 0);
+        } else {
+            assert!(matches!(
+                outcome,
+                ReviewedExecutionV1::Executed(Completion::Complete(_))
+            ));
+        }
+        let completed = wallet.execute(request()).unwrap();
+        assert!(matches!(completed, Completion::Complete(_)));
+        assert_eq!(wallet.execute(request()).unwrap(), completed);
+        assert_eq!(wallet.custody.signatures, 2);
+        assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn reviewed_dispatch_rechecks_exact_mapping_before_fixed_binding_publication() {
+    // The selected checkpoint is replaced after the initial authenticated absence read.
+    // The final dispatcher branch must observe it, not continue the preflight decision.
+    let mut wallet = prepared_wallet();
+    wallet.custody.fail_publication = Some(true);
+    assert!(wallet.execute(request()).is_err());
+    let bound = wallet.custody.checkpoint.clone().unwrap();
+    let mut fresh = prepared_wallet();
+    // Copy only the immutable index objects; the selected checkpoint still proves absence.
+    fresh
+        .archive
+        .records
+        .lock()
+        .unwrap()
+        .extend(wallet.archive.records.lock().unwrap().clone());
+    let checkpoint = fresh.manifest().unwrap().0;
+    let mut probe = prepared_wallet();
+    let before = probe.custody.checkpoint_calls;
+    probe.require_fresh_work().unwrap();
+    let maintenance_reads = probe.custody.checkpoint_calls - before;
+    // Initial map read, all ordinary maintenance reads, then the final sync_manifest read.
+    fresh.custody.checkpoint_replacement = Some((
+        fresh.custody.checkpoint_calls + maintenance_reads + 2,
+        bound,
+    ));
+    let outcome = fresh
+        .execute_reviewed_unbound(request(), None, checkpoint)
+        .unwrap();
+    assert_eq!(
+        outcome,
+        ReviewedExecutionV1::Existing(BoundRequestStatusV1::Preparing)
+    );
+    assert_eq!(derivations(&fresh), 0);
+    assert_eq!(fresh.custody.signatures, 1);
+}
+
+#[test]
+fn reviewed_dispatch_refuses_missing_selected_index_and_inconsistent_unbound_draft() {
+    for bytes in [Vec::new(), vec![1], vec![0; 2048]] {
+        let mut wallet = prepared_wallet();
+        let checkpoint = wallet.manifest().unwrap().0;
+        let key = ArchiveKey::PreparationDraft(request().request_id);
+        wallet.archive.put(key, &bytes).unwrap();
+        assert_eq!(wallet.bound_review_request(&request()).unwrap(), None);
+        assert!(
+            wallet
+                .require_no_preparation_draft(request().request_id)
+                .is_err()
+        );
+        assert!(
+            wallet
+                .execute_reviewed_unbound(request(), None, checkpoint)
+                .is_err()
+        );
+        assert_eq!(wallet.manifest().unwrap().0, checkpoint);
+        assert_eq!(
+            wallet.archive.records.lock().unwrap().get(&key),
+            Some(&bytes)
+        );
+        assert_eq!(derivations(&wallet), 0);
+        assert_eq!(wallet.custody.signatures, 1);
+    }
+    let mut wallet = prepared_wallet();
+    wallet.custody.fail_publication = Some(true);
+    assert!(wallet.execute(request()).is_err());
+    let (checkpoint, manifest) = wallet.manifest().unwrap();
+    wallet
+        .archive
+        .records
+        .lock()
+        .unwrap()
+        .remove(&ArchiveKey::Object(manifest.preparations.0));
+    assert!(matches!(
+        wallet.bound_review_request(&request()),
+        Err(Error::WitnessLost(_))
+    ));
+    assert!(matches!(
+        wallet.execute_reviewed_unbound(request(), None, checkpoint),
+        Err(Error::WitnessLost(_))
+    ));
+    assert_eq!(derivations(&wallet), 0);
+    assert_eq!(wallet.custody.signatures, 1);
+}
+
+#[test]
+fn reviewed_dispatch_requires_the_exact_preapproval_checkpoint_before_own_publication() {
+    let mut wallet = prepared_wallet();
+    let checkpoint = wallet.manifest().unwrap().0;
+    let mut different = checkpoint;
+    different[0] ^= 1;
+    assert!(matches!(
+        wallet.execute_reviewed_unbound(request(), None, different),
+        Err(Error::OperationConflict)
+    ));
+    assert_eq!(wallet.bound_review_request(&request()).unwrap(), None);
+    assert_eq!(wallet.manifest().unwrap().0, checkpoint);
+    assert_eq!(derivations(&wallet), 0);
+    assert_eq!(wallet.custody.signatures, 1);
+    // Its own binding/plan/capsule publications change the checkpoint legitimately.
+    assert!(matches!(
+        wallet
+            .execute_reviewed_unbound(request(), None, checkpoint)
+            .unwrap(),
+        ReviewedExecutionV1::Executed(Completion::Complete(_))
+    ));
+    assert_ne!(wallet.manifest().unwrap().0, checkpoint);
+    assert_eq!(wallet.custody.signatures, 2);
+}
+
+#[test]
+fn review_waits_are_source_typed_and_preserve_operational_errors() {
+    let mut enrollment = wallet();
+    assert!(matches!(
+        enrollment.review_maintenance_wait(),
+        Err(Error::NoHead)
+    ));
+    let mut wallet = prepared_wallet();
+    assert_eq!(wallet.review_maintenance_wait().unwrap(), None);
+    wallet.custody.pause = true;
+    assert_eq!(wallet.execute(request()).unwrap(), Completion::Pending);
+    let signatures = wallet.custody.signatures;
+    assert_eq!(
+        wallet.review_maintenance_wait().unwrap(),
+        Some(ReviewMaintenanceWaitV1::SelectedPending)
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
+    wallet.custody.status_unavailable_at = Some(wallet.custody.status_calls + 1);
+    assert!(matches!(
+        wallet.review_maintenance_wait(),
+        Err(Error::Provider(_))
+    ));
+    let mut wallet = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut wallet);
+    assert!(matches!(
+        fixture_archive_attempt(&mut wallet, &send, &original).unwrap(),
+        Completion::Complete(_)
+    ));
+    assert_eq!(
+        wallet.review_maintenance_wait().unwrap(),
+        Some(ReviewMaintenanceWaitV1::ArchiveFold)
+    );
+    let mut wallet = prepared_wallet();
+    wallet.scheduler.close();
+    assert!(matches!(
+        wallet.review_maintenance_wait(),
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Closed))
+    ));
+}
+
+#[test]
 fn a_speculation_for_another_source_or_statement_is_unused_and_execution_proves() {
     // Changed source: the speculation was made for a head that is no longer current.
     let mut wallet = prepared_wallet();
@@ -377,9 +665,12 @@ fn a_speculation_for_another_source_or_statement_is_unused_and_execution_proves(
         body.predecessor_capsule_digest = [93; 32];
     });
     let signatures = wallet.custody.signatures;
+    let checkpoint = wallet.manifest().unwrap().0;
     assert!(matches!(
-        wallet.execute_speculated(request(), Some(stale)).unwrap(),
-        Completion::Complete(_)
+        wallet
+            .execute_reviewed_unbound(request(), Some(stale), checkpoint)
+            .unwrap(),
+        ReviewedExecutionV1::Executed(Completion::Complete(_))
     ));
     assert_eq!(
         *wallet.proofs.proof_origins.lock().unwrap(),
@@ -397,8 +688,21 @@ fn a_speculation_for_another_source_or_statement_is_unused_and_execution_proves(
     let later = changed(&speculation(&mut wallet), |body| {
         body.successor_state.core.state_nonce = field(91);
     });
+    let checkpoint = wallet.manifest().unwrap().0;
+    let before = derivations(&wallet);
+    assert_eq!(
+        wallet
+            .execute_reviewed_unbound(request(), Some(later), checkpoint)
+            .unwrap(),
+        ReviewedExecutionV1::Existing(BoundRequestStatusV1::Preparing)
+    );
+    assert_eq!(
+        derivations(&wallet),
+        before,
+        "a new review cannot adopt a held plan"
+    );
     assert!(matches!(
-        wallet.execute_speculated(request(), Some(later)).unwrap(),
+        wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
     assert_eq!(
@@ -420,6 +724,35 @@ fn prepared_wallet() -> Wallet {
     wallet.commit(bootstrap()).unwrap();
     snapshot_test_fold(&mut wallet);
     wallet
+}
+
+// Test orchestration through the public queue and sole guarded executor. Exact selected
+// results remain observations and do not need another receipt intake or idle turn. The
+// fixture caller must explicitly finish any prior fold before attempting a fresh Archive.
+pub(super) fn fixture_archive_attempt(
+    wallet: &mut Wallet,
+    send: &[u8; 32],
+    original: &[u8],
+) -> Result<Completion, Error> {
+    if let RequestStatusV1::Outcome(completion) = wallet.credited_status_for_send(send, original)? {
+        return Ok(completion);
+    }
+    wallet.observe_credited_for_send(send, original)?;
+    wallet.maintenance_view()?;
+    wallet.scheduler().set_activity(true, true);
+    let turn = wallet.scheduler().prepare_archive_turn()?;
+    match wallet.drain_deferred_archive(turn)? {
+        DeferredArchiveDrainV1::Executed(completion)
+        | DeferredArchiveDrainV1::Reconciled(completion) => Ok(completion),
+        DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::SelectedPending) => {
+            Err(Error::Pending)
+        }
+        DeferredArchiveDrainV1::Blocked(
+            DeferredArchiveWaitV1::ArchiveFold | DeferredArchiveWaitV1::FoldBacklog,
+        ) => Err(Error::FoldRequired),
+        DeferredArchiveDrainV1::Blocked(_) => Err(ArchiveAdmissionErrorV1::Busy.into()),
+        DeferredArchiveDrainV1::NoWork => Err(Error::WitnessLost("fixture queued Archive")),
+    }
 }
 
 fn restart(wallet: Wallet) -> Wallet {
@@ -512,10 +845,12 @@ fn historical_send() -> (Wallet, FrozenTransition, OperationRequestV1) {
         &boot.capsule.body().successor_state,
         KagemushaWalletOperationKindV1::RefreshPolicy,
         Some(KagemushaWalletPolicyUpdateKindV1::SchemePolicy),
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     policy_custody
@@ -571,7 +906,7 @@ fn historical_send() -> (Wallet, FrozenTransition, OperationRequestV1) {
     };
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(request.clone()),
+            &NativeIntentV1::user(request.clone()),
             send.capsule.custody_digest(),
             send.capsule.receipt_commitment(),
             send.capsule.body().operation_id,
@@ -620,6 +955,10 @@ fn historical_send_missing_completion_stays_committed_across_restart_and_exact_r
         assert_eq!(
             wallet.retry_request(&request.request_id).unwrap(),
             RequestStatusV1::Outcome(Completion::DeliveryDataLoss)
+        );
+        assert_eq!(
+            wallet.bound_review_request(&request).unwrap(),
+            Some(BoundRequestStatusV1::Outcome(Completion::DeliveryDataLoss))
         );
         assert_eq!(
             wallet.execute(request.clone()).unwrap(),
@@ -805,7 +1144,7 @@ fn missing_completion_requires_readable_canonical_operation_locator_and_matching
     let signatures = wallet.custody.signatures;
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(request.clone()),
+            &NativeIntentV1::user(request.clone()),
             field(1),
             send.capsule.receipt_commitment(),
             operation,
@@ -908,6 +1247,7 @@ fn request_replay_authenticates_exact_completion_in_each_retained_source_state()
             let direct = wallet.retry(&operation);
             let request_retry = wallet.retry_request(&request.request_id);
             let repeated = wallet.execute(request.clone());
+            let reviewed = wallet.bound_review_request(&request);
             assert!(direct.is_err(), "{source}, mutation {mutation}");
             assert!(
                 request_retry.is_err(),
@@ -916,6 +1256,10 @@ fn request_replay_authenticates_exact_completion_in_each_retained_source_state()
             assert!(
                 repeated.is_err(),
                 "repeated execute: {source}, mutation {mutation}"
+            );
+            assert!(
+                reviewed.is_err(),
+                "bound review lookup: {source}, mutation {mutation}"
             );
             if mutation == 8 {
                 // Canonical structure, statement and receipt remain unchanged: only the
@@ -932,6 +1276,10 @@ fn request_replay_authenticates_exact_completion_in_each_retained_source_state()
                 assert!(matches!(repeated, Err(Error::WitnessLost(reason)) if reason == expected));
             }
             wallet.custody.retained.insert(operation, original);
+            assert_eq!(
+                wallet.bound_review_request(&request).unwrap(),
+                Some(BoundRequestStatusV1::Outcome(exact.clone()))
+            );
             assert_eq!(wallet.retry(&operation).unwrap(), Some(exact.clone()));
             assert_eq!(
                 wallet.retry_request(&request.request_id).unwrap(),
@@ -1268,10 +1616,12 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -1331,7 +1681,7 @@ fn deferred_archive(wallet: &mut Wallet) -> ([u8; 32], Vec<u8>, [u8; 32]) {
         .unwrap();
     wallet
         .retain_delivery_test_mapping(
-            NativeIntentV1::user(OperationRequestV1 {
+            &NativeIntentV1::user(OperationRequestV1 {
                 request_id: send,
                 action: OperationActionV1::Send {
                     request: request.clone(),
@@ -1363,7 +1713,7 @@ fn deferred_archive(wallet: &mut Wallet) -> ([u8; 32], Vec<u8>, [u8; 32]) {
         archive::encode(&companion.certificates).unwrap(),
     );
     let archive = intent.request_id();
-    wallet.retain_delivery_test_preparing(intent).unwrap();
+    wallet.retain_delivery_test_preparing(&intent).unwrap();
     wallet.proofs.archive_plans = true;
     (send, credited, archive)
 }
@@ -1422,10 +1772,10 @@ fn receipt_verdict_is_read_only_and_a_later_drain_archives_that_original_once() 
     wallet.proofs.reject = false;
     assert_eq!(wallet.manifest().unwrap().0, root);
     // The drain archives exactly that original once; then the verdict is that Archive's.
-    let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+    let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
     assert!(matches!(complete, Completion::Complete(_)));
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         complete
     );
     assert_eq!(wallet.custody.signatures, signatures + 1);
@@ -1436,7 +1786,7 @@ fn receipt_verdict_is_read_only_and_a_later_drain_archives_that_original_once() 
             .unwrap()
             .bytes(),
         wallet
-            .delivery_credit_projection(&send, &credited, &[])
+            .delivery_credit_projection(&send, &credited)
             .unwrap()
             .bytes()
     );
@@ -1450,7 +1800,7 @@ fn deferred_archive_stopped_after_its_plan_is_planned_again_after_a_later_step()
     // The drain stops once the Archive plan is durable, before any capsule exists.
     wallet.proofs.fail_preparation_proof = true;
     assert!(matches!(
-        wallet.accept_credited_for_send(&send, &credited),
+        fixture_archive_attempt(&mut wallet, &send, &credited),
         Err(Error::Proof("injected preparation stop"))
     ));
     assert_eq!(
@@ -1463,9 +1813,10 @@ fn deferred_archive_stopped_after_its_plan_is_planned_again_after_a_later_step()
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
+    snapshot_test_fold(&mut wallet);
     let mut wallet = restart(wallet);
     // The next drain plans the same Archive again on the new head and completes it once.
-    let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+    let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
     assert!(matches!(complete, Completion::Complete(_)));
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), 3);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 3);
@@ -1486,7 +1837,7 @@ fn deferred_archive_stopped_after_its_plan_is_planned_again_after_a_later_step()
         input.role == KagemushaWalletRetainedInputRoleV1::Credited && input.bytes == credited
     }));
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         complete
     );
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), 3);
@@ -1501,7 +1852,7 @@ fn deferred_archive_capsule_never_selected_is_replaced_after_a_later_step() {
     // Proved and retained, then refused before Advance: never selected.
     wallet.proofs.fail_commit_derivation = true;
     assert!(matches!(
-        wallet.accept_credited_for_send(&send, &credited),
+        fixture_archive_attempt(&mut wallet, &send, &credited),
         Err(Error::Proof("injected commit derivation refusal"))
     ));
     let stale: Vec<_> = capsules(&wallet).difference(&before).copied().collect();
@@ -1512,7 +1863,8 @@ fn deferred_archive_capsule_never_selected_is_replaced_after_a_later_step() {
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
-    let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+    snapshot_test_fold(&mut wallet);
+    let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
     assert!(matches!(complete, Completion::Complete(_)));
     // Nothing names the unused capsule any more; the committed Archive is a new capsule.
     assert!(!capsules(&wallet).contains(&stale));
@@ -1541,19 +1893,22 @@ fn deferred_archive_batch_from_an_older_head_is_planned_again() {
     // The batch is durable but its plan never published: one staged object put fails.
     *wallet.archive.fail_put.lock().unwrap() = Some((ArchiveKey::Object(object), false));
     assert!(matches!(
-        wallet.accept_credited_for_send(&send, &credited),
+        fixture_archive_attempt(&mut wallet, &send, &credited),
         Err(Error::Storage(_))
     ));
     let draft = ArchiveKey::PreparationDraft(archive);
     assert!(wallet.archive.records.lock().unwrap().contains_key(&draft));
-    wallet
-        .retain_intake_batch_only_test_original(archive)
+    let selected_original = wallet
+        .source_bound_archive_intent(&send, &credited)
         .unwrap();
+    assert_eq!(selected_original.request_id(), archive);
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 1);
     assert!(matches!(
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
-    let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+    snapshot_test_fold(&mut wallet);
+    let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
     assert!(matches!(complete, Completion::Complete(_)));
     assert!(!wallet.archive.records.lock().unwrap().contains_key(&draft));
     assert_eq!(
@@ -1568,7 +1923,7 @@ fn selected_pending_archive_resumes_and_is_never_planned_again_or_deferred() {
     let (send, credited, archive) = deferred_archive(&mut wallet);
     wallet.custody.pause = true;
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         Completion::Pending
     );
     let preparations = wallet.proofs.preparations.load(Ordering::SeqCst);
@@ -1576,7 +1931,7 @@ fn selected_pending_archive_resumes_and_is_never_planned_again_or_deferred() {
     let held = capsules(&wallet);
     for _ in 0..2 {
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Pending
         );
         assert_eq!(
@@ -1607,7 +1962,7 @@ fn selected_pending_archive_resumes_and_is_never_planned_again_or_deferred() {
     let derivations = wallet.proofs.derivations.load(Ordering::SeqCst);
     let mut wallet = restart(wallet);
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         Completion::Pending
     );
     assert_eq!(wallet.resume().unwrap(), Some(Completion::Pending));
@@ -1636,7 +1991,7 @@ fn selected_pending_archive_resumes_and_is_never_planned_again_or_deferred() {
     let mut wallet = restart(wallet);
     assert_eq!(wallet.resume().unwrap(), None);
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         complete
     );
     assert_eq!(
@@ -1754,6 +2109,8 @@ fn native_intent_is_canonical_and_does_not_decode_the_foreign_request_layout() {
 
 #[test]
 fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_before_preparation() {
+    use KagemushaWalletPolicyUpdateKindV1 as K;
+
     let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
     let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
     // Intake validates canonical shape only. The empty set confers no issuer authority;
@@ -1766,7 +2123,6 @@ fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_befor
         payer_credential: credential.to_canonical_bytes().unwrap(),
         certificates: certificates.clone(),
     }];
-    use KagemushaWalletPolicyUpdateKindV1 as K;
     for (kind, update) in [
         (K::Credential, credential.to_canonical_bytes().unwrap()),
         (
@@ -1813,10 +2169,9 @@ fn model_intake_refusal_preserves_all_refresh_receive_and_unload_originals_befor
         let mut w = wallet();
         // Resolve the mock ledger scope outside the constrained decoder. No fixture
         // construction or proof authority is introduced inside the observed read.
-        w.proofs.ledger_scope = Some((scheme.clone(), "wallet-test-chain".into()));
+        w.proofs.ledger_scope = Some((scheme, "wallet-test-chain".into()));
         let root = w.manifest().unwrap().0;
-        let allocation_limit =
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let allocation_limit = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
         let mut refusal_limits = vec![
             norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 64),
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
@@ -1924,6 +2279,7 @@ fn held_plan_retry_validates_fresh_custody_once_and_proves_from_that_derivation(
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
+    snapshot_test_fold(&mut wallet);
     assert_eq!(derivations(&wallet), 3, "validate and commit");
     assert_eq!(wallet.proofs.validations.load(Ordering::SeqCst), 1);
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), 1);
@@ -1959,6 +2315,7 @@ fn commit_derivation_refusal_never_advances_and_the_retained_capsule_resumes() {
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
+    snapshot_test_fold(&mut wallet);
     // The capsule is already retained: validate and commit, nothing proven again.
     assert_eq!(derivations(&wallet), 4);
     assert_eq!(wallet.proofs.validations.load(Ordering::SeqCst), 1);
@@ -2055,10 +2412,12 @@ fn unsynced_head_move_after_the_binding_check_stops_at_the_final_source_check() 
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap();
     let (plan, _) = wallet
@@ -2110,10 +2469,12 @@ fn proven_successor_is_checked_on_durable_custody_before_capsule_publication() {
         &map_state,
         request().kind(),
         None,
-        manifest.issued_requests,
-        manifest.direct_anchors,
-        manifest.finality_epochs,
-        manifest.blacklist.clone(),
+        crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {
+            issued: manifest.issued_requests,
+            anchors: manifest.direct_anchors,
+            epochs: manifest.finality_epochs,
+            blacklist: manifest.blacklist.clone(),
+        },
     )
     .unwrap()
     .original(crate::kagemusha_wallet_state_v1::PreparationOriginalV1::CurrentCredential)
@@ -2147,6 +2508,7 @@ fn proven_successor_is_checked_on_durable_custody_before_capsule_publication() {
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
+    snapshot_test_fold(&mut wallet);
     assert_eq!(wallet.custody.signatures, signatures + 1);
 }
 
@@ -2263,21 +2625,24 @@ fn stale_archive_batch_retirement_preserves_the_original_across_every_boundary()
         let object = object_digest(&wallet.proofs.preparation_payload);
         *wallet.archive.fail_put.lock().unwrap() = Some((ArchiveKey::Object(object), false));
         assert!(matches!(
-            wallet.accept_credited_for_send(&send, &credited),
+            fixture_archive_attempt(&mut wallet, &send, &credited),
             Err(Error::Storage(_))
         ));
-        wallet
-            .retain_intake_batch_only_test_original(archive)
+        let selected_original = wallet
+            .source_bound_archive_intent(&send, &credited)
             .unwrap();
+        assert_eq!(selected_original.request_id(), archive);
+        assert_eq!(wallet.deferred_archive_summary().unwrap().count, 1);
         assert!(matches!(
             wallet.execute(request()).unwrap(),
             Completion::Complete(_)
         ));
+        snapshot_test_fold(&mut wallet);
         let signatures = wallet.custody.signatures;
         let calls = wallet.custody.publication_calls;
         let draft = ArchiveKey::PreparationDraft(archive);
         match boundary {
-            // Original publication must finish before its formerly sole batch is removed.
+            // Reaffirm the permanently selected original before its old batch is removed.
             0 | 1 => wallet.custody.fail_publication_at = Some((calls + 1, boundary == 1)),
             2 | 3 => wallet.archive.fail_remove_at = Some((draft, boundary == 3)),
             // The old immutable key is retired before different bytes are put under it.
@@ -2287,19 +2652,19 @@ fn stale_archive_batch_retirement_preserves_the_original_across_every_boundary()
             _ => wallet.proofs.fail_preparation_proof = true,
         }
         assert!(
-            wallet.accept_credited_for_send(&send, &credited).is_err(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).is_err(),
             "boundary {boundary}"
         );
         assert_eq!(wallet.custody.signatures, signatures, "boundary {boundary}");
         wallet.proofs.fail_preparation_proof = false;
         let mut wallet = restart(wallet);
-        let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+        let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
         assert!(
             matches!(complete, Completion::Complete(_)),
             "boundary {boundary}"
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             complete
         );
         assert_eq!(
@@ -2332,7 +2697,7 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
         let before = capsules(&wallet);
         wallet.proofs.fail_commit_derivation = true;
         assert!(matches!(
-            wallet.accept_credited_for_send(&send, &credited),
+            fixture_archive_attempt(&mut wallet, &send, &credited),
             Err(Error::Proof("injected commit derivation refusal"))
         ));
         let stale: Vec<_> = capsules(&wallet).difference(&before).copied().collect();
@@ -2343,6 +2708,7 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
             wallet.execute(request()).unwrap(),
             Completion::Complete(_)
         ));
+        snapshot_test_fold(&mut wallet);
         let head = wallet
             .released_steps()
             .unwrap()
@@ -2370,7 +2736,7 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
             }
         }
         assert!(
-            wallet.accept_credited_for_send(&send, &credited).is_err(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).is_err(),
             "boundary {boundary}"
         );
         assert_eq!(wallet.custody.signatures, signatures, "boundary {boundary}");
@@ -2400,13 +2766,13 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
         wallet.proofs.fail_preparation_plan = false;
         wallet.proofs.fail_preparation_proof = false;
         let mut wallet = restart(wallet);
-        let complete = wallet.accept_credited_for_send(&send, &credited).unwrap();
+        let complete = fixture_archive_attempt(&mut wallet, &send, &credited).unwrap();
         assert!(
             matches!(complete, Completion::Complete(_)),
             "boundary {boundary}"
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             complete
         );
         assert_eq!(
@@ -2420,7 +2786,7 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
         let proofs = wallet.proofs.preparation_proofs.load(Ordering::SeqCst);
         let mut wallet = restart(wallet);
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             complete
         );
         assert_eq!(wallet.custody.signatures, signatures + 1);
@@ -2450,7 +2816,7 @@ fn stale_archive_retirement_refuses_uncertain_or_indexed_operation_absence() {
         let (send, credited, _) = deferred_archive(&mut wallet);
         let before = capsules(&wallet);
         wallet.proofs.fail_commit_derivation = true;
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         let stale: Vec<_> = capsules(&wallet).difference(&before).copied().collect();
         assert_eq!(stale.len(), 1);
         let stale = stale[0];
@@ -2460,6 +2826,7 @@ fn stale_archive_retirement_refuses_uncertain_or_indexed_operation_absence() {
             wallet.execute(request()).unwrap(),
             Completion::Complete(_)
         ));
+        snapshot_test_fold(&mut wallet);
         let held = capsules(&wallet);
         let signatures = wallet.custody.signatures;
         let preparations = wallet.proofs.preparations.load(Ordering::SeqCst);
@@ -2476,7 +2843,7 @@ fn stale_archive_retirement_refuses_uncertain_or_indexed_operation_absence() {
                 wallet.publish_manifest(selected, &manifest).unwrap();
             }
         }
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         assert_eq!(capsules(&wallet), held);
         assert_eq!(wallet.custody.signatures, signatures);
         assert_eq!(
@@ -2486,10 +2853,9 @@ fn stale_archive_retirement_refuses_uncertain_or_indexed_operation_absence() {
     }
 }
 
-#[test]
-fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
-    let mut wallet = prepared_wallet();
-    let (send, credited, _) = deferred_archive(&mut wallet);
+// A tombstoned Send fixture that will finish an Archive fold needs the same retained
+// descriptor and map as a folded real Send. Keep source-selection checks active.
+fn retain_historical_send_pending(wallet: &mut Wallet) {
     // This tombstone fixture represents a historical Send. Its explicit mock Ω must
     // retain that Send's actual pending descriptor before Archive can remove it.
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
@@ -2519,7 +2885,7 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         .insert(&mut wallet.archive, credit_id, leaf.leaf_value().unwrap())
         .unwrap();
     let sequence = wallet.manifest().unwrap().1.folded.unwrap();
-    snapshot_test_replace_fold(&mut wallet, sequence, |fold| {
+    snapshot_test_replace_fold(wallet, sequence, |fold| {
         fold.record.lineage.public.pending_outgoing_root = pending.root();
     });
     let (selected, mut manifest) = wallet.manifest().unwrap();
@@ -2529,11 +2895,22 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         .unwrap();
     manifest.fold_pending = manifest
         .fold_pending
-        .set(&mut wallet.archive, manifest::sequence_key(sequence), &address)
+        .set(
+            &mut wallet.archive,
+            manifest::sequence_key(sequence),
+            &address,
+        )
         .unwrap();
     wallet.publish_manifest(selected, &manifest).unwrap();
+}
+
+#[test]
+fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
+    let mut wallet = prepared_wallet();
+    let (send, credited, _) = deferred_archive(&mut wallet);
+    retain_historical_send_pending(&mut wallet);
     assert!(matches!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         Completion::Complete(_)
     ));
     let archived = wallet.released_steps().unwrap().pop().unwrap();
@@ -2549,12 +2926,13 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         wallet.execute(request()).unwrap(),
         Completion::Complete(_)
     ));
+    snapshot_test_fold(&mut wallet);
     wallet.custody.retained.remove(&operation).unwrap();
     let signatures = wallet.custody.signatures;
     let preparations = wallet.proofs.preparations.load(Ordering::SeqCst);
     let root = wallet.manifest().unwrap().0;
     assert_eq!(
-        wallet.accept_credited_for_send(&send, &credited).unwrap(),
+        fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
         Completion::DeliveryDataLoss
     );
     assert_eq!(wallet.custody.signatures, signatures);
@@ -2568,34 +2946,15 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
 // A fresh committed Send (production commit and indexing; explicit mock step proofs) with no
 // Archive intent. The receiver's fixture receipt is rebound to this Send's own Payment and
 // signed again with the receiver's fixture payment key, so binding and signatures are real.
-#[test]
-fn verified_delivery_checks_a_fresh_send_receipt_without_any_archive_intent() {
-    check_fresh_send_receipt(false);
-}
-
-#[test]
-fn verified_delivery_checks_open_request_receipt_without_any_archive_intent() {
-    check_fresh_send_receipt(true);
-}
-
-fn check_fresh_send_receipt(open: bool) {
-    let (mut wallet, send, mut request) = historical_send();
-    if open {
-        let OperationActionV1::Send { request: original } = &mut request.action else {
-            panic!("Send request")
-        };
-        let mut issued: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
-        issued.body = issued.body.open();
-        *original = archive::encode(&issued).unwrap();
-        wallet
-            .retain_delivery_test_mapping(
-                NativeIntentV1::user(request.clone()),
-                send.capsule.custody_digest(),
-                send.capsule.receipt_commitment(),
-                send.capsule.body().operation_id,
-            )
-            .unwrap();
-    }
+pub(super) fn fresh_delivery_receipt() -> (
+    Wallet,
+    FrozenTransition,
+    OperationRequestV1,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+) {
+    let (wallet, send, request) = historical_send();
     let OperationActionV1::Send { request: original } = &request.action else {
         panic!("Send request")
     };
@@ -2633,7 +2992,7 @@ fn check_fresh_send_receipt(open: bool) {
             KagemushaWalletSigningDomainV1::Receipt,
             &body.transcript(),
         ));
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let mut signed = package.clone();
         signed.receipt.signature =
             KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
@@ -2641,6 +3000,50 @@ fn check_fresh_send_receipt(open: bool) {
     };
     let credited = credited_with(signer(receiver));
     let forged = credited_with(signer(&send.credential));
+    (wallet, send, request, credited, foreign, forged)
+}
+
+#[test]
+fn verified_delivery_checks_a_fresh_send_receipt_without_any_archive_intent() {
+    check_fresh_send_receipt(false);
+}
+
+#[test]
+fn verified_delivery_checks_open_request_receipt_without_any_archive_intent() {
+    check_fresh_send_receipt(true);
+}
+
+fn check_fresh_send_receipt(open: bool) {
+    let (mut wallet, send, mut request, credited, foreign, forged) = fresh_delivery_receipt();
+    if open {
+        let OperationActionV1::Send { request: original } = &mut request.action else {
+            panic!("Send request")
+        };
+        let mut issued: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
+        issued.body = issued.body.open();
+        *original = archive::encode(&issued).unwrap();
+        wallet
+            .retain_delivery_test_mapping(
+                &NativeIntentV1::user(request.clone()),
+                send.capsule.custody_digest(),
+                send.capsule.receipt_commitment(),
+                send.capsule.body().operation_id,
+            )
+            .unwrap();
+    }
+    let OperationActionV1::Send { request: original } = &request.action else {
+        panic!("Send request");
+    };
+    let held: KagemushaWalletRequestV1 = archive::decode(original).unwrap();
+    let intent = wallet
+        .source_bound_archive_intent(&request.request_id, &credited)
+        .unwrap();
+    let payment = KagemushaWalletPaymentV1::decode_canonical(
+        &intent.archive_request().unwrap().payment,
+        &wallet.scheme_id,
+    )
+    .unwrap();
+    let identity = payment.digests().unwrap();
     let root = wallet.manifest().unwrap().0;
     let snapshot = wallet.snapshot().unwrap();
     let signatures = wallet.custody.signatures;
@@ -2703,4 +3106,383 @@ fn check_fresh_send_receipt(open: bool) {
     wallet.proofs.reject = false;
     assert_eq!(wallet.manifest().unwrap().0, root);
     assert_eq!(wallet.custody.signatures, signatures);
+}
+
+#[test]
+fn archive_age_is_sampled_after_final_source_reads_and_rechecked_at_threshold() {
+    let mut w = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut w);
+    let first = 123;
+    let retained = w
+        .retain_deferred_credited_with_clock(&send, &original, || Some(first))
+        .unwrap();
+    w.verify_deferred_credited(&retained).unwrap();
+    w.scheduler().set_activity(true, false);
+    let signatures = w.custody.signatures;
+    let checkpoint = w.custody.checkpoint.clone();
+    // Simulate a clock adjustment/unavailability while source reads are in progress.
+    // The observation records the actual final read count. Moving it before selected-head
+    // reads fails this assertion even when the returned age happens to refuse admission.
+    for current in [None, Some(first - 1), Some(first + 86_400_000 - 1)] {
+        let reads = Arc::clone(&w.archive.reads);
+        let mut sampled_reads = None;
+        let turn = w.scheduler().prepare_archive_turn().unwrap();
+        assert_eq!(
+            w.drain_deferred_archive_with_test_clock(turn, || {
+                sampled_reads = Some(reads.load(Ordering::SeqCst));
+                current
+            })
+            .unwrap(),
+            DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::NotDue)
+        );
+        assert_eq!(
+            sampled_reads,
+            Some(reads.load(Ordering::SeqCst)),
+            "no source read follows the final admission clock sample"
+        );
+        assert_eq!(w.custody.checkpoint, checkpoint);
+        assert_eq!(w.custody.signatures, signatures);
+        assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 0);
+    }
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert!(matches!(
+        w.drain_deferred_archive_with_test_clock(turn, || Some(first + 86_400_000))
+            .unwrap(),
+        DeferredArchiveDrainV1::Executed(Completion::Complete(_))
+    ));
+    assert_eq!(w.custody.signatures, signatures + 1);
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 1);
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
+}
+
+#[test]
+fn guarded_archive_waits_for_due_and_exchange_gates_then_blocks_fresh_head_until_fold() {
+    let mut w = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut w);
+    retain_historical_send_pending(&mut w);
+    let retained = w
+        .retain_deferred_credited_with_clock(&send, &original, || None)
+        .unwrap();
+    w.verify_deferred_credited(&retained).unwrap();
+    let signatures = w.custody.signatures;
+    let before = w.snapshot().unwrap();
+    w.scheduler().set_activity(true, false);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert_eq!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::NotDue)
+    );
+    assert_eq!(w.snapshot().unwrap(), before);
+    assert_eq!(w.custody.signatures, signatures);
+    w.scheduler().set_activity(true, true);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    let exchange = w.scheduler().begin_exchange().unwrap();
+    assert_eq!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::ExchangeOpen)
+    );
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 0);
+    exchange.end().unwrap();
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert!(matches!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Executed(Completion::Complete(_))
+    ));
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
+    assert_eq!(w.custody.signatures, signatures + 1);
+    assert!(matches!(
+        w.execute(request()),
+        Err(Error::FoldRequired) | Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
+    ));
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 1);
+    let current = w.released_steps().unwrap().pop().unwrap().frozen;
+    let load = frozen(
+        Some(&current),
+        KagemushaWalletEffectV1::Load {
+            receipt_digest: field(97),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        },
+    );
+    assert!(matches!(
+        w.commit(load),
+        Err(Error::FoldRequired) | Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
+    ));
+    assert_eq!(w.custody.signatures, signatures + 1);
+    let mut w = restart(w);
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
+    assert!(matches!(w.execute(request()), Err(Error::FoldRequired)));
+    snapshot_test_fold(&mut w);
+    assert!(matches!(
+        w.maintenance_view().unwrap(),
+        MaintenanceViewV1::Released(_)
+    ));
+    assert!(matches!(
+        w.execute(request()).unwrap(),
+        Completion::Complete(_)
+    ));
+    assert_eq!(w.custody.signatures, signatures + 2);
+}
+
+#[test]
+fn guarded_drain_authenticates_turn_even_without_work_and_never_resumes_pending() {
+    let mut w = prepared_wallet();
+    let other = Scheduler::new();
+    let foreign = other.prepare_archive_turn().unwrap();
+    let reads = w.archive.reads.load(Ordering::SeqCst);
+    assert!(matches!(
+        w.drain_deferred_archive(foreign),
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Foreign))
+    ));
+    assert_eq!(w.archive.reads.load(Ordering::SeqCst), reads);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert_eq!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::NoWork
+    );
+    assert_eq!(w.reconcile_next_deferred_archive().unwrap(), None);
+    let mut pending = wallet();
+    pending.custody.pause = true;
+    assert_eq!(pending.commit(bootstrap()).unwrap(), Completion::Pending);
+    let root = pending.custody.checkpoint.clone();
+    let records = pending.archive.records.lock().unwrap().clone();
+    let turn = pending.scheduler().prepare_archive_turn().unwrap();
+    assert_eq!(
+        pending.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::SelectedPending)
+    );
+    assert_eq!(pending.custody.checkpoint, root);
+    assert_eq!(*pending.archive.records.lock().unwrap(), records);
+    assert_eq!(pending.custody.signatures, 0);
+    pending.custody.pause = false;
+    assert!(matches!(
+        pending.resume().unwrap(),
+        Some(Completion::Complete(_))
+    ));
+}
+
+#[test]
+fn guarded_drain_requires_current_ordinary_fold_backlog_to_be_empty() {
+    let mut w = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut w);
+    w.observe_credited_for_send(&send, &original).unwrap();
+    assert!(matches!(
+        w.execute(request()).unwrap(),
+        Completion::Complete(_)
+    ));
+    w.scheduler().set_activity(true, true);
+    let root = w.manifest().unwrap().0;
+    let signatures = w.custody.signatures;
+    let count = w.proofs.preparations.load(Ordering::SeqCst);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert_eq!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Blocked(DeferredArchiveWaitV1::FoldBacklog)
+    );
+    assert_eq!(w.manifest().unwrap().0, root);
+    assert_eq!(w.custody.signatures, signatures);
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), count);
+    snapshot_test_fold(&mut w);
+    w.scheduler().set_activity(true, true);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert!(matches!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::Executed(Completion::Complete(_))
+    ));
+}
+
+#[test]
+fn observed_receipt_retry_is_bounded_and_never_dispatches_archive() {
+    let mut w = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut w);
+    let before = w.snapshot().unwrap();
+    let signatures = w.custody.signatures;
+    let bad = w
+        .retain_deferred_credited(&send, b"bad canonical receipt")
+        .unwrap();
+    let good = w.retain_deferred_credited(&send, &original).unwrap();
+    assert!(matches!(
+        w.verify_next_deferred_credited(),
+        Err(Error::ReceiptRejected(_))
+    ));
+    assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
+    assert!(matches!(
+        w.verify_deferred_credited(&bad),
+        Err(Error::ReceiptRejected(_))
+    ));
+    assert!(w.verify_next_deferred_credited().unwrap().is_some());
+    assert!(w.verify_next_deferred_credited().unwrap().is_none());
+    let projection = w.observe_credited_for_send(&send, &original).unwrap();
+    assert_eq!(projection.bytes()[3], 4);
+    assert_eq!(w.snapshot().unwrap(), before);
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 1);
+    assert_eq!(w.custody.signatures, signatures);
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        w.reconcile_next_deferred_archive().unwrap(),
+        Some(RequestStatusV1::Preparing)
+    );
+}
+
+#[test]
+fn failed_archive_proof_reconciles_exact_nonselection_and_raw_commit_cannot_bypass_gate() {
+    let mut w = prepared_wallet();
+    let (send, original, target) = deferred_archive(&mut w);
+    w.proofs.fail_commit_derivation = true;
+    let before = capsules(&w);
+    let signatures = w.custody.signatures;
+    assert!(matches!(
+        fixture_archive_attempt(&mut w, &send, &original),
+        Err(Error::Proof("injected commit derivation refusal"))
+    ));
+    assert_eq!(
+        w.retry_request(&target).unwrap(),
+        RequestStatusV1::Preparing
+    );
+    assert!(
+        w.scheduler().reconciling_archive().is_none(),
+        "definitive nonselection and unchanged source release the reservation"
+    );
+    let prepared = *capsules(&w).difference(&before).next().unwrap();
+    let frozen = w.frozen(prepared).unwrap();
+    w.proofs.fail_commit_derivation = false;
+    assert!(matches!(
+        w.commit(frozen),
+        Err(Error::Invalid(
+            "Archive dispatch requires Native reservation"
+        ))
+    ));
+    assert_eq!(w.custody.signatures, signatures);
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 1);
+    assert!(matches!(
+        fixture_archive_attempt(&mut w, &send, &original).unwrap(),
+        Completion::Complete(_)
+    ));
+}
+
+#[test]
+fn dropped_dispatched_permit_requires_exact_retained_outcome_and_covering_fold() {
+    use super::super::scheduling::ArchiveTargetV1;
+    let mut w = prepared_wallet();
+    let (send, original, target_id) = deferred_archive(&mut w);
+    retain_historical_send_pending(&mut w);
+    w.observe_credited_for_send(&send, &original).unwrap();
+    w.scheduler().set_activity(true, true);
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    let intent = w.source_bound_archive_intent(&send, &original).unwrap();
+    let target = ArchiveTargetV1 {
+        request_id: target_id,
+        source: w.selected_archive_head().unwrap().0,
+    };
+    let permit = w
+        .scheduler()
+        .reserve_archive(&turn, target, 1, false, 0)
+        .unwrap();
+    assert!(matches!(
+        w.execute_archive_intent(intent, &permit).unwrap(),
+        Completion::Complete(_)
+    ));
+    drop(permit);
+    drop(turn);
+    let (operation, _, _) = w.prepared_output_mapping(&target_id).unwrap();
+    let retained = w.custody.retained.remove(&operation).unwrap();
+    assert!(matches!(w.maintenance_view(), Err(Error::WitnessLost(_))));
+    assert!(w.scheduler().reconciling_archive().is_some());
+    assert!(matches!(
+        w.scheduler().prepare_archive_turn(),
+        Err(ArchiveAdmissionErrorV1::Busy)
+    ));
+    w.custody.retained.insert(operation, retained);
+    assert!(matches!(
+        w.maintenance_view().unwrap(),
+        MaintenanceViewV1::AwaitingArchiveFold(_)
+    ));
+    assert!(matches!(
+        w.reconcile_next_deferred_archive().unwrap(),
+        Some(RequestStatusV1::Outcome(Completion::Complete(_)))
+    ));
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
+    snapshot_test_fold(&mut w);
+    assert!(matches!(
+        w.maintenance_view().unwrap(),
+        MaintenanceViewV1::Released(_)
+    ));
+    assert!(w.scheduler().reconciling_archive().is_none());
+    let turn = w.scheduler().prepare_archive_turn().unwrap();
+    assert_eq!(
+        w.drain_deferred_archive(turn).unwrap(),
+        DeferredArchiveDrainV1::NoWork
+    );
+}
+
+#[test]
+fn late_fresh_work_preserves_running_and_parked_archive_fold() {
+    use std::{ops::ControlFlow, sync::mpsc, thread};
+    let mut w = prepared_wallet();
+    let (send, original, _) = deferred_archive(&mut w);
+    assert!(matches!(
+        fixture_archive_attempt(&mut w, &send, &original).unwrap(),
+        Completion::Complete(_)
+    ));
+    w.proofs.checkpoint_stages = 3;
+    let current = w.released_steps().unwrap().pop().unwrap().frozen;
+    let sequence = current.capsule.body().statement.sequence;
+    let job = match w.fold_prepare().unwrap() {
+        ControlFlow::Continue(job) => job,
+        ControlFlow::Break(ended) => panic!("admitted Archive fold: {ended:?}"),
+    };
+    let (tx, rx) = mpsc::channel();
+    let caller = thread::spawn(move || {
+        let result = w.execute(request());
+        tx.send(()).unwrap();
+        (w, result)
+    });
+    let refused_without_join = rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    // Release the proof before asserting even against the old preempting implementation.
+    let proved = job.prove();
+    let (mut w, result) = caller.join().unwrap();
+    assert!(
+        refused_without_join,
+        "late fresh work cannot join/cancel the required fold"
+    );
+    assert!(matches!(
+        result,
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy)) | Err(Error::FoldRequired)
+    ));
+    assert_eq!(
+        w.fold_publish(proved.expect("fresh-work barrier preserves proof"))
+            .unwrap()
+            .status,
+        FoldStatus::Checkpoint {
+            sequence,
+            ordinal: 0
+        }
+    );
+    let retained = w.proofs.last_left();
+    let root = w.custody.checkpoint.clone();
+    assert!(w.scheduler().holds_retained_for_test());
+    let load = frozen(
+        Some(&current),
+        KagemushaWalletEffectV1::Load {
+            receipt_digest: field(98),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        },
+    );
+    assert!(matches!(
+        w.commit(load),
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy)) | Err(Error::FoldRequired)
+    ));
+    assert!(w.scheduler().holds_retained_for_test());
+    assert_eq!(w.custody.checkpoint, root);
+    assert_eq!(
+        w.fold_once().unwrap(),
+        FoldStatus::Checkpoint {
+            sequence,
+            ordinal: 1
+        }
+    );
+    assert_eq!(w.proofs.last_handed(), Some(retained));
 }

@@ -80,7 +80,7 @@ fn status_carrier_is_only_a_bounded_hint_and_elapsed_budget_fails_before_io() {
 }
 
 #[test]
-fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch() {
+fn parent_context_and_certified_tip_are_required_before_preparation_or_dispatch() {
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent,
@@ -111,7 +111,7 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let mut store =
         AttachmentStore::open(&dir.path().join("attachment"), fixture.identity.clone()).unwrap();
@@ -148,10 +148,209 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
             .advance_parent(&config, &bootstrap, &mut parent, &offline, &options, None)
             .is_err()
     );
-    assert!(offline.0.load(Ordering::Relaxed) >= 3);
+    assert_eq!(offline.0.load(Ordering::Relaxed), 1);
     assert!(!store.progress(None).pending);
     assert!(!store.directory.path().join("transactions").exists());
     assert!(store.confirmed().is_none());
+}
+
+#[test]
+fn expired_unsigned_parent_requests_remain_terminal_under_fresh_turn_budgets() {
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+    use iroha_data_model::{
+        account::address::ChainDiscriminantGuard, sumeragi_finality::SumeragiFinalityProof,
+        transaction::FeePaymentIntent,
+    };
+    use iroha_model_base::peer::PeerId;
+    use std::time::Duration;
+
+    // The wallet checks its schema's exact JSON field order, including unsigned
+    // requests. Keep this expired input fixture typed rather than sorting its keys
+    // through a generic JSON object; the production wallet remains its only reader.
+    #[derive(norito::derive::JsonSerialize)]
+    struct Terms {
+        max_total_fees: Vec<norito::json::Value>,
+        deadline_ms: u64,
+    }
+    #[derive(norito::derive::JsonSerialize)]
+    #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+    enum RequestKind<'a> {
+        PrivateRootRegistration {
+            alias: &'a str,
+            expected_ownership_generation: u64,
+            registration: &'a PrivateDataspaceRegistration,
+            terms: &'a Terms,
+        },
+        PrivateRootAnchor {
+            state: &'a PrivateDataspaceAnchorState,
+            anchor: &'a PrivateDataspaceAnchor,
+            terms: &'a Terms,
+        },
+    }
+    #[derive(norito::derive::JsonSerialize)]
+    struct Request<'a> {
+        schema: &'a str,
+        torii_url: &'a str,
+        chain_id: &'a str,
+        network_id: NetworkId,
+        chain_discriminant: u16,
+        account_id: &'a AccountId,
+        operation: RequestKind<'a>,
+        requested_fee: &'a FeePaymentIntent,
+        deadline_ms: u64,
+    }
+
+    struct CertifiedTip(SumeragiFinalityProof);
+    impl crate::verify::finality::FinalitySource for CertifiedTip {
+        type Error = std::io::Error;
+        fn finality_proof(&self, height: NonZeroU64) -> std::io::Result<SumeragiFinalityProof> {
+            assert_eq!(height.get(), self.0.height());
+            Ok(self.0.clone())
+        }
+        fn latest_attestation(
+            &self,
+            _: &PeerId,
+            _: &[u8; 32],
+        ) -> std::io::Result<crate::verify::finality::FinalityAttestation> {
+            panic!("historical certificate refresh must not infer quorum readiness")
+        }
+        fn latest_finality_proof(
+            &self,
+            _: &PeerId,
+            _: &[u8; 32],
+        ) -> std::io::Result<SumeragiFinalityProof> {
+            Ok(self.0.clone())
+        }
+    }
+
+    for anchor in [false, true] {
+        let mut fixture = Fixture::new();
+        let (receipt, verifier) = fixture.parent_receipt();
+        let root = tempfile::tempdir().unwrap();
+        let bootstrap = fixture.bootstrap();
+        let mut parent =
+            ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
+        let mut store =
+            AttachmentStore::open(&root.path().join("attachment"), fixture.identity.clone())
+                .unwrap();
+        let key = KeyPair::from_seed(vec![47; 32], Algorithm::Ed25519);
+        let config = Config::load_table(
+            "expired-parent-request.toml",
+            toml::toml! {
+                chain = (fixture.parent.chain_id())
+                network_id = (fixture.parent.network_id().to_string())
+                torii_url = "https://parent.example/"
+                [account]
+                chain_discriminant = 753
+                public_key = (key.public_key().to_string())
+                private_key = (ExposedPrivateKey(key.private_key().clone()).to_string())
+            },
+        )
+        .unwrap();
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let options = BoundedTransactionOptions {
+            fee_payment: FeePaymentIntent::authority(vec![], None),
+            max_total_fees: std::collections::BTreeMap::default(),
+            deadline: Instant::now() + Duration::from_secs(30),
+        };
+        let terms = Terms {
+            max_total_fees: vec![],
+            deadline_ms: 1,
+        };
+        let kind = if anchor {
+            store.confirm_with_verifier(receipt, &verifier).unwrap();
+            let state = store.confirmed_child_state().unwrap().clone();
+            let anchor = fixture.child_anchor();
+            PendingKind::Anchor {
+                previous: Box::new(state),
+                anchor: Box::new(anchor),
+            }
+        } else {
+            PendingKind::Registration
+        };
+        let pending = PendingOperation {
+            kind,
+            checkpoint: fixture.parent.checkpoint().encode_canonical().unwrap(),
+            replay: None,
+        };
+        let journal = store
+            .directory
+            .ensure_child("transactions")
+            .unwrap()
+            .path()
+            .join(pending.journal_name().unwrap());
+        store.publish_pending(pending.clone()).unwrap();
+        // A canonical, already expired unsigned request is enough to exercise recovery.
+        // Its child certificates are genuine fixture certificates; no payload, signature,
+        // dispatch or parent inclusion is fabricated by this local custody fixture.
+        let operation = match &pending.kind {
+            PendingKind::Registration => RequestKind::PrivateRootRegistration {
+                alias: &fixture.identity.alias,
+                expected_ownership_generation: fixture.identity.ownership_generation,
+                registration: &fixture.identity.registration,
+                terms: &terms,
+            },
+            PendingKind::Anchor { previous, anchor } => RequestKind::PrivateRootAnchor {
+                state: previous,
+                anchor,
+                terms: &terms,
+            },
+        };
+        let request = Request {
+            schema: "iroha.wallet.native-preparation.v1",
+            torii_url: config.torii_api_url.as_str(),
+            chain_id: config.chain.as_str(),
+            network_id: config.network_id,
+            chain_discriminant: config.account_chain_discriminant,
+            account_id: &config.account,
+            operation,
+            requested_fee: &options.fee_payment,
+            deadline_ms: 1,
+        };
+        drop(iroha_operation_journal::Journal::create_preparation(&journal, &request).unwrap());
+        let original = std::fs::read(journal.join("preparation.json")).unwrap();
+        let pending = store
+            .directory
+            .read("attachment.nrt", MAX_RECORD_BYTES)
+            .unwrap();
+        let confirmed = store.confirmed();
+        let source = CertifiedTip(fixture.parent.latest().clone());
+        for seconds in [30, 60] {
+            let fresh = BoundedTransactionOptions {
+                deadline: Instant::now() + Duration::from_secs(seconds),
+                ..options.clone()
+            };
+            let progress = store
+                .advance_parent(&config, &bootstrap, &mut parent, &source, &fresh, None)
+                .unwrap();
+            assert_eq!(progress.transaction_status, Some(OperationStatus::Expired));
+            assert_eq!(progress.confirmed, confirmed);
+            assert!(progress.pending);
+            assert_eq!(
+                std::fs::read(journal.join("preparation.json")).unwrap(),
+                original
+            );
+            assert_eq!(
+                store
+                    .directory
+                    .read("attachment.nrt", MAX_RECORD_BYTES)
+                    .unwrap(),
+                pending
+            );
+            for record in [
+                "payload.json",
+                "operation.json",
+                "submission.json",
+                "applied.json",
+                "retired.json",
+            ] {
+                assert!(
+                    !journal.join(record).exists(),
+                    "expired request created {record}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -267,7 +466,7 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let path = dir.path().join("attachment");
     let mut store = AttachmentStore::open(&path, fixture.identity.clone()).unwrap();
@@ -335,7 +534,7 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
         store.advance_parent(&config, &bootstrap, &mut parent, &source, &options, None),
         Ok(_) | Err(AttachmentError::Cancelled)
     ));
-    assert!(source.0.get() >= 3);
+    assert_eq!(source.0.get(), 1);
     assert_eq!(
         store
             .directory

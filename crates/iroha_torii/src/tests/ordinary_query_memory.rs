@@ -90,12 +90,17 @@ mod ordinary_query_memory_tests {
             bridge,
         };
         let world = tests_runtime_handlers::world_with_account(&authority);
-        let app = tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
+        let app = tests_runtime_handlers::mk_native_app_state_for_tests_with_world(world);
+
+        let genesis = app
+            .state
+            .latest_block_header_fast()
+            .expect("native genesis header");
         let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero proof fixture height"),
+            NonZeroU64::new(2).expect("nonzero proof fixture height"),
+            Some(genesis.hash()),
             None,
-            None,
-            0,
+            u64::try_from(genesis.creation_time().as_millis()).unwrap() + 1,
             0,
         );
         let mut block = app.state.block(header);
@@ -109,7 +114,8 @@ mod ordinary_query_memory_tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit bounded proof fixture");
-        let signed = authorize_query_for_test(
+        let signed = tests_runtime_handlers::authorize_native_query_for_fixture(
+            *app.state.network_id_ref(),
             QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
                 id,
             })),
@@ -330,7 +336,7 @@ mod ordinary_query_memory_tests {
                 .len();
             assert!(
                 crate::utils::respond_with_format_bounded(
-                    response.clone(),
+                    &(response),
                     ResponseFormat::Json,
                     exact,
                 )
@@ -338,7 +344,7 @@ mod ordinary_query_memory_tests {
             );
             assert!(matches!(
                 crate::utils::respond_with_format_bounded(
-                    response,
+                    &(response),
                     ResponseFormat::Json,
                     exact - 1,
                 ),
@@ -524,7 +530,7 @@ mod ordinary_query_memory_tests {
             signed_query_b64: "A"
                 .repeat(canonical_base64_max_len(envelope.route_body_bytes).saturating_add(1)),
         };
-        let response = decode_bounded_proof_query(dto, envelope)
+        let response = decode_bounded_proof_query(&(dto), envelope)
             .err()
             .expect("oversized proof input must fail before versioned decode");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -634,14 +640,12 @@ mod ordinary_query_memory_tests {
         let exact = norito::core::to_bytes(&value)
             .expect("encode fixture")
             .len();
-        assert!(crate::utils::respond_with_format_bounded(
-            value.clone(),
-            ResponseFormat::Norito,
-            exact,
-        )
-        .is_ok());
+        assert!(
+            crate::utils::respond_with_format_bounded(&(value), ResponseFormat::Norito, exact,)
+                .is_ok()
+        );
         assert!(matches!(
-            crate::utils::respond_with_format_bounded(value, ResponseFormat::Norito, exact - 1,),
+            crate::utils::respond_with_format_bounded(&(value), ResponseFormat::Norito, exact - 1,),
             Err(crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. })
         ));
     }

@@ -50,19 +50,19 @@ pub(super) fn governed_head(
 
 /// Apply one exact action after Parliament authenticated its subject, effect and current head.
 pub(super) fn apply(
-    action: Action,
+    action: &Action,
     tx: &mut StateTransaction<'_, '_>,
 ) -> Result<bool, InstructionExecutionError> {
     apply_inner(action, tx, None).map_err(rejected)
 }
 
 fn apply_inner(
-    action: Action,
+    action: &Action,
     tx: &mut StateTransaction<'_, '_>,
     genesis_origin: Option<native::GenesisAdmissionOriginV1>,
 ) -> Result<bool, ProviderAdmissionErrorV1> {
     let invalid = ProviderAdmissionErrorV1;
-    let subject = match (&action, &genesis_origin) {
+    let subject = match (action, &genesis_origin) {
         (Action::Admit(bytes), Some(_)) => {
             let projection: ProviderAdmissionEnvelopeV1 =
                 decode_frame(bytes).map_err(|_| invalid)?;
@@ -96,7 +96,7 @@ fn apply_inner(
     }
     let network_id = *tx.network_id().as_bytes();
     let mut count_update = None;
-    let (material, revoked, owner) = match &action {
+    let (material, revoked, owner) = match action {
         Action::ConfigureCouncil(bytes) => {
             let policy: ProviderAdmissionCouncilPolicyV1 =
                 decode_frame(bytes).map_err(|_| invalid)?;

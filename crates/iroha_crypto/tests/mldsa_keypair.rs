@@ -4,8 +4,6 @@ mod mldsa_tests {
         Algorithm, Error, ExposedPrivateKey, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
         SignatureOf,
     };
-    use pqcrypto_mldsa::mldsa65;
-    use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
     fn checked_mldsa_public_key_payload(keypair: &KeyPair) -> &[u8] {
         let (algorithm, payload) = keypair
             .public_key()
@@ -21,22 +19,20 @@ mod mldsa_tests {
     fn checked_mldsa_signature(keypair: &KeyPair, message: &[u8]) -> Signature {
         Signature::try_new(keypair.private_key(), message).expect("sign checked ML-DSA fixture")
     }
-    fn seeded_pair(label: &[u8]) -> (mldsa65::PublicKey, mldsa65::SecretKey) {
+    fn seeded_pair(label: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let kp = checked_mldsa_keypair_from_seed(label);
         let pk_bytes = checked_mldsa_public_key_payload(&kp);
         let sk_bytes = kp.private_key().to_bytes().1;
-        let pk = mldsa65::PublicKey::from_bytes(pk_bytes)
-            .expect("seeded ML-DSA public key bytes should decode");
-        let sk = mldsa65::SecretKey::from_bytes(&sk_bytes)
-            .expect("seeded ML-DSA secret key bytes should decode");
-        (pk, sk)
+        assert_eq!(pk_bytes.len(), iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES);
+        assert_eq!(sk_bytes.len(), iroha_crypto::ML_DSA_65_SECRET_KEY_BYTES);
+        (pk_bytes.to_vec(), sk_bytes)
     }
     #[test]
     fn keypair_new_accepts_matching_mldsa_keys() {
         let (pk, sk) = seeded_pair(b"iroha:ml-dsa:keypair:accept");
-        let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes())
+        let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_slice())
             .expect("valid ML-DSA public key");
-        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes())
+        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_slice())
             .expect("valid ML-DSA private key");
         let pair = KeyPair::new(public_key, private_key);
         assert!(pair.is_ok(), "expected matching ML-DSA keys to succeed");
@@ -45,9 +41,9 @@ mod mldsa_tests {
     fn keypair_new_rejects_mismatched_mldsa_keys() {
         let (_, sk) = seeded_pair(b"iroha:ml-dsa:keypair:mismatch:sk");
         let (other_pk, _) = seeded_pair(b"iroha:ml-dsa:keypair:mismatch:pk");
-        let public_key = PublicKey::from_bytes(Algorithm::MlDsa, other_pk.as_bytes())
+        let public_key = PublicKey::from_bytes(Algorithm::MlDsa, other_pk.as_slice())
             .expect("valid ML-DSA public key");
-        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes())
+        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_slice())
             .expect("valid ML-DSA private key");
         let result = KeyPair::new(public_key, private_key);
         assert!(
@@ -258,9 +254,9 @@ mod mldsa_tests {
     fn public_key_from_private_key_matches_original() {
         let (pk, sk) = seeded_pair(b"iroha:ml-dsa:pk-from-sk");
         let expected_public =
-            PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes()).expect("valid public key");
+            PublicKey::from_bytes(Algorithm::MlDsa, pk.as_slice()).expect("valid public key");
         let private =
-            PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes()).expect("valid private key");
+            PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_slice()).expect("valid private key");
         let derived: PublicKey = private.clone().into();
         assert_eq!(
             expected_public, derived,
@@ -271,9 +267,9 @@ mod mldsa_tests {
     fn keypair_from_private_key_restores_public_material() {
         let (pk, sk) = seeded_pair(b"iroha:ml-dsa:keypair-from-private");
         let expected_public =
-            PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes()).expect("valid public key");
+            PublicKey::from_bytes(Algorithm::MlDsa, pk.as_slice()).expect("valid public key");
         let private =
-            PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes()).expect("valid private key");
+            PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_slice()).expect("valid private key");
         let keypair: KeyPair = private.clone().into();
         assert_eq!(
             expected_public,
@@ -289,7 +285,7 @@ mod mldsa_tests {
     #[test]
     fn private_key_import_rejects_inconsistent_private_key() {
         let (_, sk) = seeded_pair(b"iroha:ml-dsa:keypair-from-private:tampered");
-        let mut secret_bytes = sk.as_bytes().to_vec();
+        let mut secret_bytes = sk.as_slice().to_vec();
         let last = secret_bytes
             .last_mut()
             .expect("ML-DSA secret key has at least one byte");

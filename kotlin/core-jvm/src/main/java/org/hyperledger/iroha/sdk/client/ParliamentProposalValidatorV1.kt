@@ -17,17 +17,67 @@ internal object ParliamentProposalValidatorV1 {
     private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val FIRST_RELEASE_MAX_EXACT_JSON_U64 = BigInteger("9007199254740991")
     private const val SCCP_GOVERNANCE_MAX_ENTRIES = 16
-    private val SCCP_EXTERNAL_NETWORKS = setOf(
-        "ethereum_mainnet", "bsc_mainnet", "ton_mainnet",
-    )
-    private val SCCP_GOVERNANCE_ACTIONS = setOf(
-        "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
-        "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
-        "set_destination_paused", "initialize_light_client", "install_trusted_checkpoint",
-        "freeze_light_client", "set_parameters", "activate_light_client_profile",
-        "attest_deployment_progress", "quarantine_revision", "open_reconciliation",
-        "set_fast_pause_suspended",
-    )
+    private val SCCP_EXTERNAL_NETWORKS =
+        listOf(
+            "ethereum_mainnet",
+            "bsc_mainnet",
+            "ton_mainnet",
+        )
+
+    // Rust enum declaration order fixes the canonical subject-revision list.
+    private val SCCP_SUBJECTS =
+        listOf(
+            "route",
+            "route_control",
+            "light_client",
+            "parameters",
+            "forgery_hold",
+            "fast_hold",
+            "fast_pause_control",
+        )
+    private val SCCP_ACTIONS =
+        mapOf(
+            "register_route" to ("route" to setOf("revision", "deployment", "initial_committee", "max_wrapped_supply")),
+            "activate_revision" to ("route" to setOf("revision")),
+            "switch_revision" to ("route" to setOf("from", "to")),
+            "deactivate_outbound" to ("route" to setOf("revision")),
+            "retire_revision" to ("route" to setOf("revision")),
+            "remove_staged" to ("route" to setOf("revision")),
+            "release_stranded" to ("route" to setOf("amount", "recipient", "memo")),
+            "set_taira_paused" to ("route" to setOf("paused")),
+            "set_destination_paused" to ("route_control" to setOf("revision", "paused")),
+            "initialize_light_client" to ("light_client" to setOf("expected", "params", "bootstrap")),
+            "install_trusted_checkpoint" to ("light_client" to setOf("checkpoint")),
+            "freeze_light_client" to ("light_client" to emptySet()),
+            "set_parameters" to ("parameters" to setOf("next")),
+            "activate_light_client_profile" to ("light_client" to setOf("version", "profile_hash")),
+            "attest_deployment_progress" to ("forgery_hold" to setOf("revision", "at")),
+            "quarantine_revision" to ("forgery_hold" to setOf("revision")),
+            "open_reconciliation" to ("forgery_hold" to setOf("revision", "window_ms")),
+            "set_fast_pause_suspended" to ("fast_pause_control" to setOf("duration_ms")),
+        )
+    private const val JSON_SAFE_MAX = 9_007_199_254_740_991L
+    private val SCCP_PARAMETER_BOUNDS =
+        mapOf(
+            "committee_validity_ms" to 0L..2_592_000_000L,
+            "committee_heartbeat_ms" to 3_600_000L..JSON_SAFE_MAX,
+            "forgery_evidence_grace_ms" to 86_400_000L..2_592_000_000L,
+            "destination_progress_cap_ms" to 0L..2_592_000_000L,
+            "outbound_ttl_ms" to 86_400_000L..7_776_000_000L,
+            "max_exempt_transactions_per_block" to 8L..1024L,
+            "fast_pause_panel_seats" to 5L..9L,
+            "fast_pause_panel_term_ms" to 3_600_000L..JSON_SAFE_MAX,
+            "fast_pause_seat_accept_window_ms" to 600_000L..JSON_SAFE_MAX,
+            "fast_pause_endorse_window_ms" to 300_000L..21_600_000L,
+            "fast_pause_renew_lead_ms" to 0L..JSON_SAFE_MAX,
+            "fast_pause_hold_ms" to 0L..2_505_600_000L,
+        )
+    /** Exact `ChangeSetV1` field set; its contents pass through to node admission. */
+    private val RUNTIME_CHANGE_SET_FIELDS =
+        setOf(
+            "network", "root", "predecessor", "successor", "effective_height",
+            "publish", "transitions", "qualification",
+        )
     private val KEBAB = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")
     private val ALPHANUMERIC_PRERELEASE = Regex("(?=.*[A-Za-z-])[A-Za-z0-9-]+")
 
@@ -89,54 +139,39 @@ internal object ParliamentProposalValidatorV1 {
         canonicalSignature(value["signature"], "$label.signature")
     }
 
+    /**
+     * Admits the closed governed change-set proposal (`specs/live_runtime_upgrades.md` §6):
+     * schedule one `ChangeSetV1` or cancel one scheduled change-set id, with the notice and
+     * proposal time the node froze at admission. The SDK checks every envelope field set and
+     * first-release exact JSON integer; the node authenticates the change set's network, root,
+     * selections, publications, transitions and qualification digest.
+     */
     private fun runtimeUpgrade(value: Map<String, Any?>) {
-        exact(value, setOf("proposal_operator", "manifest"), "RuntimeUpgrade")
+        exact(value, setOf("proposal_operator", "action", "notice", "proposed_ms"), "RuntimeUpgrade")
         account(value["proposal_operator"], "RuntimeUpgrade.proposal_operator")
-        val manifest = objectValue(value["manifest"], "RuntimeUpgrade.manifest")
-        exact(
-            manifest,
-            setOf(
-                "name", "description", "abi_version", "abi_hash", "added_syscalls",
-                "added_pointer_types", "start_height", "end_height", "sbom_digests",
-                "slsa_attestation", "provenance",
-            ),
-            "RuntimeUpgrade.manifest",
-        )
-        text(manifest["name"], "manifest.name")
-        string(manifest["description"], "manifest.description")
-        require(uint(manifest["abi_version"], "manifest.abi_version") == BigInteger.ONE) {
-            "manifest.abi_version must equal 1"
+        val action = objectValue(value["action"], "RuntimeUpgrade.action")
+        exact(action, setOf("kind", "content"), "RuntimeUpgrade.action")
+        when (text(action["kind"], "RuntimeUpgrade.action.kind")) {
+            "Schedule" -> {
+                val changeSet = objectValue(action["content"], "RuntimeUpgrade.action.content")
+                exact(changeSet, RUNTIME_CHANGE_SET_FIELDS, "RuntimeUpgrade.action.content")
+                uint(changeSet["effective_height"], "RuntimeUpgrade.action.content.effective_height")
+            }
+            "Cancel" -> lowerHex32(action["content"], "RuntimeUpgrade.action.content")
+            else -> throw IllegalArgumentException("RuntimeUpgrade.action.kind must be Schedule or Cancel")
         }
-        bytes(manifest["abi_hash"], 32, "manifest.abi_hash", false)
-        val syscalls = list(manifest["added_syscalls"], "manifest.added_syscalls")
-        val pointers = list(manifest["added_pointer_types"], "manifest.added_pointer_types")
-        syscalls.forEachIndexed { index, item ->
-            require(uint(item, "manifest.added_syscalls[$index]") <= BigInteger.valueOf(0xffff))
-        }
-        pointers.forEachIndexed { index, item ->
-            require(uint(item, "manifest.added_pointer_types[$index]") <= BigInteger.valueOf(0xffff))
-        }
-        require(syscalls.isEmpty() && pointers.isEmpty()) { "V1 ABI delta lists must be empty" }
-        val start = uint(manifest["start_height"], "manifest.start_height")
-        val end = uint(manifest["end_height"], "manifest.end_height")
-        require(end > start) { "manifest.end_height must exceed start_height" }
-        list(manifest["sbom_digests"], "manifest.sbom_digests").forEachIndexed { index, item ->
-            val digest = objectValue(item, "manifest.sbom_digests[$index]")
-            exact(digest, setOf("algorithm", "digest"), "manifest.sbom_digests[$index]")
-            text(digest["algorithm"], "manifest.sbom_digests[$index].algorithm")
-            canonicalBase64(digest["digest"], "manifest.sbom_digests[$index].digest")
-        }
-        canonicalBase64(manifest["slsa_attestation"], "manifest.slsa_attestation")
-        list(manifest["provenance"], "manifest.provenance").forEachIndexed { index, item ->
-            manifestProvenance(objectValue(item, "manifest.provenance[$index]"), "manifest.provenance[$index]")
-        }
+        val notice = objectValue(value["notice"], "RuntimeUpgrade.notice")
+        exact(notice, setOf("blocks", "ms", "approval_cushion_ms"), "RuntimeUpgrade.notice")
+        uint(notice["blocks"], "RuntimeUpgrade.notice.blocks")
+        uint(notice["ms"], "RuntimeUpgrade.notice.ms")
+        uint(notice["approval_cushion_ms"], "RuntimeUpgrade.notice.approval_cushion_ms")
+        uint(value["proposed_ms"], "RuntimeUpgrade.proposed_ms")
     }
 
     /**
-     * Checks the closed `SccpGovernanceProposalV1` envelope (specs/sccp.md §4.14.3): subjects,
-     * revisions and action tags. Action payloads must be objects; Torii performs the
-     * state-independent payload checks against the live network and core the state-dependent ones.
-     * TODO: share typed action-body and exact subject-set validation through the native bridge.
+     * Checks the envelope, all static action rules and exact subject-revision set
+     * (specs/sccp.md §4.14.3). The node checks live network identity, authorization,
+     * authenticated committee/bootstrap evidence and committed state.
      */
     private fun sccpRoute(value: Map<String, Any?>) {
         exact(value, setOf("proposal"), "SccpRouteGovernance")
@@ -151,44 +186,318 @@ internal object ParliamentProposalValidatorV1 {
         require(baseRevisions.size in 1..SCCP_GOVERNANCE_MAX_ENTRIES) {
             "proposal.base_revisions must hold 1 to $SCCP_GOVERNANCE_MAX_ENTRIES entries"
         }
-        baseRevisions.forEachIndexed { index, item ->
-            val label = "proposal.base_revisions[$index]"
-            val entry = objectValue(item, label)
-            exact(entry, setOf("subject", "revision"), label)
-            sccpGovernanceSubject(objectValue(entry["subject"], "$label.subject"), "$label.subject")
-            uint(entry["revision"], "$label.revision")
-        }
+        val actualSubjects =
+            baseRevisions.mapIndexed { index, item ->
+                val label = "proposal.base_revisions[$index]"
+                val entry = objectValue(item, label)
+                exact(entry, setOf("subject", "revision"), label)
+                uint(entry["revision"], "$label.revision")
+                sccpGovernanceSubject(objectValue(entry["subject"], "$label.subject"), "$label.subject")
+            }
         val actions = list(proposal["actions"], "proposal.actions")
         require(actions.size in 1..SCCP_GOVERNANCE_MAX_ENTRIES) {
             "proposal.actions must hold 1 to $SCCP_GOVERNANCE_MAX_ENTRIES entries"
         }
+        val subjects = sortedSetOf<Int>()
+        val destinations = mutableSetOf<List<Byte>>()
         actions.forEachIndexed { index, item ->
             val label = "proposal.actions[$index]"
             val action = objectValue(item, label)
             exact(action, setOf("action", "payload"), label)
-            require(text(action["action"], "$label.action") in SCCP_GOVERNANCE_ACTIONS) {
-                "$label.action is unknown"
+            val tag = text(action["action"], "$label.action")
+            val (subject, fields) =
+                SCCP_ACTIONS[tag]
+                    ?: throw IllegalArgumentException("$label.action is unknown")
+            val body = objectValue(action["payload"], "$label.payload")
+            exact(body, if (subject == "parameters") fields else fields + "network", "$label.payload")
+            val network =
+                if (subject == "parameters") {
+                    null
+                } else {
+                    sccpExternalNetwork(objectValue(body["network"], "$label.payload.network"), "$label.payload.network")
+                }
+            subjects.add(sccpSubjectOrder(subject, network))
+            sccpAction(tag, body, network, "$label.payload", destinations)
+        }
+        require(actualSubjects == subjects.toList()) {
+            "proposal.base_revisions must list exactly the action subjects in canonical order, without duplicates"
+        }
+    }
+
+    private fun sccpAction(
+        action: String,
+        value: Map<String, Any?>,
+        network: String?,
+        label: String,
+        destinations: MutableSet<List<Byte>>,
+    ) {
+        if ("revision" in value) sccpUint(value["revision"], "$label.revision", 1, 0xffff_ffffL)
+        when (action) {
+            "register_route" -> {
+                val word = sccpDeployment(value["deployment"], requireNotNull(network), "$label.deployment")
+                sccpCommitteePin(value["initial_committee"], "$label.initial_committee")
+                val bits = if (network == "ton_mainnet") 96 else 128
+                sccpAmount(
+                    value["max_wrapped_supply"],
+                    "$label.max_wrapped_supply",
+                    BigInteger.ONE,
+                    BigInteger.ONE.shiftLeft(bits).subtract(BigInteger.ONE),
+                )
+                require(destinations.add(word.toList())) { "$label.deployment repeats a registered destination word" }
             }
-            objectValue(action["payload"], "$label.payload")
+            "release_stranded" -> {
+                sccpAmount(
+                    value["amount"],
+                    "$label.amount",
+                    BigInteger.ONE,
+                    BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE),
+                )
+                val memo = string(value["memo"], "$label.memo")
+                require(
+                    memo.length <= 256 && StandardCharsets.UTF_8.newEncoder().canEncode(memo) &&
+                        memo.toByteArray(StandardCharsets.UTF_8).size <= 256,
+                ) {
+                    "$label.memo must contain valid Unicode scalar values and at most 256 UTF-8 bytes"
+                }
+                account(value["recipient"], "$label.recipient")
+            }
+            "initialize_light_client" -> {
+                val expected = objectValue(value["expected"], "$label.expected")
+                exact(expected, setOf("expected", "detail"), "$label.expected")
+                require(expected["expected"] in listOf("absent", "unusable") && expected["detail"] == null) {
+                    "$label.expected must name absent or unusable with null detail"
+                }
+                sccpLightClientParams(value["params"], requireNotNull(network), "$label.params")
+                sccpBootstrap(value["bootstrap"], network, "$label.bootstrap")
+            }
+            "set_parameters" -> sccpParameters(value["next"], "$label.next")
+            "switch_revision" -> {
+                val from = sccpUint(value["from"], "$label.from", 1, 0xffff_ffffL)
+                val to = sccpUint(value["to"], "$label.to", 1, 0xffff_ffffL)
+                require(from != to) { "$label.from and .to must name distinct revisions" }
+            }
+            "set_taira_paused", "set_destination_paused" ->
+                require(value["paused"] is Boolean) { "$label.paused must be a boolean" }
+            "activate_light_client_profile" -> {
+                sccpUint(value["version"], "$label.version", 2, 0xffff_ffffL)
+                bytes(value["profile_hash"], 32, "$label.profile_hash", true)
+            }
+            "install_trusted_checkpoint" -> {
+                require(network != "ton_mainnet") { "$label.network cannot be TON; its light client reads no checkpoints" }
+                sccpCheckpoint(value["checkpoint"], "$label.checkpoint")
+            }
+            "attest_deployment_progress" -> sccpProgress(value["at"], "$label.at")
+            "open_reconciliation" -> sccpUint(value["window_ms"], "$label.window_ms", 1)
+            "set_fast_pause_suspended" -> sccpUint(value["duration_ms"], "$label.duration_ms", 0, 7_776_000_000L)
         }
     }
 
-    private fun sccpGovernanceSubject(value: Map<String, Any?>, label: String) {
+    private fun sccpUint(
+        value: Any?,
+        label: String,
+        minimum: Long = 0,
+        maximum: Long = JSON_SAFE_MAX,
+    ): Long {
+        val number = uint(value, label).longValueExact()
+        require(number in minimum..maximum) { "$label must be within $minimum..$maximum" }
+        return number
+    }
+
+    private fun sccpAmount(
+        value: Any?,
+        label: String,
+        minimum: BigInteger,
+        maximum: BigInteger,
+    ) {
+        val literal = string(value, label)
+        require(literal.length <= maximum.toString().length && Regex("0|[1-9][0-9]*").matches(literal)) {
+            "$label must be a bounded canonical unsigned decimal string"
+        }
+        require(BigInteger(literal) in minimum..maximum) { "$label must be within $minimum..$maximum" }
+    }
+
+    private fun sccpDeployment(
+        value: Any?,
+        network: String,
+        label: String,
+    ): ByteArray {
+        val record = objectValue(value, label)
+        exact(record, setOf("family", "deployment"), label)
+        val body = objectValue(record["deployment"], "$label.deployment")
+        if (record["family"] == "evm" && network != "ton_mainnet") {
+            exact(body, setOf("address", "runtime_code_hash"), "$label.deployment")
+            val address = bytes(body["address"], 20, "$label.deployment.address", true)
+            bytes(body["runtime_code_hash"], 32, "$label.deployment.runtime_code_hash", false)
+            return ByteArray(12) + address
+        }
+        if (record["family"] == "ton" && network == "ton_mainnet") {
+            exact(body, setOf("master_account", "minter_code", "wallet_code", "bucket_code"), "$label.deployment")
+            val word = bytes(body["master_account"], 32, "$label.deployment.master_account", true)
+            for (field in listOf("minter_code", "wallet_code", "bucket_code")) {
+                val code = objectValue(body[field], "$label.deployment.$field")
+                exact(code, setOf("hash", "depth"), "$label.deployment.$field")
+                bytes(code["hash"], 32, "$label.deployment.$field.hash", false)
+                sccpUint(code["depth"], "$label.deployment.$field.depth", 0, 65535)
+            }
+            return word
+        }
+        throw IllegalArgumentException("$label.family must match the external network")
+    }
+
+    private fun sccpCommitteePin(
+        value: Any?,
+        label: String,
+    ) {
+        val pin = objectValue(value, label)
+        exact(pin, setOf("generation", "committee_root", "start_height", "until_ms"), label)
+        for (field in listOf("generation", "start_height", "until_ms")) sccpUint(pin[field], "$label.$field", 1)
+        bytes(pin["committee_root"], 32, "$label.committee_root", true)
+    }
+
+    private fun sccpLightClientParams(
+        value: Any?,
+        network: String,
+        label: String,
+    ) {
+        val jsonFields = setOf("ws_bound_ms", "set_retention_ms", "checkpoint_stride", "checkpoint_prune_after_ms")
+        val u32Fields =
+            setOf(
+                "max_updates_per_advance",
+                "max_segment_headers",
+                "max_ancestry_headers",
+                "max_backfill_headers",
+                "max_advance_bytes",
+                "max_proof_bytes",
+            )
+        val params = objectValue(value, label)
+        exact(params, jsonFields + u32Fields + "network", label)
+        require(sccpExternalNetwork(objectValue(params["network"], "$label.network"), "$label.network") == network) {
+            "$label.network must match the action network"
+        }
+        for (field in jsonFields) {
+            val derived = network == "ton_mainnet" && field in setOf("ws_bound_ms", "checkpoint_stride")
+            sccpUint(params[field], "$label.$field", if (derived) 0 else 1, if (derived) 0 else JSON_SAFE_MAX)
+        }
+        for (field in u32Fields) sccpUint(params[field], "$label.$field", 1, 0xffff_ffffL)
+    }
+
+    private fun sccpBootstrap(
+        value: Any?,
+        network: String,
+        label: String,
+    ) {
+        val bootstrap = objectValue(value, label)
+        exact(bootstrap, setOf("network", "bytes"), label)
+        require(sccpExternalNetwork(objectValue(bootstrap["network"], "$label.network"), "$label.network") == network) {
+            "$label.network must match the action network"
+        }
+        val encoded = string(bootstrap["bytes"], "$label.bytes")
+        val maximum = 1_048_576
+        require(encoded.length in 1..(4 * ((maximum + 2) / 3))) { "$label.bytes must encode 1..$maximum bytes" }
+        canonicalBase64(encoded, "$label.bytes")
+        val length =
+            encoded.length / 4 * 3 -
+                if (encoded.endsWith("==")) {
+                    2
+                } else if (encoded.endsWith("=")) {
+                    1
+                } else {
+                    0
+                }
+        require(length <= maximum) { "$label.bytes exceeds $maximum bytes" }
+        // Per-chain native decoding and bootstrap authentication remain node-owned.
+    }
+
+    private fun sccpCheckpoint(
+        value: Any?,
+        label: String,
+    ) {
+        val checkpoint = objectValue(value, label)
+        exact(checkpoint, setOf("source_height", "block_hash", "state_root", "receipts_or_tx_root", "source_time_ms"), label)
+        for (field in listOf("source_height", "source_time_ms")) uint(checkpoint[field], "$label.$field")
+        for (field in listOf("block_hash", "receipts_or_tx_root")) bytes(checkpoint[field], 32, "$label.$field", false)
+        checkpoint["state_root"]?.let { bytes(it, 32, "$label.state_root", false) }
+    }
+
+    private fun sccpProgress(
+        value: Any?,
+        label: String,
+    ) {
+        val progress = objectValue(value, label)
+        exact(progress, setOf("at", "detail"), label)
+        when (progress["at"]) {
+            "frozen" -> require(progress["detail"] == null) { "$label.detail must be null" }
+            "generation" -> {
+                val detail = objectValue(progress["detail"], "$label.detail")
+                exact(detail, setOf("generation", "committee_root"), "$label.detail")
+                sccpUint(detail["generation"], "$label.detail.generation", 1)
+                bytes(detail["committee_root"], 32, "$label.detail.committee_root", true)
+            }
+            else -> throw IllegalArgumentException("$label.at must be frozen or generation")
+        }
+    }
+
+    private fun sccpParameters(
+        value: Any?,
+        label: String,
+    ) {
+        val params = objectValue(value, label)
+        exact(params, SCCP_PARAMETER_BOUNDS.keys + setOf("enabled", "min_outbound_amount", "inbound_self_claim_fee"), label)
+        require(params["enabled"] is Boolean) { "$label.enabled must be a boolean" }
+        val parsed =
+            SCCP_PARAMETER_BOUNDS.mapValues { (field, bounds) ->
+                sccpUint(params[field], "$label.$field", bounds.first, bounds.last)
+            }
+        sccpAmount(params["min_outbound_amount"], "$label.min_outbound_amount", BigInteger.ONE, BigInteger("1000000000000000"))
+        sccpAmount(params["inbound_self_claim_fee"], "$label.inbound_self_claim_fee", BigInteger.ZERO, BigInteger("10000000000"))
+        require(parsed.getValue("fast_pause_panel_seats") in setOf(5L, 7L, 9L)) { "$label.fast_pause_panel_seats must be 5, 7 or 9" }
+        // Every input is at most 2^53-1, so these sums and doubles fit exactly in Long.
+        val floor = parsed.getValue("fast_pause_hold_ms") + 2 * parsed.getValue("committee_heartbeat_ms") + 86_400_000
+        require(parsed.getValue("committee_validity_ms") >= floor) {
+            "$label.committee_validity_ms is below the hold, heartbeat and pin margin"
+        }
+        require(2 * parsed.getValue("fast_pause_seat_accept_window_ms") <= parsed.getValue("fast_pause_panel_term_ms")) {
+            "$label.fast_pause_seat_accept_window_ms exceeds half the panel term"
+        }
+        val lead = parsed.getValue("fast_pause_renew_lead_ms")
+        require(lead >= 2 * parsed.getValue("fast_pause_endorse_window_ms") && 2 * lead <= parsed.getValue("fast_pause_hold_ms")) {
+            "$label.fast_pause_renew_lead_ms must span two endorsement windows and fit half the hold"
+        }
+        // Committed staking delay and Parliament attempt latency are checked at enactment.
+    }
+
+    private fun sccpGovernanceSubject(
+        value: Map<String, Any?>,
+        label: String,
+    ): Int {
         exact(value, setOf("subject", "key"), label)
-        when (text(value["subject"], "$label.subject")) {
-            "route", "route_control", "light_client", "forgery_hold", "fast_hold", "fast_pause_control" ->
+        val tag = text(value["subject"], "$label.subject")
+        require(tag in SCCP_SUBJECTS) { "$label.subject is unknown" }
+        val network =
+            if (tag == "parameters") {
+                require(value["key"] == null) { "$label.key must be null" }
+                null
+            } else {
                 sccpExternalNetwork(objectValue(value["key"], "$label.key"), "$label.key")
-            "parameters" -> require(value["key"] == null) { "$label.key must be null" }
-            else -> throw IllegalArgumentException("$label.subject is unknown")
-        }
+            }
+        return sccpSubjectOrder(tag, network)
     }
 
-    private fun sccpExternalNetwork(value: Map<String, Any?>, label: String) {
+    private fun sccpSubjectOrder(
+        subject: String,
+        network: String?,
+    ): Int = SCCP_SUBJECTS.indexOf(subject) * 4 + if (network == null) 0 else SCCP_EXTERNAL_NETWORKS.indexOf(network) + 1
+
+    private fun sccpExternalNetwork(
+        value: Map<String, Any?>,
+        label: String,
+    ): String {
         exact(value, setOf("network", "profile"), label)
         require(text(value["network"], "$label.network") in SCCP_EXTERNAL_NETWORKS) {
             "$label.network is unknown"
         }
         require(value["profile"] == null) { "$label.profile must be null" }
+        return value["network"] as String
     }
 
     private fun validationFeePolicyProposal(value: Map<String, Any?>) {
@@ -673,8 +982,13 @@ internal object ParliamentProposalValidatorV1 {
         return parsed
     }
 
-    private fun uint(value: Any?, label: String): BigInteger {
-        require(value is Number) { "$label must be an unsigned JSON integer" }
+    private fun uint(
+        value: Any?,
+        label: String,
+    ): BigInteger {
+        // JsonParser uses Long/BigInteger only for integer tokens. BigDecimal can
+        // render an exponent spelling such as 1e0 as "1", losing the wire distinction.
+        require(value is Long || value is BigInteger) { "$label must be an unsigned JSON integer" }
         val literal = value.toString()
         require(Regex("0|[1-9][0-9]*").matches(literal)) { "$label must be an unsigned JSON integer" }
         val parsed = BigInteger(literal)

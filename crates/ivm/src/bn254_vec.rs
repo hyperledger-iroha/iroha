@@ -140,7 +140,7 @@ pub fn reduce_wide(val: [u64; 8]) -> [u64; 4] {
     for i in 0..8 {
         bytes[i * 8..(i + 1) * 8].copy_from_slice(&val[i].to_le_bytes());
     }
-    let wide = U512::from_le_bytes(bytes);
+    let wide = U512::from_le_bytes(bytes.into());
     let (lo, hi) = wide.split();
     let modulus_nz = NonZero::new(MODULUS).expect("BN254 modulus must be non-zero");
     let reduced = U256::rem_wide_vartime((lo, hi), &modulus_nz);
@@ -617,7 +617,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     use halo2curves::bn256::Fr;
     #[cfg(target_arch = "aarch64")]
-    use rand_core::{RngCore, impls::fill_bytes_via_next};
+    use rand_core::{Rng, TryRng, utils::fill_bytes_via_next_word};
     #[test]
     fn u64_constructor_preserves_every_canonical_integer_bit() {
         let boundaries = [0, 1, u64::from(u32::MAX), 1_u64 << 32, u64::MAX];
@@ -685,20 +685,21 @@ mod tests {
             }
         }
         struct DeterministicRng(u64);
-        impl RngCore for DeterministicRng {
-            fn next_u32(&mut self) -> u32 {
-                self.next_u64() as u32
+        impl TryRng for DeterministicRng {
+            type Error = core::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(self.next_u64() as u32)
             }
-            fn next_u64(&mut self) -> u64 {
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
                 let mut x = self.0;
                 x ^= x << 7;
                 x ^= x >> 9;
                 x = x.wrapping_mul(0x9e37_79b9_7f4a_7c15);
                 self.0 = x;
-                x
+                Ok(x)
             }
-            fn fill_bytes(&mut self, dest: &mut [u8]) {
-                fill_bytes_via_next(self, dest);
+            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+                fill_bytes_via_next_word(dest, || self.try_next_u64())
             }
         }
         let mut rng = DeterministicRng(0xdecafbad_d00df00d);

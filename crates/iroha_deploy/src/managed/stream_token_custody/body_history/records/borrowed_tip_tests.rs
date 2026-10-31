@@ -42,9 +42,18 @@ fn borrowed_original_gates_keep_cold_refusal_retry_scope_and_exact_executed_incl
     );
     assert_eq!(native.chain.commit(vec![signed.clone()]), vec![true]);
     assert_eq!(native.chain.height(), 2);
-    // Independent fresh native observations leave distinct, not-yet-imported tip owners.
-    let scope = native.observe(&owner.authority);
-    let carrier = native.observe(&owner.authority);
+    // An enclosing decoder keeps each successful native observation's follow-up tip cold.
+    // Without it, observation retains its already authenticated tip and needs no cold import.
+    // Both independent observations still verify the actual paid carrier and fresh quorum.
+    let (scope, carrier) = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64),
+        || {
+            (
+                native.observe(&owner.authority),
+                native.observe(&owner.authority),
+            )
+        },
+    );
     let original_scope = checkpoint_bytes(&scope).unwrap();
     let original_carrier = checkpoint_bytes(&carrier).unwrap();
     let original_signed = signed.encode_wire_v1().unwrap();

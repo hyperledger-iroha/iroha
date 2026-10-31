@@ -404,6 +404,7 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
         "one signed-query byte above the pre-body unit must fail before decode"
     );
     let near_overflow = QueryFanoutMemoryEnvelope {
+        profile: QueryMemoryProfile::Fanout,
         working_set_bytes: usize::MAX,
         request_bytes: usize::MAX,
         request_decode_allocated_bytes: usize::MAX,
@@ -431,7 +432,14 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
     );
     let ingress_reserved = geometry.ingress.slot_bytes * geometry.ingress_slots.get();
     let fanout_reserved = geometry.fanout_working_set_bytes * geometry.fanout_slots.get();
-    assert!(ingress_reserved + fanout_reserved <= aggregate);
+    assert!(ingress_reserved + fanout_reserved + geometry.routed_read_body_pool_bytes <= aggregate);
+    assert!(
+        geometry.routed_read_body_pool_bytes
+            >= QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+                .unwrap()
+                .route_body_bytes,
+        "the shared retained-body pool still admits every routed request"
+    );
     assert!(geometry.fanout_working_set_bytes < aggregate);
     assert!(
         query_memory_geometry(
@@ -453,6 +461,49 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
 }
 
 #[test]
+fn query_memory_retention_growth_preserves_every_signed_ingress_limit() {
+    for aggregate in [
+        20_100_000,
+        48_000_000,
+        64_000_000,
+        512_000_000,
+        2_048_000_000,
+    ] {
+        let geometry = query_memory_geometry(aggregate, 48_000_000, 64_000_000, 32)
+            .expect("previously valid pool remains valid");
+        let phase =
+            QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes)
+                .unwrap()
+                .route_body_bytes;
+        let original_slot =
+            (aggregate / QUERY_INGRESS_POOL_DIVISOR - phase) / QUERY_INGRESS_SLOT_COUNT;
+        let original = QueryIngressMemoryEnvelope::from_slot_bytes(original_slot, phase).unwrap();
+        assert_eq!(geometry.ingress.body_bytes, original.body_bytes);
+        assert_eq!(
+            geometry.ingress.decode_allocated_bytes,
+            original.decode_allocated_bytes
+        );
+        assert_eq!(
+            geometry.ingress.canonical_encoded_bytes,
+            original.canonical_encoded_bytes
+        );
+        assert_eq!(
+            geometry.ingress.scope_decode_allocated_bytes,
+            original.scope_decode_allocated_bytes
+        );
+        assert_eq!(
+            geometry.ingress.scope_canonical_encoded_bytes,
+            original.scope_canonical_encoded_bytes
+        );
+        assert!(geometry.ingress.phases_fit());
+        assert!(
+            geometry.routed_read_body_pool_bytes
+                + geometry.ingress.slot_bytes * geometry.ingress_slots.get()
+                <= aggregate / QUERY_INGRESS_POOL_DIVISOR
+        );
+    }
+}
+#[test]
 fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     let cap = 48_000_000;
     let small = query_memory_geometry(64_000_000, cap, 64_000_000, 32).unwrap();
@@ -463,8 +514,13 @@ fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     assert_eq!(default.fanout_slots.get(), 8);
     assert_eq!(default.fanout_pool_bytes, 384_000_000);
     assert_eq!(
+        default.routed_read_body_pool_bytes, 64_000_000,
+        "the default budget admits one maximum transaction body or many small fee quotes"
+    );
+    assert_eq!(
         default.ingress.slot_bytes * default.ingress_slots.get(),
-        128_000_000
+        (128_000_000 - default.routed_read_body_pool_bytes) / default.ingress_slots.get()
+            * default.ingress_slots.get()
     );
     assert!(default.ingress.phases_fit());
     let envelope = QueryFanoutMemoryEnvelope::for_body_admission(cap).unwrap();
@@ -558,7 +614,11 @@ fn query_memory_parser_geometry_matches_runtime_complete_phases() {
         config::QUERY_INGRESS_PHASE_UNITS_V1
     );
     for (aggregate, ceiling, content) in [
-        (20_000_000, 48_000_000, 64_000_000),
+        (
+            config::QUERY_FANOUT_MIN_POOL_BYTES_V1 as usize,
+            48_000_000,
+            64_000_000,
+        ),
         (64_000_000, 48_000_000, 64_000_000),
         (512_000_000, 48_000_000, 64_000_000),
         (512_000_000, 36_000_000, 64_000_000),
@@ -880,7 +940,9 @@ fn fixed_capacity_norito_writer_refuses_growth_past_preflight() {
 #[tokio::test]
 async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
     let authority = routed_read_test_account(0xd7);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     for content_type in [Some("text/plain"), None] {
@@ -925,9 +987,14 @@ async fn bounded_json_signed_query_remains_supported() {
         "derive JSON signed-query fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let signed_query =
-        crate::tests_runtime_handlers::signed_find_triggers_query_for_test(authority, &key_pair);
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
+    let signed_query = crate::tests_runtime_handlers::signed_native_find_triggers_query_for_fixture(
+        *app.state.network_id_ref(),
+        authority,
+        &key_pair,
+    );
     let body = norito::json::to_json(
         &iroha_data_model::query::json_wrappers::SignedQueryJson::from(&signed_query),
     )
@@ -953,7 +1020,9 @@ async fn bounded_json_signed_query_remains_supported() {
 #[tokio::test]
 async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
     let authority = routed_read_test_account(0xd8);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     let mut request = axum::extract::Request::builder()
@@ -996,7 +1065,9 @@ async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
 #[tokio::test]
 async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
     let authority = routed_read_test_account(0xd9);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     let mut request = axum::extract::Request::builder()
@@ -1034,12 +1105,15 @@ async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
 #[tokio::test]
 async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
     let authority = routed_read_test_account(0xea);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
+    let network = *app.state.network_id_ref();
     Arc::get_mut(&mut app)
         .expect("test app state has one owner")
         .signed_query_admission = Arc::new(
         routing::SignedQueryAdmission::new(
-            signed_query_test_network_id(),
+            network,
             Duration::ZERO,
             Duration::from_millis(5),
             NonZeroUsize::new(1).expect("nonzero replay capacity"),

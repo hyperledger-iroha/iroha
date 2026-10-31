@@ -98,7 +98,7 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 /// # Errors
 /// Any nested committee, monetary staking or `RecordSccpMessage` instruction, an unresolved
 /// approval, or an excessively deep proposal graph.
-pub(crate) fn reject_opaque_deferred_authority(
+pub fn reject_opaque_deferred_authority(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<TransactionRejectionReason>> {
@@ -123,7 +123,7 @@ pub(crate) fn reject_opaque_deferred_authority(
     single_use_lifetimes,
     reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
 )]
-pub(crate) fn reject_opaque_instruction_authority<'a>(
+pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Attempt<ValidationFail>> {
@@ -152,7 +152,7 @@ fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return iroha_data_model::isi::instruction_wire_id(instruction);
+                return iroha_data_model::isi::wire_id_of::<$ty>();
             }
         )+};
     }
@@ -212,7 +212,7 @@ fn is_sccp_outbound_record(instruction: &InstructionBox) -> bool {
 /// multisig approval needs ledger state to resolve; the execution-time check
 /// ([`reject_opaque_instruction_authority`]) covers it. Graphs deeper than the traversal bound
 /// return `false` here and are refused by that check.
-pub(crate) fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
+pub fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
     executable_derives_sccp_outbound_record(executable, 0)
 }
 
@@ -446,18 +446,40 @@ mod tests {
 
     fn check(
         instructions: &[InstructionBox],
-        proposal: Option<Vec<InstructionBox>>,
+        proposal: Option<&[InstructionBox]>,
     ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>> {
         reject_opaque_committee_operations_with(
             instructions,
             &mut std::collections::BTreeSet::new(),
             0,
-            &mut |_| {
-                Ok(proposal
-                    .clone()
-                    .map(|body| (iroha_test_samples::ALICE_ID.clone(), body)))
-            },
+            &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
         )
+    }
+
+    #[test]
+    fn envelopes_kept_opaque_are_no_deferred_authority_operation() {
+        // An envelope this release keeps opaque is none of this release's staking, committee or
+        // SCCP operations; execution refuses it as `definition_inactive`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        let opaque: InstructionBox = iroha_data_model::isi::OpaqueInstructionV1::new(
+            "test.unreleased.instruction.v1",
+            vec![0xA5; 8],
+        )
+        .expect("well-formed wire id")
+        .into();
+        assert_eq!(monetary_staking_wire_id(&opaque), None);
+        assert_eq!(monetary_staking_wire_id(&log("ordinary")), None);
+        for instructions in [
+            vec![log("first"), opaque.clone()],
+            vec![propose(vec![opaque.clone()])],
+            vec![register_by_call_trigger("opaque_body", vec![opaque])],
+        ] {
+            assert_eq!(
+                check(&instructions, None)
+                    .map_err(crate::execution_attempt::expect_completed_rejection),
+                Ok(())
+            );
+        }
     }
 
     #[test]
@@ -506,14 +528,14 @@ mod tests {
         )
         .into();
         assert_eq!(
-            (check(core::slice::from_ref(&approval), Some(vec![sccp_record()])))
+            (check(core::slice::from_ref(&approval), Some(&[sccp_record()])))
                 .map_err(crate::execution_attempt::expect_completed_rejection),
             refused(0)
         );
         // This static outbound-value scan accepts other SCCP instructions. Public
         // panel operations separately require their exact direct signed execution frame.
         assert!(matches!(
-            check(&[approval], Some(vec![log("ordinary")])),
+            check(&[approval], Some(&[log("ordinary")])),
             Ok(())
         ));
         let others: Vec<InstructionBox> =

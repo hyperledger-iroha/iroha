@@ -1,7 +1,39 @@
 # Profiling Rust builds
 
-Use `scripts/profile_cargo_build.py` for reproducible build measurements. It
-keeps Cargo artifacts and its report outside the checkout and never gives the
+For local iteration, use the same entry point with `--local` first. This mode
+keeps the checkout, installed toolchain and persistent target paths unchanged:
+
+```sh
+python3 scripts/profile_cargo_build.py --local \
+  --target-dir "$PWD/target" --out /tmp/iroha-warm-baseline.json \
+  --warmup 1 --repeat 5 -- check -p iroha_core --lib
+```
+
+Choose a new external report path for each run; existing reports are never
+overwritten. Local mode uses `cargo_fast.sh --stable-local-metadata --incremental`,
+preserves Cargo's native parallelism unless `--jobs N` is requested, and records
+the Git source snapshot, maintained native census when applicable, pinned
+toolchain, command environment, exact command,
+Cargo unit features/profiles, competing compiler processes and cache growth.
+End-to-end time, complete source-preflight time, lock wait and Cargo time are
+reported separately. Warm-up samples are retained but excluded from the median.
+Only successful samples with unchanged source and zero rebuilt artifacts qualify
+as warm no-op measurements. Source drift or a failed build leaves an invalid
+report and its transcripts for diagnosis.
+
+Add `--measure-compiler` for edit-to-check experiments. It uses the maintained
+per-child `wait4` instrumentation at a stable path within the target and records
+compiler-unit time and peak RSS; use that same option for both comparison arms.
+The initial instrumented run may need warming. Cached units receive no invented
+compiler measurements. Custom compiler/wrapper overrides must be unset so the
+reported Cargo and rustc binaries are the ones executed. Local reports have the separate
+`iroha-local-build-diagnostic-v1` schema and do not establish release resource or
+authenticated artifact qualification. The wrapper's `CARGO_FAST_TIMINGS=1`
+diagnostic switch emits phase timings without changing source capture or Cargo
+fingerprints.
+
+The default isolated mode of `scripts/profile_cargo_build.py` keeps Cargo artifacts
+and its report outside the checkout and never gives the
 measured Cargo process the caller checkout as its working tree:
 
 ```sh

@@ -1,4 +1,4 @@
-//! Canonical MacStadium host custody and authenticated cross-host phase checkpoints.
+//! Canonical `MacStadium` host custody and authenticated cross-host phase checkpoints.
 //!
 //! A phase checkpoint is signed by the operator key admitted by the reset inventory.
 //! It names both physical hosts and their custody roots. Transport authentication
@@ -111,6 +111,10 @@ pub(super) struct NativePythonRuntimeV1 {
 mod native_python_version {
     use super::*;
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito field adapters receive a borrowed field"
+    )]
     pub(super) fn serialize(version: &[u16; 3], output: &mut String) {
         output.push('[');
         for (index, component) in version.iter().enumerate() {
@@ -122,6 +126,10 @@ mod native_python_version {
         output.push(']');
     }
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito field adapters receive a borrowed field"
+    )]
     pub(super) fn serialize_bounded(
         version: &[u16; 3],
         output: &mut dyn json::JsonWriteSink,
@@ -603,6 +611,10 @@ pub(super) struct NativeOwnedPublicationV1 {
 /// A publication-only incumbent cannot stand in for a completed distributed reset.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The bounded signed receipt is decoded as one value and keeps its flat Norito representation"
+)]
 pub(super) enum NativeEdgeCompletionProvenanceV1 {
     #[norito(rename = "publication_only")]
     PublicationOnly { publication_operation_id: String },

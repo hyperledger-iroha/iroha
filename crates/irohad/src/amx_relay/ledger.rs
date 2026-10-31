@@ -31,6 +31,9 @@ use iroha_data_model::{
     },
 };
 
+use super::pending_custody::{
+    PendingCustody, PendingKey, PendingKind, PendingObservationLease, Progress, Slot,
+};
 use iroha_version::codec::DecodeVersioned as _;
 
 // Status selects a locator only. Its success/rejection/expiry text is never an outcome.
@@ -38,9 +41,24 @@ enum Location {
     Absent,
     Observed(Option<u64>),
 }
+enum ProofInput {
+    Response(iroha::client::SumeragiFinalityProofResponse),
+    #[cfg(test)]
+    Fixture(Box<SumeragiFinalityProof>),
+}
+impl ProofInput {
+    fn decode_checked(self) -> Result<SumeragiFinalityProof> {
+        match self {
+            Self::Response(response) => response.decode_checked(),
+            #[cfg(test)]
+            Self::Fixture(proof) => Ok(*proof),
+        }
+    }
+}
+
 trait Source: Send + Sync {
     fn locate(&self, hash: HashOf<SignedTransaction>) -> WorkflowFuture<'_, Result<Location>>;
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>>;
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>>;
     // Untrusted scan bound only: successful effects require independently verified blocks.
     fn applied_height(&self) -> WorkflowFuture<'_, Result<u64>>;
     fn approval<'a>(
@@ -93,34 +111,33 @@ impl Source for OnlineSource {
             }))
         })
     }
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
         Box::pin(async move {
             self.client
-                .get_sumeragi_finality_proof_async(height, self.scope)
+                .read_sumeragi_finality_proof_response_async(height, self.scope)
                 .await
+                .map(ProofInput::Response)
         })
     }
 }
 
-#[derive(Default)]
-struct HandoffScan {
-    effect: Option<Hash>,
-    next: u64,
-    found: Option<u64>,
-}
-
+#[derive(Clone)]
 pub(super) struct RelayLedger {
     source: Arc<dyn Source>,
     dispatch: Arc<dyn WorkflowLedger>,
-    verifier: Mutex<SumeragiFinalityVerifier>,
+    original: SumeragiFinalityVerifier,
+    custody: Arc<PendingCustody>,
     network: NetworkId,
     authority: AccountId,
     fee_payment: FeePaymentIntent,
-    instruction: Mutex<Option<Hash>>,
-    approval: Mutex<Option<AmxDebitApprovalV1>>,
-    handoff_scan: Mutex<HandoffScan>,
+    instruction: Arc<Mutex<Option<Hash>>>,
+    approval: Arc<Mutex<Option<AmxDebitApprovalV1>>>,
+    source_plan: Arc<Mutex<Option<[u8; 32]>>>,
+    handoff: Arc<Mutex<Option<(PendingKey, bool)>>>,
     max_reads: usize,
-    reads: AtomicUsize,
+    reads: Arc<AtomicUsize>,
+    #[cfg(test)]
+    test_lease: Arc<Mutex<Option<PendingObservationLease>>>,
 }
 fn locked<T>(owner: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
     owner
@@ -152,7 +169,52 @@ fn approval_evidence_failure(error: eyre::Report) -> StepFailure {
             WorkflowErrorCode::ProofInvalid
         }
     };
-    let code = if let Some(failure) = error.downcast_ref::<AmxApprovalReadFailureV1>() {
+    let finality_read_code = |failure: &iroha_data_model::sumeragi_finality::FinalityReadError| {
+        use iroha_data_model::sumeragi_finality::{FinalityReadError, GenesisReadError};
+        match failure {
+            FinalityReadError::Invalid(_)
+            | FinalityReadError::Genesis(GenesisReadError::Invalid(_)) => {
+                WorkflowErrorCode::ProofInvalid
+            }
+            FinalityReadError::DecodeResource(source) => decode_code(source),
+            FinalityReadError::ScratchLimit(_) | FinalityReadError::Allocator(_) => {
+                WorkflowErrorCode::LocalResourceUnavailable
+            }
+            FinalityReadError::Genesis(GenesisReadError::Json(source)) => {
+                // This JSON bound does not retain a classified
+                // original decoder attempt. Do not guess capacity from its label.
+                if source.is_decode_resource_limit() {
+                    WorkflowErrorCode::EvidenceUnavailable
+                } else {
+                    WorkflowErrorCode::ProofInvalid
+                }
+            }
+        }
+    };
+    let code = if error
+        .downcast_ref::<iroha::client::NativeWorkerError>()
+        .is_some()
+    {
+        WorkflowErrorCode::LocalResourceUnavailable
+    } else if let Some(failure) = error.downcast_ref::<super::pending_custody::CustodyError>() {
+        use super::pending_custody::CustodyError;
+        match failure {
+            CustodyError::Binding => WorkflowErrorCode::BindingMismatch,
+            CustodyError::Capacity | CustodyError::Io(_) => {
+                WorkflowErrorCode::LocalResourceUnavailable
+            }
+            CustodyError::Busy | CustodyError::Conflict => WorkflowErrorCode::JournalConflict,
+            CustodyError::Signing(_) => WorkflowErrorCode::AuthorizationDenied,
+            CustodyError::Codec(source) if source.is_decode_resource_limit() => {
+                // A raw codec limit retains no classified decoder attempt. It proves neither
+                // malformed custody nor an authenticated local-capacity refusal.
+                WorkflowErrorCode::EvidenceUnavailable
+            }
+            CustodyError::Codec(_) => WorkflowErrorCode::NonCanonicalEncoding,
+            CustodyError::Finality(source) => finality_read_code(source),
+            CustodyError::Execution(_) => WorkflowErrorCode::ProofInvalid,
+        }
+    } else if let Some(failure) = error.downcast_ref::<AmxApprovalReadFailureV1>() {
         if !failure.is_valid() {
             WorkflowErrorCode::ProofInvalid
         } else {
@@ -183,26 +245,7 @@ fn approval_evidence_failure(error: eyre::Report) -> StepFailure {
     } else if let Some(failure) =
         error.downcast_ref::<iroha_data_model::sumeragi_finality::FinalityReadError>()
     {
-        use iroha_data_model::sumeragi_finality::{FinalityReadError, GenesisReadError};
-        match failure {
-            FinalityReadError::Invalid(_)
-            | FinalityReadError::Genesis(GenesisReadError::Invalid(_)) => {
-                WorkflowErrorCode::ProofInvalid
-            }
-            FinalityReadError::DecodeResource(source) => decode_code(source),
-            FinalityReadError::ScratchLimit(_) | FinalityReadError::Allocator(_) => {
-                WorkflowErrorCode::LocalResourceUnavailable
-            }
-            FinalityReadError::Genesis(GenesisReadError::Json(source)) => {
-                // This JSON bound does not retain a classified
-                // original decoder attempt. Do not guess capacity from its label.
-                if source.is_decode_resource_limit() {
-                    WorkflowErrorCode::EvidenceUnavailable
-                } else {
-                    WorkflowErrorCode::ProofInvalid
-                }
-            }
-        }
+        finality_read_code(failure)
     } else if error
         .downcast_ref::<iroha_data_model::sumeragi_finality::FinalityError>()
         .is_some()
@@ -223,74 +266,405 @@ impl RelayLedger {
         scope: SumeragiRootScope,
         fee_payment: FeePaymentIntent,
         max_reads: usize,
+        custody: Arc<PendingCustody>,
     ) -> Self {
         Self {
             network: verifier.initial_epoch().network_id,
             authority: account.authority().clone(),
             fee_payment,
-            instruction: Mutex::new(None),
-            approval: Mutex::new(None),
-            handoff_scan: Mutex::new(HandoffScan::default()),
+            instruction: Arc::new(Mutex::new(None)),
+            approval: Arc::new(Mutex::new(None)),
+            source_plan: Arc::new(Mutex::new(None)),
+            handoff: Arc::new(Mutex::new(None)),
             source: Arc::new(OnlineSource { client, scope }),
             dispatch,
-            verifier: Mutex::new(verifier),
+            original: verifier.into_genesis_verifier(),
+            custody,
             max_reads,
-            reads: AtomicUsize::new(max_reads),
+            reads: Arc::new(AtomicUsize::new(max_reads)),
+            #[cfg(test)]
+            test_lease: Arc::new(Mutex::new(None)),
         }
     }
     pub(super) fn begin_observation(
         &self,
+        source_plan: [u8; 32],
+        instruction: Hash,
+        approval: Option<AmxDebitApprovalV1>,
+        handoff_effect: Option<Hash>,
+    ) -> Result<PendingObservationLease> {
+        let lease = self
+            .custody
+            .acquire_observation(source_plan, instruction, handoff_effect)?;
+        let carrier = PendingKey {
+            source_plan,
+            instruction,
+            kind: handoff_effect.map_or(PendingKind::Carrier, PendingKind::HandoffCarrier),
+        };
+        let handoff = handoff_effect.map(|effect| PendingKey {
+            source_plan,
+            instruction,
+            kind: PendingKind::Handoff(effect),
+        });
+        let mut group = vec![carrier];
+        group.extend(handoff.clone());
+        self.custody.reserve_group(&group)?;
+        *locked(&self.source_plan)? = Some(source_plan);
+        *locked(&self.instruction)? = Some(instruction);
+        *locked(&self.approval)? = approval;
+        *locked(&self.handoff)? = handoff.map(|key| (key, false));
+        self.reads.store(self.max_reads, Ordering::Relaxed);
+        Ok(lease)
+    }
+
+    // Native proof work shares one bounded route worker. Only this already admitted
+    // observation's original native lock is passed outside the closure, so cancellation
+    // cannot release it while a worker or its thread-local destructors remain alive.
+    async fn native<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(Self) -> T + Send + 'static,
+    ) -> Result<T> {
+        let (permit, custody) = self.custody.native_custody()?;
+        self.check_observation(
+            &custody,
+            custody.source_plan,
+            custody.instruction,
+            custody.handoff_effect,
+        )?;
+        let ledger = self.clone();
+        let (output, _custody) =
+            iroha::client::run_native_worker(permit, custody, move || work(ledger)).await?;
+        Ok(output)
+    }
+
+    async fn load_native(
+        &self,
+        slot: Slot,
+    ) -> Result<Option<Box<super::pending_custody::LoadedProgress>>> {
+        Ok(self
+            .native(move |ledger| ledger.custody.load(&slot).map(|saved| saved.map(Box::new)))
+            .await??)
+    }
+
+    async fn advance_native(
+        &self,
+        slot: Slot,
+        expected: Option<[u8; 32]>,
+        progress: Progress,
+        mut candidate: SumeragiFinalityVerifier,
+        response: ProofInput,
+        height: u64,
+        handoff: Option<Hash>,
+    ) -> Result<(
+        SumeragiFinalityVerifier,
+        VerifiedSumeragiBlock,
+        [u8; 32],
+        bool,
+    )> {
+        self.native(move |ledger| {
+            let proof = response.decode_checked()?;
+            if proof.height() != height {
+                return Err(eyre!("AMX destination proof differs from requested height"));
+            }
+            let block = candidate.verify(&proof)?;
+            let found = handoff
+                .map(|effect| successful_handoff(&block, &ledger.network, effect))
+                .transpose()?
+                .unwrap_or(false);
+            candidate.retain_recent_decisions(3);
+            let digest = ledger.custody.compare_and_publish(
+                &slot,
+                expected.as_ref(),
+                progress,
+                &candidate,
+                &proof,
+            )?;
+            Ok((candidate, block, digest, found))
+        })
+        .await?
+    }
+
+    /// Signed local presence selects pending scheduling only, never execution or signing.
+    pub(super) fn has_pending(
+        &self,
+        source_plan: [u8; 32],
+        instruction: Hash,
+        handoff_effect: Option<Hash>,
+    ) -> Result<bool> {
+        let carrier = PendingKey {
+            source_plan,
+            instruction,
+            kind: handoff_effect.map_or(PendingKind::Carrier, PendingKind::HandoffCarrier),
+        };
+        let carrier_present = self.custody.contains(&Slot::Pending(carrier))?;
+        let handoff_present = if let Some(effect) = handoff_effect {
+            self.custody.contains(&Slot::Pending(PendingKey {
+                source_plan,
+                instruction,
+                kind: PendingKind::Handoff(effect),
+            }))?
+        } else {
+            false
+        };
+        Ok(carrier_present || handoff_present)
+    }
+
+    /// Require the original native lease and the exact independently selected route visit.
+    pub(super) fn check_observation(
+        &self,
+        lease: &PendingObservationLease,
+        source_plan: [u8; 32],
+        instruction: Hash,
+        handoff_effect: Option<Hash>,
+    ) -> Result<()> {
+        self.custody.check_observation(lease)?;
+        let actual_handoff = locked(&self.handoff)?
+            .as_ref()
+            .map(|(key, _)| match key.kind {
+                PendingKind::Handoff(effect) => Ok(effect),
+                _ => Err(eyre!("AMX observation has a foreign handoff kind")),
+            })
+            .transpose()?;
+        if lease.source_plan != source_plan
+            || lease.instruction != instruction
+            || lease.handoff_effect != handoff_effect
+            || *locked(&self.source_plan)? != Some(source_plan)
+            || *locked(&self.instruction)? != Some(instruction)
+            || actual_handoff != handoff_effect
+        {
+            return Err(eyre!("AMX observation differs from its original custody"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn with_test_observation(self) -> Self {
+        let instruction = *self.instruction.lock().unwrap();
+        let approval = self.approval.lock().unwrap().clone();
+        if let Some(instruction) = instruction {
+            self.begin_test_observation(instruction, approval).unwrap();
+        }
+        self
+    }
+
+    #[cfg(test)]
+    fn begin_test_observation(
+        &self,
         instruction: Hash,
         approval: Option<AmxDebitApprovalV1>,
     ) -> Result<()> {
-        *locked(&self.instruction)? = Some(instruction);
-        *locked(&self.approval)? = approval;
-        self.reads.store(self.max_reads, Ordering::Relaxed);
+        self.begin_test_bound_observation(*instruction.as_ref(), instruction, approval, None)
+    }
+
+    #[cfg(test)]
+    fn begin_test_handoff(&self, expected: &InstructionBox) -> Result<()> {
+        let instruction = instruction_digest(expected)?;
+        self.begin_test_bound_observation(
+            *instruction.as_ref(),
+            instruction,
+            None,
+            handoff_effect(expected)?,
+        )
+    }
+
+    #[cfg(test)]
+    fn begin_test_bound_observation(
+        &self,
+        source_plan: [u8; 32],
+        instruction: Hash,
+        approval: Option<AmxDebitApprovalV1>,
+        handoff: Option<Hash>,
+    ) -> Result<()> {
+        *self.test_lease.lock().unwrap() = None;
+        let lease = self.begin_observation(source_plan, instruction, approval, handoff)?;
+        *self.test_lease.lock().unwrap() = Some(lease);
         Ok(())
     }
-    /// Recover an already successful handoff delivered by any authorized carrier. The
-    /// retained cursor/locator only saves read work; every positive result is reverified.
+    fn carrier_key(&self) -> Result<PendingKey> {
+        let kind = match locked(&self.handoff)?.as_ref() {
+            Some((
+                PendingKey {
+                    kind: PendingKind::Handoff(effect),
+                    ..
+                },
+                _,
+            )) => PendingKind::HandoffCarrier(*effect),
+            Some(_) => return Err(eyre!("AMX observation has a foreign handoff kind")),
+            None => PendingKind::Carrier,
+        };
+        Ok(PendingKey {
+            source_plan: locked(&self.source_plan)?
+                .ok_or_else(|| eyre!("AMX observation is not admitted"))?,
+            instruction: locked(&self.instruction)?
+                .ok_or_else(|| eyre!("AMX original instruction unavailable"))?,
+            kind,
+        })
+    }
+
+    /// Recover this original effect through its own contiguous inspected prefix.
     pub(super) async fn recover_handoff(&self, expected: &InstructionBox) -> Result<bool> {
         if cfg!(all(test, sumeragi_daemon_mutation = "HC331")) {
             return Ok(false);
         }
         let effect = handoff_effect(expected)?
-            .ok_or_else(|| eyre!("original boundary intent does not contain a handoff"))?;
-        let found = {
-            let mut scan = locked(&self.handoff_scan)?;
-            if scan.effect != Some(effect) {
-                *scan = HandoffScan {
-                    effect: Some(effect),
-                    next: 2,
-                    found: None,
-                };
-            }
-            scan.found
-        };
-        if let Some(height) = found {
-            let block = self.verified_block(height).await?;
-            if successful_handoff(&block, &self.network, effect)? {
-                return Ok(true);
-            }
-            return Err(eyre!(
-                "original successful handoff locator changed its authenticated effect"
-            ));
+            .ok_or_else(|| eyre!("original boundary intent has no handoff"))?;
+        let key = locked(&self.handoff)?
+            .as_ref()
+            .map(|(key, _)| key.clone())
+            .ok_or_else(|| eyre!("AMX handoff group was not admitted before observation"))?;
+        if key.kind != PendingKind::Handoff(effect) {
+            return Err(eyre!("AMX handoff differs from admitted source"));
         }
-        let tip = self.source.applied_height().await?;
+        let slot = Slot::Pending(key.clone());
+        let load_slot = slot.clone();
+        let (saved, recovered) = self
+            .native(move |ledger| {
+                let saved = ledger
+                    .custody
+                    .load(&load_slot)?
+                    .ok_or_else(|| eyre!("AMX admitted handoff is missing"))?;
+                let recovered = saved
+                    .tip
+                    .as_ref()
+                    .map(|tip| successful_handoff(tip, &ledger.network, effect))
+                    .transpose()?
+                    .unwrap_or(false);
+                Ok::<_, eyre::Report>((Box::new(saved), recovered))
+            })
+            .await??;
+        let mut digest = saved.digest;
+        let mut verifier = saved.verifier.unwrap_or_else(|| self.original.clone());
+        let captured_tip = match saved.progress {
+            Progress::Reserved => self.source.applied_height().await?,
+            Progress::Handoff {
+                inspected_height,
+                captured_tip,
+            } => {
+                if recovered {
+                    *locked(&self.handoff)? = Some((key, true));
+                    return Ok(true);
+                }
+                if inspected_height < captured_tip {
+                    captured_tip
+                } else {
+                    captured_tip.max(self.source.applied_height().await?)
+                }
+            }
+            _ => return Err(eyre!("AMX saved handoff kind differs")),
+        };
+        if captured_tip < 2 {
+            return Ok(false);
+        }
         loop {
-            let next = locked(&self.handoff_scan)?.next;
-            if next > tip {
+            let next = verifier
+                .authenticated_height()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| eyre!("AMX handoff height overflow"))?;
+            if next > captured_tip {
                 return Ok(false);
             }
-            let block = self.verified_block(next).await?;
-            if successful_handoff(&block, &self.network, effect)? {
-                locked(&self.handoff_scan)?.found = Some(next);
+            let response = self.proof(next).await?;
+            let (candidate, _, published, found) = self
+                .advance_native(
+                    slot.clone(),
+                    Some(digest),
+                    Progress::Handoff {
+                        inspected_height: next,
+                        captured_tip,
+                    },
+                    verifier,
+                    response,
+                    next,
+                    (next >= 2).then_some(effect),
+                )
+                .await?;
+            digest = published;
+            verifier = candidate;
+            if found {
+                *locked(&self.handoff)? = Some((key, true));
                 return Ok(true);
             }
-            locked(&self.handoff_scan)?.next = next
-                .checked_add(1)
-                .ok_or_else(|| eyre!("AMX handoff recovery height overflow"))?;
         }
+    }
+
+    /// Called only at the original durable route boundary, while its outer lease remains held.
+    /// Business handoff success alone never retires this relayer's unknown exact carrier.
+    pub(super) async fn finish_observation(&self, lease: &PendingObservationLease) -> Result<()> {
+        let lease = lease.clone();
+        self.native(move |ledger| ledger.finish_observation_native(&lease))
+            .await?
+    }
+
+    fn finish_observation_native(&self, lease: &PendingObservationLease) -> Result<()> {
+        self.check_observation(
+            lease,
+            lease.source_plan,
+            lease.instruction,
+            lease.handoff_effect,
+        )?;
+        let key = self.carrier_key()?;
+        if key.source_plan != lease.source_plan || key.instruction != lease.instruction {
+            return Err(eyre!(
+                "AMX completion differs from its original observation lease"
+            ));
+        }
+        let saved = self
+            .custody
+            .load(&Slot::Pending(key.clone()))?
+            .ok_or_else(|| eyre!("AMX admitted carrier custody is missing"))?;
+        let carrier_block = match &saved.progress {
+            Progress::Reserved => None,
+            Progress::Carrier {
+                identity,
+                target_height,
+            } => {
+                let tip = saved
+                    .tip
+                    .as_ref()
+                    .ok_or_else(|| eyre!("AMX exact carrier still unresolved"))?;
+                if tip.height() != *target_height {
+                    return Err(eyre!("AMX exact carrier prefix is unfinished"));
+                }
+                self.carrier_evidence(tip, identity)?;
+                Some(tip)
+            }
+            _ => return Err(eyre!("AMX exact signed carrier still unresolved")),
+        };
+        let handoff = locked(&self.handoff)?.clone();
+        let handoff_saved = if let Some((handoff, _)) = handoff {
+            let PendingKind::Handoff(effect) = handoff.kind else {
+                return Err(eyre!("AMX handoff kind changed"));
+            };
+            let saved_handoff = self
+                .custody
+                .load(&Slot::Pending(handoff.clone()))?
+                .ok_or_else(|| eyre!("AMX handoff custody missing"))?;
+            let found = saved_handoff
+                .tip
+                .as_ref()
+                .map(|tip| successful_handoff(tip, &self.network, effect))
+                .transpose()?
+                .unwrap_or(false)
+                || carrier_block
+                    .map(|tip| successful_handoff(tip, &self.network, effect))
+                    .transpose()?
+                    .unwrap_or(false);
+            if !found {
+                return Err(eyre!("AMX handoff effect still unresolved"));
+            }
+            Some((handoff, saved_handoff.digest))
+        } else {
+            None
+        };
+        self.custody
+            .retire_after_durable_route_result(&key, &saved.digest)?;
+        if let Some((key, digest)) = handoff_saved {
+            self.custody
+                .retire_after_durable_route_result(&key, &digest)?;
+        }
+        self.custody.check_observation(lease)?;
+        Ok(())
     }
 
     // Journal labels and checksums are not authorization. Inspect the actual payload
@@ -332,6 +706,17 @@ impl RelayLedger {
         self.check_authorized_payload(payload).map_err(|error| {
             StepFailure::new(WorkflowErrorCode::BindingMismatch, error.to_string())
         })?;
+        let key = self.carrier_key().map_err(approval_evidence_failure)?;
+        if !self
+            .custody
+            .contains(&Slot::Pending(key))
+            .map_err(|error| approval_evidence_failure(error.into()))?
+        {
+            return Err(StepFailure::new(
+                WorkflowErrorCode::LocalResourceUnavailable,
+                "AMX original admission is missing",
+            ));
+        }
         let Executable::Instructions(instructions) = payload.instructions() else {
             unreachable!("checked native payload")
         };
@@ -359,13 +744,7 @@ impl RelayLedger {
             .source
             .applied_height()
             .await
-            .map_err(approval_evidence_failure)?
-            .max(
-                locked(&self.verifier)
-                    .map_err(approval_evidence_failure)?
-                    .authenticated_height()
-                    .unwrap_or(0),
-            );
+            .map_err(approval_evidence_failure)?;
         let block = self
             .verified_block(height)
             .await
@@ -432,50 +811,232 @@ impl RelayLedger {
         }
         Ok(())
     }
-    async fn proof(&self, height: u64) -> Result<SumeragiFinalityProof> {
+    async fn proof(&self, height: u64) -> Result<ProofInput> {
         self.reads.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(1))
             .map_err(|_| eyre!("AMX destination proof-read budget exhausted; retained verifier remains resumable"))?;
-        let proof = self
-            .source
+        self.source
             .proof(NonZeroU64::new(height).ok_or_else(|| eyre!("zero AMX destination locator"))?)
-            .await?;
-        if proof.height() != height {
-            return Err(eyre!("AMX destination proof differs from requested height"));
-        }
-        Ok(proof)
+            .await
     }
+    /// The live approval cursor is independent of all replayed carrier/handoff walks.
     async fn verified_block(&self, height: u64) -> Result<VerifiedSumeragiBlock> {
         if height < 2 {
-            return Err(eyre!("AMX carrier must select a non-genesis block"));
+            return Err(eyre!("AMX approval must select a non-genesis block"));
         }
+        let saved = self.load_native(Slot::LiveApproval).await?;
+        let mut digest = saved.as_ref().map(|saved| saved.digest);
+        let target = height.max(
+            saved
+                .as_ref()
+                .and_then(|saved| saved.tip.as_ref())
+                .map_or(0, |tip| tip.height()),
+        );
+        if let Some(tip) = saved.as_ref().and_then(|saved| saved.tip.as_ref())
+            && tip.height() == target
+        {
+            return Ok(tip.clone());
+        }
+        let mut verifier = saved
+            .and_then(|saved| saved.verifier)
+            .unwrap_or_else(|| self.original.clone());
         loop {
-            let next = locked(&self.verifier)?
+            let next = verifier
                 .authenticated_height()
                 .unwrap_or(0)
                 .checked_add(1)
-                .ok_or_else(|| eyre!("AMX destination height overflow"))?;
-            if next > height {
-                let proof = self.proof(height).await?;
-                return Ok(locked(&self.verifier)?.verify_retained_decision(&proof)?);
+                .ok_or_else(|| eyre!("AMX approval height overflow"))?;
+            let response = self.proof(next).await?;
+            let (candidate, block, published, _) = self
+                .advance_native(
+                    Slot::LiveApproval,
+                    digest,
+                    Progress::LiveApproval,
+                    verifier,
+                    response,
+                    next,
+                    None,
+                )
+                .await?;
+            digest = Some(published);
+            verifier = candidate;
+            if next == target {
+                return Ok(block);
             }
-            let proof = self.proof(next).await?;
-            let block = locked(&self.verifier)?.verify(&proof)?;
+        }
+    }
+
+    async fn select_carrier_identity(&self, identity: &TransactionIdentityV1) -> Result<()> {
+        let identity = *identity;
+        self.native(move |ledger| ledger.select_carrier_identity_native(&identity))
+            .await?
+    }
+
+    fn select_carrier_identity_native(&self, identity: &TransactionIdentityV1) -> Result<()> {
+        let key = self.carrier_key()?;
+        let saved = self
+            .custody
+            .load(&Slot::Pending(key.clone()))?
+            .ok_or_else(|| eyre!("AMX carrier was not admitted before signing"))?;
+        match &saved.progress {
+            Progress::Reserved => {
+                self.custody
+                    .bind_signed_identity(&key, &saved.digest, *identity)?;
+            }
+            Progress::SignedCarrier { identity: original }
+            | Progress::Carrier {
+                identity: original, ..
+            } if original == identity => (),
+            Progress::Carrier {
+                identity: original,
+                target_height,
+            } => {
+                let tip = saved
+                    .tip
+                    .as_ref()
+                    .ok_or_else(|| eyre!("AMX original carrier remains unresolved"))?;
+                if tip.height() != *target_height {
+                    return Err(eyre!("AMX original carrier prefix is unfinished"));
+                }
+                let evidence = self.carrier_evidence(tip, original)?;
+                self.custody.rebind_after_durable_rejected_attempt(
+                    &key,
+                    &saved.digest,
+                    *identity,
+                    &evidence,
+                )?;
+            }
+            _ => return Err(eyre!("AMX unknown signed identity cannot be replaced")),
+        }
+        Ok(())
+    }
+
+    /// A decoded journal reset cannot mint another identity while original signed
+    /// custody remains unresolved. Existing bytes still use dispatch/recovery directly.
+    async fn authorize_new_identity(&self) -> Result<(), StepFailure> {
+        self.native(move |ledger| ledger.authorize_new_identity_native())
+            .await
+            .map_err(approval_evidence_failure)?
+    }
+
+    fn authorize_new_identity_native(&self) -> Result<(), StepFailure> {
+        let key = self.carrier_key().map_err(approval_evidence_failure)?;
+        let saved = self
+            .custody
+            .load(&Slot::Pending(key))
+            .map_err(|error| approval_evidence_failure(error.into()))?
+            .ok_or_else(|| {
+                StepFailure::new(
+                    WorkflowErrorCode::LocalResourceUnavailable,
+                    "AMX original admission is missing",
+                )
+            })?;
+        if matches!(saved.progress, Progress::Reserved) {
+            return Ok(());
+        }
+        if let Progress::Carrier {
+            identity,
+            target_height,
+        } = saved.progress
+            && let Some(tip) = saved.tip
+            && tip.height() == target_height
+        {
+            let evidence = self
+                .carrier_evidence(&tip, &identity)
+                .map_err(approval_evidence_failure)?;
+            if !evidence.result().is_ok() {
+                // Only the engine's explicit next ordinal invokes signing after this
+                // native gate; current source, fee, consent and retry caps still apply.
+                return Ok(());
+            }
+        }
+        Err(StepFailure::new(
+            WorkflowErrorCode::EvidenceUnavailable,
+            "AMX original identity lacks an authenticated rejection; recover or retransmit its exact bytes",
+        ))
+    }
+
+    async fn carrier_block(
+        &self,
+        identity: &TransactionIdentityV1,
+        height: u64,
+    ) -> Result<VerifiedSumeragiBlock> {
+        if height < 2 {
+            return Err(eyre!("AMX carrier must select a non-genesis block"));
+        }
+        self.select_carrier_identity(identity).await?;
+        let slot = Slot::Pending(self.carrier_key()?);
+        let saved = self
+            .load_native(slot.clone())
+            .await?
+            .ok_or_else(|| eyre!("AMX carrier custody is missing"))?;
+        let mut digest = saved.digest;
+        let progress = Progress::Carrier {
+            identity: *identity,
+            target_height: height,
+        };
+        if saved.tip.as_ref().is_some_and(|tip| tip.height() == height) {
+            return self
+                .native(move |ledger| {
+                    if saved.progress != progress {
+                        ledger.custody.compare_and_publish(
+                            &slot,
+                            Some(&digest),
+                            progress,
+                            saved
+                                .verifier
+                                .as_ref()
+                                .ok_or_else(|| eyre!("AMX missing native prefix"))?,
+                            saved
+                                .proof
+                                .as_ref()
+                                .ok_or_else(|| eyre!("AMX missing native tip"))?,
+                        )?;
+                    }
+                    saved.tip.ok_or_else(|| eyre!("AMX missing native tip"))
+                })
+                .await?;
+        }
+        let mut verifier = saved
+            .verifier
+            .filter(|verifier| {
+                verifier
+                    .authenticated_height()
+                    .is_none_or(|tip| tip < height)
+            })
+            .unwrap_or_else(|| self.original.clone());
+        loop {
+            let next = verifier
+                .authenticated_height()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| eyre!("AMX carrier height overflow"))?;
+            let response = self.proof(next).await?;
+            let (candidate, block, published, _) = self
+                .advance_native(
+                    slot.clone(),
+                    Some(digest),
+                    progress.clone(),
+                    verifier,
+                    response,
+                    next,
+                    None,
+                )
+                .await?;
+            digest = published;
+            verifier = candidate;
             if next == height {
                 return Ok(block);
             }
         }
     }
-    async fn outcome(&self, identity: &TransactionIdentityV1) -> Result<CommittedOutcome> {
+
+    fn carrier_evidence(
+        &self,
+        verified: &VerifiedSumeragiBlock,
+        identity: &TransactionIdentityV1,
+    ) -> Result<CommittedTransaction> {
         let hash =
             HashOf::from_untyped_unchecked(Hash::prehashed(identity.signed_transaction_hash));
-        let height = match self.source.locate(hash).await? {
-            // Exact canonical HTTP absence permits only identical-byte retransmission. It
-            // cannot close this identity or authorize a fresh signature.
-            Location::Absent => return Ok(CommittedOutcome::ExactAbsence),
-            Location::Observed(None) => return Ok(CommittedOutcome::ObservedNotFinal),
-            Location::Observed(Some(height)) => height,
-        };
-        let verified = self.verified_block(height).await?;
         let block = verified.block();
         let index = block
             .network_entrypoints()
@@ -499,19 +1060,39 @@ impl RelayLedger {
         if !cfg!(all(test, sumeragi_daemon_mutation = "HC266")) {
             self.check_payload(transaction.payload())?;
         }
-        let proof_index = u32::try_from(index)
-            .map_err(|_| eyre!("AMX carrier input index exceeds the proof format"))?;
-        let evidence = evidence(block, proof_index)?;
+        let evidence = evidence(
+            block,
+            u32::try_from(index).map_err(|_| eyre!("AMX input index exceeds proof format"))?,
+        )?;
         verified.verify_transaction_execution(&self.network, &evidence)?;
-        if evidence.result().is_ok() {
-            Ok(CommittedOutcome::Applied {
-                block_height: Some(height),
-            })
-        } else {
-            Ok(CommittedOutcome::Rejected {
-                detail: "authenticated execution rejected this exact AMX carrier".into(),
-            })
-        }
+        Ok(evidence)
+    }
+
+    async fn outcome(&self, identity: &TransactionIdentityV1) -> Result<CommittedOutcome> {
+        let hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed(identity.signed_transaction_hash));
+        let height = match self.source.locate(hash).await? {
+            // Exact canonical HTTP absence permits only identical-byte retransmission. It
+            // cannot close this identity or authorize a fresh signature.
+            Location::Absent => return Ok(CommittedOutcome::ExactAbsence),
+            Location::Observed(None) => return Ok(CommittedOutcome::ObservedNotFinal),
+            Location::Observed(Some(height)) => height,
+        };
+        let verified = self.carrier_block(identity, height).await?;
+        let identity = *identity;
+        self.native(move |ledger| {
+            let evidence = ledger.carrier_evidence(&verified, &identity)?;
+            if evidence.result().is_ok() {
+                Ok(CommittedOutcome::Applied {
+                    block_height: Some(height),
+                })
+            } else {
+                Ok(CommittedOutcome::Rejected {
+                    detail: "authenticated execution rejected this exact AMX carrier".into(),
+                })
+            }
+        })
+        .await?
     }
 }
 
@@ -550,6 +1131,9 @@ impl WorkflowAccount for RelayAccount {
                 })?;
             // Any operational refusal retains the exact unsigned reservation;
             // its original category cannot become a monetary rejection or capacity.
+            if !cfg!(all(test, sumeragi_daemon_mutation = "HC489")) {
+                self.ledger.authorize_new_identity().await?;
+            }
             self.ledger.authorize_debit(&payload).await?;
             self.account.sign(unsigned_payload).await
         })
@@ -579,6 +1163,13 @@ impl WorkflowLedger for RelayLedger {
                 return DispatchOutcome::NotAdmitted {
                     code: error.code,
                     detail: error.detail,
+                };
+            }
+            if let Err(error) = self.select_carrier_identity(identity).await {
+                let failure = approval_evidence_failure(error);
+                return DispatchOutcome::NotAdmitted {
+                    code: failure.code,
+                    detail: failure.detail,
                 };
             }
             let transaction = match SignedTransaction::decode_all_versioned(bytes) {
@@ -629,7 +1220,7 @@ struct HandoffEffect<'a> {
     result_preimage: &'a [u8],
 }
 
-fn handoff_effect(instruction: &InstructionBox) -> Result<Option<Hash>> {
+pub(super) fn handoff_effect(instruction: &InstructionBox) -> Result<Option<Hash>> {
     use iroha_data_model::isi::sumeragi_amx::{RelayAmxHandoffV1, RelayGlobalAmxHandoffV1};
     let (direction, dataspace, proof) =
         if let Some(value) = instruction.as_any().downcast_ref::<RelayAmxHandoffV1>() {
@@ -797,3 +1388,7 @@ mod approval_tests;
 #[cfg(test)]
 #[path = "expiry_recovery_tests.rs"]
 mod expiry_recovery_tests;
+
+#[cfg(test)]
+#[path = "ledger_pending_progress_tests.rs"]
+mod pending_progress_tests;

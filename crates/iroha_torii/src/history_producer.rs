@@ -32,11 +32,35 @@ pub struct ProducerBudget {
     response_metadata: AllocationBudget,
     allocations: DecodeBudgetContext,
     allocation_limits: DecodeLimits,
+    /// Set when a limit derived from this owner refused the read, so the admission
+    /// that granted it may serve the same read again with a larger owner.
+    owner_limit_refused: std::sync::atomic::AtomicBool,
 }
 
 impl ProducerBudget {
+    /// Closed native-finality request, codec, cancellation and last-byte controls.
+    /// These actual layouts are separate from source/response buffers and Core graphs.
+    pub(crate) fn native_finality_metadata_bytes() -> Option<usize> {
+        [
+            ChargedShared::<Self>::allocation_layout().size(),
+            DecodeBudgetContext::allocation_layout().size(),
+            crate::AdmittedFanoutPermit::layout().size(),
+            ChargedShared::<std::sync::atomic::AtomicBool>::allocation_layout().size(),
+            crate::response_memory_custody::native_response_control_bytes()?,
+        ]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+    }
     pub(crate) fn response_metadata(&self) -> &AllocationBudget {
         &self.response_metadata
+    }
+    pub(crate) fn note_owner_limit_refused(&self) {
+        self.owner_limit_refused
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub(crate) fn owner_limit_refused(&self) -> bool {
+        self.owner_limit_refused
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
     /// Derive corridors from an already admitted envelope, never a configured or response cap.
     pub(crate) fn from_admitted(
@@ -104,6 +128,7 @@ impl ProducerBudget {
             response_metadata,
             allocations,
             allocation_limits,
+            owner_limit_refused: std::sync::atomic::AtomicBool::new(false),
         };
         ChargedShared::from_reservation(budget, &mut reservation).map_err(|_| capacity())
     }
@@ -138,7 +163,7 @@ impl HistoryProducerOwner {
     }
     /// Capture the admitted producer before moving the request into a physical worker.
     pub(crate) fn from_admission(admission: &QueryAdmissionPermit) -> Result<Self, Error> {
-        Self::from_reservation(admission._fanout_memory.as_ref().ok_or_else(capacity)?)
+        Self::from_reservation(admission.fanout_memory.as_ref().ok_or_else(capacity)?)
     }
 
     /// A present outer capability may never disappear into a fresh, wider finality
@@ -235,6 +260,64 @@ impl HistoryProducerOwner {
         )
     }
 
+    /// Native page bytes collected by the Explorer query adapter before projection.
+    pub(crate) fn source_frame_bytes(&self) -> usize {
+        self.budget.envelope.route_body_bytes
+    }
+
+    /// All post-scan allocation phases of the block collection: internal native
+    /// JSON, its decoded retained graph, projection scratch, public JSON and
+    /// native cursor/hash text. Every phase spends this same cumulative owner.
+    #[cfg(feature = "app_api")]
+    pub(crate) fn block_feed_output_reserve(&self) -> Result<usize, Error> {
+        let envelope = self.budget.envelope;
+        [
+            envelope.route_body_bytes,
+            envelope.accumulator_retained_bytes,
+            envelope.candidate_allocation_bytes,
+            envelope.route_body_bytes,
+            crate::explorer::EXPLORER_HISTORY_RESPONSE_METADATA_BYTES,
+        ]
+        .into_iter()
+        .try_fold(0usize, |sum, bytes| sum.checked_add(bytes))
+        .ok_or_else(|| self.owner_capacity())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn allocation_limit_for_test(&self) -> usize {
+        self.budget.allocation_limits.max_total_allocated_bytes()
+    }
+
+    /// Bound source decoding to the remaining cumulative grant while leaving
+    /// `response_reserve` bytes for cursor and response construction. The child
+    /// context never replaces this owner: install it first, then this owner's
+    /// allocation scope, so refused source charges cannot spend the output reserve.
+    /// Callers retain physical custody across the separately scoped phases.
+    pub(crate) fn source_allocation_context(
+        &self,
+        response_reserve: usize,
+    ) -> Result<DecodeBudgetContext, Error> {
+        let limits = self.budget.allocation_limits;
+        let spent = usize::try_from(self.budget.allocations.consumed_allocated_bytes())
+            .map_err(|_| self.owner_capacity())?;
+        let source_bytes = limits
+            .max_total_allocated_bytes()
+            .checked_sub(spent)
+            .and_then(|remaining| remaining.checked_sub(response_reserve))
+            .ok_or_else(|| self.owner_capacity())?;
+        DecodeBudgetContext::try_new_owned(
+            DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                source_bytes,
+                limits.max_nesting_depth(),
+            ),
+            &self.budget.response_metadata,
+        )
+        .map_err(|_| self.owner_capacity())
+    }
+
     /// Prepay finality's complete source/output and graph corridors from this
     /// request's original cumulative grant. Generic decoded graphs must not spend
     /// the cold-frame portion while exact finality destinations retain it.
@@ -271,8 +354,9 @@ impl HistoryProducerOwner {
     /// A present invalid or foreign-generation token is a refusal, never a standalone grant.
     pub(crate) fn authentication_read(app: &crate::SharedAppState) -> Result<Self, Error> {
         if let Some(owner) = Self::current_if_admitted()? {
+            // A routed read's owner is sized for that read, at most the configured one.
             if owner.budget.pool_generation != app.query_fanout_inflight.generation()
-                || owner.budget.envelope.working_set_bytes != app.query_fanout_working_set_bytes
+                || owner.budget.envelope.working_set_bytes > app.query_fanout_working_set_bytes
             {
                 return Err(capacity());
             }
@@ -281,6 +365,40 @@ impl HistoryProducerOwner {
         let reservation =
             crate::try_acquire_new_query_fanout_memory(app).map_err(|_| capacity())?;
         Self::from_reservation(&reservation)
+    }
+
+    /// Reuse the request's admitted owner (`borrowed == true`), or wait in the query
+    /// admission queue for the smallest owner whose phase covers `unit_bytes`, the
+    /// request's largest representation; an unknown size takes the configured owner.
+    pub(crate) async fn authentication_read_waiting(
+        app: &crate::SharedAppState,
+        unit_bytes: Option<usize>,
+    ) -> Result<(Self, bool), axum::response::Response> {
+        use axum::response::IntoResponse as _;
+        if let Some(owner) = Self::current_if_admitted().map_err(Error::into_response)? {
+            if owner.budget.pool_generation != app.query_fanout_inflight.generation()
+                || owner.budget.envelope.working_set_bytes > app.query_fanout_working_set_bytes
+            {
+                return Err(capacity().into_response());
+            }
+            return Ok((owner, true));
+        }
+        let working_set = crate::authentication_owner_working_set(app, unit_bytes);
+        let reservation = crate::acquire_app_routed_read_http_memory(app, working_set).await?;
+        Ok((
+            Self::from_reservation(&reservation).map_err(Error::into_response)?,
+            false,
+        ))
+    }
+
+    /// The complete working set this owner was admitted with.
+    pub(crate) fn working_set_bytes(&self) -> usize {
+        self.budget.envelope.working_set_bytes
+    }
+
+    /// Record that a limit derived from this owner refused its request.
+    pub(crate) fn note_owner_limit_refused(&self) {
+        self.budget.note_owner_limit_refused();
     }
 
     /// Acquire one fresh fail-fast owner for a background worker's off-chain history read.
@@ -307,18 +425,24 @@ impl HistoryProducerOwner {
         self.budget.envelope.final_body_bytes
     }
 
+    /// Refuse a read that outgrew this owner's own limits, and record that the owner refused it.
+    fn owner_capacity(&self) -> Error {
+        self.budget.note_owner_limit_refused();
+        capacity()
+    }
+
     /// Admit exact native collection backing before allocation, without geometric overgrowth.
     pub(crate) fn selected<T>(&self, count: usize) -> Result<Vec<T>, Error> {
         let bytes = std::alloc::Layout::array::<T>(count)
-            .map_err(|_| capacity())?
+            .map_err(|_| self.owner_capacity())?
             .size();
         if bytes > self.retained_bytes() {
-            return Err(capacity());
+            return Err(self.owner_capacity());
         }
         self.scope(|| norito::core::reserve_decode_allocation(bytes))
-            .map_err(|_| capacity())?;
+            .map_err(|_| self.owner_capacity())?;
         crate::torii_routed_read_exact_vec(count, "history selected records", bytes)
-            .map_err(|_| capacity())
+            .map_err(|_| self.owner_capacity())
     }
 
     /// Encode a borrowed projection under the unchanged cumulative owner.
@@ -339,9 +463,10 @@ impl HistoryProducerOwner {
             .scope(|| {
                 norito::json::to_json_bounded_boxed(payload, limit.min(self.response_bytes()))
             })
-            .map_err(|_| capacity())?;
-        let bytes = crate::response_memory_custody::owned(encoded, self).map_err(|_| capacity())?;
-        crate::response_memory_custody::json(bytes, self).map_err(|_| capacity())
+            .map_err(|_| self.owner_capacity())?;
+        let bytes = crate::response_memory_custody::owned(encoded, self)
+            .map_err(|_| self.owner_capacity())?;
+        crate::response_memory_custody::json(bytes, self).map_err(|_| self.owner_capacity())
     }
 
     /// Stream one single-line canonical JSON event into exact native response backing.
@@ -366,8 +491,8 @@ impl HistoryProducerOwner {
         }
         let encoded = self
             .scope(|| norito::json::to_json_bounded_boxed(&Event(payload), self.response_bytes()))
-            .map_err(|_| capacity())?;
-        crate::response_memory_custody::owned(encoded, self).map_err(|_| capacity())
+            .map_err(|_| self.owner_capacity())?;
+        crate::response_memory_custody::owned(encoded, self).map_err(|_| self.owner_capacity())
     }
 }
 
@@ -385,6 +510,154 @@ mod tests {
         )
         .unwrap();
         HistoryProducerOwner::from_reservation(&reservation).unwrap()
+    }
+
+    #[test]
+    fn source_allocation_context_preserves_response_room_and_original_accounting() {
+        let owner = owner(48_000_000);
+        let reserved = 1024;
+        owner
+            .scope(|| norito::core::reserve_decode_allocation(128))
+            .unwrap();
+        let before = owner.allocation_context().consumed_allocated_bytes();
+        let source = owner.source_allocation_context(reserved).unwrap();
+        let available = owner.budget.allocation_limits.max_total_allocated_bytes()
+            - usize::try_from(before).unwrap()
+            - reserved;
+        source
+            .with(|| owner.scope(|| norito::core::reserve_decode_allocation(available)))
+            .unwrap();
+        assert!(
+            source
+                .with(|| owner.scope(|| norito::core::reserve_decode_allocation(1)))
+                .is_err()
+        );
+        owner
+            .scope(|| norito::core::reserve_decode_allocation(reserved))
+            .unwrap();
+        assert_eq!(
+            owner.allocation_context().consumed_allocated_bytes(),
+            owner.budget.allocation_limits.max_total_allocated_bytes() as u64
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn block_feed_budget_exhaustion_keeps_a_serializable_short_page_and_cursor() {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use std::num::NonZeroUsize;
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        chain.commit(Vec::new());
+        let state = Arc::clone(chain.state());
+        let measured = owner(48_000_000);
+        let newest = NonZeroUsize::new(2).unwrap();
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(newest, &measured.canonical_history_budget())
+            })
+            .unwrap();
+        let first = measured.allocation_context().consumed_allocated_bytes() as usize;
+        measured
+            .scope(|| {
+                state.read_canonical_history_block(
+                    NonZeroUsize::MIN,
+                    &measured.canonical_history_budget(),
+                )
+            })
+            .unwrap();
+        let second = measured.allocation_context().consumed_allocated_bytes() as usize - first;
+        assert!(first > 0 && second > 0);
+
+        let request = owner(48_000_000);
+        let output_reserve = request.block_feed_output_reserve().unwrap();
+        let selected = std::alloc::Layout::array::<crate::explorer_history::HistoryBlockRow>(100)
+            .unwrap()
+            .size();
+        let source = first + second / 2;
+        let burn = request.budget.allocation_limits.max_total_allocated_bytes()
+            - output_reserve
+            - selected
+            - source;
+        request
+            .scope(|| norito::core::reserve_decode_allocation(burn))
+            .unwrap();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let response = request
+            .physical_scope(|| {
+                crate::routing::handle_v1_explorer_blocks_sync(
+                    Arc::clone(&state),
+                    crate::routing::MaybeTelemetry::disabled(),
+                    crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    crate::explorer::ExplorerCursorQuery {
+                        cursor: None,
+                        limit: 100,
+                    },
+                    (crate::routing::EXPLORER_BLOCK_HEIGHTS_ALL, &summaries),
+                )
+            })
+            .expect("source exhaustion still permits cursor and response serialization");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        let rows = payload
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("height").and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        let cursor = payload
+            .get("pagination")
+            .and_then(|page| page.get("next_cursor"))
+            .and_then(norito::json::Value::as_str)
+            .expect("unread block continuation");
+        let next = owner(48_000_000);
+        let response = next
+            .physical_scope(|| {
+                crate::routing::handle_v1_explorer_blocks_sync(
+                    state,
+                    crate::routing::MaybeTelemetry::disabled(),
+                    crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    crate::explorer::ExplorerCursorQuery {
+                        cursor: Some(cursor.to_owned()),
+                        limit: 100,
+                    },
+                    (crate::routing::EXPLORER_BLOCK_HEIGHTS_ALL, &summaries),
+                )
+            })
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resumed: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        let rows = resumed
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("height").and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            resumed
+                .get("pagination")
+                .and_then(|page| page.get("next_cursor"))
+                .unwrap()
+                .is_null()
+        );
+    }
+
+    #[test]
+    fn source_allocation_context_refuses_a_reserve_larger_than_its_owner() {
+        let owner = owner(48_000_000);
+        assert!(owner.source_allocation_context(usize::MAX).is_err());
+        assert_eq!(owner.allocation_context().consumed_allocated_bytes(), 0);
     }
 
     #[test]
@@ -514,6 +787,108 @@ mod tests {
     }
 
     #[test]
+    fn default_finality_custody_can_hold_one_maximum_payment_and_its_response() {
+        // Necessary lower bound for the real maximum-payment network regression: the
+        // portable proof still owns the original transaction while HTTP owns its encoded
+        // response. These are actual funded buffers, not authenticated proof fixtures.
+        let maximum_payment = usize::try_from(
+            iroha_data_model::parameter::Parameters::default()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+        )
+        .unwrap();
+        let working = usize::try_from(
+            iroha_config::parameters::defaults::torii::FINALITY_MAX_WORKING_SET_BYTES.0,
+        )
+        .unwrap();
+        let envelope = QueryFanoutMemoryEnvelope::for_native_finality(
+            working,
+            usize::try_from(iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0).unwrap(),
+        )
+        .unwrap();
+        let budget = ProducerBudget::from_admitted(envelope, 7).unwrap();
+        let proof =
+            iroha_allocation::ChargedBuffer::<u8>::new(maximum_payment, &budget.cold_frames)
+                .expect("default finality custody must admit the maximum signed payment source");
+        let response =
+            iroha_allocation::ChargedBuffer::<u8>::new(maximum_payment, &budget.cold_frames)
+                .expect(
+                    "default finality custody must retain the original while encoding its response",
+                );
+        assert!(envelope.final_body_bytes >= maximum_payment);
+        drop((proof, response));
+        assert_eq!(budget.cold_frames.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn native_finality_profile_refuses_before_acquisition_and_keeps_disjoint_pools() {
+        let response =
+            usize::try_from(iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0).unwrap();
+        let frames = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+            response,
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
+            64,
+        )
+        .unwrap();
+        let graph_floor =
+            iroha_core::sumeragi::finality::native_finality_graph_floor_bytes().unwrap();
+        let controls = ProducerBudget::native_finality_metadata_bytes().unwrap();
+        let fixed = crate::query_fanout_fixed_overhead_bytes().unwrap();
+        // Core's maximum-payment test reserves this existing fixed allowance a
+        // second time instead of guessing our platform-specific Body/Bytes layouts.
+        // Its graph grant is therefore a proven lower bound of this actual profile.
+        assert!(controls <= fixed);
+        let candidate =
+            QueryFanoutMemoryEnvelope::for_native_finality(384_000_000, response).unwrap();
+        let actual = ProducerBudget::from_admitted(candidate, 7).unwrap();
+        let core_test_lower_bound = 384_000_000_usize
+            .checked_sub(frames)
+            .unwrap()
+            .checked_sub(fixed)
+            .unwrap()
+            .checked_sub(fixed)
+            .unwrap();
+        assert!(actual.finality_graphs.limit_bytes() >= core_test_lower_bound);
+        let minimum = fixed + controls + frames + graph_floor;
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(minimum - 1, response).is_err());
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(384_000_000, usize::MAX).is_err());
+        let exact = QueryFanoutMemoryEnvelope::for_native_finality(minimum, response).unwrap();
+        let budget = ProducerBudget::from_admitted(exact, 7).unwrap();
+        assert_eq!(budget.finality_graphs.limit_bytes(), graph_floor);
+        assert_eq!(budget.cold_frames.limit_bytes(), frames);
+        assert_eq!(budget.response_metadata.limit_bytes(), controls);
+        assert_eq!(
+            fixed
+                + budget.finality_graphs.limit_bytes()
+                + budget.cold_frames.limit_bytes()
+                + budget.response_metadata.limit_bytes(),
+            minimum
+        );
+        assert!(!budget.finality_graphs.same_pool(&budget.cold_frames));
+        assert!(!budget.response_metadata.same_pool(&budget.cold_frames));
+        let remaining = frames - budget.cold_frames.reserved_bytes();
+        let full = budget
+            .cold_frames
+            .try_reserve(std::alloc::Layout::array::<u8>(remaining).unwrap())
+            .unwrap();
+        assert!(
+            budget
+                .cold_frames
+                .try_reserve(std::alloc::Layout::new::<u8>())
+                .is_err()
+        );
+        drop(full);
+        assert_eq!(budget.cold_frames.reserved_bytes(), 0);
+
+        let smaller = QueryFanoutMemoryEnvelope::for_bodyless_finality(48_000_000).unwrap();
+        let inherited = ProducerBudget::from_admitted(smaller, 7).unwrap();
+        assert_eq!(inherited.envelope, smaller);
+        assert!(inherited.cold_frames.limit_bytes() < 10 * 1024 * 1024);
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(48_000_000, response).is_err());
+    }
+
+    #[test]
     fn larger_initial_finality_working_set_reduces_slots_inside_the_same_aggregate_pool() {
         let aggregate = 512_000_000;
         let geometry = crate::query_memory_geometry(aggregate, 192_000_000, 64_000_000, 64)
@@ -547,25 +922,29 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn finality_rejects_missing_or_replaced_present_outer_admission() {
         let inherited = owner(48_000_000);
         let foreign = owner(48_000_000);
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let mut admission = QueryAdmissionPermit {
             _query: Arc::clone(&query).try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: None,
+            heavy: None,
+            body: None,
+            fanout_memory: None,
         };
         inherited.physical_scope(|| {
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(foreign._reservation.clone());
+            admission.fanout_memory = Some(foreign._reservation.clone());
             assert!(HistoryProducerOwner::validate_finality_inheritance(&admission).is_err());
-            admission._fanout_memory = Some(inherited._reservation.clone());
+            admission.fanout_memory = Some(inherited._reservation.clone());
             HistoryProducerOwner::validate_finality_inheritance(&admission).unwrap();
             assert_eq!(
                 admission
-                    ._fanout_memory
+                    .fanout_memory
                     .as_ref()
                     .unwrap()
                     .admission
@@ -577,6 +956,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the original reservation retained solely for its custody and drop lifetime."
+    )]
     fn native_history_refuses_response_only_and_foreign_generation_tokens() {
         let permit = Arc::new(tokio::sync::Semaphore::new(1))
             .try_acquire_owned()
@@ -652,9 +1035,9 @@ mod tests {
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let admission = QueryAdmissionPermit {
             _query: query.try_acquire_owned().unwrap(),
-            _heavy: None,
-            _body: None,
-            _fanout_memory: Some(reservation),
+            heavy: None,
+            body: None,
+            fanout_memory: Some(reservation),
         };
         let (started, entered) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();

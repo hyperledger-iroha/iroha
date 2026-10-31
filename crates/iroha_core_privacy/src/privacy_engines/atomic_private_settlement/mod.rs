@@ -34,14 +34,18 @@ pub use relation::{
 #[cfg(test)]
 pub use wallet::AtomicPrivateSettlementBootstrapPlanV1;
 pub use wallet::{
+    ATOMIC_PRIVATE_SETTLEMENT_RESERVATION_MAX_BYTES_V1,
     ATOMIC_PRIVATE_SETTLEMENT_WALLET_BUNDLE_MAX_BYTES_V1,
     AtomicPrivateSettlementAuthorizedWalletLegV1, AtomicPrivateSettlementInputSecretV1,
     AtomicPrivateSettlementPreparationErrorV1, AtomicPrivateSettlementPreparedLegV1,
     AtomicPrivateSettlementPreparedProofV1, AtomicPrivateSettlementProvisionalBundleV1,
-    AtomicPrivateSettlementProvisionalLegInputV1, AtomicPrivateSettlementWalletErrorV1,
-    AtomicPrivateSettlementWalletInspectionV1, complete_atomic_private_settlement_prepared_leg_v1,
+    AtomicPrivateSettlementProvisionalLegInputV1, AtomicPrivateSettlementReservationInspectionV1,
+    AtomicPrivateSettlementWalletErrorV1, AtomicPrivateSettlementWalletInspectionV1,
+    complete_atomic_private_settlement_prepared_leg_v1,
     consume_atomic_private_settlement_wallet_bundle_v1,
+    decode_atomic_private_settlement_reservation_v1,
     derive_atomic_private_settlement_input_nullifiers_v1,
+    encode_atomic_private_settlement_reservation_v1,
     finalize_atomic_private_settlement_provisional_bundle_v1,
     inspect_atomic_private_settlement_wallet_bundle_v1,
     prepare_atomic_private_settlement_authorization_inputs_v1,
@@ -51,7 +55,8 @@ pub use wallet::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use wallet::{
-    plan_atomic_private_settlement_bootstrap_v1, plan_atomic_private_settlement_initial_inputs_v1,
+    atomic_private_settlement_reservation_fixture_v1, plan_atomic_private_settlement_bootstrap_v1,
+    plan_atomic_private_settlement_initial_inputs_v1,
 };
 
 /// Validate the closed settlement-only two-input/three-output proof profile.

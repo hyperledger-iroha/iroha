@@ -3,7 +3,7 @@
 //! This Core producer is a request-sized custody primitive, not a response cache or
 //! HTTP admission. Configured identity and an immutable captured State hash generation
 //! come from its caller. Signed genesis and every original authority/QC/availability
-//! check remain in CertifiedChain. A digest only joins freshly read physical bytes
+//! check remain in `CertifiedChain`. A digest only joins freshly read physical bytes
 //! to those completed checks; it never authenticates a frame independently.
 //!
 //! A State-owned source also carries the node's bounded ladder of completed prefixes.
@@ -21,10 +21,10 @@ use crate::{
 use crate::{
     execution_attempt::{ExecutionAttemptError, ExecutionDeferred},
     kura::Kura,
-    state::{BlockHashRead, StateView},
+    state::BlockHashRead,
     sumeragi::certified_chain::{
-        CertifiedChain, ChainReadError, FinalityPrefixCheckpoints, PrefixCheckpoint,
-        QcVerification, QueryCacheOwner,
+        ChainReadError, FinalityPrefixCheckpoints, PrefixCheckpoint, QcVerification,
+        QueryCacheOwner, QueryCertifiedChain,
     },
 };
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, ChargedShared};
@@ -113,9 +113,26 @@ pub struct NativeFinalityProofIntervalLimits {
     deadline: Instant,
 }
 impl NativeFinalityProofIntervalLimits {
+    /// First requested height; the State ladder climbs to within one step below it.
+    pub(crate) fn first_height(&self) -> u64 {
+        self.from
+    }
     /// Exact final historical membership checked by the State wrapper.
     pub(crate) fn final_height(&self) -> u64 {
         self.to
+    }
+    /// Original absolute deadline; no wait inside this request extends it.
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+    /// One earlier height under these same wire, response and deadline bounds.
+    /// A ladder step's proof is discarded; only its retained prefix remains.
+    pub(crate) fn step_to(&self, height: NonZeroU64) -> Self {
+        Self {
+            from: height.get(),
+            to: height.get(),
+            ..*self
+        }
     }
     /// Check the original stop policy without entering State or native I/O.
     pub(crate) fn check(
@@ -393,9 +410,9 @@ fn build_interval_in_cache_scope(
             progress()?;
             // The backing covers the original inline cursor/control, not its nested
             // authority graph. No Box, additional pool or policy copy is introduced.
-            let mut cursor = ChargedBuffer::<CertifiedChain<'_, StateView<'_>>>::new(1, budget)?;
-            let mut chain = workspace.stage(|| {
-                CertifiedChain::from_pinned_history_query(
+            let mut cursor = ChargedBuffer::<QueryCertifiedChain<'_>>::new(1, budget)?;
+            let chain = workspace.stage(|| {
+                QueryCertifiedChain::new(
                     source.chain_id,
                     source.network,
                     source.hashes,
@@ -405,7 +422,6 @@ fn build_interval_in_cache_scope(
                 )
             })?;
             progress()?;
-            chain.enable_proof_source_cut();
             if let Some((checkpoints, budget)) = source.checkpoints {
                 let mut cache = QueryCacheOwner::new(budget.clone());
                 if let Err(original) = checkpoints.prepare(budget) {
@@ -436,26 +452,21 @@ fn build_interval_in_cache_scope(
             progress()?;
             for height in limits.from..=limits.to {
                 progress()?;
-                let retained = reader.with_certified_workspace(
+                let retained = reader.with_verified_source(
                     height,
                     &mut progress,
                     &workspace,
-                    |certified| {
+                    |raw, header, members, verification| {
                         if !matches!(
-                            (height, certified.verification()),
+                            (height, verification),
                             (1, QcVerification::Genesis) | (2.., QcVerification::Verified)
                         ) {
                             return Err(NativeFinalityProofIntervalError::Native(
                                 NativeFinalityProofRefusal::UnverifiedCommittee(height),
                             ));
                         }
-                        OwnedProof::new(
-                            certified.block(),
-                            &certified.commitment().schedule.current.committee,
-                            budget,
-                            limits.deadline,
-                        )
-                        .map_err(NativeFinalityProofIntervalError::from)
+                        OwnedProof::from_native_frame(raw, header, members, budget, limits.deadline)
+                            .map_err(NativeFinalityProofIntervalError::from)
                     },
                 )?;
                 progress()?;
@@ -516,12 +527,11 @@ fn build_interval_in_cache_scope(
             // Original request graphs retire before returning their workspace credit.
             // A retained authority keeps its independently prepaid State source owner.
             drop(cursor);
-            if let Some((checkpoints, budget, checkpoint)) = checkpoint {
-                if let Err(original) = checkpoints.retain(checkpoint, budget) {
-                    if cache_refusal.is_none() {
-                        cache_refusal = Some(original);
-                    }
-                }
+            if let Some((checkpoints, budget, checkpoint)) = checkpoint
+                && let Err(original) = checkpoints.retain(checkpoint, budget)
+                && cache_refusal.is_none()
+            {
+                cache_refusal = Some(original);
             }
             Ok(NativeFinalityProofInterval {
                 proofs,

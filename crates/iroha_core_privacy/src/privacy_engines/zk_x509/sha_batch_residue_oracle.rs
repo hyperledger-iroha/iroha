@@ -65,6 +65,37 @@ fn original_evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
         let value = current.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + bit];
         residues.push(value.mul(value.sub(A::ONE)));
     }
+    // The same private raw length owns both the early frame header and the
+    // final RFC length event. Carry it through every capacity row, including
+    // inactive compression and memory rows, and stop at the call boundary.
+    let within_call = A::ONE
+        .sub(current.fixed[SHA_WORD_CAPACITY_CALL_LAST_V1])
+        .sub(current.fixed[ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1]);
+    for bit in 0..ZK_X509_SHA_RFC_LENGTH_BITS_V1 {
+        residues.push(
+            within_call.mul(
+                next.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + bit]
+                    .sub(current.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + bit]),
+            ),
+        );
+    }
+    let raw_low = pack_sha_rfc_bits_v1(
+        &current.base[ZK_X509_SHA_LENGTH_BITS_START_V1..ZK_X509_SHA_LENGTH_BITS_START_V1 + 8],
+    );
+    let raw_high = pack_sha_rfc_bits_v1(
+        &current.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + 8
+            ..ZK_X509_SHA_LENGTH_BITS_START_V1 + ZK_X509_SHA_RFC_LENGTH_BITS_V1],
+    );
+    for byte in 0..4 {
+        let mask = current.fixed[ZK_X509_SHA_FIXED_FRAME_MASK_V1 + byte];
+        let expected = current.fixed[ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + byte]
+            .add(current.fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + byte].mul(raw_high))
+            .add(current.fixed[ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1 + byte].mul(raw_low));
+        let bits = 1 + (3 - byte) * 8;
+        let actual = pack_sha_rfc_bits_v1(&current.base[bits..bits + 8]);
+        residues.push(mask.mul(actual.sub(expected)));
+        residues.push(mask.mul(current.base[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte].sub(A::ONE)));
+    }
     residues.push(sha_rfc_length_recomposition_residue_v1(
         &current.base,
         &current.aux,
@@ -169,7 +200,8 @@ fn original_evaluate_sha_batch_relation_v1<A: PolynomialAirFieldV1>(
         }
     }
     residues.extend(current.base.map(|value| padding.mul(value)));
-    residues.extend(current.aux.map(|value| padding.mul(value)));
+    residues.extend(current.aux[..projection_bus::AUX_START_V1].iter().copied().map(|value| padding.mul(value)));
+    projection_bus::push_residues_v1(current, next, call_challenges, &mut residues);
     let expected_count = if ca_call_boundaries.is_some() {
         ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
     } else {

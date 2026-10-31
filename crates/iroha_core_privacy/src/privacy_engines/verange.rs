@@ -10,9 +10,8 @@ use super::p256::{
     TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
     random_nonzero_scalar, validate_generator_independence,
 };
-use once_cell::sync::Lazy;
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 /// Closed suite identifier committed by every `VeRange` transcript.
@@ -289,8 +288,8 @@ impl VeRangeParameterSetV1 {
         Ok(Self { bits_32, bits_64 })
     }
 }
-static VERANGE_PARAMETER_SET: Lazy<Result<VeRangeParameterSetV1, VeRangeError>> =
-    Lazy::new(VeRangeParameterSetV1::derive);
+static VERANGE_PARAMETER_SET: std::sync::LazyLock<Result<VeRangeParameterSetV1, VeRangeError>> =
+    std::sync::LazyLock::new(VeRangeParameterSetV1::derive);
 /// Fully bound public input to one `VeRange` Type-1 proof.
 #[derive(Clone, Copy, Debug)]
 pub struct VeRangeType1StatementV1<'a> {
@@ -314,7 +313,7 @@ impl<'a> VeRangeType1StatementV1<'a> {
     pub fn new(
         profile: VeRangeBitLengthV1,
         commitment: CompressedPointV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, VeRangeError> {
         let _ = commitment.to_projective()?;
         let parameters = VeRangeParametersV1::for_profile(profile)?;
@@ -329,7 +328,7 @@ impl<'a> VeRangeType1StatementV1<'a> {
         Ok(Self {
             profile,
             commitment,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             batch_index: 0,
             batch_count: 1,
             batch_commitment_digest,
@@ -348,7 +347,7 @@ impl<'a> VeRangeType1StatementV1<'a> {
     fn for_batch(
         profile: VeRangeBitLengthV1,
         commitment: CompressedPointV1,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
         batch_index: u32,
         batch_count: u32,
         batch_commitment_digest: [u8; 32],
@@ -356,7 +355,7 @@ impl<'a> VeRangeType1StatementV1<'a> {
         Self {
             profile,
             commitment,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             batch_index,
             batch_count,
             batch_commitment_digest,
@@ -386,7 +385,7 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     pub fn new(
         profile: VeRangeBitLengthV1,
         commitments: Vec<CompressedPointV1>,
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, VeRangeError> {
         if commitments.is_empty() || commitments.len() > MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 {
             return Err(VeRangeError::InvalidBatchCount {
@@ -412,7 +411,7 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
         Ok(Self {
             profile,
             commitments,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             commitment_digest,
         })
     }
@@ -437,7 +436,7 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
         VeRangeType1StatementV1::for_batch(
             self.profile,
             self.commitments[index],
-            self.transcript_binding,
+            &self.transcript_binding,
             u32::try_from(index).expect("batch index fits u32"),
             u32::try_from(self.commitments.len()).expect("batch count fits u32"),
             self.commitment_digest,
@@ -751,7 +750,7 @@ pub fn prove<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_prover_witness(statement, value, blinding)?;
     let mut checked_rng = health_checked_p256_rng_v1(rng)?;
@@ -780,7 +779,7 @@ fn prove_validated<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = VeRangeParametersV1::for_profile(statement.profile)?;
     for _ in 0..MAX_PROVER_RESTARTS {
@@ -791,7 +790,7 @@ where
             }
             Err(VeRangeError::P256(
                 P256EngineError::IdentityPoint | P256EngineError::ZeroScalar,
-            )) => continue,
+            )) => {}
             Err(error) => return Err(error),
         }
     }
@@ -805,7 +804,7 @@ fn prove_once<R>(
     parameters: &VeRangeParametersV1,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let rows = statement.profile.rows();
     let columns = statement.profile.columns();
@@ -897,10 +896,10 @@ where
     }
     let mut responses = Vec::with_capacity(matrix_len);
     for row in 0..rows {
-        for column in 0..columns {
+        for (column, challenge) in epsilon.iter().copied().enumerate() {
             let index = matrix_index(row, column, columns);
             responses.push(CanonicalScalarV1::from_scalar(
-                weights[index] * epsilon[column] + r_jk[index],
+                weights[index] * challenge + r_jk[index],
             ));
         }
     }
@@ -947,20 +946,20 @@ pub fn verify(
     if statement.transcript_binding.generator_digest != parameters.generator_digest {
         return Err(VeRangeError::GeneratorDigestMismatch);
     }
-    let w = proof
+    let opening_commitments = proof
         .w_commitments
         .iter()
         .copied()
         .map(CompressedPointV1::to_projective)
         .collect::<Result<Vec<_>, _>>()?;
-    let t = proof
+    let range_commitments = proof
         .t_commitments
         .iter()
         .copied()
         .map(CompressedPointV1::to_projective)
         .collect::<Result<Vec<_>, _>>()?;
-    let r = proof.r_commitment.to_projective()?;
-    let s = proof.s_commitment.to_projective()?;
+    let mask_commitment = proof.r_commitment.to_projective()?;
+    let scalar_commitment = proof.s_commitment.to_projective()?;
     let responses = proof
         .responses
         .iter()
@@ -1000,10 +999,12 @@ pub fn verify(
         });
         left_range += parameters.h[row] * exponent;
     }
-    let right_range = t
+    let right_range = range_commitments
         .iter()
         .zip(&epsilon)
-        .fold(s, |sum, (point, challenge)| sum + *point * *challenge);
+        .fold(scalar_commitment, |sum, (point, challenge)| {
+            sum + *point * *challenge
+        });
     if left_range != right_range {
         return Err(VeRangeError::RangeEquationFailed);
     }
@@ -1012,15 +1013,17 @@ pub fn verify(
         .copied()
         .fold(Scalar::ZERO, |sum, value| sum + value);
     let left_response = parameters.g * response_sum + parameters.q * eta_2;
-    let right_response = w
+    let right_response = opening_commitments
         .iter()
         .zip(&epsilon)
-        .fold(r, |sum, (point, challenge)| sum + *point * *challenge);
+        .fold(mask_commitment, |sum, (point, challenge)| {
+            sum + *point * *challenge
+        });
     if left_response != right_response {
         return Err(VeRangeError::ResponseEquationFailed);
     }
     let external = statement.commitment.to_projective()?;
-    let column_sum = w
+    let column_sum = opening_commitments
         .iter()
         .copied()
         .fold(ProjectivePoint::IDENTITY, |sum, point| sum + point);
@@ -1060,7 +1063,7 @@ pub fn prove_batch<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1BatchProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if values.len() != statement.len() || blindings.len() != statement.len() {
         return Err(VeRangeError::BatchLengthMismatch {
@@ -1197,7 +1200,7 @@ fn scalar_power_of_two(exponent: usize) -> Scalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1207,37 +1210,42 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            let mut offset = 0;
-            while offset < dest.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.verange.kat.rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (dest.len() - offset).min(block.len());
-                dest[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(dest);
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < dest.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.verange.kat.rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (dest.len() - offset).min(block.len());
+                    dest[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     #[derive(Clone, Copy)]
     enum AdversarialRngMode {
         Periodic,
@@ -1245,29 +1253,30 @@ mod tests {
         Panic,
     }
     struct AdversarialRng(AdversarialRngMode);
-    impl RngCore for AdversarialRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for AdversarialRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("VeRange must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("VeRange must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("VeRange must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 AdversarialRngMode::Periodic => {
                     for (index, byte) in destination.iter_mut().enumerate() {
-                        *byte = ((index % 8) as u8).wrapping_mul(37).wrapping_add(11);
+                        *byte = ((index % 8).to_le_bytes()[0])
+                            .wrapping_mul(37)
+                            .wrapping_add(11);
                     }
                     Ok(())
                 }
                 AdversarialRngMode::PartialFailure => {
                     for (index, byte) in destination.iter_mut().take(17).enumerate() {
-                        *byte = index as u8;
+                        *byte = index.to_le_bytes()[0];
                     }
-                    Err(RngError::new("injected partial VeRange entropy failure"))
+                    Err(RngError::other("injected partial VeRange entropy failure"))
                 }
                 AdversarialRngMode::Panic => {
                     panic!("invalid VeRange witness consumed entropy")
@@ -1275,7 +1284,7 @@ mod tests {
             }
         }
     }
-    impl CryptoRng for AdversarialRng {}
+    impl rand::TryCryptoRng for AdversarialRng {}
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;
@@ -1306,8 +1315,8 @@ mod tests {
     ) {
         let blinding = scalar(7);
         let commitment = commit(profile, value, &blinding).expect("commitment");
-        let statement =
-            VeRangeType1StatementV1::new(profile, commitment, binding(profile)).expect("statement");
+        let statement = VeRangeType1StatementV1::new(profile, commitment, &binding(profile))
+            .expect("statement");
         let mut rng = KatRng::new([0x42; 32]);
         let proof = prove(&statement, value, &blinding, &mut rng).expect("proof");
         (statement, blinding, proof)
@@ -1335,7 +1344,7 @@ mod tests {
             .zip(&blindings)
             .map(|(value, blinding)| commit(profile, *value, blinding).expect("commitment"))
             .collect();
-        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, binding(profile))
+        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, &binding(profile))
             .expect("batch statement");
         let mut rng = KatRng::new([0x81; 32]);
         let proof = prove_batch(&statement, &values, &blindings, &mut rng).expect("batch proof");
@@ -1351,7 +1360,7 @@ mod tests {
         let mut reordered_commitments = statement.commitments().to_vec();
         reordered_commitments.swap(0, 1);
         let reordered_statement =
-            VeRangeType1BatchStatementV1::new(profile, reordered_commitments, binding(profile))
+            VeRangeType1BatchStatementV1::new(profile, reordered_commitments, &binding(profile))
                 .expect("reordered statement");
         assert!(verify_batch(&reordered_statement, &proof).is_err());
         let other_blindings = [scalar(13), scalar(17), scalar(19), scalar(23)];
@@ -1361,7 +1370,7 @@ mod tests {
             .map(|(value, blinding)| commit(profile, *value, blinding).expect("commitment"))
             .collect();
         let other_statement =
-            VeRangeType1BatchStatementV1::new(profile, other_commitments, binding(profile))
+            VeRangeType1BatchStatementV1::new(profile, other_commitments, &binding(profile))
                 .expect("other statement");
         let mut other_rng = KatRng::new([0x91; 32]);
         let other_proof = prove_batch(&other_statement, &values, &other_blindings, &mut other_rng)
@@ -1380,7 +1389,7 @@ mod tests {
     fn batch_rejects_empty_over_cap_duplicate_and_witness_count_mismatch() {
         let profile = VeRangeBitLengthV1::Bits32;
         assert!(matches!(
-            VeRangeType1BatchStatementV1::new(profile, Vec::new(), binding(profile)),
+            VeRangeType1BatchStatementV1::new(profile, Vec::new(), &binding(profile)),
             Err(VeRangeError::InvalidBatchCount { count: 0, .. })
         ));
         let blinding = scalar(3);
@@ -1389,7 +1398,7 @@ mod tests {
             VeRangeType1BatchStatementV1::new(
                 profile,
                 vec![commitment; MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 + 1],
-                binding(profile)
+                &binding(profile)
             ),
             Err(VeRangeError::InvalidBatchCount { .. })
         ));
@@ -1397,12 +1406,12 @@ mod tests {
             VeRangeType1BatchStatementV1::new(
                 profile,
                 vec![commitment, commitment],
-                binding(profile)
+                &binding(profile)
             ),
             Err(VeRangeError::DuplicateBatchCommitment { index: 1 })
         ));
         let statement =
-            VeRangeType1BatchStatementV1::new(profile, vec![commitment], binding(profile))
+            VeRangeType1BatchStatementV1::new(profile, vec![commitment], &binding(profile))
                 .expect("statement");
         let mut rng = KatRng::new([0x82; 32]);
         assert!(matches!(
@@ -1429,7 +1438,7 @@ mod tests {
             .zip(&blindings)
             .map(|(value, blinding)| commit(profile, *value, blinding).expect("commitment"))
             .collect();
-        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, binding(profile))
+        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, &binding(profile))
             .expect("max batch statement");
         assert_eq!(statement.len(), MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1);
         let mut rng = KatRng::new([0x84; 32]);
@@ -1448,7 +1457,7 @@ mod tests {
             .zip(&blindings)
             .map(|(value, blinding)| commit(profile, *value, blinding).expect("commitment"))
             .collect();
-        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, binding(profile))
+        let statement = VeRangeType1BatchStatementV1::new(profile, commitments, &binding(profile))
             .expect("statement");
         let mut rng = KatRng::new([0x83; 32]);
         let proof = prove_batch(&statement, &values, &blindings, &mut rng).expect("proof");
@@ -1541,7 +1550,7 @@ mod tests {
         assert_eq!(descriptor.generator_digest, parameters.generator_digest());
         assert_eq!(
             descriptor.max_batch_commitments,
-            MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 as u32
+            u32::try_from(MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1).expect("fixed commitment bound")
         );
         assert_eq!(
             (
@@ -1567,8 +1576,8 @@ mod tests {
         ));
         let profile = VeRangeBitLengthV1::Bits32;
         let commitment = commit(profile, 9, &blinding).expect("commitment");
-        let statement =
-            VeRangeType1StatementV1::new(profile, commitment, binding(profile)).expect("statement");
+        let statement = VeRangeType1StatementV1::new(profile, commitment, &binding(profile))
+            .expect("statement");
         let mut rng = KatRng::new([1; 32]);
         assert!(matches!(
             prove(&statement, 10, &blinding, &mut rng),
@@ -1581,8 +1590,8 @@ mod tests {
         let value = 19;
         let blinding = scalar(9);
         let commitment = commit(profile, value, &blinding).expect("commitment");
-        let statement =
-            VeRangeType1StatementV1::new(profile, commitment, binding(profile)).expect("statement");
+        let statement = VeRangeType1StatementV1::new(profile, commitment, &binding(profile))
+            .expect("statement");
         assert!(matches!(
             prove(
                 &statement,
@@ -1718,7 +1727,7 @@ mod tests {
         let changed_commitment = VeRangeType1StatementV1::new(
             statement.profile,
             different_commitment,
-            statement.transcript_binding,
+            &statement.transcript_binding,
         )
         .expect("statement");
         assert!(verify(&changed_commitment, &proof).is_err());
@@ -1730,7 +1739,8 @@ mod tests {
         let mut changed = statement.transcript_binding;
         changed.genesis_hash[0] ^= 1;
         assert!(
-            VeRangeType1StatementV1::new(statement.profile, statement.commitment, changed).is_err(),
+            VeRangeType1StatementV1::new(statement.profile, statement.commitment, &changed)
+                .is_err(),
             "network/genesis disagreement must reject before proof evaluation"
         );
         let mut changed = statement.transcript_binding;
@@ -1753,20 +1763,24 @@ mod tests {
         changed_bindings.push(changed);
         for binding in changed_bindings {
             let changed =
-                VeRangeType1StatementV1::new(statement.profile, statement.commitment, binding)
+                VeRangeType1StatementV1::new(statement.profile, statement.commitment, &binding)
                     .expect("bound statement");
             assert!(verify(&changed, &proof).is_err());
         }
         let mut wrong_parameter = statement.transcript_binding;
         wrong_parameter.parameter_digest[0] ^= 1;
         assert!(matches!(
-            VeRangeType1StatementV1::new(statement.profile, statement.commitment, wrong_parameter),
+            VeRangeType1StatementV1::new(statement.profile, statement.commitment, &wrong_parameter),
             Err(VeRangeError::ParameterDigestMismatch)
         ));
         let mut wrong_generators = statement.transcript_binding;
         wrong_generators.generator_digest[0] ^= 1;
         assert!(matches!(
-            VeRangeType1StatementV1::new(statement.profile, statement.commitment, wrong_generators),
+            VeRangeType1StatementV1::new(
+                statement.profile,
+                statement.commitment,
+                &wrong_generators
+            ),
             Err(VeRangeError::GeneratorDigestMismatch)
         ));
     }
@@ -1826,7 +1840,7 @@ mod tests {
         let statement64 = VeRangeType1StatementV1::new(
             VeRangeBitLengthV1::Bits64,
             commitment64,
-            binding(VeRangeBitLengthV1::Bits64),
+            &binding(VeRangeBitLengthV1::Bits64),
         )
         .expect("statement64");
         assert!(matches!(
@@ -1839,7 +1853,7 @@ mod tests {
             VeRangeType1StatementV1::new(
                 VeRangeBitLengthV1::Bits32,
                 commit(VeRangeBitLengthV1::Bits32, 5, &blinding).expect("commitment32"),
-                cross_profile_binding
+                &cross_profile_binding
             ),
             Err(VeRangeError::GeneratorDigestMismatch)
         ));

@@ -221,16 +221,19 @@ pub fn enact(
             timestamp_ms: 0,
         }
     };
+    // `ReleaseStranded` moves escrow value; every enactment must stay a balanced entry (§4.15).
+    let guard = super::conservation::ValueGuard::capture(&*state_transaction.world)?;
     for (index, action) in proposal.actions.iter().enumerate() {
         apply_action(state_transaction, action, proposal_id, cause, s0)
             .map_err(|error| refuse(format_args!("action {index}: {error}")))?;
     }
+    guard.verify(&*state_transaction.world)?;
     let subjects = proposal.subjects();
     for subject in &subjects {
         let next = store::governance_revision(&*state_transaction.world, subject)
             .checked_add(1)
             .ok_or_else(|| refuse("a subject revision overflows"))?;
-        store::set_governance_revision(state_transaction, subject.clone(), next);
+        store::set_governance_revision(state_transaction, *subject, next);
     }
     state_transaction
         .world
@@ -366,8 +369,15 @@ fn register_route(
         .ok_or_else(|| refuse("SCCP does not exist on this network"))?;
     let route = store::routes::get(world, &network)
         .ok_or_else(|| refuse(format_args!("no route to {}", network.profile_key())))?;
-    let expected_revision = route
-        .latest_revision()
+    // `latest` is the highest revision ever registered, removed ones included: the never-freed
+    // destination words remember them. A number is never reused, so no per-revision record
+    // (reconciliation window, control, pending count) left by a removed revision can price or
+    // shadow a new deployment.
+    let latest = store::destination_words::iter(world)
+        .filter(|(_, (word_network, _))| *word_network == network)
+        .map(|(_, (_, revision))| *revision)
+        .fold(route.latest_revision(), u32::max);
+    let expected_revision = latest
         .checked_add(1)
         .ok_or_else(|| refuse("the revision counter is exhausted"))?;
     if register.revision != expected_revision {
@@ -541,6 +551,23 @@ fn remove_staged(
             action.revision
         )));
     }
+    // A quarantine and its reconciliation window never end (§4.10): removing the revision
+    // would orphan the window, whose block-start close needs the revision's liability.
+    if route
+        .revisions
+        .get(&action.revision)
+        .is_some_and(|record| record.quarantine.is_some())
+        || super::reconciliation_store::get(
+            &*state_transaction.world,
+            &(action.network, action.revision),
+        )
+        .is_some()
+    {
+        return Err(refuse(format_args!(
+            "revision {} is quarantined or has a reconciliation window",
+            action.revision
+        )));
+    }
     // The destination word stays reserved forever.
     route.revisions.remove(&action.revision);
     store::routes::insert(state_transaction, action.network, route)?;
@@ -567,13 +594,13 @@ fn release_stranded(
         .stranded
         .checked_sub(action.amount)
         .ok_or_else(|| refuse(format_args!("only {} is stranded", route.stranded)))?;
-    let registered = match recipients::classify_account(state_transaction, action.recipient.clone())
-    {
-        SccpRecipientClassV1::Creditable { registered, .. } => registered,
-        SccpRecipientClassV1::Uncreditable { .. } | SccpRecipientClassV1::Undecodable => {
-            return Err(refuse("the recipient cannot be credited"));
-        }
-    };
+    let registered =
+        match recipients::classify_account(state_transaction, action.recipient.clone())? {
+            SccpRecipientClassV1::Creditable { registered, .. } => registered,
+            SccpRecipientClassV1::Uncreditable { .. } | SccpRecipientClassV1::Undecodable => {
+                return Err(refuse("the recipient cannot be credited"));
+            }
+        };
     if !registered {
         recipients::register_recipient(state_transaction, &action.recipient, network, None)?;
     }
@@ -626,6 +653,9 @@ fn set_taira_paused(
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) use registration::reference_pin_rows;
 
 #[cfg(test)]
 mod tests {
@@ -702,14 +732,14 @@ mod tests {
         crate::smartcontracts::isi::sccp::test_support::install_generation(
             stx,
             1,
-            sample_generation_at(1, 1),
+            &(sample_generation_at(1, 1)),
         )
         .expect("generation");
         store::committee_current::set(stx, 1);
     }
 
     /// Existing-state fixture for lifecycle tests, not evidence of successful registration.
-    /// RegisterRoute still requires the original identity and all launch/forgery authority.
+    /// `RegisterRoute` still requires the original identity and all launch/forgery authority.
     fn existing_staged(stx: &mut StateTransaction<'_, '_>, revision: u32, seed: u8) {
         let mut route = store::routes::get(&*stx.world, &NETWORK)
             .cloned()
@@ -833,7 +863,7 @@ mod tests {
         let id = stx.network_id;
         setup(&mut stx);
         let route = SccpGovernanceSubjectV1::Route(NETWORK);
-        let fresh = proposal(id, vec![(route.clone(), 0)], vec![register(1, 7)]);
+        let fresh = proposal(id, vec![(route, 0)], vec![register(1, 7)]);
         assert_eq!(preflight_rejection_in(stx.world(), &fresh), None);
         preflight_attempt(&stx, &fresh).expect("fresh");
         store::destination_words::insert(&mut stx, evm(7).destination_word(), (NETWORK, 9))
@@ -843,7 +873,7 @@ mod tests {
             preflight_rejection_in(stx.world(), &fresh),
             Some(PreflightRejection::DestinationUsed)
         );
-        let other = proposal(id, vec![(route.clone(), 0)], vec![register(1, 8)]);
+        let other = proposal(id, vec![(route, 0)], vec![register(1, 8)]);
         store::set_governance_revision(&mut stx, route, 1);
         assert_eq!(
             preflight_rejection_in(stx.world(), &fresh),
@@ -868,7 +898,7 @@ mod tests {
         let route = SccpGovernanceSubjectV1::Route(NETWORK);
         let control = SccpGovernanceSubjectV1::RouteControl(NETWORK);
         existing_staged(&mut stx, 1, 7);
-        store::set_governance_revision(&mut stx, route.clone(), 1);
+        store::set_governance_revision(&mut stx, route, 1);
         assert_eq!(activation(&stx, 1), Some(SccpRouteActivationV1::Staged));
         assert_eq!(store::governance_revision(&*stx.world, &route), 1);
         assert_eq!(
@@ -885,7 +915,7 @@ mod tests {
         // effect transaction.
         let activate = proposal(
             id,
-            vec![(route.clone(), 1)],
+            vec![(route, 1)],
             vec![SccpGovernanceActionV1::ActivateRevision(
                 SccpRouteRevisionActionV1 {
                     network: NETWORK,
@@ -902,7 +932,7 @@ mod tests {
             .expect("live");
         let pause = proposal(
             id,
-            vec![(route.clone(), 1), (control.clone(), 0)],
+            vec![(route, 1), (control, 0)],
             vec![
                 SccpGovernanceActionV1::SetTairaPaused(SccpSetTairaPausedActionV1 {
                     network: NETWORK,
@@ -935,7 +965,7 @@ mod tests {
             [0x43; 32],
             [0x45; 32],
             S0,
-            &proposal(id, vec![(route.clone(), 2)], vec![register(5, 9)]),
+            &proposal(id, vec![(route, 2)], vec![register(5, 9)]),
         )
         .expect_err("revision gap");
         assert!(error.to_string().contains("next revision"), "{error}");
@@ -1035,6 +1065,112 @@ mod tests {
     }
 
     #[test]
+    fn remove_staged_refuses_a_quarantined_or_reconciling_revision() {
+        use iroha_data_model::sccp::{
+            native::SccpQuarantineV1, reconciliation::SccpReconciliationStateV1,
+        };
+        let state = blank_state();
+        let mut block = state.block(header(5));
+        let mut stx = block.transaction();
+        setup(&mut stx);
+        existing_staged(&mut stx, 1, 7);
+        let remove = SccpGovernanceActionV1::RemoveStaged(SccpRouteRevisionActionV1 {
+            network: NETWORK,
+            revision: 1,
+        });
+        let set_quarantine = |stx: &mut StateTransaction<'_, '_>, quarantine| {
+            let mut route = store::routes::get(&*stx.world, &NETWORK)
+                .cloned()
+                .expect("route");
+            route.revisions.get_mut(&1).expect("revision").quarantine = quarantine;
+            store::routes::insert(stx, NETWORK, route).expect("route");
+        };
+
+        set_quarantine(
+            &mut stx,
+            Some(SccpQuarantineV1 {
+                certificate_id: [0x81; 32],
+                since_height: 1,
+            }),
+        );
+        let error = apply_action(
+            &mut stx,
+            &remove,
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect_err("a quarantine never ends");
+        assert!(error.to_string().contains("quarantined"), "{error}");
+
+        // A reconciliation window alone also keeps the revision: its block-start close
+        // reads the revision's liability.
+        set_quarantine(&mut stx, None);
+        super::super::reconciliation_store::put(
+            &mut stx,
+            (NETWORK, 1),
+            SccpReconciliationStateV1 {
+                opened_at_ms: 0,
+                closes_at_ms: 10,
+                forged_supply: 0,
+                rho: None,
+                settled_face: 0,
+            },
+        )
+        .expect("window");
+        apply_action(
+            &mut stx,
+            &remove,
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect_err("a reconciliation window never ends");
+        assert_eq!(activation(&stx, 1), Some(SccpRouteActivationV1::Staged));
+    }
+
+    #[test]
+    fn register_route_never_reuses_a_removed_revision_number() {
+        let state = blank_state();
+        let mut block = state.block(header(5));
+        let mut stx = block.transaction();
+        setup(&mut stx);
+        existing_staged(&mut stx, 1, 7);
+        existing_staged(&mut stx, 2, 8);
+        apply_action(
+            &mut stx,
+            &SccpGovernanceActionV1::RemoveStaged(SccpRouteRevisionActionV1 {
+                network: NETWORK,
+                revision: 2,
+            }),
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect("remove");
+        assert_eq!(
+            store::routes::get(&*stx.world, &NETWORK)
+                .expect("route")
+                .latest_revision(),
+            1
+        );
+        let cause = controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]);
+        let error = with_launch_gates((true, true), || {
+            apply_action(&mut stx, &register(2, 9), [7; 32], cause, S0)
+        })
+        .expect_err("the removed number stays retired");
+        assert!(
+            error.to_string().contains("is not the next revision 3"),
+            "{error}"
+        );
+        let error = with_launch_gates((true, true), || {
+            apply_action(&mut stx, &register(3, 9), [7; 32], cause, S0)
+        })
+        .expect_err("this fixture has no authenticated native pin");
+        assert!(!error.to_string().contains("next revision"), "{error}");
+    }
+
+    #[test]
     fn profile_activation_is_enacted_under_the_light_client_subject() {
         use iroha_data_model::sccp::governance::SccpActivateLightClientProfileActionV1;
         let state = blank_state();
@@ -1056,7 +1192,7 @@ mod tests {
             let heads = subject_heads(&*stx.world, &proposal(id, vec![], vec![activate(2)]))
                 .expect("heads")
                 .1;
-            assert_eq!(heads, vec![(subject.clone(), 0)]);
+            assert_eq!(heads, vec![(subject, 0)]);
             // Version 1 is active from genesis: re-activating it is refused at enactment and
             // the light-client head does not move.
             let error = enact(
@@ -1064,7 +1200,7 @@ mod tests {
                 [0x43; 32],
                 [0x45; 32],
                 S0,
-                &proposal(id, vec![(subject.clone(), 0)], vec![activate(1)]),
+                &proposal(id, vec![(subject, 0)], vec![activate(1)]),
             )
             .expect_err("not above version 1");
             assert!(error.to_string().contains("does not exceed"), "{error}");
@@ -1082,7 +1218,7 @@ mod tests {
                 [0x43; 32],
                 [0x45; 32],
                 S0,
-                &proposal(id, vec![(subject.clone(), 0)], vec![activate(2)]),
+                &proposal(id, vec![(subject, 0)], vec![activate(2)]),
             )
             .expect_err("version 2 is not compiled");
             assert!(stx.is_execution_deferred());
@@ -1108,23 +1244,49 @@ mod tests {
         assert!(error.to_string().contains("NetworkId"), "{error}");
     }
 
+    fn staking_policy(
+        delay_ms: u64,
+    ) -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+        let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
+        );
+        policy.unbonding_delay_ms = delay_ms;
+        policy.max_slash_bps = 1;
+        policy
+    }
+
+    fn monetary_state(delay_ms: u64) -> crate::state::State {
+        let mut state =
+            super::super::test_support::blank_state_with_staking(Some(staking_policy(delay_ms)));
+        let mut consensus = state.world.parameters.view().get().sumeragi().clone();
+        consensus.epoch_length_blocks = std::num::NonZeroU64::new(3_600).expect("epoch");
+        consensus.block_cadence_ms = std::num::NonZeroU64::new(1_000).expect("cadence");
+        state.world.set_sumeragi_for_testing(consensus).unwrap();
+        state
+    }
+
+    fn stage_staking(stx: &mut StateTransaction<'_, '_>, delay_ms: u64) {
+        stx.world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                staking_policy(delay_ms).into_custom_parameter().unwrap(),
+            ))
+            .unwrap();
+    }
+
     #[test]
     fn set_parameters_validates_the_full_pinned_policy_before_writing() {
-        let state = blank_state();
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        let state = monetary_state(delay);
         let mut block = state.block(header(5));
         let mut stx = block.transaction();
         setup(&mut stx);
-        stx.nexus.staking.unbonding_delay = std::time::Duration::from_secs(21 * 86_400);
-        stx.nexus.staking.max_slash_bps = 1;
-        let mut consensus = stx.world.parameters.get().sumeragi().clone();
-        consensus.epoch_length_blocks = std::num::NonZeroU64::new(3_600).expect("epoch");
-        consensus.block_cadence_ms = std::num::NonZeroU64::new(1_000).expect("cadence");
-        stx.world.parameters.get_mut().set_sumeragi(consensus);
         let original = *store::parameters::get(&*stx.world);
         let mut next = original.expect("original parameters");
         next.enabled = false;
         let action = SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next });
-        stx.nexus.staking.unbonding_delay -= std::time::Duration::from_millis(1);
+        stage_staking(&mut stx, delay - 1);
+        let events_before = stx.world.internal_event_buf.clone();
         let error = apply_action(
             &mut stx,
             &action,
@@ -1132,10 +1294,23 @@ mod tests {
             controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
             S0,
         )
-        .expect_err("short delay");
+        .expect_err("short pending delay");
         assert!(error.to_string().contains("unbonding_delay"), "{error}");
         assert_eq!(*store::parameters::get(&*stx.world), original);
-        stx.nexus.staking.unbonding_delay += std::time::Duration::from_millis(1);
+        assert_eq!(stx.world.internal_event_buf, events_before);
+        assert_eq!(
+            stx.staking_monetary_policy().unwrap().unbonding_delay_ms,
+            delay
+        );
+        assert_eq!(
+            stx.world
+                .parameters()
+                .require_staking_policy()
+                .unwrap()
+                .unbonding_delay_ms,
+            delay - 1
+        );
+        stage_staking(&mut stx, delay);
         apply_action(
             &mut stx,
             &action,
@@ -1145,6 +1320,109 @@ mod tests {
         )
         .expect("valid complete parameters");
         assert_eq!(*store::parameters::get(&*stx.world), Some(next));
+    }
+
+    #[test]
+    fn pending_staking_cannot_repair_missing_original_liability_authority() {
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        for original in [None, Some(delay - 1)] {
+            let state = original.map_or_else(blank_state, monetary_state);
+            let mut block = state.block(header(5));
+            let mut stx = block.transaction();
+            setup(&mut stx);
+            stage_staking(&mut stx, delay);
+            let before = *store::parameters::get(&*stx.world);
+            let mut next = before.unwrap();
+            next.enabled = false;
+            let action = SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next });
+            let events_before = stx.world.internal_event_buf.clone();
+            let error = apply_action(
+                &mut stx,
+                &action,
+                [7; 32],
+                controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                S0,
+            )
+            .expect_err("pending policy cannot replace original authority");
+            let expected = if original.is_some() {
+                "unbonding_delay"
+            } else {
+                "staking"
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(*store::parameters::get(&*stx.world), before);
+            assert_eq!(stx.world.internal_event_buf, events_before);
+        }
+    }
+
+    #[test]
+    fn staking_and_sccp_successors_validate_the_joint_pair_in_both_orders() {
+        const DAY: u64 = 86_400_000;
+        let delay = super::super::test_support::SCCP_UNBONDING_DELAY_MS;
+        for staking_first in [true, false] {
+            let state = monetary_state(delay + DAY);
+            let mut block = state.block(header(5));
+            let mut stx = block.transaction();
+            setup(&mut stx);
+            let original = *store::parameters::get(&*stx.world);
+            let mut longer = original.unwrap();
+            longer.enabled = false; // Disabling value movement must not erase liabilities.
+            longer.committee_validity_ms += DAY;
+            let action =
+                SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next: longer });
+            if staking_first {
+                super::super::params::validate_staking_successor(
+                    &*stx.world,
+                    &staking_policy(delay),
+                )
+                .unwrap();
+                stage_staking(&mut stx, delay);
+                let events_before = stx.world.internal_event_buf.clone();
+                let error = apply_action(
+                    &mut stx,
+                    &action,
+                    [7; 32],
+                    controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                    S0,
+                )
+                .expect_err("later SCCP period cannot invalidate the current monetary successor");
+                assert!(error.to_string().contains("unbonding_delay"), "{error}");
+                assert_eq!(*store::parameters::get(&*stx.world), original);
+                assert_eq!(stx.world.internal_event_buf, events_before);
+                assert_eq!(
+                    stx.world
+                        .parameters()
+                        .require_staking_policy()
+                        .unwrap()
+                        .unbonding_delay_ms,
+                    delay
+                );
+            } else {
+                apply_action(
+                    &mut stx,
+                    &action,
+                    [7; 32],
+                    controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+                    S0,
+                )
+                .expect("longer original policy covers this SCCP update");
+                let error = super::super::params::validate_staking_successor(
+                    &*stx.world,
+                    &staking_policy(delay),
+                )
+                .expect_err("later monetary candidate cannot shrink current SCCP liabilities");
+                assert!(error.to_string().contains("unbonding_delay"), "{error}");
+                assert_eq!(*store::parameters::get(&*stx.world), Some(longer));
+                assert_eq!(
+                    stx.world
+                        .parameters()
+                        .require_staking_policy()
+                        .unwrap()
+                        .unbonding_delay_ms,
+                    delay + DAY
+                );
+            }
+        }
     }
 
     #[test]
@@ -1182,6 +1460,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) use registration::reference_pin_rows;

@@ -1,6 +1,6 @@
 //! Genuine Send fee execution without Receive, exact historical inputs, and certified replay.
 //!
-//! This uses the production installed verifier and StateExecutor with a test-signed committee.
+//! This uses the production installed verifier and `StateExecutor` with a test-signed committee.
 //! It is not a four-peer network, native fee-custody acknowledgement, or physical qualification.
 //! TODO: Execute with a fresh dedicated native fee producer and its pinned genuine originals.
 
@@ -80,14 +80,14 @@ fn retain_execution(
     for height in 1..=setup.chain.height() {
         let proof =
             crate::sumeragi::finality::build_proof(&setup.chain.state().view(), height).unwrap();
-        let verified = verifier.verify(&proof).unwrap();
-        assert_eq!(verified.result(), setup.chain.committed(height).result());
+        let candidate = verifier.verify(&proof).unwrap();
+        assert_eq!(candidate.result(), setup.chain.committed(height).result());
         records.push(publish(
             output,
             &format!("native-proof-{height}.norito"),
             &norito::encode_canonical(&proof).unwrap(),
         ));
-        terminal = Some(verified);
+        terminal = Some(candidate);
     }
     let terminal = terminal.unwrap();
     let tip = setup.chain.committed(setup.chain.height());

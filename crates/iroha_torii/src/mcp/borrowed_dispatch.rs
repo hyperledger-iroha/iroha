@@ -104,10 +104,8 @@ fn decode_base64_any(input: &str, invalid_message: &str) -> Result<Vec<u8>, Stri
     }
     let padding = if input.ends_with("==") {
         2
-    } else if input.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(input.ends_with('='))
     };
     if padding != 0 && remainder != 0 {
         return Err(invalid_message.to_owned());
@@ -481,34 +479,6 @@ fn append_query_arguments(
     )
 }
 
-fn append_explorer_history_query_arguments(
-    path: String,
-    arguments: &Map,
-    query_fields: &[&str],
-    context: &str,
-) -> Result<String, String> {
-    let mut allowed_root = Vec::with_capacity(query_fields.len().saturating_add(3));
-    allowed_root.extend_from_slice(query_fields);
-    allowed_root.extend_from_slice(&["query", "headers", "accept"]);
-    reject_unknown_arguments(arguments, &allowed_root, context)?;
-    if let Some(query) = arguments.get("query") {
-        let query = query
-            .as_object()
-            .ok_or_else(|| "`query` must be an object".to_owned())?;
-        reject_unknown_arguments(query, query_fields, context)?;
-        if let Some(field) = query_fields
-            .iter()
-            .find(|field| arguments.contains_key(**field))
-        {
-            return Err(format!(
-                "`query` and flat `{field}` cannot be supplied together"
-            ));
-        }
-        return append_named_query_fields(path, query, query_fields);
-    }
-    append_named_query_fields(path, arguments, query_fields)
-}
-
 fn append_named_query_fields(
     path: String,
     arguments: &Map,
@@ -595,6 +565,8 @@ fn extra_headers_contain_authorization(value: &Value) -> bool {
 }
 
 fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, String> {
+    const PREFIX: &str = "Bearer ";
+
     if token.len() != 43
         || !token
             .bytes()
@@ -602,7 +574,7 @@ fn connect_management_authorization_value(token: &str) -> Result<HeaderValue, St
     {
         return Err("management token must be canonical unpadded base64url".to_owned());
     }
-    const PREFIX: &str = "Bearer ";
+
     let capacity = PREFIX
         .len()
         .checked_add(token.len())

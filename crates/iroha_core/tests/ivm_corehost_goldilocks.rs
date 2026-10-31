@@ -101,7 +101,7 @@ mod goldilocks {
         record.key = Some(key);
         assert!(
             matches!(
-                host.set_verifying_keys(BTreeMap::from([(id, record)])),
+                host.set_verifying_keys(&(BTreeMap::from([(id, record)]))),
                 Err(ivm::VMError::NoritoInvalid)
             ),
             "retired IVM binding circuit cannot enter the production verifier registry"

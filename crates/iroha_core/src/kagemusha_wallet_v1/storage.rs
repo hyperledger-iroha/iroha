@@ -254,7 +254,7 @@ pub(super) fn is_reference_key(key: &KagemushaWalletLedgerKeyV1) -> bool {
 /// Validate one complete snapshot generation, including the permanent reserve indexes.
 /// The caller's lookup must refer to exactly the same generation as the iterator. Only
 /// registration reference counts are accumulated; historical issuance/proof bytes are not cloned.
-pub(crate) fn validate_snapshot<'a>(
+pub fn validate_snapshot<'a>(
     rows: impl Iterator<Item = (&'a KagemushaWalletLedgerKeyV1, &'a Vec<u8>)>,
     lookup: impl Fn(&KagemushaWalletLedgerKeyV1) -> Option<&'a [u8]>,
 ) -> Result<()> {

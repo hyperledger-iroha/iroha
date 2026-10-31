@@ -29,7 +29,7 @@ pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
 #[cfg(any(test, feature = "fastpq-gpu"))]
 pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
-/// Bound shared backing buffers, retained/oversized pool pages, returned digests
+/// Bound shared backing buffers, retained idle pool pages, returned digests
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
@@ -81,9 +81,9 @@ fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError>
     // Two extra pages cover cached public lane constants/MDS, the bounded KAT
     // payload/jobs/oracle vectors and staging ownership descriptors. These are
     // counted even on CPU so admission is independent of hardware or warm state.
-    // Pool::take can reuse a larger capacity than this request. The complete
-    // retained-pool allowance covers those borrowed excess pages plus all idle
-    // entries; it is added once, independently of the four active requests.
+    // Pool::take returns exactly the requested page capacity. The complete
+    // retained-pool allowance covers idle entries even if other callers refill
+    // the pool while these four exact-capacity allocations remain live.
     // Root-specific public FFT tables can remain from an earlier dispatch in
     // the same process; their complete independent cache is also always charged.
     Ok(total.max(4 * STAGING_PAGE_BYTES + 8 * 48)

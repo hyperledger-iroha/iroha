@@ -1,4 +1,4 @@
-//! Static-site binding helpers backed by SoraFS storage.
+//! Static-site binding helpers backed by `SoraFS` storage.
 use crate::secure_file_metadata::{
     SecureMetadata, from_file, from_path, is_direct_directory, is_direct_file, number_of_links,
     same_file, unchanged,
@@ -48,7 +48,7 @@ pub(crate) struct AuthoritativeAppSiteBinding {
     pub(crate) manifest_digest_hex: String,
 }
 
-/// Return whether one active public SoraCloud revision selects `host`.
+/// Return whether one active public `SoraCloud` revision selects `host`.
 ///
 /// This intentionally does not require a valid static-site config. Selecting
 /// the host first lets the gateway return a stable service failure for a
@@ -723,7 +723,7 @@ pub fn encode_content_cid(bytes: &[u8]) -> String {
     let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
     out.push(b'b');
     for byte in bytes {
-        acc = (acc << 8) | (*byte as u32);
+        acc = (acc << 8) | u32::from(*byte);
         bits += 8;
         while bits >= 5 {
             let index = ((acc >> (bits - 5)) & 0x1f) as usize;
@@ -752,8 +752,8 @@ pub fn decode_content_cid(raw: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity((encoded.len() * 5) / 8);
     for ch in encoded.chars() {
         let value = match ch {
-            'a'..='z' => (ch as u8 - b'a') as u32,
-            '2'..='7' => 26 + (ch as u8 - b'2') as u32,
+            'a'..='z' => u32::from(ch as u8 - b'a'),
+            '2'..='7' => 26 + u32::from(ch as u8 - b'2'),
             _ => return None,
         };
         acc = (acc << 5) | value;

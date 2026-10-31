@@ -1,4 +1,6 @@
-# Queue and gossip measurements
+# Queue, gossip and state measurements
+
+## Queue and gossip
 
 `read_path_hotpaths` reports absolute Criterion timings for the production
 transaction queue and inbound admission worker. Run an optimized benchmark:
@@ -45,3 +47,31 @@ There is no reconstructed A/B baseline.
 
 The matching [P2P benchmark](../../iroha_p2p/benches/README.md) covers record
 sealing/writing and receive-credit release notifications.
+
+## Derived membership index writes
+
+`state` reports the cost of one membership change in a derived World index:
+
+```sh
+scripts/cargo_fast.sh --target-slot perf-agents --stable-local-metadata -- \
+  bench -p iroha_core --features bench --bench state -- derived_membership_index_write
+```
+
+- `derived_membership_index_write/rows/N`: insert one 32-byte member into a group
+  of N members, then remove it, each in its own block and transaction. It uses
+  the production `(key, member) -> ()` row layout and the contains-then-write
+  rule of the World row helpers. N is 1,000, 10,000 or 100,000.
+- `derived_membership_index_write/grouped_reference/N`: the same change against
+  the retired `key -> BTreeSet<member>` layout, where the transaction clones the
+  whole group. This provides a comparison baseline for the migrated indexes.
+
+Row writes copy one B+tree leaf and the branch nodes on its path. That removes
+the linear clone of the whole group; what remains grows only with tree depth.
+The grouped baseline clones the group, so its cost grows linearly with N. Member
+types in production are often heavier than 32 bytes, which widens the gap. The
+deterministic clone-count bound is covered by:
+
+```sh
+scripts/cargo_fast.sh --target-slot perf --stable-local-metadata --incremental -- \
+  test -p iroha_core --lib state::derived_index_write_cost_tests
+```

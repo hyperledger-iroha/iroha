@@ -46,8 +46,13 @@ pub(super) struct Schedule {
 }
 impl Schedule {
     pub(super) fn new(vm: u8, first_clock: u32) -> Option<Self> {
-        first_clock.checked_add(PORTS as u32 - 1)?;
-        Self::with_clocks(vm, core::array::from_fn(|slot| first_clock + slot as u32))
+        first_clock.checked_add(u32::try_from(PORTS).expect("fixed port schedule fits u32") - 1)?;
+        Self::with_clocks(
+            vm,
+            core::array::from_fn(|slot| {
+                first_clock + u32::try_from(slot).expect("validated player or port count")
+            }),
+        )
     }
     fn with_clocks(vm: u8, clocks: [u32; PORTS]) -> Option<Self> {
         clocks
@@ -214,22 +219,23 @@ fn append_semantics(out: &mut Vec<F>, program: &Program, schedule: Schedule, row
             .child
             .sub(originals.fields[super::RUNNING_WRITE][BEFORE]),
     );
-    let (child, selected, absolute) = program
-        .callables()
-        .select_child(program.fetch(row.dispatch));
+    let (child, selected, absolute) = program.callables().select_child(
+        crate::execution_proofs::ivm_step_air::machine_bus::private_dispatch::Program::fetch(
+            row.dispatch,
+        ),
+    );
     let mut frame_cost = [F::ZERO; 4];
     for slot in 0..program.words.len() {
         let fetch = row.dispatch[super::FETCH + slot];
         if let Some(cost) = program.callables().child_frame_work(slot) {
-            for limb in 0..4 {
-                frame_cost[limb] =
-                    frame_cost[limb].add(fetch.mul(super::constant_limb(cost, limb)));
+            for (limb, accumulated) in frame_cost.iter_mut().enumerate() {
+                *accumulated = accumulated.add(fetch.mul(super::constant_limb(cost, limb)));
             }
         }
     }
     out.push(selected.sub(decoded.child));
-    for limb in 0..4 {
-        out.push(absolute[limb].sub(decoded.target[limb]));
+    for (actual, target) in absolute.iter().zip(&decoded.target) {
+        out.push(actual.sub(*target));
     }
     frame_descriptor::append_residues(
         out,
@@ -268,8 +274,7 @@ pub(super) fn append_residues(
         }
         private_history::append_residues(
             out,
-            history.current,
-            history.next,
+            (history.current, history.next),
             history.aux,
             history.next_aux,
             history.fixed,

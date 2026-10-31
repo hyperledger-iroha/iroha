@@ -448,6 +448,7 @@ impl DurableMusubiPublicationServiceJournalV1 {
             root.reconcile_atomic_staging(
                 &[JOURNAL_LOCK_FILE, JOURNAL_STATE_FILE],
                 16,
+                16,
                 limits.max_snapshot_usize(),
             )
             .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;

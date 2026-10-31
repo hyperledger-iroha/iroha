@@ -1,6 +1,4 @@
 //! Router-level regression tests for `/v1/configuration`.
-#[path = "fixtures.rs"]
-mod fixtures;
 #[path = "common/norito_rpc_harness.rs"]
 mod norito_rpc_harness;
 use axum::http::Request;
@@ -30,8 +28,7 @@ async fn configuration_endpoint_includes_transport_summary() {
         .label()
         .to_string();
     let expected_allowlist = cfg.torii.transport.norito_rpc.allowed_clients.len();
-    let mut req = fixtures::operator_signed_request(
-        &harness.cfg.common.key_pair,
+    let mut req = harness.operator_signed_request(
         Request::builder()
             .uri(iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path())
             .body(axum::body::Body::empty())
@@ -74,8 +71,7 @@ async fn configuration_endpoint_includes_transport_summary() {
 #[tokio::test]
 async fn configuration_endpoint_rejects_runtime_mutation() {
     let harness = NoritoRpcHarness::new(|_| {});
-    let mut req = fixtures::operator_signed_request(
-        &harness.cfg.common.key_pair,
+    let mut req = harness.operator_signed_request(
         Request::builder()
             .method(http::Method::POST)
             .uri(iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path())

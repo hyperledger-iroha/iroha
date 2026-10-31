@@ -43,22 +43,30 @@ use zeroize::{Zeroize, Zeroizing};
 #[cfg(test)]
 pub(super) struct FailingRngV1;
 #[cfg(test)]
-impl rand_core_06::RngCore for FailingRngV1 {
-    fn next_u32(&mut self) -> u32 {
-        panic!("FCMP++ must use the fallible RNG interface")
+impl rand_core::TryRng for FailingRngV1 {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Err(std::io::Error::other("injected FCMP++ RNG failure"))
     }
-    fn next_u64(&mut self) -> u64 {
-        panic!("FCMP++ must use the fallible RNG interface")
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Err(std::io::Error::other("injected FCMP++ RNG failure"))
     }
-    fn fill_bytes(&mut self, _destination: &mut [u8]) {
-        panic!("FCMP++ must use the fallible RNG interface")
-    }
-    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
-        Err(rand_core_06::Error::new("injected FCMP++ RNG failure"))
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+        Err(std::io::Error::other("injected FCMP++ RNG failure"))
     }
 }
+#[test]
+fn failing_rng_reports_unavailable_entropy_through_every_fallible_entry() {
+    use rand_core::TryRng as _;
+    let mut rng = FailingRngV1;
+    assert!(rng.try_next_u32().is_err());
+    assert!(rng.try_next_u64().is_err());
+    let mut bytes = [0xa5; 32];
+    assert!(rng.try_fill_bytes(&mut bytes).is_err());
+    assert_eq!(bytes, [0xa5; 32]);
+}
 #[cfg(test)]
-impl rand_core_06::CryptoRng for FailingRngV1 {}
+impl rand_core::TryCryptoRng for FailingRngV1 {}
 #[cfg(test)]
 pub(crate) use self::membership::verify_fcmp_plus_plus_v1;
 #[cfg(any(test, feature = "test-utils"))]
@@ -174,7 +182,7 @@ fn health_checked_fcmp_rng_v1<R>(
     rng: &mut R,
 ) -> Result<HealthCheckedCryptoRngV1<'_, R>, FcmpNativeErrorV1>
 where
-    R: rand_core_06::CryptoRng + rand_core_06::RngCore,
+    R: rand_core::TryCryptoRng + rand_core::TryRng,
 {
     HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
         ProverRandomnessErrorV1::Unavailable => FcmpNativeErrorV1::RandomnessUnavailable,

@@ -18,6 +18,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
 };
+const TAR_BLOCK_SIZE: usize = 512;
 const TAR_BLOCK_BYTES: u64 = 512;
 const TAR_TRAILER_BYTES: u64 = TAR_BLOCK_BYTES * 2;
 #[derive(clap::Subcommand, Debug)]
@@ -509,7 +510,7 @@ fn build_tar(entries: &[ContentSourceEntry], max_bundle_bytes: u64) -> Result<Ve
             );
         }
         let (name, prefix) = split_tar_path(path)?;
-        let mut header = [0u8; TAR_BLOCK_BYTES as usize];
+        let mut header = [0u8; TAR_BLOCK_SIZE];
         header[..name.len()].copy_from_slice(name.as_bytes());
         let size_str = format!("{:0>11o}\0", data.len());
         header[124..124 + size_str.len()].copy_from_slice(size_str.as_bytes());
@@ -519,11 +520,10 @@ fn build_tar(entries: &[ContentSourceEntry], max_bundle_bytes: u64) -> Result<Ve
         }
         out.extend_from_slice(&header);
         out.extend_from_slice(data);
-        let pad = (TAR_BLOCK_BYTES as usize - (data.len() % TAR_BLOCK_BYTES as usize))
-            % TAR_BLOCK_BYTES as usize;
+        let pad = (TAR_BLOCK_SIZE - (data.len() % TAR_BLOCK_SIZE)) % TAR_BLOCK_SIZE;
         out.resize(out.len() + pad, 0);
     }
-    out.resize(out.len() + TAR_TRAILER_BYTES as usize, 0);
+    out.resize(out.len() + TAR_BLOCK_SIZE * 2, 0);
     debug_assert_eq!(out.len(), archive_bytes);
     Ok(out)
 }
@@ -574,13 +574,20 @@ mod tests {
         let exact_payload_bytes = max_bundle_bytes - TAR_BLOCK_BYTES - TAR_TRAILER_BYTES;
         let exact = vec![ContentSourceEntry {
             path: "index.bin".to_string(),
-            data: vec![0_u8; exact_payload_bytes as usize],
+            data: vec![
+                0_u8;
+                usize::try_from(exact_payload_bytes).expect("test bundle limit fits usize")
+            ],
         }];
         let tarball = build_tar(&exact, max_bundle_bytes).expect("exact archive must fit");
         assert_eq!(tarball.len() as u64, max_bundle_bytes);
         let oversized = vec![ContentSourceEntry {
             path: "index.bin".to_string(),
-            data: vec![0_u8; exact_payload_bytes as usize + 1],
+            data: vec![
+                0_u8;
+                usize::try_from(exact_payload_bytes).expect("test bundle limit fits usize")
+                    + 1
+            ],
         }];
         let error = build_tar(&oversized, max_bundle_bytes)
             .expect_err("one payload byte must require another tar block");

@@ -19,18 +19,25 @@ impl ZkX509ShaBatchSegmentBaseSourceV1<'_> {
             targets[0],
         )?;
         let mut fills = sha_column_fill_batch_v1(targets)?;
-        self.for_each_call_row_v1(|row, original| {
-            let base = if let Some((call, call_row)) = original {
-                call.validate_fixed_row_shape_v1(call_row)?;
-                call.base_row(call_row)?
-            } else {
-                physical_padding_row_v1(row).base
-            };
+        self.for_each_base_call_using_v1(
+            |first_row, call| {
+                for call_row in 0..call.logical_rows() {
+                    call.validate_fixed_row_shape_v1(call_row)?;
+                    let base = call.base_row(call_row)?;
+                    for (offset, fill) in fills.iter_mut().enumerate() {
+                        fill.write_v1(first_row + call_row, base[first_column + offset]);
+                    }
+                }
+                Ok(())
+            },
+            |manifest, witness| build_zk_x509_sha_batch_call_base_source_v1(manifest, witness, self.schedule.shape().disclosed_attributes),
+        )?;
+        for row in self.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
+            let base = physical_padding_row_v1(row).base;
             for (offset, fill) in fills.iter_mut().enumerate() {
                 fill.write_v1(row, base[first_column + offset]);
             }
-            Ok(())
-        })?;
+        }
         finish_sha_column_fill_batch_v1(fills)
     }
 }
@@ -49,6 +56,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
             binding.rfc5280(),
         )?;
         let source = ZkX509ShaBatchSegmentBaseSourceV1 {
+        retained_base: None,
             schedule: self.schedule,
             witnesses: self.witnesses,
             replay: self.replay,
@@ -102,11 +110,12 @@ fn sha_borrowed_timing_operation_v1<const MAINTAINED: bool>(
         .map(Vec::as_mut_slice)
         .collect::<Vec<_>>();
     if case.after_binding {
-        let bound = source.bind_v1(credential_binding(0x47))?;
+        let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(schedule.shape())?;
+        let bound = source.bind_v1(&credential_binding(0x47))?;
         let result = if MAINTAINED {
             bound.maintained_replay_v1(case.segment, case.first, &mut targets)
         } else {
-            bound.replay_base_columns_v1(case.segment, case.first, &mut targets)
+            bound.replay_base_columns_v1(&fixed, case.segment, case.first, &mut targets)
         };
         // Genuine bound-owner Drop runs before the caller stops this operation's clock.
         drop(bound);

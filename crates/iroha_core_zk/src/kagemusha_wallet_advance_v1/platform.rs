@@ -718,10 +718,9 @@ pub fn kagemusha_wallet_written_this_boot_v1(
     written_boot_id: &[u8; 32],
     current_boot: &Result<[u8; 32], KagemushaWalletUnavailableV1>,
 ) -> bool {
-    match current_boot {
-        Ok(current) => *written_boot_id == [0; 32] || written_boot_id == current,
-        Err(_) => true,
-    }
+    current_boot.as_ref().map_or(true, |current| {
+        *written_boot_id == [0; 32] || written_boot_id == current
+    })
 }
 
 /// Native boot identity: SHA-256 of Linux/Android `/proc/sys/kernel/random/boot_id`.

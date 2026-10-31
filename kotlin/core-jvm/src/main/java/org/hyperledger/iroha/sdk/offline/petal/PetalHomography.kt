@@ -191,3 +191,110 @@ class PetalHomography(matrix: DoubleArray) {
         }
     }
 }
+
+/**
+ * A camera pose: a homography from the canvas onto undistorted image pixels, followed by radial
+ * lens distortion about the image centre.
+ *
+ * A pixel that an undistorted camera would see at `u` is seen at
+ * `c + (u − c) · (1 + k · |u − c|² / s²)`, with `c` the distortion centre ([centerX],
+ * [centerY]), `k` the [distortion] (negative is barrel) and `s² =` [scale2]; [fit] uses the image
+ * centre and `s = 0.8 · max(width, height)`. `k = 0` is a plain homography. Immutable.
+ */
+class PetalPose(
+    /** Canvas to undistorted pixels. */
+    val homography: PetalHomography,
+    /** Radial distortion coefficient `k`. */
+    val distortion: Double,
+    /** Distortion centre `x` in pixels. */
+    val centerX: Double,
+    /** Distortion centre `y` in pixels. */
+    val centerY: Double,
+    /** Squared distortion scale `s²` in pixels². */
+    val scale2: Double,
+) {
+    /** Maps the canvas point `(x, y)` to image pixels, returning `[x', y']`. */
+    fun apply(x: Double, y: Double): DoubleArray {
+        val m = homography.m
+        val w = m[6] * x + m[7] * y + m[8]
+        val ux = (m[0] * x + m[1] * y + m[2]) / w
+        val uy = (m[3] * x + m[4] * y + m[5]) / w
+        if (distortion == 0.0) return doubleArrayOf(ux, uy)
+        val dx = ux - centerX
+        val dy = uy - centerY
+        val factor = 1.0 + distortion * (dx * dx + dy * dy) / scale2
+        return doubleArrayOf(centerX + dx * factor, centerY + dy * factor)
+    }
+
+    /** [apply] without allocating: writes `x'` and `y'` to `out[offset]` and `out[offset + 1]`. */
+    internal fun applyInto(x: Double, y: Double, out: DoubleArray, offset: Int) {
+        val m = homography.m
+        val w = m[6] * x + m[7] * y + m[8]
+        val ux = (m[0] * x + m[1] * y + m[2]) / w
+        val uy = (m[3] * x + m[4] * y + m[5]) / w
+        if (distortion == 0.0) {
+            out[offset] = ux
+            out[offset + 1] = uy
+            return
+        }
+        val dx = ux - centerX
+        val dy = uy - centerY
+        val factor = 1.0 + distortion * (dx * dx + dy * dy) / scale2
+        out[offset] = centerX + dx * factor
+        out[offset + 1] = centerY + dy * factor
+    }
+
+    override fun equals(other: Any?): Boolean = other is PetalPose && homography == other.homography &&
+        distortion == other.distortion && centerX == other.centerX && centerY == other.centerY && scale2 == other.scale2
+
+    override fun hashCode(): Int {
+        var hash = homography.hashCode()
+        // `+ 0.0` folds −0 into +0, which `equals` treats as the same value
+        for (value in doubleArrayOf(distortion, centerX, centerY, scale2)) hash = 31 * hash + (value + 0.0).hashCode()
+        return hash
+    }
+
+    override fun toString(): String =
+        "PetalPose(homography=$homography, distortion=$distortion, center=($centerX, $centerY), scale2=$scale2)"
+
+    companion object {
+        /** A pose without lens distortion. */
+        @JvmStatic
+        fun plain(homography: PetalHomography): PetalPose = PetalPose(homography, 0.0, 0.0, 0.0, 1.0)
+
+        /**
+         * The pose with distortion [distortion] that takes the canvas points [src] to the image
+         * points [dst] (both flattened `x0, y0, x1, y1, …`) of a [width] × [height] image: the image
+         * points are undistorted (six fixed-point rounds), then the homography is fitted to them.
+         * Returns `null` when [PetalHomography.fromPoints] does.
+         */
+        @JvmStatic
+        fun fit(src: DoubleArray, dst: DoubleArray, distortion: Double, width: Int, height: Int): PetalPose? {
+            if (dst.size % 2 != 0) return null
+            val centerX = width.toDouble() / 2.0
+            val centerY = height.toDouble() / 2.0
+            val scale = 0.8 * Math.max(width, height).toDouble()
+            val scale2 = scale * scale
+            val undistorted = DoubleArray(dst.size)
+            for (point in 0 until dst.size / 2) {
+                val dx = dst[2 * point] - centerX
+                val dy = dst[2 * point + 1] - centerY
+                var ux = dx
+                var uy = dy
+                if (distortion != 0.0) {
+                    for (round in 0 until 6) {
+                        val factor = 1.0 + distortion * (ux * ux + uy * uy) / scale2
+                        ux = dx / factor
+                        uy = dy / factor
+                    }
+                }
+                // the reference always maps back through the centre, so even a plain fit sees
+                // `c + (p − c)` rather than `p`
+                undistorted[2 * point] = centerX + ux
+                undistorted[2 * point + 1] = centerY + uy
+            }
+            val homography = PetalHomography.fromPoints(src, undistorted) ?: return null
+            return PetalPose(homography, distortion, centerX, centerY, scale2)
+        }
+    }
+}

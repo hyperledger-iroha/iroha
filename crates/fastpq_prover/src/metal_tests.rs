@@ -589,9 +589,11 @@ fn poseidon_hash_columns_batches_multi_block_columns() {
     );
     let expected =
         crate::trace::hash_columns_cpu_batch_inputs(&domains, &columns).expect("cpu reference");
-    super::adaptive_scheduler()
-        .poseidon
-        .record_sample(4, domains.len() as u32, 0.0);
+    super::adaptive_scheduler().poseidon.record_sample(
+        4,
+        u32::try_from(domains.len()).unwrap(),
+        0.0,
+    );
     super::enable_kernel_stats(true);
     let Some(actual) = unwrap_or_skip(
         super::poseidon_hash_columns(&batch),
@@ -644,7 +646,7 @@ fn poseidon_hash_columns_batches_two_word_inputs() {
         .collect::<Vec<_>>();
     super::adaptive_scheduler()
         .poseidon
-        .record_sample(8, pairs.len() as u32, 0.0);
+        .record_sample(8, u32::try_from(pairs.len()).unwrap(), 0.0);
     super::enable_kernel_stats(true);
     let Some(actual) = unwrap_or_skip(
         super::poseidon_hash_columns(&batch),
@@ -735,8 +737,7 @@ fn column_batch_iterator_chunks_columns() {
 }
 #[test]
 fn column_batch_iterator_handles_zero_total_and_batch_size() {
-    let empty: Vec<_> = super::column_batch_ranges(0, 8).collect();
-    assert!(empty.is_empty());
+    assert_eq!(super::column_batch_ranges(0, 8).next(), None);
     let singletons: Vec<_> = super::column_batch_ranges(3, 0).collect();
     assert_eq!(singletons, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -805,15 +806,26 @@ fn buffer_pool_recycles_aligned_page_vectors() {
     let mut pool = BufferPool::default();
     assert_eq!(pool.len_for_tests(), 0);
     let buffer = pool.take(2).expect("allocate pages");
-    assert!(buffer.capacity() >= 2);
+    assert_eq!(buffer.capacity(), 2);
+    let pointer = buffer.as_ptr();
+    assert_eq!(pointer as usize % METAL_BUFFER_PAGE_BYTES, 0);
     pool.recycle(buffer);
     assert_eq!(pool.len_for_tests(), 1);
-    let buffer = pool.take(1).expect("reuse pages");
-    assert!(buffer.capacity() >= 1);
+    let smaller = pool.take(1).expect("allocate exact smaller pages");
+    assert_eq!(smaller.capacity(), 1);
+    assert_eq!(pool.len_for_tests(), 1);
+    assert_eq!(pool.spare[0].as_ptr(), pointer);
+    let buffer = pool.take(2).expect("reuse exact pages");
+    assert_eq!(buffer.capacity(), 2);
+    assert_eq!(buffer.as_ptr(), pointer);
     assert_eq!(pool.len_for_tests(), 0);
+    pool.recycle(smaller);
+    pool.recycle(buffer);
+    assert_eq!(pool.len_for_tests(), 2);
+    assert_eq!(pool.spare.iter().map(Vec::capacity).sum::<usize>(), 3);
 }
 #[test]
-fn digest384_admission_covers_retained_pool_and_oversized_staging_reuse() {
+fn digest384_admission_covers_full_idle_pool_and_exact_staging() {
     let mut pool = BufferPool::default();
     let pages_per_entry = MAX_BUFFER_POOL_CACHED_PAGES / MAX_BUFFER_POOL_BUFFERS;
     for _ in 0..MAX_BUFFER_POOL_BUFFERS {
@@ -830,7 +842,7 @@ fn digest384_admission_covers_retained_pool_and_oversized_staging_reuse() {
     for bytes in sizes {
         let requested_pages = bytes.div_ceil(METAL_BUFFER_PAGE_BYTES);
         let allocation = pool.take(requested_pages).unwrap();
-        assert!(allocation.capacity() > requested_pages);
+        assert_eq!(allocation.capacity(), requested_pages);
         live.push(allocation);
     }
     let live_and_idle_pages = live
@@ -838,22 +850,35 @@ fn digest384_admission_covers_retained_pool_and_oversized_staging_reuse() {
         .chain(&pool.spare)
         .map(Vec::capacity)
         .sum::<usize>();
-    assert_eq!(live_and_idle_pages, cached_before);
+    let requested_pages = sizes
+        .into_iter()
+        .map(|bytes| bytes.div_ceil(METAL_BUFFER_PAGE_BYTES))
+        .sum::<usize>();
+    assert_eq!(
+        pool.spare.iter().map(Vec::capacity).sum::<usize>(),
+        cached_before
+    );
+    assert_eq!(live_and_idle_pages, cached_before + requested_pages);
     let charged = crate::digest384_batch::last_fields_payload_charge(jobs, payload).unwrap();
     assert!(charged >= live_and_idle_pages * METAL_BUFFER_PAGE_BYTES + jobs * 48);
     assert!(
         charged - crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
             < live_and_idle_pages * METAL_BUFFER_PAGE_BYTES,
-        "requested staging alone does not charge retained oversized pages"
+        "requested staging alone does not charge the independently retained idle pool"
     );
     for allocation in live {
         pool.recycle(allocation);
     }
     assert!(pool.spare.iter().map(Vec::capacity).sum::<usize>() <= MAX_BUFFER_POOL_CACHED_PAGES);
+    assert!(pool.len_for_tests() <= MAX_BUFFER_POOL_BUFFERS);
 }
 
 #[test]
 fn buffer_pool_rejects_oversized_cached_allocations() {
+    assert_eq!(
+        MAX_BUFFER_POOL_PAGES_PER_BUFFER * METAL_BUFFER_PAGE_BYTES,
+        32 << 20
+    );
     assert!(buffer_pool_capacity_is_cacheable(1));
     assert!(buffer_pool_capacity_is_cacheable(
         MAX_BUFFER_POOL_PAGES_PER_BUFFER
@@ -863,6 +888,226 @@ fn buffer_pool_rejects_oversized_cached_allocations() {
         MAX_BUFFER_POOL_PAGES_PER_BUFFER + 1
     ));
 }
+
+#[test]
+fn buffer_pool_large_exact_reuse_clears_pages_and_survives_concurrent_refills() {
+    let mut pool = BufferPool::default();
+    let pages = MAX_BUFFER_POOL_PAGES_PER_BUFFER;
+    let words = pages * METAL_BUFFER_PAGE_WORDS;
+    let mut allocation = pool.take(pages).unwrap();
+    assert_eq!(allocation.capacity(), pages);
+    allocation.resize_with(pages, MetalBufferPage::zeroed);
+    for page in &mut allocation {
+        page.words.fill(FIELD_MODULUS - 1);
+    }
+    let pointer = allocation.as_ptr();
+    // Exercise the same clearing owner used by a completed sensitive staging
+    // buffer, including the tail outside a later smaller logical request.
+    let mut backing = PooledBufferBacking {
+        pages: allocation,
+        logical_len: words,
+        sensitive: true,
+    };
+    backing.wipe_sensitive_pages();
+    assert!(
+        backing
+            .pages
+            .iter()
+            .all(|page| page.words.iter().all(|&word| word == 0))
+    );
+    pool.recycle(mem::take(&mut backing.pages));
+    drop(backing);
+
+    // The new 32MiB entry must not become hidden capacity on a tiny request.
+    let smaller = pool.take(1).unwrap();
+    assert_eq!(smaller.capacity(), 1);
+    assert_eq!(pool.spare.len(), 1);
+    assert_eq!(pool.spare[0].as_ptr(), pointer);
+    drop(smaller);
+
+    let mut live = pool.take(pages).unwrap();
+    assert_eq!(live.as_ptr(), pointer);
+    live.resize_with(pages, MetalBufferPage::zeroed);
+    assert!(
+        live.iter()
+            .all(|page| page.words.iter().all(|&word| word == 0))
+    );
+    // Model other callers returning two buffers while this exact-size loan is
+    // live. Full idle capacity plus requested live capacity remains sufficient.
+    for _ in 0..2 {
+        let mut returned = Vec::new();
+        returned.try_reserve_exact(pages).unwrap();
+        pool.recycle(returned);
+    }
+    let idle = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    assert_eq!(idle, MAX_BUFFER_POOL_CACHED_PAGES);
+    assert_eq!(live.capacity() + idle, pages + MAX_BUFFER_POOL_CACHED_PAGES);
+    let forecast =
+        crate::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(1 << 19, 8)
+            .unwrap();
+    assert!((live.capacity() + idle) * METAL_BUFFER_PAGE_BYTES <= forecast);
+    pool.recycle(live);
+    assert_eq!(pool.spare.len(), 2, "the third 32MiB entry is evicted");
+    assert_eq!(
+        pool.spare.iter().map(Vec::capacity).sum::<usize>(),
+        MAX_BUFFER_POOL_CACHED_PAGES
+    );
+}
+
+#[test]
+fn buffer_pool_small_exact_loan_preserves_full_idle_pool_allowance() {
+    let mut pool = BufferPool::default();
+    let pages_per_entry = MAX_BUFFER_POOL_CACHED_PAGES / 4;
+    for _ in 0..4 {
+        let mut allocation = Vec::new();
+        allocation.try_reserve_exact(pages_per_entry).unwrap();
+        pool.recycle(allocation);
+    }
+    let before = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    let live = pool.take(1).unwrap();
+    assert_eq!(live.capacity(), 1);
+    let idle = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    assert_eq!(idle, before);
+    assert_eq!(live.capacity() + idle, before + 1);
+    assert_eq!(before, MAX_BUFFER_POOL_CACHED_PAGES);
+    let forecast =
+        crate::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(2, 1).unwrap();
+    assert!((live.capacity() + idle) * METAL_BUFFER_PAGE_BYTES <= forecast);
+    pool.recycle(live);
+    assert_eq!(
+        pool.spare.iter().map(Vec::capacity).sum::<usize>(),
+        before + 1 - pages_per_entry,
+        "returning the tiny owner evicts one larger idle entry at the unchanged cap"
+    );
+    assert!(pool.len_for_tests() <= MAX_BUFFER_POOL_BUFFERS);
+}
+#[test]
+fn buffer_pool_tiny_loan_stays_bounded_during_concurrent_refills() {
+    // Model a paused caller whose loan remains live while another completed
+    // caller returns four 16MiB owners. No device execution is needed to exercise
+    // the same pool take/recycle interleaving.
+    let mut pool = BufferPool::default();
+    let warm_pages = (16 << 20) / METAL_BUFFER_PAGE_BYTES;
+    let mut warm = Vec::new();
+    warm.try_reserve_exact(warm_pages).unwrap();
+    pool.recycle(warm);
+    let live = pool.take(1).unwrap();
+    for _ in 0..4 {
+        let mut returned = Vec::new();
+        returned.try_reserve_exact(warm_pages).unwrap();
+        pool.recycle(returned);
+    }
+    let idle = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    assert_eq!(idle, MAX_BUFFER_POOL_CACHED_PAGES);
+    let forecast =
+        crate::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(2, 1).unwrap();
+    assert!(
+        (live.capacity() + idle) * METAL_BUFFER_PAGE_BYTES <= forecast,
+        "a tiny live owner plus concurrent idle refills must fit its unchanged allowance"
+    );
+    assert_eq!(live.capacity(), 1);
+    assert!(pool.len_for_tests() <= MAX_BUFFER_POOL_BUFFERS);
+    pool.recycle(live);
+    assert!(pool.spare.iter().map(Vec::capacity).sum::<usize>() <= MAX_BUFFER_POOL_CACHED_PAGES);
+}
+
+#[test]
+fn buffer_pool_tiny_loan_stays_bounded_after_public_digest_refill() {
+    use fastpq_isi::poseidon_digest384::{GoldilocksDigest384FrameV1, GoldilocksDigestDomainV1};
+
+    let payload = [0_u8; 4096];
+    let fields = [payload.as_slice()];
+    let frame = GoldilocksDigest384FrameV1::new(
+        GoldilocksDigestDomainV1 {
+            catalog: b"",
+            protocol: b"",
+            profile: b"",
+            role: b"",
+            phase: b"",
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &fields,
+    )
+    .expect("valid public frame geometry");
+    let count = 4096;
+    let words = count * frame.word_count();
+    assert_eq!(frame.word_count(), 632);
+    assert!(count <= crate::digest_executor::MAX_DIGEST384_BATCH_FRAMES_V1);
+    assert!(words <= crate::digest_executor::MAX_DIGEST384_BATCH_WORDS_V1);
+    let requested_pages = [
+        metal_buffer_page_count(words),
+        metal_buffer_page_count(count * 3),
+        metal_buffer_page_count(crate::digest384_gpu::DIGEST384_GPU_PARAMETER_WORDS_V1),
+        metal_buffer_page_count(count * 6),
+    ];
+    assert_eq!(requested_pages, [1264, 6, 1, 12]);
+
+    let mut pool = BufferPool::default();
+    for pages in [1024, 2048] {
+        let mut warm = Vec::new();
+        warm.try_reserve_exact(pages).unwrap();
+        pool.recycle(warm);
+    }
+    let live = pool.take(1).unwrap();
+    // Exact-root initialization does not admit the independent digest backend.
+    // Model its first public call: the successful KAT returns four small owners
+    // before the real batch stages. Pre-admitting it before warming the pool
+    // would leave one-page spares and prevent the original oversized tiny loan.
+    let kat_fields = [b"payload".as_slice()];
+    let kat = GoldilocksDigest384FrameV1::new(
+        GoldilocksDigestDomainV1 {
+            catalog: b"iroha-privacy-exact12-v1",
+            protocol: b"test-protocol-v1",
+            profile: b"stark-fri-poseidon-x7-goldilocks-6x64-v1",
+            role: b"trace-merkle",
+            phase: b"leaf",
+            level: 0,
+            index: 7,
+            counter: 0,
+        },
+        &kat_fields,
+    )
+    .expect("valid public readiness frame");
+    assert_eq!(kat.word_count(), 58);
+    let kat_pages = [
+        metal_buffer_page_count(kat.word_count()),
+        metal_buffer_page_count(3),
+        metal_buffer_page_count(crate::digest384_gpu::DIGEST384_GPU_PARAMETER_WORDS_V1),
+        metal_buffer_page_count(6),
+    ];
+    assert_eq!(kat_pages, [1; 4]);
+    let kat_owners = kat_pages
+        .into_iter()
+        .map(|pages| pool.take(pages).unwrap())
+        .collect::<Vec<_>>();
+    for allocation in kat_owners {
+        pool.recycle(allocation);
+    }
+    // These are the four actual backing requests made by a valid public digest
+    // batch. Hold every owner until the modeled digest completes, then recycle.
+    let returned = requested_pages
+        .into_iter()
+        .map(|pages| pool.take(pages).unwrap())
+        .collect::<Vec<_>>();
+    for allocation in returned {
+        pool.recycle(allocation);
+    }
+    let idle = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    let forecast =
+        crate::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(2, 1).unwrap();
+    assert!(
+        (live.capacity() + idle) * METAL_BUFFER_PAGE_BYTES <= forecast,
+        "a public digest refill must not hide excess capacity in a live tiny loan"
+    );
+    assert_eq!(live.capacity(), 1);
+    assert!(idle <= MAX_BUFFER_POOL_CACHED_PAGES);
+    assert!(pool.len_for_tests() <= MAX_BUFFER_POOL_BUFFERS);
+    pool.recycle(live);
+    assert!(pool.spare.iter().map(Vec::capacity).sum::<usize>() <= MAX_BUFFER_POOL_CACHED_PAGES);
+}
+
 #[test]
 fn pooled_buffer_zeroed_is_preinitialized() {
     let buffer = PooledBuffer::zeroed(4).expect("allocate pooled buffer");
@@ -902,10 +1147,13 @@ fn pooled_buffer_region_is_page_aligned_and_page_rounded() {
         let mut buffer = PooledBuffer::zeroed(logical_words).expect("allocate pooled buffer");
         let (pointer, byte_len) = buffer.metal_region();
         assert_eq!(pointer as usize % METAL_BUFFER_PAGE_BYTES, 0);
-        assert_eq!(byte_len as usize % METAL_BUFFER_PAGE_BYTES, 0);
-        assert!(byte_len as usize >= logical_words * mem::size_of::<u64>());
         assert_eq!(
-            byte_len as usize,
+            usize::try_from(byte_len).unwrap() % METAL_BUFFER_PAGE_BYTES,
+            0
+        );
+        assert!(usize::try_from(byte_len).unwrap() >= logical_words * mem::size_of::<u64>());
+        assert_eq!(
+            usize::try_from(byte_len).unwrap(),
             metal_buffer_page_count(logical_words) * METAL_BUFFER_PAGE_BYTES
         );
     }
@@ -1001,7 +1249,7 @@ fn queue_stats_capture_overlap() {
     let snapshot = state.snapshot(2);
     assert_eq!(snapshot.dispatch_count, 2);
     assert_eq!(snapshot.max_in_flight, 2);
-    assert_eq!(snapshot.overlap_ms, 1.0);
+    assert_eq!(snapshot.overlap_ms.to_bits(), 1.0_f64.to_bits());
 }
 #[test]
 fn bounded_ticket_window_drains_in_fifo_order() {
@@ -1036,6 +1284,8 @@ fn command_completion_releases_permit_and_queue_stats_once() {
     completion.mark_launched();
     completion.complete();
     completion.complete();
+    assert!(completion.notification.wait_for(Duration::ZERO));
+    assert!(!completion.notification.wait_for(Duration::ZERO));
     assert_eq!(semaphore.in_flight_for_tests(), 0);
     let stats = super::take_queue_depth_stats().expect("stats captured");
     super::enable_queue_depth_stats(false);
@@ -1053,12 +1303,14 @@ fn launched_permit_drop_defers_release_to_completion_handler() {
     permit.mark_launched();
 
     drop(permit);
+    assert!(!completion.notification.wait_for(Duration::ZERO));
     assert_eq!(
         semaphore.in_flight_for_tests(),
         1,
         "a timed-out/dropped launched ticket must keep its permit"
     );
     completion.complete();
+    assert!(completion.notification.wait_for(Duration::ZERO));
     assert_eq!(semaphore.in_flight_for_tests(), 0);
 }
 #[test]
@@ -1099,7 +1351,7 @@ fn column_staging_stats_capture_events() {
     assert!((stats.fft().wait_ms - 2.0).abs() < f64::EPSILON);
     assert_eq!(stats.poseidon().batches, 1);
     assert!((stats.poseidon().flatten_ms - 3.0).abs() < f64::EPSILON);
-    assert_eq!(stats.poseidon().wait_ms, 0.0);
+    assert_eq!(stats.poseidon().wait_ms.to_bits(), 0.0_f64.to_bits());
     assert_eq!(stats.lde().batches, 0);
     let fft_samples = stats.fft_samples();
     assert_eq!(fft_samples.len(), 1);
@@ -1110,7 +1362,7 @@ fn column_staging_stats_capture_events() {
     assert_eq!(poseidon_samples.len(), 1);
     assert_eq!(poseidon_samples[0].batch, 0);
     assert!((poseidon_samples[0].flatten_ms - 3.0).abs() < f64::EPSILON);
-    assert_eq!(poseidon_samples[0].wait_ms, 0.0);
+    assert_eq!(poseidon_samples[0].wait_ms.to_bits(), 0.0_f64.to_bits());
     assert!(stats.lde_samples().is_empty());
 }
 #[test]
@@ -1278,7 +1530,7 @@ fn adaptive_batch_backs_off_after_slow_sample() {
     state.record_sample(2, 32, 1.0);
     let grown = state.select(2, 32, AdaptiveStateId::Fft);
     assert_eq!(grown.columns(), 4);
-    state.record_sample(4, 32, 2.0 * ADAPTIVE_BACKOFF_RATIO + 0.1);
+    state.record_sample(4, 32, 2.0_f64.mul_add(ADAPTIVE_BACKOFF_RATIO, 0.1));
     let backoff = state.select(2, 32, AdaptiveStateId::Fft);
     assert_eq!(backoff.columns(), 2);
 }
@@ -1287,7 +1539,7 @@ fn adaptive_batch_backoff_respects_minimum_floor() {
     let state = AdaptiveBatchState::new(3, 2.0);
     let selection = state.select(4, 64, AdaptiveStateId::Fft);
     assert_eq!(selection.columns(), 4);
-    state.record_sample(4, 64, 2.0 * ADAPTIVE_BACKOFF_RATIO + 0.1);
+    state.record_sample(4, 64, 2.0_f64.mul_add(ADAPTIVE_BACKOFF_RATIO, 0.1));
     let next = state.select(4, 64, AdaptiveStateId::Fft);
     assert_eq!(next.columns(), 3);
 }

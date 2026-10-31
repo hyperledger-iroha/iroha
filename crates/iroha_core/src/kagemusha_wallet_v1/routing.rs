@@ -7,7 +7,7 @@ use iroha_data_model::isi::kagemusha_wallet::{
 use iroha_model_base::topology::DataSpaceId;
 use mv::storage::StorageReadOnly as _;
 
-pub(crate) fn dataspace(
+pub fn dataspace(
     world: &impl WorldReadOnly,
     instruction: &KagemushaWalletLedgerV1,
 ) -> Result<DataSpaceId> {

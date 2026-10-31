@@ -175,7 +175,7 @@ public enum PrivacyCompiledProfileCatalogBridgeError: Error, Equatable, Sendable
     case invalidFixtureBundle
 }
 
-/// Stable ABI31 result of validating one typed local compiled-profile catalog.
+/// Stable ABI33 result of validating one typed local compiled-profile catalog.
 public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -188,7 +188,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable
     case invalidCatalog = 8
 }
 
-/// Stable ABI31 result of validating the Rust-derived exact-12 fixture bundle.
+/// Stable ABI33 result of validating the Rust-derived exact-12 fixture bundle.
 public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -205,10 +205,10 @@ public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendab
 ///
 /// Generic proof request/build/verify dispatch is intentionally absent. Each proof protocol owns
 /// its typed API. The compiled-profile catalog describes only the current binary and never
-/// establishes network activation or readiness. Fetch a fresh authoritative
+/// establishes network availability. Fetch a fresh authoritative
 /// `PrivacyExact12CapabilityManifestV1` from live Torii before submitting a privacy proof.
 public enum PrivacyNativeBridge {
-    public static let requiredBridgeABIVersion: UInt32 = 31
+    public static let requiredBridgeABIVersion: UInt32 = 33
     public static let compiledProfileCatalogArchiveMaximumBytes = 256 * 1024
     public static let exact12CapabilityManifestArchiveMaximumBytes = 256 * 1024
     public static let exact12FixtureBundleMaximumBytes = 2 * 1024 * 1024
@@ -254,12 +254,44 @@ public enum PrivacyNativeBridge {
         return status
     }
 
-    /// Validate Torii's canonical Exact12 manifest and bind every committed
-    /// compiled-profile tuple to this exact ABI31 binary.
+    /// Revalidate one instruction against its exact canonical profile and effective limits.
+    /// Missing native support rejects; a managed projection cannot replace this check.
+    static func requireExact12SubmitProofConstructionV1(
+        manifestArchive: Data,
+        protocolId: PrivacyProtocolIdV1,
+        instructionArchive: Data,
+        expectedNetworkId: NetworkId
+    ) throws {
+        guard !manifestArchive.isEmpty,
+              manifestArchive.count <= exact12CapabilityManifestArchiveMaximumBytes,
+              !instructionArchive.isEmpty, instructionArchive.count <= 10 * 1024 * 1024 else {
+            throw PrivacyExact12CapabilityManifestErrorV1.invalidArchive(
+                "construction input is empty or exceeds its transport bound"
+            )
+        }
+        guard isNativeAvailable,
+              let status = NoritoNativeBridge.shared
+                .privacyExact12SubmitProofConstructionValidationStatusV1(
+                    manifestArchive: manifestArchive,
+                    protocolIndex: protocolId.noritoDiscriminant,
+                    instructionArchive: instructionArchive,
+                    expectedNetwork: expectedNetworkId.bytes
+                ) else {
+            throw PrivacyExact12CapabilityManifestErrorV1.nativeUnavailable
+        }
+        guard status == 0 else {
+            throw PrivacyExact12CapabilityManifestErrorV1.invalidArchive(
+                "native construction validation rejected status \(status)"
+            )
+        }
+    }
+
+    /// Validate Torii's canonical Exact12 manifest and compare each committed
+    /// compiled-profile tuple with this exact ABI33 binary's local catalog.
     ///
-    /// Rust validates the complete canonical archive, including signed release,
-    /// audit and deployment evidence, before Swift projects its public fields.
-    /// The immutable local catalog then authenticates every tuple comparison.
+    /// Rust validates the canonical archive and semantic profiles and committed resource policies.
+    /// Swift retains a local-match flag per row; only the selected row decides admission.
+    /// The immutable native catalog authenticates those tuple comparisons.
     /// This standalone projection cannot issue network admission; use the authenticated Torii fetch.
     public static func validateExact12CapabilityManifestV1(
         _ archive: Data
@@ -279,7 +311,7 @@ public enum PrivacyNativeBridge {
         }
         guard status == 0 else {
             throw PrivacyExact12CapabilityManifestErrorV1.invalidArchive(
-                "native evidence validation rejected status \(status)"
+                "native capability validation rejected status \(status)"
             )
         }
         let localCatalog: Data

@@ -3,11 +3,13 @@
 pub mod account;
 mod account_admission;
 pub mod asset;
+pub mod asset_escrow_scope;
+pub mod asset_fi;
+pub mod asset_fi_context;
 /// Aggregate UID holding and activity policy handlers.
 pub mod asset_uid;
-pub mod asset_uid_reader;
 pub mod asset_uid_enrollment;
-pub mod asset_fi;
+pub mod asset_uid_reader;
 pub mod block;
 /// Native bond-servicing kernel handlers.
 pub mod bond;
@@ -373,9 +375,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::RegisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
-    dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::CancelRuntimeUpgrade>,
+    dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
+    dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -390,9 +391,12 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::asset_uid_enrollment::ActivateAssetUidEnrollmentV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::asset_uid_enrollment::SetAssetUidSystemAccountV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::asset_fi::SetAssetFiV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::asset_escrow_scope::InitializeAssetEscrowReadScopeV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::asset_fi::SetAssetFiLinkAttestationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::asset_fi::SetAssetFiLinkV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::asset_fi::TransferToLinkedFiV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::asset_fi_context::AssertAssetFiContextV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::asset_fi_context::AssertAssetFiTransferReceiptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
 
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::BindRetailIdentityV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
@@ -726,7 +730,10 @@ define_instruction_handlers! {
     // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
     // not authorize spending, key administration or stronger execution-proof semantics.
     dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<zk::PruneProofs>,
+    // Any signed account may apply retention. Core reads cap/grace/batch from the
+    // committed policy; the caller can select only a backend, never a weaker policy.
+    // Removing proof records and their indexes changes no numeric asset balances.
+    dispatch_instruction::<zk::PruneProofs> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
@@ -771,7 +778,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
-    // Privacy governance checks exact native permissions and lifecycle state. Proof
+    // Privacy governance checks exact native permissions and committed policy. Proof
     // submissions and settlement carriers enforce their signed transaction bindings
     // and exhaustive verification in Core before committing persistent effects.
     // Asset-effect metadata is an independent audit: governance, roots, bootstraps and APS
@@ -779,19 +786,10 @@ define_instruction_handlers! {
     // Their ordinary signed network fees remain payable. SubmitPrivacyProof can authorize
     // transparent transfers, whose user payment legs retain the common signed assessment checks.
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
+        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
+        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -834,6 +832,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
@@ -867,17 +866,65 @@ define_instruction_handlers! {
         iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1
     > => CoreAuthorized,
 }
+/// Handlers of additions after the baseline that rebind an earlier wire ID to their own code
+/// (`specs/live_runtime_upgrades.md` §4, "Fix behaviour within an interface's contract"), by
+/// addition module and wire ID.
+///
+/// A release that declares such an addition (`crate::runtime::catalog::additions`) registers its
+/// handlers here; `every_rebinding_addition_registers_its_handlers` requires one for every rebound
+/// wire ID. While a selection binds the wire ID to the baseline bundle, the baseline handler keeps
+/// executing it: the binding, not the release, decides which code runs.
+static ADDITION_HANDLERS: std::sync::LazyLock<
+    std::collections::BTreeMap<
+        &'static str,
+        std::collections::BTreeMap<&'static str, InstructionHandler>,
+    >,
+> = std::sync::LazyLock::new(std::collections::BTreeMap::new);
+
+/// The handler that executes `instruction` for the `implementation` its root binds (§5.2).
+///
+/// An addition that rebinds the instruction's wire ID answers it with its own handler; every other
+/// implementation of this release, the baseline bundle and the additions that add instructions,
+/// executes the instruction type's native handler.
+fn native_handler(
+    implementation: Option<iroha_data_model::runtime::definition::DefinitionId>,
+    instruction: &InstructionBox,
+) -> Option<InstructionHandler> {
+    if let Some(implementation) = implementation
+        && let Ok(catalog) = crate::runtime::release_catalog()
+        && let Some(module) = catalog.native_module(&implementation)
+        && let Some(handlers) = ADDITION_HANDLERS.get(module)
+        && let Some(wire_id) = iroha_data_model::isi::instruction_wire_id(instruction)
+        && let Some(handler) = handlers.get(wire_id)
+    {
+        return Some(*handler);
+    }
+    NATIVE_INSTRUCTIONS
+        .get(instruction)
+        .map(|native| native.handler)
+}
+
+/// Execute one instruction under the selection its root executes at this height (§5.2).
+///
+/// Resolution comes first: every release stops at the same envelope with the same stable
+/// rejection, before any check that depends on the instruction's type. An envelope this release
+/// kept opaque never executes; once its wire ID resolves it fails with `malformed_payload`.
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
+    let implementation = crate::runtime::envelope::resolve_envelope(
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+        instruction,
+        || crate::runtime::obligations::step(instruction, &state_transaction.world),
+    )?;
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
     iroha_logger::debug!(isi=%instruction, "Executing");
-    if let Some(result) = NATIVE_INSTRUCTIONS
-        .get(instruction)
-        .and_then(|native| (native.handler)(instruction, authority, state_transaction))
+    if let Some(result) = native_handler(implementation, instruction)
+        .and_then(|handler| handler(instruction, authority, state_transaction))
     {
         return result;
     }
@@ -900,6 +947,56 @@ mod registry_dispatch_tests {
     use std::collections::BTreeSet;
     fn has_dispatch_handler(type_name: &str) -> bool {
         registered_native_instruction_type_names().contains(&type_name)
+    }
+    #[test]
+    fn every_rebinding_addition_registers_its_handlers() {
+        let catalog = crate::runtime::release_catalog().expect("release catalog");
+        for addition in &catalog.additions {
+            for wire_id in addition.rebinds.keys() {
+                assert!(
+                    ADDITION_HANDLERS
+                        .get(addition.module)
+                        .is_some_and(|handlers| handlers.contains_key(wire_id)),
+                    "addition {} rebinds {wire_id} without its own handler",
+                    addition.module
+                );
+            }
+        }
+        for module in ADDITION_HANDLERS.keys() {
+            assert!(
+                catalog
+                    .additions
+                    .iter()
+                    .any(|addition| addition.module == *module),
+                "handlers registered for {module}, which is not an addition of this release"
+            );
+        }
+    }
+    #[test]
+    fn the_bound_implementation_selects_the_handler() {
+        let instruction = InstructionBox::from(iroha_data_model::isi::Log::new(
+            iroha_data_model::level::Level::INFO,
+            "routed".into(),
+        ));
+        let native = NATIVE_INSTRUCTIONS
+            .get(&instruction)
+            .map(|native| native.handler as usize);
+        assert!(native.is_some(), "Log has a native handler");
+        let bundle = crate::runtime::release_catalog()
+            .expect("release catalog")
+            .baseline
+            .bindings[0]
+            .implementation;
+        assert_eq!(
+            native_handler(Some(bundle), &instruction).map(|handler| handler as usize),
+            native,
+            "the baseline bundle executes the native handler"
+        );
+        assert_eq!(
+            native_handler(None, &instruction).map(|handler| handler as usize),
+            native,
+            "a private primitive executes the native handler"
+        );
     }
     #[test]
     fn native_instruction_table_matches_an_ordered_registration_scan() {
@@ -965,7 +1062,7 @@ mod registry_dispatch_tests {
         assert!(table.get_type(core::any::TypeId::of::<u32>()).is_none());
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
-    fn assert_reviewed_initial_family(family: &str, expected_closed: BTreeSet<&str>) {
+    fn assert_reviewed_initial_family(family: &str, expected_closed: &BTreeSet<&str>) {
         let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
             .names()
             .filter(|name| name.starts_with(family))
@@ -1003,14 +1100,14 @@ mod registry_dispatch_tests {
             })
             .collect();
         assert_eq!(
-            closed_types, expected_closed,
+            &closed_types, expected_closed,
             "closed native operations must not acquire admission"
         );
     }
     fn assert_reviewed_asset_effect_family(
         family: &str,
         expected_count: usize,
-        expected_ds_capable: BTreeSet<&str>,
+        expected_ds_capable: &BTreeSet<&str>,
     ) {
         let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
             .names()
@@ -1043,39 +1140,39 @@ mod registry_dispatch_tests {
             })
             .collect();
         assert_eq!(
-            ds_capable, expected_ds_capable,
+            &ds_capable, expected_ds_capable,
             "authority does not imply balance neutrality"
         );
     }
     #[test]
     fn kagemusha_ledger_has_reviewed_authority_and_numeric_effects() {
         let family = "iroha_data_model::isi::kagemusha_wallet::";
-        assert_reviewed_initial_family(family, BTreeSet::new());
+        assert_reviewed_initial_family(family, &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             family,
             1,
-            BTreeSet::from([core::any::type_name::<
+            &(BTreeSet::from([core::any::type_name::<
                 iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
-            >()]),
+            >()])),
         );
     }
     #[test]
     fn every_soracloud_wire_instruction_has_a_reviewed_initial_disposition() {
         assert_reviewed_initial_family(
             "iroha_data_model::isi::soracloud::",
-            BTreeSet::from([
+            &(BTreeSet::from([
                 core::any::type_name::<
                     iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage,
                 >(),
                 core::any::type_name::<
                     iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult,
                 >(),
-            ]),
+            ])),
         );
     }
     #[test]
     fn every_sccp_wire_instruction_has_a_reviewed_initial_disposition() {
-        assert_reviewed_initial_family("iroha_data_model::isi::sccp::", BTreeSet::new());
+        assert_reviewed_initial_family("iroha_data_model::isi::sccp::", &(BTreeSet::new()));
         for instruction in crate::smartcontracts::isi::sccp::test_support::SampleInstructions::all()
         {
             assert_eq!(
@@ -1087,13 +1184,16 @@ mod registry_dispatch_tests {
     }
     #[test]
     fn every_space_directory_wire_instruction_has_a_reviewed_initial_disposition() {
-        assert_reviewed_initial_family("iroha_data_model::isi::space_directory::", BTreeSet::new());
+        assert_reviewed_initial_family(
+            "iroha_data_model::isi::space_directory::",
+            &(BTreeSet::new()),
+        );
     }
     #[test]
     fn every_sorafs_wire_instruction_has_a_reviewed_initial_disposition() {
         assert_reviewed_initial_family(
             "iroha_data_model::isi::sorafs::",
-            BTreeSet::from([
+            &(BTreeSet::from([
                 core::any::type_name::<iroha_data_model::isi::sorafs::RegisterProviderOwner>(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>(),
                 core::any::type_name::<
@@ -1101,7 +1201,7 @@ mod registry_dispatch_tests {
                 >(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority>(
                 ),
-            ]),
+            ])),
         );
     }
     #[test]
@@ -1137,11 +1237,8 @@ mod registry_dispatch_tests {
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
-        assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
-        assert_native_registration::<privacy::RegisterPrivacyExact12QualificationV1>();
-        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
-        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
-        assert_native_registration::<privacy::TransitionPrivacyProtocolLifecycleV1>();
+        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyUpdateV1>();
+        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsUpdateV1>();
         assert_native_registration::<privacy::PublishPrivacyRootV1>();
         assert_native_registration::<privacy::BootstrapPrivacyOrchardPoolV1>();
         assert_native_registration::<privacy::BootstrapPrivacyProofManagedPoolV1>();
@@ -1165,21 +1262,22 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RegisterPrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::SubmitPrivacyZkX509CertificateV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
-        assert_reviewed_initial_family("iroha_data_model::isi::privacy::", BTreeSet::new());
+        assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
-            29,
-            BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()]),
+            27,
+            &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
         );
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::private_settlement::",
             5,
-            BTreeSet::new(),
+            &(BTreeSet::new()),
         );
         assert_reviewed_initial_family(
             "iroha_data_model::isi::private_settlement::",
-            BTreeSet::new(),
+            &(BTreeSet::new()),
         );
     }
     #[test]
@@ -1599,6 +1697,15 @@ mod tests {
     }
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
+        // Component registrations use an explicit policy authored before the block snapshot.
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy().into_parameter()?,
+            world.sccp_committee_generations.allocation_budget(),
+        )?;
+        parameters.commit();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
         let asset_definition_id =
@@ -1750,6 +1857,64 @@ mod tests {
         Ok(())
     }
     #[test]
+    async fn the_selection_decides_whether_an_added_instruction_executes() -> Result<()> {
+        use crate::runtime::{
+            catalog::{
+                additions::test_additions::{LOG, LOG_MODULE, LOG_WIRE_ID},
+                test_catalog,
+            },
+            change_set::PublishedDefinitions,
+        };
+        use iroha_data_model::runtime::lifecycle::RuntimeRejectionV1;
+        test_catalog::with_additions(&[LOG], || -> Result<()> {
+            let state = authenticated_instruction_state(Vec::new());
+            let network = *state.network_id_ref();
+            let log = InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::level::Level::INFO,
+                "added after the baseline".into(),
+            ));
+            let header = ordinary_instruction_header(&state);
+            let height = header.height().get();
+            let mut state_block = state.block(header);
+            {
+                let mut state_transaction = state_block.transaction();
+                let err = execute_borrowed_instruction(&log, &ALICE_ID, &mut state_transaction)
+                    .expect_err("an addition executes only once a change set activates it");
+                assert_eq!(
+                    err,
+                    InstructionExecutionError::Runtime(RuntimeRejectionV1::DefinitionInactive {
+                        wire_id: LOG_WIRE_ID.to_owned(),
+                    })
+                );
+            }
+            let catalog = crate::runtime::release_catalog()?;
+            let current = state_block.world.runtime_selection.get().clone();
+            let change = catalog.activation(
+                LOG_MODULE,
+                &current,
+                &PublishedDefinitions(&state_block.world.runtime_definitions),
+                network,
+                height,
+                [0; 32],
+            )?;
+            let applied = change.apply(
+                &current,
+                &PublishedDefinitions(&state_block.world.runtime_definitions),
+            )?;
+            for (definition, descriptor) in applied.published {
+                state_block
+                    .world
+                    .runtime_definitions
+                    .insert(definition, descriptor);
+            }
+            *state_block.world.runtime_selection.get_mut() = applied.selection;
+            let mut state_transaction = state_block.transaction();
+            execute_borrowed_instruction(&log, &ALICE_ID, &mut state_transaction)
+                .expect("the addition's implementation executes its instruction");
+            Ok(())
+        })
+    }
+    #[test]
     async fn default_executor_rejects_invalid_instruction_placeholders() -> Result<()> {
         let state = authenticated_instruction_state(Vec::new());
         let mut state_block = state.block(ordinary_instruction_header(&state));
@@ -1893,7 +2058,7 @@ mod tests {
             metadata
         }
 
-        fn assert_metadata_limit(error: Error, entity: &str) {
+        fn assert_metadata_limit(error: &Error, entity: &str) {
             assert!(
                 matches!(error, Error::InvalidParameter(_)),
                 "oversized {entity} registration returned {error:?}"
@@ -1922,11 +2087,11 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_account = AccountId::new(checked_keypair().public_key().clone());
         assert_metadata_limit(
-            Register::account(
+            &(Register::account(
                 Account::new(oversized_account.clone()).with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized account metadata must fail"),
+            .expect_err("oversized account metadata must fail")),
             "account",
         );
         assert!(state_transaction.world.account(&oversized_account).is_err());
@@ -1936,11 +2101,11 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_domain = DomainId::try_new("metadata-oversized", "universal")?;
         assert_metadata_limit(
-            Register::domain(
+            &(Register::domain(
                 Domain::new(oversized_domain.clone()).with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized domain metadata must fail"),
+            .expect_err("oversized domain metadata must fail")),
             "domain",
         );
         assert!(state_transaction.world.domain(&oversized_domain).is_err());
@@ -1965,7 +2130,7 @@ mod tests {
             "metadata_oversized".parse()?,
         );
         assert_metadata_limit(
-            Register::asset_definition(
+            &(Register::asset_definition(
                 AssetDefinition::numeric(
                     oversized_definition.clone(),
                     "metadata oversized",
@@ -1975,7 +2140,7 @@ mod tests {
                 .with_metadata(oversized.clone()),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized asset-definition metadata must fail"),
+            .expect_err("oversized asset-definition metadata must fail")),
             "asset definition",
         );
         assert!(
@@ -1990,9 +2155,9 @@ mod tests {
             .execute(&ALICE_ID, &mut state_transaction)?;
         let oversized_nft: NftId = "metadata_oversized$wonderland.universal".parse()?;
         assert_metadata_limit(
-            Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
+            &(Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
                 .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("oversized NFT metadata must fail"),
+                .expect_err("oversized NFT metadata must fail")),
             "NFT",
         );
         assert!(state_transaction.world.nft(&oversized_nft).is_err());
@@ -2013,7 +2178,7 @@ mod tests {
         .execute(&ALICE_ID, &mut state_transaction)?;
         let rwa_count = state_transaction.world.rwas.len();
         assert_metadata_limit(
-            RegisterRwa {
+            &(RegisterRwa {
                 rwa: NewRwa::new(
                     wonderland,
                     "1".parse::<Quantity>()?,
@@ -2026,7 +2191,7 @@ mod tests {
                 ),
             }
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("oversized RWA metadata must fail"),
+            .expect_err("oversized RWA metadata must fail")),
             "RWA",
         );
         assert_eq!(state_transaction.world.rwas.len(), rwa_count);
@@ -2554,7 +2719,6 @@ mod tests {
             "genesis stateless admission".to_owned(),
         )])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let crypto_cfg = state.crypto();
         let (_clock, time_source) =
             iroha_primitives::time::TimeSource::new_mock(tx.creation_time());
         assert!(
@@ -2563,7 +2727,11 @@ mod tests {
                 &state.network_id,
                 max_clock_drift,
                 tx_limits,
-                crypto_cfg.as_ref(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time_source,
             )
             .is_ok(),

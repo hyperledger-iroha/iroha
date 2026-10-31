@@ -34,7 +34,7 @@ const FINISH_DOMAIN: &[u8] = b"iroha:world-net-delta:finish:v1\0";
 /// Exact private net-delta binding produced from actual borrowed overlay entries.
 /// It contains no copied values and cannot authorize a complete State commitment.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct WorldNetDelta {
+pub struct WorldNetDelta {
     root: Hash,
     changed_values: u64,
     fields: u64,
@@ -56,7 +56,7 @@ impl WorldNetDelta {
 
 /// Streaming fold shared with the trigger owner, which owns its private stores.
 /// Construction is not publication authority; State retains its own actual fold.
-pub(crate) struct WorldDeltaBuilder {
+pub struct WorldDeltaBuilder {
     accumulator: Hash,
     changed_values: u64,
     fields: u64,
@@ -66,7 +66,7 @@ pub(crate) struct WorldDeltaBuilder {
 
 /// Hash one canonical semantic value without allocating its encoded payload.
 /// The domain fixes the bare Norito V1 layout and binds its exact encoded length.
-pub(crate) fn hash_value<T: Encode>(value: &T) -> Result<Hash, String> {
+pub fn hash_value<T: Encode>(value: &T) -> Result<Hash, String> {
     iroha_data_model::sumeragi_finality::world_state_value_hash_v1(value)
         .map_err(|error| error.to_string())
 }
@@ -218,7 +218,7 @@ impl WorldDeltaBuilder {
 #[path = "world_projection/visitor.rs"]
 mod visitor;
 use visitor::AppendWorldField;
-pub(crate) use visitor::WorldProjection;
+pub use visitor::WorldProjection;
 
 macro_rules! append_world_field {
     ($world:ident, $builder:ident, executor) => {
@@ -334,5 +334,5 @@ impl WorldBlock<'_> {
 mod tests;
 
 #[path = "world_state_accumulator.rs"]
-pub(crate) mod world_state_accumulator;
-pub(crate) use world_state_accumulator::WorldStateAccumulator;
+pub mod world_state_accumulator;
+pub use world_state_accumulator::WorldStateAccumulator;

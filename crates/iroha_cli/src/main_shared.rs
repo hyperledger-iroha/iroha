@@ -1,5 +1,6 @@
 //! Iroha client CLI implementation executed by the thin `iroha` binary.
 #![deny(deprecated)]
+#![cfg_attr(test, deny(clippy::large_stack_arrays))]
 
 use iroha_core::release_identity::CompiledBuildMetadata;
 use iroha_model_base::domain::DomainId;
@@ -245,11 +246,8 @@ fn quote_and_sign_transaction_inner(
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
     let account = client.account_client();
-    let draft = iroha::client::AccountTransactionDraft::new(
-        executable.clone(),
-        requested_fee_payment.clone(),
-        metadata,
-    );
+    let draft =
+        iroha::client::AccountTransactionDraft::new(executable, requested_fee_payment, metadata);
 
     let mut payload = account
         .prepare_transaction(draft)
@@ -260,7 +258,7 @@ fn quote_and_sign_transaction_inner(
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("Failed to request an exact transaction fee quote")?;
-    validate_executable_fee_payment(&executable, &quote.intent)?;
+    validate_executable_fee_payment(&payload.instructions, &quote.intent)?;
     payload.fee_payment = quote.intent.clone();
     let transaction = account
         .sign_transaction(payload)
@@ -402,6 +400,10 @@ enum FeePayerArg {
     Sponsor,
 }
 #[derive(clap::Args, Clone, Debug, Default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names define the explicit public command-line flags."
+)]
 struct FeePaymentArgs {
     /// Required fee source for every submitted transaction.
     #[arg(long, value_enum, global = true)]
@@ -489,6 +491,10 @@ pub(crate) fn wait_for_transaction_applied(
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
 #[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These are independent global CLI flags, not a state machine."
+)]
 struct Args {
     /// Path to the configuration file.
     ///
@@ -515,7 +521,7 @@ struct Args {
     ///
     /// This runtime-only credential is never inferred from the account key, environment, or
     /// client TOML. The selected node must allowlist its public key for the configured exact
-    /// NetworkId.
+    /// `NetworkId`.
     #[arg(
         long,
         value_name("ABSOLUTE_PATH"),
@@ -578,6 +584,10 @@ struct Args {
     command: Command,
 }
 #[derive(clap::Subcommand, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The top-level CLI command is parsed once and dispatched by ownership; inline variants preserve direct subcommand matching."
+)]
 enum Command {
     /// Canonical account reads and account mutations
     #[command(subcommand)]
@@ -600,7 +610,7 @@ enum Command {
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
-    /// Contract code, aliases, calls, views and local debugging; deploy with `musubi deploy`
+    /// Contract code, aliases, calls, views and local debugging; deploy with `kagami contract deploy` or `musubi deploy`
     #[command(subcommand)]
     Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
@@ -900,7 +910,7 @@ mod explorer {
         Accounts(crate::collection_list::ListArgs),
         /// Read the bounded Domains Explorer feed.
         Domains(crate::collection_list::ListArgs),
-        /// Read the bounded AssetDefinitions Explorer feed.
+        /// Read the bounded `AssetDefinitions` Explorer feed.
         AssetDefinitions(crate::collection_list::ListArgs),
         /// Read the bounded Assets Explorer feed.
         Assets(crate::collection_list::ListArgs),
@@ -914,17 +924,17 @@ mod explorer {
         Transactions(crate::collection_list::ListArgs),
         /// Read node-supplied selective evidence; does not independently verify finality
         TransactionProof(TransactionProof),
-        /// Read the bounded TransactionsLatest Explorer feed.
+        /// Read the bounded `TransactionsLatest` Explorer feed.
         TransactionsLatest(crate::collection_list::ListArgs),
         /// Read the bounded Instructions Explorer feed.
         Instructions(crate::collection_list::ListArgs),
-        /// Read the bounded InstructionsLatest Explorer feed.
+        /// Read the bounded `InstructionsLatest` Explorer feed.
         InstructionsLatest(crate::collection_list::ListArgs),
     }
     /// Arguments of the authenticated, read-only selective evidence request.
     #[derive(clap::Args, Debug)]
     pub struct TransactionProof {
-        /// Canonical transaction entrypoint hash literal (hash:UPPERCASE_HEX#CHECKSUM)
+        /// Canonical transaction entrypoint hash literal (`hash:UPPERCASE_HEX#CHECKSUM`)
         #[arg(short('H'), long, value_parser = parse_proof_hash)]
         pub hash: HashOf<TransactionEntrypoint>,
     }
@@ -975,7 +985,7 @@ mod explorer {
                     args,
                 ),
             };
-            crate::collection_list::run_list(context, collection, &args)
+            crate::collection_list::run_list(context, &collection, &args)
         }
     }
 }
@@ -1012,7 +1022,7 @@ mod ledger {
         Multisig(crate::multisig::Command),
         /// Subscribe to events: state changes, transaction/block/trigger progress
         Events(crate::events::Args),
-        /// Subscribe to full signed blocks (requires CanReadAllLedgerData)
+        /// Subscribe to full signed blocks (requires `CanReadAllLedgerData`)
         Blocks(crate::blocks::Args),
     }
     impl Run for Command {
@@ -1128,7 +1138,7 @@ mod app {
         /// Kaigi session helpers
         #[command(subcommand)]
         Kaigi(crate::commands::kaigi::Command),
-        /// SoraFS helpers (pin registry, aliases, replication orders, storage)
+        /// `SoraFS` helpers (pin registry, aliases, replication orders, storage)
         #[command(subcommand)]
         Sorafs(crate::commands::sorafs::Command),
         /// Soracles helpers (evidence bundling)
@@ -1180,15 +1190,15 @@ mod app {
     impl Command {
         pub(super) fn allows_fallback_config(&self) -> bool {
             match self {
+                Self::Zk(command) => command.allows_fallback_config(),
+                Self::Taikai(command) => taikai_allows_fallback_config(command),
+                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::Da(
                     crate::commands::da::Command::RentQuote(_)
                     | crate::commands::da::Command::RentLedger(_),
-                ) => true,
-                Self::Zk(command) => command.allows_fallback_config(),
-                Self::Execution(_) => true,
-                Self::Taikai(command) => taikai_allows_fallback_config(command),
-                Self::Sorafs(command) => sorafs_allows_fallback_config(command),
-                Self::SpaceDirectory(crate::space_directory::Command::Manifest(
+                )
+                | Self::Execution(_)
+                | Self::SpaceDirectory(crate::space_directory::Command::Manifest(
                     crate::space_directory::ManifestCommand::Encode(_)
                     | crate::space_directory::ManifestCommand::AuditBundle(_)
                     | crate::space_directory::ManifestCommand::Scaffold(_),
@@ -1230,11 +1240,11 @@ mod app {
             Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
         match command {
-            SorafsCommand::Toolkit(_) => true,
-            SorafsCommand::Reserve(
+            SorafsCommand::Toolkit(_)
+            | SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
-            ) => true,
-            SorafsCommand::Incentives(
+            )
+            | SorafsCommand::Incentives(
                 IncentivesCommand::Compute(_)
                 | IncentivesCommand::OpenDispute(_)
                 | IncentivesCommand::Dashboard(_),
@@ -1342,7 +1352,7 @@ struct CliHint(String);
 /// printable attachment. Error types that embed their source in their own message would otherwise
 /// show that source twice, so a cause already contained in a shown message is skipped.
 fn command_error_report(error: &eyre::Report) -> Report<MainError> {
-    let mut chain = error.chain().map(|cause| cause.to_string());
+    let mut chain = error.chain().map(std::string::ToString::to_string);
     let message = chain.next().unwrap_or_default();
     let mut shown = vec![message.clone()];
     let mut causes = Vec::new();
@@ -1400,10 +1410,10 @@ fn api_error_hints(error: &eyre::Report) -> Vec<String> {
         hints.push(hint.to_owned());
     }
     if let Some(expected) = details.expected() {
-        hints.push(match details.actual() {
-            Some(actual) => format!("expected {expected}; got {actual}"),
-            None => format!("expected {expected}"),
-        });
+        hints.push(details.actual().map_or_else(
+            || format!("expected {expected}"),
+            |actual| format!("expected {expected}; got {actual}"),
+        ));
     }
     hints
 }
@@ -1511,7 +1521,9 @@ pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
         Err(report) => {
             let rendered = render_cli_error(&report, output);
             eprint!("{}", rendered.output);
-            std::process::ExitCode::from(rendered.kind.exit_code() as u8)
+            std::process::ExitCode::from(
+                u8::try_from(rendered.kind.exit_code()).expect("CLI exit-code enumeration fits u8"),
+            )
         }
     }
 }
@@ -1988,10 +2000,9 @@ where
         } else if let Some(value) = arg.strip_prefix("-o")
             && !value.is_empty()
             && !arg.starts_with("--")
+            && let Some(format) = parse_output_format(value.strip_prefix('=').unwrap_or(value))
         {
-            if let Some(format) = parse_output_format(value.strip_prefix('=').unwrap_or(value)) {
-                explicit = Some(format);
-            }
+            explicit = Some(format);
         }
     }
     (explicit, machine)
@@ -2048,7 +2059,7 @@ fn load_cli_client_config(
             )));
         }
     };
-    let source_path = source.path().to_path_buf();
+    let source_path = source.path().clone();
     let filesystem_config =
         client_config::FilesystemConfig::take_from(source.table_mut(), &source_path)
             .into_report()
@@ -2206,9 +2217,7 @@ fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<Str
     while let Some(cause) = current {
         if let Some(admission) = cause.downcast_ref::<AccountAdmissionError>() {
             return Some(match admission {
-                AccountAdmissionError::ImplicitAccountCreationDisabled => format!(
-                    "Implicit account creation is disabled; register the destination or pass `--ensure-destination` to add an explicit registration."
-                ),
+                AccountAdmissionError::ImplicitAccountCreationDisabled => "Implicit account creation is disabled; register the destination or pass `--ensure-destination` to add an explicit registration.".to_string(),
                 AccountAdmissionError::InvalidPolicy(invalid) => format!(
                     "Account admission policy is invalid: {}",
                     invalid.reason
@@ -2421,27 +2430,6 @@ mod events {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
-            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
-                let error = GovernanceArgs {
-                    proposal_id: Some(proposal_id),
-                    referendum_id: None,
-                }
-                .into_filter()
-                .expect_err("malformed proposal id must fail before opening the event stream");
-                assert_eq!(
-                    error.to_string(),
-                    "--proposal-id must be exactly 32 bytes of hexadecimal"
-                );
-            }
-        }
-    }
-
     fn listen(
         filter: impl Into<EventFilterBox>,
         context: &mut impl RunContext,
@@ -2473,6 +2461,27 @@ mod events {
             })()
         };
         finish_stream(result, stream.close())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
+            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
+                let error = GovernanceArgs {
+                    proposal_id: Some(proposal_id),
+                    referendum_id: None,
+                }
+                .into_filter()
+                .expect_err("malformed proposal id must fail before opening the event stream");
+                assert_eq!(
+                    error.to_string(),
+                    "--proposal-id must be exactly 32 bytes of hexadecimal"
+                );
+            }
+        }
     }
 }
 mod blocks {
@@ -2552,7 +2561,7 @@ mod domain {
             match self {
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Domains,
+                    &iroha::collections::Collection::Domains,
                     &args,
                 ),
                 Get(args) => {
@@ -2634,7 +2643,7 @@ mod account {
                 Permission(cmd) => cmd.run(context),
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Accounts,
+                    &iroha::collections::Collection::Accounts,
                     &args,
                 ),
                 History(args) => {
@@ -2646,7 +2655,7 @@ mod account {
                         .unwrap_or_else(|| context.config().account.clone());
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountHistory(account),
+                        &iroha::collections::Collection::AccountHistory(account),
                         &args.list,
                     )
                 }
@@ -2761,7 +2770,7 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountPermissions(account_id),
+                        &iroha::collections::Collection::AccountPermissions(account_id),
                         &args.list,
                     )
                 }
@@ -2795,7 +2804,7 @@ mod account {
         }
     }
     /// Read every effective permission using the shared cursor page contract.
-    pub(crate) fn list_effective_permissions(
+    pub fn list_effective_permissions(
         client: &Client,
         account_id: &AccountId,
     ) -> Result<Vec<Permission>> {
@@ -2947,7 +2956,7 @@ mod asset {
                     };
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AccountAssets(account),
+                        &iroha::collections::Collection::AccountAssets(account),
                         &args.list,
                     )
                 }
@@ -2964,7 +2973,7 @@ mod asset {
                     };
                     crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AssetHolders(definition),
+                        &iroha::collections::Collection::AssetHolders(definition),
                         &args.list,
                     )
                 }
@@ -3089,7 +3098,7 @@ mod asset {
                 match self {
                     List(args) => crate::collection_list::run_list(
                         context,
-                        iroha::collections::Collection::AssetDefinitions,
+                        &iroha::collections::Collection::AssetDefinitions,
                         &args,
                     ),
                     Get(args) => {
@@ -3647,7 +3656,7 @@ mod asset {
                 DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
-            let asset_id = AssetId::new(asset_def_id, owner.clone().into());
+            let asset_id = AssetId::new(asset_def_id, owner.clone());
             let args = Transfer {
                 definition: Some(asset_id.definition().clone()),
                 definition_alias: None,
@@ -3752,7 +3761,7 @@ mod nft {
                 }
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Nfts,
+                    &iroha::collections::Collection::Nfts,
                     &args,
                 ),
                 Register(args) => {
@@ -3852,14 +3861,14 @@ mod rwa {
                 Get(args) => {
                     let entry = crate::collection_list::get_by_id(
                         context,
-                        iroha::collections::Collection::Rwas,
+                        &iroha::collections::Collection::Rwas,
                         &args.id.to_string(),
                     )?;
                     context.print_data(&entry)
                 }
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::Rwas,
+                    &iroha::collections::Collection::Rwas,
                     &args,
                 ),
                 Register => {
@@ -4744,12 +4753,14 @@ mod multisig {
             .unwrap_or(usize::MAX);
         Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
-    fn format_multisig_intent(intent: &Option<Json>) -> Result<String> {
-        match intent {
-            Some(value) => norito::json::to_json(value)
-                .map_err(|err| eyre!("failed to render multisig intent: {err}")),
-            None => Ok("null".to_owned()),
-        }
+    fn format_multisig_intent(intent: Option<&Json>) -> Result<String> {
+        intent.map_or_else(
+            || Ok("null".to_owned()),
+            |value| {
+                norito::json::to_json(value)
+                    .map_err(|err| eyre!("failed to render multisig intent: {err}"))
+            },
+        )
     }
     fn render_multisig_list_all_text(entries: &[MultisigListAllEntry]) -> Result<String> {
         let mut blocks = Vec::with_capacity(entries.len());
@@ -4761,7 +4772,7 @@ mod multisig {
                 entry.instructions_hash,
                 entry.status,
                 entry.operation_type,
-                format_multisig_intent(&entry.intent)?,
+                format_multisig_intent(entry.intent.as_ref())?,
                 entry.proposed_at_ms,
             ));
         }
@@ -5168,7 +5179,7 @@ mod transaction {
         /// Send an empty transaction that logs a message
         Ping(Ping),
         /// Collect an exact fixed-schedule transaction trace for multilane qualification
-        Load(crate::transaction_load::Args),
+        Load(Box<crate::transaction_load::Args>),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -5180,9 +5191,9 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
-                Prepare(args) => crate::transaction_journal::prepare(args, context),
-                Submit(args) => crate::transaction_journal::submit(args, context),
-                Resume(args) => crate::transaction_journal::resume(args, context),
+                Prepare(args) => crate::transaction_journal::prepare(&args, context),
+                Submit(args) => crate::transaction_journal::submit(&args, context),
+                Resume(args) => crate::transaction_journal::resume(&args, context),
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 List(cmd) => cmd.run(context),
@@ -5243,6 +5254,10 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config()?;
             let details = client.get_transaction_details(self.hash)?;
+            // The output keeps its encoded result; stderr says what that result means.
+            if let Err(reason) = &details.transaction.result().0 {
+                eprintln!("rejected: {}", iroha::client::rejection_summary(reason));
+            }
             context.print_data(&details.transaction)
         }
     }
@@ -5265,7 +5280,7 @@ mod transaction {
             };
             crate::collection_list::run_list(
                 context,
-                iroha::collections::Collection::AccountTransactions(account),
+                &iroha::collections::Collection::AccountTransactions(account),
                 &self.list,
             )
         }
@@ -5313,11 +5328,17 @@ mod transaction {
     fn ping_nonce_seed() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
+            .map(|d| {
+                u64::from_le_bytes(
+                    d.as_nanos().to_le_bytes()[..8]
+                        .try_into()
+                        .expect("eight-byte nonce seed"),
+                )
+            })
             .unwrap_or(0)
     }
     fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
-        if metadata.contains(&*PING_NONCE_KEY) {
+        if metadata.contains(&PING_NONCE_KEY) {
             return false;
         }
         let value = seed.wrapping_add(index as u64);
@@ -5867,7 +5888,7 @@ mod trigger {
         /// Retrieve details of a specific trigger
         Get(Id),
         /// Register a trigger
-        Register(Register),
+        Register(Box<Register>),
         /// Unregister a trigger
         Unregister(Id),
         /// Increase the number of trigger executions
@@ -6467,7 +6488,7 @@ mod trigger {
         /// Only Updated events
         Updated,
     }
-    pub(super) fn parse_data_verifying_key_id(
+    pub fn parse_data_verifying_key_id(
         spec: &str,
     ) -> Result<iroha::data_model::proof::VerifyingKeyId> {
         let (backend, name) = spec
@@ -6493,7 +6514,7 @@ mod trigger {
             normalized_name.to_string(),
         ))
     }
-    pub(super) fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
+    pub fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
         let (backend, hash_hex) = spec
             .split_once(':')
             .ok_or_else(|| eyre!("--data-proof requires BACKEND:HEX format"))?;
@@ -6638,7 +6659,6 @@ mod trigger {
                             definition,
                             owner,
                             self.data_asset_scope
-                                .clone()
                                 .unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
                         );
                         DataEventFilter::from(
@@ -7047,7 +7067,7 @@ mod metadata {
                     Get(args) => {
                         let entry = crate::collection_list::get_by_id(
                             context,
-                            iroha::collections::Collection::Rwas,
+                            &iroha::collections::Collection::Rwas,
                             &args.id.to_string(),
                         )
                         .wrap_err("Failed to get value")?;
@@ -7160,13 +7180,13 @@ mod repo {
                 Unwind(args) => args.run(context),
                 List(args) => crate::collection_list::run_list(
                     context,
-                    iroha::collections::Collection::RepoAgreements,
+                    &iroha::collections::Collection::RepoAgreements,
                     &args,
                 ),
                 Get(args) => {
                     let entry = crate::collection_list::get_by_id(
                         context,
-                        iroha::collections::Collection::RepoAgreements,
+                        &iroha::collections::Collection::RepoAgreements,
                         &args.id.to_string(),
                     )?;
                     context.print_data(&entry)
@@ -7577,7 +7597,7 @@ mod settlement {
         /// Expected destination asset from the referenced policy
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Destination-currency recipient account or alias
@@ -7665,7 +7685,7 @@ mod settlement {
     }
     #[derive(clap::Args, Debug)]
     pub struct DvpArgs {
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Asset definition delivered in exchange
@@ -7781,7 +7801,7 @@ mod settlement {
     }
     #[derive(clap::Args, Debug)]
     pub struct PvpArgs {
-        /// Payer-scoped settlement identity: REFERENCE$CANONICAL_ACCOUNT
+        /// Payer-scoped settlement identity: `REFERENCE$CANONICAL_ACCOUNT`
         #[arg(long)]
         pub settlement_id: SettlementId,
         /// Primary currency leg asset definition
@@ -8693,7 +8713,7 @@ fn read_cli_input_bounded<R: Read>(
         let count = loop {
             match reader.read(&mut chunk[..read_len]) {
                 Ok(count) => break count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),
             }
         };
@@ -8709,7 +8729,7 @@ fn read_cli_input_bounded<R: Read>(
     let extra = loop {
         match reader.read(&mut growth_probe) {
             Ok(count) => break count,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
     };
@@ -8777,12 +8797,12 @@ fn decode_base64_or_hex(
 type ReportResult<T, E> = core::result::Result<T, Report<E>>;
 fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
     match report.current_context() {
-        MainError::CliArgs(_) => CliErrorKind::Input,
         MainError::Config => CliErrorKind::Config,
-        MainError::TransactionMetadata => CliErrorKind::Input,
         MainError::SerializeConfig => CliErrorKind::Internal,
         MainError::Command(_) => CliErrorKind::Command,
-        MainError::Input(_) => CliErrorKind::Input,
+        MainError::CliArgs(_) | MainError::TransactionMetadata | MainError::Input(_) => {
+            CliErrorKind::Input
+        }
     }
 }
 struct CliRenderedError {
@@ -9158,8 +9178,11 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             (0..5)
                 .map(|index| {
-                    let owner = sample_account_id("universal", seed + index as u8);
-                    Domain::new(DomainId::try_new(&format!("d{index}"), "universal").unwrap())
+                    let owner = sample_account_id(
+                        "universal",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
+                    Domain::new(DomainId::try_new(format!("d{index}"), "universal").unwrap())
                         .build(&owner)
                 })
                 .collect()
@@ -9202,7 +9225,10 @@ mod cli_integration_harness_tests {
 
             let mut accounts: Vec<_> = (0..5)
                 .map(|index| {
-                    let id = sample_account_id("land", seed + index as u8);
+                    let id = sample_account_id(
+                        "land",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
                     Account::new(id.clone()).build(&id)
                 })
                 .collect();
@@ -9220,7 +9246,10 @@ mod cli_integration_harness_tests {
 
             (0..5)
                 .map(|index| {
-                    let id = sample_account_id("land", seed + index as u8);
+                    let id = sample_account_id(
+                        "land",
+                        seed + u8::try_from(index).expect("five-row fixture index fits u8"),
+                    );
                     let mut account = Account::new(id.clone()).build(&id);
                     account
                         .metadata
@@ -9328,7 +9357,7 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", 0x70);
             let mut nfts: Vec<_> = ["n1$art", "n2$art", "n3$art"]
                 .into_iter()
-                .map(|id| Nft::new(id.parse().unwrap(), Default::default()).build(owner.account()))
+                .map(|id| Nft::new(id.parse().unwrap(), Metadata::default()).build(owner.account()))
                 .collect();
             let key: Name = "rank".parse().unwrap();
             nfts[0]
@@ -9373,8 +9402,11 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", seed);
             (0..5)
                 .map(|index| {
-                    Nft::new(format!("n{index}$art").parse().unwrap(), Default::default())
-                        .build(owner.account())
+                    Nft::new(
+                        format!("n{index}$art").parse().unwrap(),
+                        Metadata::default(),
+                    )
+                    .build(owner.account())
                 })
                 .collect()
         }
@@ -9480,16 +9512,13 @@ mod cli_integration_harness_tests {
                 .get()
                 .try_into()
                 .unwrap_or(100);
-            let offset = query.params.pagination.offset_value() as usize;
-            let limit = query
-                .params
-                .pagination
-                .limit_value()
-                .map(|value| value.get() as usize);
+            let offset =
+                usize::try_from(query.params.pagination.offset_value()).unwrap_or(usize::MAX);
+            let limit = query.params.pagination.limit_value().map(|value| {
+                usize::try_from(value.get()).expect("fixture pagination limit fits usize")
+            });
             let start = offset.min(items.len());
-            let end = limit
-                .map(|limit| (start + limit).min(items.len()))
-                .unwrap_or(items.len());
+            let end = limit.map_or(items.len(), |limit| (start + limit).min(items.len()));
             let first_end = start.saturating_add(fetch).min(end);
             let first = items[start..first_end].to_vec();
             let remaining = end.saturating_sub(first_end) as u64;
@@ -9711,6 +9740,8 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_domains_asc() {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         PSD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSD_ASC_CONTS.store(0, Ordering::SeqCst);
         let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
@@ -9718,7 +9749,7 @@ mod cli_integration_harness_tests {
             &PSD_ASC_STARTS,
             &PSD_ASC_CONTS,
         );
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9745,6 +9776,8 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_domains_desc() {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         PSD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSD_DESC_CONTS.store(0, Ordering::SeqCst);
         let exec = HarnessQueryExecutor::<DomainFixture>::ranked_five(
@@ -9752,7 +9785,7 @@ mod cli_integration_harness_tests {
             &PSD_DESC_STARTS,
             &PSD_DESC_CONTS,
         );
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
+
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -10132,6 +10165,7 @@ mod cli_integration_harness {
             .expect("fixture seed must derive a valid keypair")
     }
     /// Minimal mock server for iterable queries; returns static payloads by type.
+    #[derive(Default)]
     pub struct MockQueryServer {
         pub domains: Vec<iroha::data_model::domain::Domain>,
         pub accounts: Vec<iroha::data_model::account::Account>,
@@ -10145,22 +10179,7 @@ mod cli_integration_harness {
         pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
-    impl Default for MockQueryServer {
-        fn default() -> Self {
-            Self {
-                domains: vec![],
-                accounts: vec![],
-                triggers: vec![],
-                asset_defs: vec![],
-                executor_data_model: None,
-                parameters: None,
-                proof_records: BTreeMap::new(),
-                manifests: BTreeMap::new(),
-                abi_version: None,
-                assets: BTreeMap::new(),
-            }
-        }
-    }
+
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
@@ -10232,7 +10251,6 @@ mod cli_integration_harness {
                     }),
                 SingularQueryBox::FindAbiVersion(_) => self
                     .abi_version
-                    .clone()
                     .map(SingularQueryOutputBox::AbiVersion)
                     .ok_or_else(|| eyre!("ABI version not configured in MockQueryServer")),
                 SingularQueryBox::FindAssetById(req) => self
@@ -10272,12 +10290,12 @@ mod cli_integration_harness {
                 .get()
                 .try_into()
                 .unwrap_or(100);
-            let offset: usize = query.params.pagination.offset_value() as usize;
-            let limit: Option<usize> = query
-                .params
-                .pagination
-                .limit_value()
-                .map(|n| n.get() as usize);
+            let offset: usize =
+                usize::try_from(query.params.pagination.offset_value()).unwrap_or(usize::MAX);
+            let limit: Option<usize> =
+                query.params.pagination.limit_value().map(|n| {
+                    usize::try_from(n.get()).expect("fixture pagination limit fits usize")
+                });
             if !self.domains.is_empty() {
                 let mut v = self.domains.clone();
                 if let Some(key) = sort_by {
@@ -10296,7 +10314,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10333,7 +10351,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10370,7 +10388,7 @@ mod cli_integration_harness {
                     });
                 }
                 let start = offset.min(v.len());
-                let end = limit.map(|l| (start + l).min(v.len())).unwrap_or(v.len());
+                let end = limit.map_or(v.len(), |l| (start + l).min(v.len()));
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
@@ -10472,11 +10490,15 @@ mod cli_integration_harness {
         // Prepare a mock server with two domains
         let owner_w1 = sample_account_id("w1", 9);
         let owner_w2 = sample_account_id("w2", 10);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
-            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
-        ];
+        let server = MockQueryServer {
+            domains: vec![
+                Domain::new(DomainId::try_new("w1", "universal").unwrap())
+                    .build(owner_w1.account()),
+                Domain::new(DomainId::try_new("w2", "universal").unwrap())
+                    .build(owner_w2.account()),
+            ],
+            ..MockQueryServer::default()
+        };
         // Build and execute the query via QueryBuilder against the mock server
         let builder = QueryBuilder::new(&server, FindDomains);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
@@ -10592,8 +10614,10 @@ mod cli_integration_harness {
         use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
         let account_id = sample_account_id("wonderland", 15);
         let account = Account::new(account_id.clone()).build(&account_id);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![account.clone()];
+        let server = MockQueryServer {
+            accounts: vec![account.clone()],
+            ..MockQueryServer::default()
+        };
         let out = server
             .execute_singular_query(SingularQueryBox::FindAccountById(FindAccountById::new(
                 account_id.account().clone(),
@@ -10625,8 +10649,10 @@ mod cli_integration_harness {
         )
         .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
-        let mut server = MockQueryServer::default();
-        server.triggers = vec![trigger.clone()];
+        let server = MockQueryServer {
+            triggers: vec![trigger.clone()],
+            ..MockQueryServer::default()
+        };
         let out = server
             .execute_singular_query(SingularQueryBox::FindTriggerById(FindTriggerById::new(
                 trigger_id.clone(),
@@ -10644,7 +10670,7 @@ mod cli_integration_harness {
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
             seiyaku_name: None,
-            code_hash: Some(code_hash.clone()),
+            code_hash: Some(code_hash),
             abi_hash: None,
             compiler_fingerprint: Some("kotodama-compiler".into()),
             features_bitmap: Some(0b1010),
@@ -10719,7 +10745,7 @@ mod cli_integration_harness {
         use std::collections::BTreeSet;
         let mut server = MockQueryServer::default();
         let executor_model = ExecutorDataModel {
-            parameters: Default::default(),
+            parameters: BTreeMap::default(),
             instructions: BTreeSet::new(),
             permissions: BTreeSet::new(),
             schema: Json::from(norito::json!({ "kind": "demo" })),

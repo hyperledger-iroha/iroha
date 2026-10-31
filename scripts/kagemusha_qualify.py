@@ -15,9 +15,9 @@ with an actually launched measured child; skipped batches and failed launches
 do not provide separation. This does not require a valid intervening sample.
 Each proof specimen must match the scheduled process seed and sample index;
 fixture derivation never replaces the prover's fresh hedged randomness.
-Native generated identity is admitted only after the maintained Rust source
-snapshot, exact Cargo output, host target and executable identity agree. This
-also binds the generator's wider prerequisites during component qualification.
+Source provenance is captured by a standalone maintained evaluator and exact
+Cargo outputs. The executable reports its proof ABI independently; repository
+identity is never injected into proof-library compilation or admission.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ CONFIGS = {
 }
 PREFIX = "M3_GATE_JSON "
 GIB = 1 << 30
-SOURCE_POLICY = "cargo-local-input-closure-native-identity-v1"
+SOURCE_POLICY = "cargo-local-input-closure-native-provenance-v1"
 MEMORY_ACTIVITY_POLICY = "unchanged-compressions-pageouts-swapouts;monotonic-swapins"
 QUIET_MEMORY_COUNTERS = ("Compressions", "Pageouts", "Swapouts")
 PROBES = {
@@ -230,28 +230,6 @@ def native_host_target() -> dict:
             }}}
 
 
-def native_identity_source(digest: str, target: dict) -> str:
-    """The exact maintained build.rs output for a complete supported native build."""
-    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-        raise ValueError("malformed maintained native source digest")
-    values = ", ".join(str(value) for value in bytes.fromhex(digest))
-    return ("// Generated from actual workspace inputs, not an environment digest.\n"
-            f"pub(super) const CURRENT_NATIVE_SOURCE_DIGEST: [u8; 32] = [{values}];\n"
-            "pub(super) const NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;\n"
-            "pub(super) const BUILTIN_TARGET_SUPPORTED: bool = true;\n"
-            "#[allow(dead_code)]\n"
-            f"pub(super) const NATIVE_SOURCE_TARGET: &str = {json.dumps(target['triple'])};\n")
-
-
-def native_output_inventory(out: Path) -> dict[str, str]:
-    """Allow precisely one regular output, with no skipped subdirectories."""
-    entries = list(local_path(out).iterdir())
-    if len(entries) != 1 or entries[0].name != "native_source_identity.rs":
-        raise ValueError("native OUT_DIR contains an unverified generated output")
-    path = local_path(entries[0])
-    return {path.relative_to(ROOT).as_posix(): "file:" + file_hash(path)}
-
-
 def native_snapshot(tool: Path, record: dict, record_sha256: str) -> tuple[str, list[str]]:
     """Check evaluator, helper and exact selected sha2 custody around each scan."""
     audit = native_audit_module()
@@ -283,17 +261,25 @@ def native_snapshot(tool: Path, record: dict, record_sha256: str) -> tuple[str, 
 
 
 def capture_native_source(metadata: dict, artifacts: list[dict], build_scripts: list[dict], output: Path) -> dict | None:
-    """Admit only the selected plonk generator and its maintained prerequisites."""
+    """Capture source provenance after compilation; never generate compiler inputs."""
     packages = {package["id"]: package for package in metadata["packages"]}
     plonk_ids = {key for key, package in packages.items()
                  if package["source"] is None and package["name"] == "iroha_plonk" and
                  local_path(package["manifest_path"]) == ROOT / "crates/iroha_plonk/Cargo.toml"}
-    selected = [item for item in build_scripts if item["package_id"] in plonk_ids]
-    compiled = {item["package_id"] for item in artifacts if item["package_id"] in plonk_ids}
-    if not compiled and not selected:
+    selected = [item for item in artifacts if item["package_id"] in plonk_ids and
+                item.get("target", {}).get("kind") == ["lib"]]
+    if not selected:
         return None
-    if len(plonk_ids) != 1 or compiled != plonk_ids or not selected:
-        raise ValueError("native identity lacks exact selected plonk build")
+    if len(plonk_ids) != 1 or any(item["package_id"] in plonk_ids for item in build_scripts):
+        raise ValueError("native provenance needs the selected plonk library without a generated identity build")
+    libraries = []
+    for item in selected:
+        for name in item["filenames"]:
+            path = local_path(name)
+            if path.suffix == ".rlib":
+                libraries.append({"package_id": item["package_id"], "path": str(path), "sha256": file_hash(path)})
+    if len(libraries) != 1:
+        raise ValueError("native provenance requires one exact selected plonk library")
     directory = output / "native-source-evaluator"
     directory.mkdir()
     audit = native_audit_module()
@@ -301,84 +287,34 @@ def capture_native_source(metadata: dict, artifacts: list[dict], build_scripts: 
     record = json.loads(tool.with_name("source-snapshot-build.json").read_text())
     record_sha256 = file_hash(tool.with_name("source-snapshot-build.json"))
     digest, watched = native_snapshot(tool, record, record_sha256)
-    result = {"policy": "complete-native-source-identity-v1", "tool": str(tool), "evaluator": record,
+    result = {"policy": "complete-native-source-provenance-v1", "tool": str(tool), "evaluator": record,
               "evaluator_record_sha256": record_sha256,
               "source_digest": digest, "watched": watched, "admin_watchers": native_admin_watchers(),
-              "target": native_host_target(), "builds": []}
-    required = {"crates/iroha_plonk/build.rs", "crates/iroha_plonk/build_support/source_identity.rs",
+              "target": native_host_target(), "libraries": libraries}
+    required = {"crates/iroha_plonk/build_support/source_identity.rs",
                 "crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "scripts/audit_native_source_inputs.py",
                 "scripts/native_source_snapshot.rs", *result["admin_watchers"]}
     if not required.issubset(watched):
-        raise ValueError("native snapshot omits mandatory generator or admin watchers")
-    expected_source = native_identity_source(digest, result["target"])
-    seen = set()
-    for item in selected:
-        out = local_path(item["out_dir"])
-        if out in seen or out.name != "out" or not out.is_relative_to(ROOT / "target"):
-            raise ValueError("native identity has foreign or duplicate Cargo OUT_DIR")
-        seen.add(out)
-        identity = local_path(out / "native_source_identity.rs")
-        original = identity.read_text()
-        if original != expected_source:
-            raise ValueError("native generated identity differs from complete current snapshot and target")
-        identity_hash = file_hash(identity)
-        if hashlib.sha256(original.encode()).hexdigest() != identity_hash:
-            raise ValueError("native generated identity changed while reading")
-        expected_files = {identity.relative_to(ROOT).as_posix(): "file:" + identity_hash}
-        if native_output_inventory(out) != expected_files:
-            raise ValueError("native OUT_DIR contains an unverified generated output")
-        rescan = local_path(out / "native-source-rescan-required", missing=True)
-        if rescan.exists():
-            raise ValueError("intentionally absent native rescan watcher exists")
-        build_output = local_path(out.parent / "output")
-        text = build_output.read_text()
-        declared, environment = set(), set()
-        for line in text.splitlines():
-            directive = line.removeprefix("cargo::").removeprefix("cargo:")
-            if directive.startswith("rerun-if-changed="):
-                raw = Path(directive.partition("=")[2])
-                path = local_path(raw, missing=True)
-                if not raw.is_absolute() or raw != path:
-                    raise ValueError("native build watcher is not an exact canonical path")
-                declared.add(path.relative_to(ROOT).as_posix())
-            elif directive.startswith("rerun-if-env-changed="):
-                environment.add(directive.partition("=")[2])
-        if declared != set(watched) | {rescan.relative_to(ROOT).as_posix()}:
-            raise ValueError("native build watchers differ from maintained snapshot and exact rescan marker")
-        if environment != set(result["target"]["environment"]):
-            raise ValueError("native build environment declarations differ from native target inputs")
-        output_hash = file_hash(build_output)
-        if hashlib.sha256(text.encode()).hexdigest() != output_hash:
-            raise ValueError("native build output changed while reading")
-        result["builds"].append({"package_id": item["package_id"], "out_dir": str(out),
-                                 "identity": str(identity), "identity_sha256": identity_hash,
-                                 "rescan": str(rescan), "output": str(build_output),
-                                 "output_sha256": output_hash, "inventory": expected_files})
-    if native_snapshot(tool, record, record_sha256) != (digest, watched) or native_admin_watchers() != result["admin_watchers"]:
-        raise ValueError("native source changed during generated-input audit")
+        raise ValueError("native snapshot omits mandatory provenance or admin inputs")
     return recheck_native_source(result)
 
 
 def recheck_native_source(value: dict | None) -> dict:
-    """Recheck exact generated outputs, absent watchers and current source identity."""
+    """Recheck standalone source provenance and selected compiled library custody."""
     if value is None:
         return {}
-    if value.get("policy") != "complete-native-source-identity-v1":
-        raise ValueError("unknown generated native input policy")
-    def check_outputs():
+    if value.get("policy") != "complete-native-source-provenance-v1":
+        raise ValueError("unknown native source provenance policy")
+    def check_inputs():
         if native_admin_watchers() != value["admin_watchers"]:
             raise ValueError("native Git admin watcher changed")
-        for item in value["builds"]:
-            if local_path(item["rescan"], missing=True).exists():
-                raise ValueError("intentionally absent native rescan watcher exists")
-            if (file_hash(local_path(item["identity"])) != item["identity_sha256"] or
-                    file_hash(local_path(item["output"])) != item["output_sha256"] or
-                    native_output_inventory(Path(item["out_dir"])) != item["inventory"]):
-                raise ValueError("native generated input or build output changed")
-    check_outputs()
+        for item in value["libraries"]:
+            if file_hash(local_path(item["path"])) != item["sha256"]:
+                raise ValueError("selected native library changed")
+    check_inputs()
     if native_snapshot(Path(value["tool"]), value["evaluator"], value["evaluator_record_sha256"]) != (value["source_digest"], value["watched"]):
-        raise ValueError("native source identity changed")
-    check_outputs()
+        raise ValueError("native source provenance changed")
+    check_inputs()
     return value
 
 
@@ -513,7 +449,7 @@ def source_digest(scope: dict | None = None) -> str:
     selected["@cargo_metadata"] = manifest_digest(cargo_metadata())
     selected["@tools"] = manifest_digest(tool_identity())
     selected["@build_environment"] = manifest_digest({key: os.environ.get(key) for key in scope["build_environment"]})
-    selected["@generated_native_inputs"] = manifest_digest(recheck_native_source(scope.get("native_source")))
+    selected["@native_source_provenance"] = manifest_digest(recheck_native_source(scope.get("native_source")))
     selected["@cargo_build_inputs"] = manifest_digest(recheck_build_inputs(scope))
     return manifest_digest(selected)
 
@@ -574,12 +510,7 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
     compiler_environment = {}
     script_packages = set()
     native = recheck_native_source(native_source)
-    native_builds = native.get("builds", [])
-    native_outputs = {item["out_dir"]: item for item in native_builds}
-    native_identities = {Path(item["identity"]).relative_to(ROOT).as_posix(): item for item in native_builds}
-    native_rescans = {Path(item["rescan"]).relative_to(ROOT).as_posix() for item in native_builds}
     admin = set(native.get("admin_watchers", {}))
-    observed_native = set()
     if native:
         required.update(set(native["watched"]) - admin)
         files.update(("scripts/audit_native_source_inputs.py", "scripts/native_source_snapshot.rs"))
@@ -613,29 +544,18 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
                 aliases.append({"alias": str(path), "actual": str(actual), "sha256": artifact_hash})
             depinfo = local_path(depinfo)
             depinfo_hash = file_hash(depinfo)
-            owner_builds = [item for item in native_builds if item["package_id"] == package["id"]]
-            native_consumer = (bool(owner_builds) and artifact.get("target", {}).get("kind") == ["lib"] and
-                               artifact.get("target", {}).get("name") == "iroha_plonk")
-            absent = native_rescans if owner_builds else set()
-            inputs = depfile_inputs(depinfo, actual, absent)
+            inputs = depfile_inputs(depinfo, actual)
             generated = sorted(name for name in inputs if name.startswith("target/"))
-            admitted = {name for name in generated if name in native_identities and
-                        native_consumer and native_identities[name]["package_id"] == package["id"]}
-            if set(generated) - admitted - absent:
+            if generated:
                 raise ValueError(f"generated compiler input has no verified disposition: {generated}")
-            observed_native.update(admitted)
-            required.update(inputs - admitted - absent - admin)
+            required.update(inputs - admin)
             derived_environment = {}
             for line in depinfo.read_text().splitlines():
                 if not line.startswith("# env-dep:"):
                     continue
                 name, separator, value = line.removeprefix("# env-dep:").partition("=")
                 expected = value if separator else None
-                if name == "OUT_DIR" and native_consumer:
-                    if expected not in {item["out_dir"] for item in owner_builds}:
-                        raise ValueError("native compiler OUT_DIR differs from selected Cargo output")
-                    derived_environment[name] = expected
-                elif name == "CARGO_MANIFEST_DIR":
+                if name == "CARGO_MANIFEST_DIR":
                     if expected != str(manifest.parent):
                         raise ValueError("depfile has foreign manifest environment")
                     derived_environment[name] = expected
@@ -649,17 +569,12 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
                     if os.environ.get(name) != expected:
                         raise ValueError(f"compiler environment differs: {name}")
                     compiler_environment[name] = expected
-            if admitted and (len(admitted) != 1 or derived_environment.get("OUT_DIR") !=
-                             native_identities[next(iter(admitted))]["out_dir"]):
-                raise ValueError("native generated input lacks its exact compiler OUT_DIR binding")
             if file_hash(depinfo) != depinfo_hash:
                 raise ValueError("compiler depfile changed during capture")
             depfiles[str(depinfo)] = {"sha256": depinfo_hash, "inputs": sorted(inputs),
                                      "derived_environment": derived_environment}
     if not any(package["name"] == "iroha_plonk_gadgets" for package in compiled.values()):
         raise ValueError("component artifact set omits its measurement driver")
-    if observed_native != set(native_identities):
-        raise ValueError("selected native generated identity is absent from exact compiler depfiles")
     outputs, environment = [], compiler_environment
     observed_scripts = set()
     for item in build_scripts:
@@ -672,12 +587,8 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
         out = local_path(item["out_dir"])
         output = local_path(out.parent / "output")
         output_hash = file_hash(output)
-        native_output = native_outputs.get(str(out))
-        generated = (native_output_inventory(out) if native_output else
-                     scan_local_root(out.relative_to(ROOT).as_posix()))
-        if native_output and native_output["package_id"] != package["id"]:
-            raise ValueError("native OUT_DIR belongs to a different Cargo package")
-        if generated and (native_output is None or generated != native_output["inventory"]):
+        generated = scan_local_root(out.relative_to(ROOT).as_posix())
+        if generated:
             raise ValueError("local generated build output has no verified disposition")
         text = output.read_text()
         for line in text.splitlines():
@@ -687,10 +598,6 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
                 base = local_path(package["manifest_path"]).parent
                 path = local_path(base / name, missing=True)
                 relative = path.relative_to(ROOT).as_posix()
-                if native_output and relative in native_rescans | admin:
-                    # Only capture_native_source's exact rescan and two separately
-                    # bound Git census controls have a non-source disposition.
-                    continue
                 path = local_path(path)
                 if path.is_dir():
                     roots.add(path.relative_to(ROOT).as_posix())
@@ -699,14 +606,11 @@ def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[d
                     required.add(path.relative_to(ROOT).as_posix())
             elif directive.startswith("rerun-if-env-changed="):
                 name = directive.partition("=")[2]
-                if native_output and name in native["target"]["environment"]:
-                    continue  # Cargo-derived, bound to the selected host compiler.
                 environment[name] = os.environ.get(name)
         if hashlib.sha256(text.encode()).hexdigest() != output_hash or file_hash(output) != output_hash:
             raise ValueError("build-script output changed during capture")
         outputs.append({"record": item, "path": str(output), "sha256": output_hash, "text": text,
-                        "generated_disposition": ("exact complete native source identity" if native_output else
-                                                  "empty output directory; no generated compiler inputs")})
+                        "generated_disposition": "empty output directory; no generated compiler inputs"})
     if observed_scripts != script_packages:
         raise ValueError("local build script lacks its executed output record")
     files.update(required)
@@ -732,19 +636,26 @@ def ignored_output(path: Path) -> Path:
 
 
 def parse_native_identity(text: str, native: dict, binary_sha256: str) -> dict:
-    """Join actual executable identity to the audited generated Cargo input."""
-    prefix = "M3_SOURCE_JSON "
+    """Record the executable's proof contract separately from source provenance.
+
+    The contract is observed diagnostic data here; proof admission enforces it.
+    This join authenticates the executable and target, not a caller-supplied ABI.
+    """
+    prefix = "M3_CONTRACT_JSON "
     lines = [line[line.index(prefix) + len(prefix):] for line in text.splitlines() if prefix in line]
     if len(lines) != 1:
-        raise ValueError("expected one compiled native source identity record")
+        raise ValueError("expected one compiled native contract record")
     value = json.loads(lines[0])
+    if not isinstance(value, dict) or not isinstance(value.get("proof_contract_digest"), str) or re.fullmatch(
+            r"[0-9a-f]{64}", value["proof_contract_digest"]) is None:
+        raise ValueError("malformed compiled proof contract digest")
     cfg = native["target"]["cfg"]
-    expected = {"schema": "kagemusha.m3.native-source.v1", "native_source_digest": native["source_digest"],
+    expected = {"schema": "kagemusha.m3.native-contract.v1", "proof_contract_digest": value["proof_contract_digest"],
                 "binary_sha256": binary_sha256, "target_arch": cfg["target_arch"], "target_os": cfg["target_os"],
                 "pointer_width": int(cfg["target_pointer_width"]), "little_endian": cfg["target_endian"] == "little"}
-    if (not isinstance(value, dict) or value.keys() != expected.keys() or
+    if (value.keys() != expected.keys() or
             any(type(value[key]) is not type(item) or value[key] != item for key, item in expected.items())):
-        raise ValueError("compiled native source identity differs from audited Cargo inputs")
+        raise ValueError("compiled native contract report differs from selected executable or target")
     return value
 
 
@@ -767,8 +678,8 @@ def validate_retained_native_source(native: dict, outputs: list[dict]) -> None:
             raise ValueError("noncanonical native provenance path")
         return result
 
-    fields(native, "policy tool evaluator evaluator_record_sha256 source_digest watched admin_watchers target builds", "scope")
-    if native["policy"] != "complete-native-source-identity-v1":
+    fields(native, "policy tool evaluator evaluator_record_sha256 source_digest watched admin_watchers target libraries", "scope")
+    if native["policy"] != "complete-native-source-provenance-v1":
         raise ValueError("missing complete audited native source scope")
     for name in ("source_digest", "evaluator_record_sha256"):
         digest(native[name])
@@ -784,7 +695,7 @@ def validate_retained_native_source(native: dict, outputs: list[dict]) -> None:
         raise ValueError("duplicate or unordered native watch inventory")
     for value in watched:
         path(value, absolute=False)
-    required = {"crates/iroha_plonk/build.rs", "crates/iroha_plonk/build_support/source_identity.rs",
+    required = {"crates/iroha_plonk/build_support/source_identity.rs",
                 "crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "scripts/audit_native_source_inputs.py",
                 "scripts/native_source_snapshot.rs", *admin}
     if not required.issubset(watched):
@@ -830,59 +741,20 @@ def validate_retained_native_source(native: dict, outputs: list[dict]) -> None:
     if evaluator["command"] != expected_command:
         raise ValueError("native evaluator command differs from retained inputs")
 
-    builds = native["builds"]
-    if not isinstance(builds, list) or not builds:
-        raise ValueError("missing selected native generator evidence")
-    if not isinstance(outputs, list):
-        raise ValueError("missing retained native build output originals")
-    seen, packages = set(), set()
-    expected_hash = hashlib.sha256(native_identity_source(native["source_digest"], target).encode()).hexdigest()
-    for item in builds:
-        fields(item, "package_id out_dir identity identity_sha256 rescan output output_sha256 inventory", "generator")
+    libraries = native["libraries"]
+    if not isinstance(libraries, list) or len(libraries) != 1:
+        raise ValueError("missing exact selected native library provenance")
+    for item in libraries:
+        fields(item, "package_id path sha256", "library")
         if not isinstance(item["package_id"], str) or not item["package_id"]:
-            raise ValueError("missing native generator package identity")
-        packages.add(item["package_id"])
-        out = path(item["out_dir"])
-        if out in seen or out.name != "out" or not out.is_relative_to(ROOT / "target"):
-            raise ValueError("foreign or duplicate native Cargo OUT_DIR")
-        seen.add(out)
-        identity = out / "native_source_identity.rs"
-        for name, expected in (("identity", identity), ("rescan", out / "native-source-rescan-required"),
-                               ("output", out.parent / "output")):
-            if path(item[name]) != expected:
-                raise ValueError("native generated output path differs from selected Cargo OUT_DIR")
-        for name in ("identity_sha256", "output_sha256"):
-            digest(item[name])
-        if (item["identity_sha256"] != expected_hash or
-                item["inventory"] != {identity.relative_to(ROOT).as_posix(): "file:" + expected_hash}):
-            raise ValueError("native generated output differs from complete source identity and target")
-        matches = [record for record in outputs if isinstance(record, dict) and record.get("path") == item["output"]]
-        if len(matches) != 1:
-            raise ValueError("missing or ambiguous retained native build output")
-        retained = matches[0]
-        fields(retained, "record path sha256 text generated_disposition", "build output")
-        event = retained["record"]
-        if (not isinstance(event, dict) or event.get("reason") != "build-script-executed" or
-                event.get("package_id") != item["package_id"] or event.get("out_dir") != str(out) or
-                retained["generated_disposition"] != "exact complete native source identity" or
-                not isinstance(retained["text"], str)):
-            raise ValueError("retained native build output differs from selected Cargo event")
-        if (retained["sha256"] != item["output_sha256"] or
-                hashlib.sha256(retained["text"].encode()).hexdigest() != item["output_sha256"]):
-            raise ValueError("retained native build output digest differs from original text")
-        declared, declared_environment = set(), set()
-        for line in retained["text"].splitlines():
-            directive = line.removeprefix("cargo::").removeprefix("cargo:")
-            if directive.startswith("rerun-if-changed="):
-                declared.add(path(directive.partition("=")[2]).relative_to(ROOT).as_posix())
-            elif directive.startswith("rerun-if-env-changed="):
-                declared_environment.add(directive.partition("=")[2])
-        if declared != set(watched) | {(out / "native-source-rescan-required").relative_to(ROOT).as_posix()}:
-            raise ValueError("retained native build watchers differ from snapshot and exact rescan marker")
-        if declared_environment != set(environment):
-            raise ValueError("retained native build environment differs from target inputs")
-    if len(packages) != 1:
-        raise ValueError("native generated outputs select different Cargo packages")
+            raise ValueError("missing native library package identity")
+        library = path(item["path"])
+        if (not library.is_relative_to(ROOT / "target") or library.parent.name != "deps" or
+                re.fullmatch(r"libiroha_plonk(?:-[a-zA-Z0-9_-]+)?\.rlib", library.name) is None):
+            raise ValueError("foreign selected native library path")
+        digest(item["sha256"])
+    if not isinstance(outputs, list):
+        raise ValueError("missing retained build output records")
 
 
 def candidate_native_reasons(candidate: dict) -> list[str]:
@@ -959,7 +831,7 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
         raise ValueError("metadata or tools changed during build")
     native = capture_native_source(metadata, artifacts, build_scripts, output)
     if native is None:
-        raise ValueError("M3 qualification requires the selected iroha_plonk native source identity")
+        raise ValueError("M3 qualification requires the selected iroha_plonk source provenance")
     if native["admin_watchers"] != before_admin:
         raise ValueError("native Git admin watchers changed during build")
     scope = component_scope(metadata, artifacts, build_scripts, native)
@@ -972,7 +844,7 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
         values["@cargo_metadata"] = manifest_digest(metadata)
         values["@tools"] = manifest_digest(before_tools)
         values["@build_environment"] = manifest_digest(scope["build_environment"])
-        values["@generated_native_inputs"] = manifest_digest(recheck_native_source(native))
+        values["@native_source_provenance"] = manifest_digest(recheck_native_source(native))
         values["@cargo_build_inputs"] = manifest_digest(recheck_build_inputs(scope))
     write_json(output / "source-provenance.json", {
         "source_policy": SOURCE_POLICY, "scope": scope,
@@ -1004,7 +876,7 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
             raise ValueError(f"missing benchmark {config['test']}")
     test = "qualification_candidate_identity"
     if f"{test}: test" not in listing.stdout:
-        raise ValueError("measurement executable lacks compiled native source identity test")
+        raise ValueError("measurement executable lacks compiled native contract identity test")
     identity = command([str(binary), "--ignored", "--exact", test, "--nocapture", "--test-threads=1"])
     (output / "native-identity.stdout.log").write_text(identity.stdout)
     (output / "native-identity.stderr.log").write_text(identity.stderr)
@@ -1048,11 +920,16 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
 
 
 def parse_vm_stat(text: str) -> dict[str, int]:
+    """Require one complete kernel row per counter; ambiguous probes invalidate."""
     counters = {}
     for label in (*QUIET_MEMORY_COUNTERS, "Swapins"):
-        match = re.search(rf"^{label}:\s+(\d+)\.", text, re.MULTILINE)
-        if not match:
-            raise ValueError(f"missing vm_stat counter {label}")
+        rows = [line for line in text.splitlines()
+                if re.match(rf"[ \t]*{label}[ \t]*:", line)]
+        if len(rows) != 1:
+            raise ValueError(f"missing or duplicate vm_stat counter {label}")
+        match = re.fullmatch(rf"{label}:[ \t]+([0-9]+)\.[ \t]*", rows[0])
+        if match is None:
+            raise ValueError(f"malformed vm_stat counter {label}")
         counters[label] = int(match[1])
     return counters
 

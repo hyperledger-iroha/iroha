@@ -1,25 +1,24 @@
 // Static test contracts only; never import or execute an SDK implementation.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { parseTypeScriptSource } from "./typescriptInspection.js";
 
-const printer = ts.createPrinter({ removeComments: true });
 export function parseSuiteSource(source) {
-  const parsed = ts.createSourceFile("suite.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  assert.equal(parsed.parseDiagnostics.length, 0, "suite syntax must parse without recovery");
-  return parsed;
-}
-export function printed(node, source) {
-  return printer.printNode(ts.EmitHint.Unspecified, node, source);
+  return parseTypeScriptSource("suite.js", source);
 }
 export function astDigest(nodes, source) {
-  return createHash("sha256").update(nodes.map((node) => printed(node, source)).join("\n")).digest("hex");
+  // Bind the parsed node kind and its complete original text. TypeScript 7's
+  // printer can rewrite formatting and cannot serialize every Unicode AST.
+  // Exact source text also retains comments and automatic-semicolon boundaries.
+  const captured = nodes.map((node) => ({ kind: ts.formatSyntaxKind(node.kind), text: node.getText(source) }));
+  return createHash("sha256").update(JSON.stringify(captured)).digest("hex");
 }
 export function descendantNodes(root, predicate) {
   const output = [];
   function visit(node) {
     if (predicate(node)) output.push(node);
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   visit(root);
   return output;

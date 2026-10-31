@@ -1,28 +1,21 @@
-//! Release authority, replay and native-checkpoint binding regressions.
+//! Native identity pins, bounded checkpoint persistence and exclusive custody regressions.
 //!
-//! Native fixtures use genuine BLS certificates over synthetic execution outputs; these tests
-//! authenticate bootstrap material and do not qualify a running parent or private dataspace.
+//! Genuine fixture certificates cover synthetic execution outputs; these tests do not qualify a
+//! live network. Shared helpers preserve the same checkpoint verifier used by production stores.
+
 use super::*;
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 
 fn key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
 
-pub(super) fn trust(key: &KeyPair, floor: u64) -> ReleaseTrust {
-    ReleaseTrust::new("fixture".into(), key.public_key().clone(), floor).unwrap()
-}
-
-pub(super) fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkRelease {
-    NetworkRelease {
+pub(crate) fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkMetadata {
+    NetworkMetadata {
         network_name: "fixture".into(),
-        serial: 5,
-        generation: 1,
         network_id: checkpoint.network_id(),
         chain_id: checkpoint.chain_id().into(),
-        issued_at_ms: 1_000,
-        expires_at_ms: 10_000,
         torii_roots: vec!["https://torii.example/".into()],
         account_chain_discriminant: 753,
         native_world_schema: Hash::new(b"independently qualified fixture World schema"),
@@ -30,459 +23,478 @@ pub(super) fn metadata(checkpoint: &SumeragiFinalityCheckpoint) -> NetworkReleas
             .tip()
             .committee
             .iter()
-            .map(|validator| crate::bootstrap::ReleasePeer {
+            .map(|validator| BootstrapPeer {
                 node_id: iroha_model_base::peer::PeerId::new(validator.public_key.clone()),
                 torii_root: "https://torii.example/".into(),
             })
             .collect(),
         faucet: None,
         build_registry: None,
-        checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-        checkpoint_height: checkpoint.height(),
-        checkpoint_block_hash: checkpoint.block_hash().into(),
     }
 }
 
-pub(super) fn signed(
-    release: NetworkRelease,
+pub(crate) fn authenticated(
+    metadata: NetworkMetadata,
     checkpoint: &SumeragiFinalityCheckpoint,
-    key: &KeyPair,
-) -> Vec<u8> {
-    SignedNetworkCheckpoint::sign(release, checkpoint, key.private_key())
-        .unwrap()
-        .encode_canonical()
-        .unwrap()
+) -> AuthenticatedBootstrap {
+    let verifier = verify_checkpoint(&metadata, &checkpoint.encode_canonical().unwrap()).unwrap();
+    AuthenticatedBootstrap { metadata, verifier }
+}
+
+fn profile(checkpoint: &SumeragiFinalityCheckpoint) -> InstalledNetworkProfile {
+    InstalledNetworkProfile::new(
+        "fixture".into(),
+        "https://torii.example/",
+        checkpoint.chain_id().into(),
+        753,
+    )
+    .unwrap()
+}
+
+pub(crate) fn discovered(checkpoint: &SumeragiFinalityCheckpoint) -> NativeBootstrap {
+    NativeBootstrap {
+        network_id: checkpoint.network_id(),
+        verifier: FinalityVerifier::from_checkpoint(
+            checkpoint.clone(),
+            checkpoint.network_id(),
+            checkpoint.chain_id(),
+        )
+        .unwrap(),
+        capabilities: iroha_torii_shared::account_capabilities::AccountCapabilitiesV1 {
+            schema_version: 1,
+            network_id: checkpoint.network_id(),
+            network_prefix: 753,
+            allowed_signing: vec!["ed25519".into()],
+        },
+        faucet: iroha_torii_shared::account_faucet_policy::AccountFaucetAdvertisement {
+            schema_version: 1,
+            network_id: checkpoint.network_id(),
+            network_prefix: 753,
+            authority: iroha_data_model::account::AccountId::new(key(81).public_key().clone()),
+            asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap(),
+            amount: 25_000_u64.into(),
+        },
+    }
 }
 
 #[test]
-fn signed_native_checkpoint_roundtrips_and_resumes_after_exclusive_reopen() {
+fn native_bootstrap_pins_network_and_resumes_after_exclusive_reopen() {
     let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(81);
-    let trust = trust(&key, 5);
-    let release = metadata(&checkpoint);
-    let bytes = signed(release.clone(), &checkpoint, &key);
+    let selected = profile(&checkpoint);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("release");
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
+    let path = directory.path().join("bootstrap");
+    let store = BootstrapStore::open(&path).unwrap();
+    assert!(store.load(&selected).unwrap().is_none());
     assert!(matches!(
-        ReleaseCheckpointStore::open(&path),
+        BootstrapStore::open(&path),
         Err(BootstrapError::Busy)
     ));
-    let result = store.authenticate(&trust, &bytes, 2_000).unwrap();
-    assert_eq!(result.release(), &release);
-    assert!(!result.is_network_reset());
+    let result = store.accept(&selected, discovered(&checkpoint)).unwrap();
+    assert_eq!(result.metadata().network_id, checkpoint.network_id());
+    assert_eq!(result.metadata().chain_id, selected.chain_id());
+    assert_eq!(
+        result.metadata().torii_roots,
+        [selected.torii_root().to_string()]
+    );
+    assert_eq!(result.metadata().account_chain_discriminant, 753);
+    assert!(result.metadata().peers.is_empty());
+    assert_eq!(
+        result.metadata().faucet.as_ref().unwrap().max_operation_fee,
+        1000_u64.into()
+    );
     assert_eq!(result.into_verifier().checkpoint(), &checkpoint);
+    let bytes = std::fs::read(path.join("accepted.nrt")).unwrap();
+    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), bytes);
     drop(store);
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    assert!(
-        !store
-            .authenticate(&trust, &bytes, 2_001)
+    let store = BootstrapStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .load(&selected)
             .unwrap()
-            .is_network_reset()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &checkpoint
     );
-    assert!(store.authenticate(&trust, &bytes, 2_000).is_err());
-    assert!(store.authenticate(&trust, &bytes, 10_000).is_err());
-    assert!(store.authenticate(&trust, &bytes, 999).is_err());
 }
 
 #[test]
-fn retained_release_reauthenticates_offline_without_repairing_expiry_or_invalid_custody() {
+fn bootstrap_rejects_profile_reset_policy_and_discovery_substitution() {
     let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let authority = key(93);
-    let selected = trust(&authority, 1);
+    let selected = profile(&checkpoint);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("release");
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    assert!(
-        store
-            .authenticate_retained(&selected, 2_000)
-            .unwrap()
-            .is_none()
-    );
-    let release = metadata(&checkpoint);
-    store
-        .authenticate(
-            &selected,
-            &signed(release.clone(), &checkpoint, &authority),
-            2_000,
+    let path = directory.path().join("bootstrap");
+    let store = BootstrapStore::open(&path).unwrap();
+    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    let bytes = std::fs::read(path.join("accepted.nrt")).unwrap();
+    for changed in [
+        InstalledNetworkProfile::new(
+            "other".into(),
+            selected.torii_root().as_str(),
+            selected.chain_id().into(),
+            753,
         )
-        .unwrap();
-    let loaded = store
-        .authenticate_retained(&selected, 3_000)
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded.release(), &release);
-    assert_eq!(loaded.into_verifier().checkpoint(), &checkpoint);
-    assert!(store.authenticate_retained(&selected, 2_999).is_err());
-    assert!(
-        store
-            .authenticate_retained(&trust(&key(94), 1), 3_001)
-            .is_err()
-    );
-    assert!(
-        store
-            .authenticate_retained(&trust(&authority, release.serial + 1), 3_001)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        store
-            .authenticate_retained(&selected, release.expires_at_ms)
-            .unwrap()
-            .is_none()
-    );
-    drop(store);
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    assert!(store.authenticate_retained(&selected, 2_999).is_err());
-    std::fs::remove_file(path.join("accepted.nrt")).unwrap();
-    assert!(store.authenticate_retained(&selected, 3_001).is_err());
-}
-
-#[test]
-fn response_cannot_choose_authority_network_floor_or_checkpoint() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(82);
-    let release = metadata(&checkpoint);
-    let bytes = signed(release.clone(), &checkpoint, &key);
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    assert!(
-        store
-            .authenticate(&trust(&super::tests::key(83), 1), &bytes, 2_000)
-            .is_err()
-    );
-    assert!(store.authenticate(&trust(&key, 6), &bytes, 2_000).is_err());
-    let wrong_name = ReleaseTrust::new("other".into(), key.public_key().clone(), 1).unwrap();
-    assert!(store.authenticate(&wrong_name, &bytes, 2_000).is_err());
-    let mut changed: SignedNetworkCheckpoint =
-        decode(&bytes, MAX_RELEASE_CHECKPOINT_BYTES).unwrap();
-    changed.release.torii_roots[0] = "https://attacker.example/".into();
-    assert!(
-        store
-            .authenticate(&trust(&key, 1), &changed.encode_canonical().unwrap(), 2_000)
-            .is_err()
-    );
-    changed = decode(&bytes, MAX_RELEASE_CHECKPOINT_BYTES).unwrap();
-    changed.checkpoint[0] ^= 1;
-    assert!(
-        store
-            .authenticate(&trust(&key, 1), &changed.encode_canonical().unwrap(), 2_000)
-            .is_err()
-    );
-    assert!(
-        store
-            .directory
-            .entries(10)
-            .unwrap()
-            .iter()
-            .all(|name| name == "release.lock" || name == "accepted.nrt")
-    );
-    assert!(store.read_watermark().unwrap().accepted.is_none());
-    let mut appended = bytes.clone();
-    appended.push(0);
-    assert!(
-        store
-            .authenticate(&trust(&key, 1), &appended, 2_000)
-            .is_err()
-    );
-    assert!(decode::<SignedNetworkCheckpoint>(&[], 10).is_err());
-    assert!(decode::<SignedNetworkCheckpoint>(&bytes, bytes.len() - 1).is_err());
-}
-
-#[test]
-fn private_root_cannot_be_installed_as_public_parent_even_with_release_signature() {
-    let parent = NativeFinalityFixture::new();
-    let mut child = NativeFinalityFixture::start_with_scope(
-        "private-child-is-not-parent",
-        iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
-            parent_network_id: parent.network_id(),
-            dataspace_id: iroha_model_base::topology::DataSpaceId::new(u64::MAX),
-        },
-    );
-    child.certify(child.block_with_submitted_work(child.next_header()));
-    let checkpoint = child.checkpoint();
-    let authority = key(90);
-    assert!(
-        SignedNetworkCheckpoint::sign(metadata(&checkpoint), &checkpoint, authority.private_key())
-            .is_err()
-    );
-    let release = metadata(&checkpoint);
-    let artifact = SignedNetworkCheckpoint {
-        signature: Signature::new(
-            authority.private_key(),
-            &release_preimage(&release).unwrap(),
-        ),
-        release,
-        checkpoint: checkpoint.encode_canonical().unwrap(),
-    };
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    assert!(
-        store
-            .authenticate(
-                &trust(&authority, 1),
-                &artifact.encode_canonical().unwrap(),
-                2_000
-            )
-            .is_err()
-    );
-}
-
-#[test]
-fn signed_metadata_still_requires_exact_native_identity_height_and_quorum() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(84);
-    let base = metadata(&checkpoint);
-    for mutation in 0..5 {
-        let mut release = base.clone();
-        match mutation {
-            0 => release.chain_id = "foreign".into(),
-            1 => {
-                release.network_id = NetworkId::from_genesis_hash(
-                    iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"foreign")),
-                )
-            }
-            2 => release.checkpoint_height += 1,
-            3 => release.checkpoint_block_hash = Hash::new(b"other block"),
-            4 => release.checkpoint_hash = Hash::new(b"other frame"),
-            _ => unreachable!(),
-        }
-        assert!(SignedNetworkCheckpoint::sign(release, &checkpoint, key.private_key()).is_err());
-    }
-    // Signing a corrupt checkpoint digest cannot turn the payload into native finality.
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let mut release = base;
-    let bad = vec![0; 32];
-    release.checkpoint_hash = Hash::new(&bad);
-    let artifact = SignedNetworkCheckpoint {
-        signature: Signature::new(key.private_key(), &release_preimage(&release).unwrap()),
-        release,
-        checkpoint: bad,
-    };
-    assert!(
-        store
-            .authenticate(
-                &trust(&key, 1),
-                &artifact.encode_canonical().unwrap(),
-                2_000
-            )
-            .is_err()
-    );
-}
-
-#[test]
-fn monotonic_release_rejects_rollback_equivocation_and_allows_installation_floor_upgrade() {
-    let mut fixture = NativeFinalityFixture::new();
-    let old_checkpoint = fixture.checkpoint();
-    let key = key(85);
-    let original = metadata(&old_checkpoint);
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    store
-        .authenticate(
-            &trust(&key, 5),
-            &signed(original.clone(), &old_checkpoint, &key),
-            2_000,
+        .unwrap(),
+        InstalledNetworkProfile::new(
+            "fixture".into(),
+            "https://other.example/",
+            selected.chain_id().into(),
+            753,
         )
-        .unwrap();
-    for mutation in 0..4 {
-        let mut release = original.clone();
-        match mutation {
-            0 => release.serial -= 1,
-            1 => release.expires_at_ms += 1,
-            2 => {
-                release.serial += 1;
-                release.issued_at_ms -= 1;
-            }
-            3 => {
-                release.serial += 1;
-                release.generation += 1;
-            }
-            _ => unreachable!(),
-        }
-        assert!(
-            store
-                .authenticate(
-                    &trust(&key, 1),
-                    &signed(release, &old_checkpoint, &key),
-                    2_001
-                )
-                .is_err()
-        );
+        .unwrap(),
+        InstalledNetworkProfile::new(
+            "fixture".into(),
+            selected.torii_root().as_str(),
+            "other-chain".into(),
+            753,
+        )
+        .unwrap(),
+        InstalledNetworkProfile::new(
+            "fixture".into(),
+            selected.torii_root().as_str(),
+            selected.chain_id().into(),
+            754,
+        )
+        .unwrap(),
+    ] {
+        assert!(store.load(&changed).is_err());
+        assert!(store.accept(&changed, discovered(&checkpoint)).is_err());
     }
-    fixture.certify(fixture.block_with_submitted_work(fixture.next_header()));
-    let newer = fixture.checkpoint();
-    let mut next = metadata(&newer);
-    next.serial = 6;
-    let result = store
-        .authenticate(&trust(&key, 6), &signed(next.clone(), &newer, &key), 2_001)
-        .unwrap();
-    assert_eq!(result.into_verifier().checkpoint().height(), 3);
-    let mut regressed = original;
-    regressed.serial = 7;
-    assert!(
-        store
-            .authenticate(
-                &trust(&key, 6),
-                &signed(regressed, &old_checkpoint, &key),
-                2_002
-            )
-            .is_err()
-    );
-    let mut changed = next.clone();
-    changed.checkpoint_block_hash = Hash::new(b"equivocation");
-    changed.serial += 1;
-    assert!(validate_successor(&next, &changed).is_err());
-    changed = next.clone();
-    changed.checkpoint_hash = Hash::new(b"different restart context");
-    changed.serial += 1;
-    assert!(validate_successor(&next, &changed).is_err());
-}
-
-#[test]
-fn authenticated_reset_is_explicit_and_an_expired_prior_release_still_prevents_rollback() {
-    let fixture = NativeFinalityFixture::new();
-    let old_checkpoint = fixture.checkpoint();
-    let key = key(86);
-    let original = metadata(&old_checkpoint);
-    // A different mode changes the signed genesis, producing a genuine independent network.
     let mut reset = NativeFinalityFixture::start_with_mode(
-        "reset-fixture",
+        checkpoint.chain_id(),
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
     );
     reset.certify(reset.block_with_submitted_work(reset.next_header()));
-    let new_checkpoint = reset.checkpoint();
-    assert_ne!(old_checkpoint.network_id(), new_checkpoint.network_id());
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(original.clone(), &old_checkpoint, &key),
-            2_000,
-        )
-        .unwrap();
-    let mut next = metadata(&new_checkpoint);
-    next.serial = 6;
-    next.issued_at_ms = 11_000;
-    next.expires_at_ms = 20_000;
+    assert_ne!(reset.network_id(), checkpoint.network_id());
     assert!(
         store
-            .authenticate(
-                &trust(&key, 1),
-                &signed(next.clone(), &new_checkpoint, &key),
-                12_000
-            )
+            .accept(&selected, discovered(&reset.checkpoint()))
             .is_err()
     );
-    next.generation = 2;
-    let result = store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(next.clone(), &new_checkpoint, &key),
-            12_000,
-        )
-        .unwrap();
-    assert!(result.is_network_reset());
-    assert_eq!(result.release().network_id, new_checkpoint.network_id());
-    let mut resurrected = original;
-    resurrected.serial = 7;
-    resurrected.issued_at_ms = 12_000;
-    resurrected.expires_at_ms = 20_000;
-    assert!(
-        store
-            .authenticate(
-                &trust(&key, 1),
-                &signed(resurrected, &old_checkpoint, &key),
-                12_001
-            )
-            .is_err()
-    );
-    assert!(
-        store
-            .authenticate(
-                &trust(&key, 1),
-                &signed(next, &new_checkpoint, &key),
-                12_001
-            )
-            .is_ok()
-    );
+    let mut changed = discovered(&checkpoint);
+    changed.faucet.amount = 50_000_u64.into();
+    assert!(store.accept(&selected, changed).is_err());
+    let mut changed = discovered(&checkpoint);
+    changed.capabilities.network_prefix = 754;
+    assert!(store.accept(&selected, changed).is_err());
+    let mut changed = discovered(&checkpoint);
+    changed.faucet.network_id = reset.network_id();
+    assert!(store.accept(&selected, changed).is_err());
+    assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), bytes);
 }
 
 #[test]
-fn release_policy_rejects_unbounded_or_ambiguous_metadata_and_noncanonical_custody() {
+fn native_metadata_caps_spending_and_rejects_invalid_faucet() {
     let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(87);
-    let base = metadata(&checkpoint);
-    for url in [
-        "http://torii.example/",
-        "https://user:secret@torii.example/",
-        "https://torii.example/?secret=yes",
-        "https://torii.example/#fragment",
-        "https://torii.example/path",
-        "https://TORII.example/",
-    ] {
-        let mut release = base.clone();
-        release.torii_roots = vec![url.into()];
-        assert!(validate_release(&release).is_err(), "{url}");
-    }
-    for mutation in 0..7 {
-        let mut release = base.clone();
-        match mutation {
-            0 => release.serial = 0,
-            1 => release.generation = 0,
-            2 => release.expires_at_ms = release.issued_at_ms,
-            3 => release.expires_at_ms = release.issued_at_ms + MAX_RELEASE_VALIDITY_MS + 1,
-            4 => release.torii_roots.push(release.torii_roots[0].clone()),
-            5 => release.checkpoint_height = 1,
-            6 => release.network_name = "../escape".into(),
-            _ => unreachable!(),
-        }
-        assert!(validate_release(&release).is_err());
-    }
-    assert!(ReleaseTrust::new("fixture".into(), key.public_key().clone(), 0).is_err());
-    assert!(ReleaseTrust::new("Fixture".into(), key.public_key().clone(), 1).is_err());
-    assert!(
-        ReleaseTrust::new(
-            "fixture".into(),
-            KeyPair::from_seed(vec![5; 32], Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-            1
-        )
-        .is_err()
-    );
+    let selected = profile(&checkpoint);
+    let mut native = discovered(&checkpoint);
+    native.faucet.amount = 25_u64.into();
+    let metadata = native_metadata(&selected, &native).unwrap();
+    let faucet = metadata.faucet.unwrap();
+    assert_eq!(faucet.max_operation_fee, 25_u64.into());
+    assert_eq!(faucet.max_namespace_rent, 25_u64.into());
+    native.faucet.amount = 0_u64.into();
+    assert!(native_metadata(&selected, &native).is_err());
+}
+
+#[test]
+fn native_bootstrap_refuses_unsupported_managed_owner_before_acceptance() {
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let selected = profile(&checkpoint);
     let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    store
-        .directory
-        .write_atomic("accepted.nrt", b"partial", PublishMode::Replace)
+    let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
+    let mut native = discovered(&checkpoint);
+    native.capabilities.allowed_signing = vec!["secp256k1".into()];
+    assert!(store.accept(&selected, native).is_err());
+    assert!(store.load(&selected).unwrap().is_none());
+}
+
+#[test]
+fn same_decision_with_alternate_quorum_preserves_the_original_checkpoint_witness() {
+    use iroha_data_model::block::{CommitCertificate, decode_framed_signed_block};
+    use iroha_sumeragi::{
+        message::Qc,
+        types::{AggregateSignature, Bitmap},
+    };
+
+    let fixture = NativeFinalityFixture::new();
+    let original = fixture.checkpoint();
+    let mut proof = fixture.latest().clone();
+    let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let consensus_header = certificate.consensus_header().to_vec();
+    let result_preimage = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
+    let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+    let mut keys: Vec<_> = (1..=4)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect();
+    keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+    assert!(
+        keys.iter()
+            .zip(&proof.committee)
+            .all(|(key, member)| key.public_key() == &member.public_key)
+    );
+    let chosen = [1, 2, 3];
+    qc.signers = Bitmap::from_indices(keys.len(), chosen).unwrap();
+    let shares: Vec<_> = chosen
+        .into_iter()
+        .map(|index| {
+            iroha_crypto::bls::consensus::sign_preimage(
+                keys[index as usize].private_key(),
+                &qc.preimage(),
+            )
+            .unwrap()
+        })
+        .collect();
+    qc.agg_sig = AggregateSignature(iroha_crypto::bls::consensus::aggregate(&shares).unwrap());
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        consensus_header,
+        norito::encode_canonical(&qc).unwrap(),
+        result_preimage,
+        availability,
+    )));
+    proof.block_wire = block.encode_wire().unwrap();
+    fixture
+        .verifier()
+        .verify_same_decision(fixture.latest(), &proof)
         .unwrap();
+    let alternate = fixture.verifier().export_checkpoint(&proof).unwrap();
+    assert_ne!(
+        original.encode_canonical().unwrap(),
+        alternate.encode_canonical().unwrap()
+    );
+    let selected = profile(&original);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bootstrap");
+    let store = BootstrapStore::open(&path).unwrap();
+    store.accept(&selected, discovered(&original)).unwrap();
+    let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
+    let accepted = store.accept(&selected, discovered(&alternate)).unwrap();
+    assert_eq!(accepted.into_verifier().checkpoint(), &original);
+    assert_eq!(std::fs::read(path.join("accepted.nrt")).unwrap(), retained);
+}
+
+#[test]
+fn bootstrap_never_rewinds_or_replaces_a_same_height_decision() {
+    let mut fixture = NativeFinalityFixture::new();
+    let low = fixture.checkpoint();
+    let selected = profile(&low);
+    fixture.certify(fixture.block_with_submitted_work(fixture.next_header()));
+    let high = fixture.checkpoint();
+    let directory = tempfile::tempdir().unwrap();
+    let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
+    store.accept(&selected, discovered(&low)).unwrap();
+    store.accept(&selected, discovered(&high)).unwrap();
+    assert!(store.accept(&selected, discovered(&low)).is_err());
+    let mut fork = NativeFinalityFixture::new();
+    let mut header = fork.next_header();
+    header.creation_time_ms += 7;
+    fork.certify(fork.block_with_submitted_work(header));
+    assert_eq!(fork.network_id(), high.network_id());
+    assert_ne!(fork.checkpoint().block_hash(), high.block_hash());
     assert!(
         store
-            .authenticate(&trust(&key, 1), &signed(base, &checkpoint, &key), 2_000)
+            .accept(&selected, discovered(&fork.checkpoint()))
             .is_err()
     );
     assert_eq!(
-        store.directory.read("accepted.nrt", 20).unwrap().as_slice(),
-        b"partial"
+        store
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &high
     );
 }
 
 #[test]
-fn authenticated_release_only_authorizes_its_exact_http_endpoints() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(88);
+fn concurrent_acceptance_retains_the_highest_verified_checkpoint() {
+    let mut fixture = NativeFinalityFixture::new();
+    let low = fixture.checkpoint();
+    let selected = profile(&low);
+    fixture.certify(fixture.block_with_submitted_work(fixture.next_header()));
+    let high = fixture.checkpoint();
     let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(metadata(&checkpoint), &checkpoint, &key),
-            2_000,
+    let store = BootstrapStore::open(&directory.path().join("bootstrap")).unwrap();
+    std::thread::scope(|scope| {
+        let low_result = scope.spawn(|| store.accept(&selected, discovered(&low)));
+        let high_result = scope.spawn(|| store.accept(&selected, discovered(&high)));
+        let _ = low_result.join().unwrap();
+        high_result.join().unwrap().unwrap();
+    });
+    assert_eq!(
+        store
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &high
+    );
+}
+
+#[test]
+fn bootstrap_records_and_exact_lock_cannot_be_recreated_after_loss() {
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let selected = profile(&checkpoint);
+    let directory = tempfile::tempdir().unwrap();
+    for missing in ["bootstrap.lock", "accepted.nrt"] {
+        let path = directory.path().join(missing.replace('.', "-"));
+        let store = BootstrapStore::open(&path).unwrap();
+        store.accept(&selected, discovered(&checkpoint)).unwrap();
+        if missing == "bootstrap.lock" {
+            // Windows retains exclusive deletion custody while the lock handle is open.
+            drop(store);
+            std::fs::remove_file(path.join(missing)).unwrap();
+        } else {
+            std::fs::remove_file(path.join(missing)).unwrap();
+            assert!(store.load(&selected).is_err());
+            assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+            drop(store);
+        }
+        assert!(BootstrapStore::open(&path).is_err());
+        assert!(!path.join(missing).exists());
+    }
+    #[cfg(unix)]
+    {
+        let path = directory.path().join("replaced-lock");
+        let store = BootstrapStore::open(&path).unwrap();
+        store.accept(&selected, discovered(&checkpoint)).unwrap();
+        std::fs::rename(path.join("bootstrap.lock"), path.join("original.lock")).unwrap();
+        drop(store.directory.create_lock("bootstrap.lock").unwrap());
+        assert!(store.load(&selected).is_err());
+        assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+    }
+}
+
+#[test]
+fn bootstrap_failed_publication_requires_reopening_original_custody() {
+    let mut fixture = NativeFinalityFixture::new();
+    let low = fixture.checkpoint();
+    let selected = profile(&low);
+    fixture.certify(fixture.block_with_submitted_work(fixture.next_header()));
+    let high = fixture.checkpoint();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bootstrap");
+    let store = BootstrapStore::open(&path).unwrap();
+    store.accept(&selected, discovered(&low)).unwrap();
+    std::fs::rename(path.join("accepted.nrt"), path.join("retained.nrt")).unwrap();
+    std::fs::create_dir(path.join("accepted.nrt")).unwrap();
+    let retained = RetainedBootstrap {
+        profile: profile_image(&selected).unwrap(),
+        metadata: native_metadata(&selected, &discovered(&high)).unwrap(),
+        checkpoint: high.encode_canonical().unwrap(),
+    };
+    assert!(
+        store
+            .publish(&mut store.state.lock().unwrap(), retained)
+            .is_err()
+    );
+    std::fs::remove_dir(path.join("accepted.nrt")).unwrap();
+    std::fs::rename(path.join("retained.nrt"), path.join("accepted.nrt")).unwrap();
+    assert!(store.load(&selected).is_err());
+    assert!(store.accept(&selected, discovered(&high)).is_err());
+    drop(store);
+    let store = BootstrapStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .load(&selected)
+            .unwrap()
+            .unwrap()
+            .into_verifier()
+            .checkpoint(),
+        &low
+    );
+    store.accept(&selected, discovered(&high)).unwrap();
+}
+
+#[test]
+fn bounded_records_and_native_checkpoints_reject_malformed_material() {
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let selected = profile(&checkpoint);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bootstrap");
+    let store = BootstrapStore::open(&path).unwrap();
+    store.accept(&selected, discovered(&checkpoint)).unwrap();
+    let retained = std::fs::read(path.join("accepted.nrt")).unwrap();
+    assert!(decode::<BootstrapRecord>(&[], MAX_BOOTSTRAP_BYTES).is_err());
+    assert!(decode::<BootstrapRecord>(&retained, retained.len() - 1).is_err());
+    let mut trailing = retained.clone();
+    trailing.push(0);
+    assert!(decode::<BootstrapRecord>(&trailing, MAX_BOOTSTRAP_BYTES).is_err());
+    let mut record = store.read_record().unwrap();
+    record.accepted.as_mut().unwrap().checkpoint = b"invalid checkpoint".to_vec();
+    store
+        .directory
+        .write_atomic(
+            "accepted.nrt",
+            &norito::encode_canonical(&record).unwrap(),
+            PublishMode::Replace,
         )
         .unwrap();
+    assert!(store.load(&selected).is_err());
+    assert!(store.accept(&selected, discovered(&checkpoint)).is_err());
+    let mut data = metadata(&checkpoint);
+    data.torii_roots.push(data.torii_roots[0].clone());
+    assert!(validate_metadata(&data).is_err());
+    data = metadata(&checkpoint);
+    data.network_id = NativeFinalityFixture::new_with_explicit_parameters().network_id();
+    assert_ne!(data.network_id, checkpoint.network_id());
+    assert!(verify_checkpoint(&data, &checkpoint.encode_canonical().unwrap()).is_err());
+}
+
+#[test]
+fn parent_bootstrap_requires_a_certified_successor_and_global_scope() {
+    let genesis = NativeFinalityFixture::start("genesis-only").checkpoint();
+    assert!(verify_checkpoint(&metadata(&genesis), &genesis.encode_canonical().unwrap()).is_err());
+    let global = NativeFinalityFixture::new();
+    let mut private = NativeFinalityFixture::start_with_scope(
+        "private-root",
+        SumeragiRootScope::Dataspace {
+            parent_network_id: global.network_id(),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(7),
+        },
+    );
+    private.certify(private.block_with_submitted_work(private.next_header()));
+    let checkpoint = private.checkpoint();
+    assert!(
+        verify_checkpoint(
+            &metadata(&checkpoint),
+            &checkpoint.encode_canonical().unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn network_metadata_admits_numeric_loopback_development_but_refuses_insecure_remote_roots() {
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    for root in ["http://127.0.0.1:18080/", "http://[::1]:18080/"] {
+        let mut data = metadata(&checkpoint);
+        data.torii_roots = vec![root.into()];
+        data.peers.clear();
+        validate_metadata(&data).unwrap();
+    }
+    for root in [
+        "http://localhost/",
+        "http://192.168.1.2/",
+        "http://torii.example/",
+    ] {
+        let mut data = metadata(&checkpoint);
+        data.torii_roots = vec![root.into()];
+        data.peers.clear();
+        assert!(validate_metadata(&data).is_err());
+    }
+}
+
+#[test]
+fn authenticated_bootstrap_only_authorizes_its_exact_http_endpoints() {
+    let checkpoint = NativeFinalityFixture::new().checkpoint();
+    let key = key(88);
+    let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
     let client = |endpoint: &str| {
         let table = toml::toml! {
             chain = (checkpoint.chain_id())
@@ -557,22 +569,21 @@ impl crate::verify::finality::FinalitySource for RuntimeSource {
     ) -> std::io::Result<crate::verify::finality::FinalityAttestation> {
         Err(std::io::Error::other("fixture peer offline"))
     }
+    fn latest_finality_proof(
+        &self,
+        _: &iroha_model_base::peer::PeerId,
+        _: &[u8; 32],
+    ) -> std::io::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+        Ok(self.proof.clone())
+    }
 }
 
 #[test]
-fn runtime_checkpoint_persists_verified_progress_without_release_rewind_or_readiness_reuse() {
+fn runtime_checkpoint_persists_verified_progress_without_bootstrap_rewind_or_readiness_reuse() {
     let mut native = NativeFinalityFixture::new();
     let checkpoint = native.checkpoint();
-    let key = key(89);
     let directory = tempfile::tempdir().unwrap();
-    let release_store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = release_store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(metadata(&checkpoint), &checkpoint, &key),
-            2_000,
-        )
-        .unwrap();
+    let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
     let runtime_path = directory.path().join("runtime");
     let mut runtime = ParentFinalityStore::open(&runtime_path, &bootstrap).unwrap();
     assert!(ParentFinalityStore::open(&runtime_path, &bootstrap).is_err());
@@ -604,20 +615,12 @@ fn runtime_checkpoint_persists_verified_progress_without_release_rewind_or_readi
     assert_eq!(
         runtime.verifier().checkpoint(),
         &before,
-        "older release never rewinds runtime"
+        "older bootstrap never rewinds runtime"
     );
     assert_eq!(runtime.verifier().verified_tip().unwrap().height(), 3);
     drop(runtime);
-    // A newly issued same-height checkpoint with the same certified decision also reopens.
-    let mut next = metadata(&native.checkpoint());
-    next.serial += 1;
-    let next = release_store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(next, &native.checkpoint(), &key),
-            2_001,
-        )
-        .unwrap();
+    // The same certified decision can also reopen from a matching native bootstrap.
+    let next = authenticated(metadata(&native.checkpoint()), &native.checkpoint());
     assert_eq!(
         ParentFinalityStore::open(&runtime_path, &next)
             .unwrap()
@@ -632,16 +635,8 @@ fn runtime_checkpoint_persists_verified_progress_without_release_rewind_or_readi
 fn runtime_checkpoint_rejects_reset_and_incomplete_or_replaced_custody() {
     let native = NativeFinalityFixture::new();
     let checkpoint = native.checkpoint();
-    let key = key(90);
     let directory = tempfile::tempdir().unwrap();
-    let release_store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = release_store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(metadata(&checkpoint), &checkpoint, &key),
-            2_000,
-        )
-        .unwrap();
+    let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
     for missing in ["lock", "verified.nrt"] {
         let path = directory.path().join(missing.replace('.', "-"));
         drop(ParentFinalityStore::open(&path, &bootstrap).unwrap());
@@ -691,13 +686,7 @@ fn runtime_checkpoint_rejects_reset_and_incomplete_or_replaced_custody() {
     );
     reset.certify(reset.block_with_submitted_work(reset.next_header()));
     let checkpoint = reset.checkpoint();
-    let mut release = metadata(&checkpoint);
-    release.serial += 1;
-    release.generation += 1;
-    let reset = release_store
-        .authenticate(&trust(&key, 1), &signed(release, &checkpoint, &key), 2_001)
-        .unwrap();
-    assert!(reset.is_network_reset());
+    let reset = authenticated(metadata(&checkpoint), &checkpoint);
     assert!(ParentFinalityStore::open(&path, &reset).is_err());
     ParentFinalityStore::open(&directory.path().join("new-network"), &reset).unwrap();
 }
@@ -706,16 +695,8 @@ fn runtime_checkpoint_rejects_reset_and_incomplete_or_replaced_custody() {
 fn uncertain_checkpoint_publication_requires_reopen_and_never_rewinds_on_retry() {
     let mut native = NativeFinalityFixture::new();
     let checkpoint = native.checkpoint();
-    let key = key(91);
     let directory = tempfile::tempdir().unwrap();
-    let releases = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = releases
-        .authenticate(
-            &trust(&key, 1),
-            &signed(metadata(&checkpoint), &checkpoint, &key),
-            2_000,
-        )
-        .unwrap();
+    let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
     let path = directory.path().join("runtime");
     let mut runtime = ParentFinalityStore::open(&path, &bootstrap).unwrap();
     let source = RuntimeSource {
@@ -750,115 +731,39 @@ fn uncertain_checkpoint_publication_requires_reopen_and_never_rewinds_on_retry()
 }
 
 #[test]
-fn release_watermark_and_exact_lock_cannot_be_recreated_after_loss() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(93);
-    let bytes = signed(metadata(&checkpoint), &checkpoint, &key);
-    let trust = trust(&key, 1);
+fn certified_refresh_uses_native_proofs_without_claiming_peer_readiness() {
+    let mut fixture = NativeFinalityFixture::new();
+    let checkpoint = fixture.checkpoint();
+    let bootstrap = authenticated(metadata(&checkpoint), &checkpoint);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("release");
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    store.authenticate(&trust, &bytes, 2_000).unwrap();
-    std::fs::remove_file(path.join("accepted.nrt")).unwrap();
-    assert!(store.authenticate(&trust, &bytes, 2_001).is_err());
-    drop(store);
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    assert!(store.authenticate(&trust, &bytes, 2_001).is_err());
-    drop(store);
-    std::fs::remove_file(path.join("release.lock")).unwrap();
-    assert!(ReleaseCheckpointStore::open(&path).is_err());
-
-    #[cfg(unix)]
-    {
-        let path = directory.path().join("replaced");
-        let store = ReleaseCheckpointStore::open(&path).unwrap();
-        store.authenticate(&trust, &bytes, 2_000).unwrap();
-        std::fs::rename(path.join("release.lock"), path.join("old.lock")).unwrap();
-        drop(store.directory.create_lock("release.lock").unwrap());
-        assert!(store.authenticate(&trust, &bytes, 2_001).is_err());
+    let path = directory.path().join("runtime");
+    let mut runtime = ParentFinalityStore::open(&path, &bootstrap).unwrap();
+    let current = fixture.certify(fixture.block_with_submitted_work(fixture.next_header()));
+    let source = RuntimeSource {
+        proof: current.clone(),
+    };
+    // This source deliberately has no attestations. Only its native certified cut is usable.
+    assert!(runtime.observe(&source, &[9; 32]).is_err());
+    assert_eq!(runtime.refresh_certified(&source).unwrap(), 3);
+    let retained = std::fs::read(path.join("verified.nrt")).unwrap();
+    let mut invalid = current;
+    invalid.block_wire[0] ^= 1;
+    let mut fork = NativeFinalityFixture::new();
+    let mut header = fork.next_header();
+    header.creation_time_ms += 7;
+    let fork = fork.certify(fork.block_with_submitted_work(header));
+    for proof in [invalid, fork, checkpoint.tip().clone()] {
+        assert!(runtime.refresh_certified(&RuntimeSource { proof }).is_err());
+        assert_eq!(runtime.verifier().checkpoint().height(), 3);
+        assert_eq!(std::fs::read(path.join("verified.nrt")).unwrap(), retained);
     }
-}
-
-#[test]
-fn release_publication_failure_requires_reopening_exact_watermark() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(94);
-    let bytes = signed(metadata(&checkpoint), &checkpoint, &key);
-    let trust = trust(&key, 1);
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("release");
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    store.authenticate(&trust, &bytes, 2_000).unwrap();
-    let retained = store.read_watermark().unwrap().accepted.unwrap();
-    std::fs::rename(path.join("accepted.nrt"), path.join("retained.nrt")).unwrap();
-    std::fs::create_dir(path.join("accepted.nrt")).unwrap();
-    assert!(
-        store
-            .publish(&mut store.state.lock().unwrap(), retained)
-            .is_err()
-    );
-    std::fs::remove_dir(path.join("accepted.nrt")).unwrap();
-    std::fs::rename(path.join("retained.nrt"), path.join("accepted.nrt")).unwrap();
-    assert!(store.authenticate(&trust, &bytes, 2_001).is_err());
-    assert!(store.authenticate_retained(&trust, 2_001).is_err());
-    drop(store);
-    ReleaseCheckpointStore::open(&path)
-        .unwrap()
-        .authenticate(&trust, &bytes, 2_001)
-        .unwrap();
-}
-
-#[test]
-fn concurrent_release_authentication_cannot_lose_the_higher_watermark() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(95);
-    let trust = trust(&key, 1);
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let mut six = metadata(&checkpoint);
-    six.serial = 6;
-    let six = signed(six, &checkpoint, &key);
-    let mut seven = metadata(&checkpoint);
-    seven.serial = 7;
-    let seven = signed(seven, &checkpoint, &key);
-    std::thread::scope(|scope| {
-        let low = scope.spawn(|| store.authenticate(&trust, &six, 2_000));
-        let high = scope.spawn(|| store.authenticate(&trust, &seven, 2_000));
-        let _ = low.join().unwrap();
-        high.join().unwrap().unwrap();
-    });
-    let retained = store.read_watermark().unwrap().accepted.unwrap();
-    assert_eq!(retained.artifact.release.serial, 7);
-    assert!(store.authenticate(&trust, &six, 2_001).is_err());
-}
-
-#[test]
-fn failed_first_release_can_resume_without_resetting_an_accepted_watermark() {
-    let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let key = key(96);
-    let bytes = signed(metadata(&checkpoint), &checkpoint, &key);
-    let trust = trust(&key, 1);
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("release");
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    assert!(
-        store
-            .authenticate(&trust, b"invalid response", 2_000)
-            .is_err()
-    );
-    assert!(store.read_watermark().unwrap().accepted.is_none());
-    drop(store);
-    let store = ReleaseCheckpointStore::open(&path).unwrap();
-    store.authenticate(&trust, &bytes, 2_001).unwrap();
+    drop(runtime);
     assert_eq!(
-        store
-            .read_watermark()
+        ParentFinalityStore::open(&path, &bootstrap)
             .unwrap()
-            .accepted
-            .unwrap()
-            .artifact
-            .release
-            .serial,
-        5
+            .verifier()
+            .checkpoint()
+            .height(),
+        3
     );
 }

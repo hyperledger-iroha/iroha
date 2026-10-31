@@ -29,7 +29,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod geometry_attempt;
-pub(crate) use geometry_attempt::TieredGeometryAttempt;
+pub use geometry_attempt::TieredGeometryAttempt;
 
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
 #[cfg(test)]
@@ -94,7 +94,7 @@ struct SnapshotPayloadCache {
 /// Changed WSV keys captured during a block for incremental snapshotting.
 #[derive(Debug, Default, Clone)]
 #[cfg(test)]
-pub(crate) struct TieredSnapshotDiff {
+pub struct TieredSnapshotDiff {
     entries: Vec<TieredKeyHandle>,
 }
 #[cfg(test)]
@@ -111,7 +111,7 @@ impl TieredSnapshotDiff {
 }
 /// Changed WSV keys captured with their updated payloads for background snapshots.
 #[derive(Default)]
-pub(crate) struct TieredSnapshotPayload {
+pub struct TieredSnapshotPayload {
     entries: Vec<TieredSnapshotPayloadEntry>,
     complete: bool,
 }
@@ -301,7 +301,7 @@ impl TieredStateBackend {
             snapshot_dir,
             scores,
             Some(&payload_cache.payloads),
-        )?;
+        );
         self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
         self.snapshot_baseline_ready = true;
         Ok(())
@@ -453,14 +453,12 @@ impl TieredStateBackend {
                 }
             }
         }
-        if touched {
-            if let Err(err) = Self::sync_dir(root) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %root.display(),
-                    "tiered-state: failed to sync snapshot root after recovery"
-                );
-            }
+        if touched && let Err(err) = Self::sync_dir(root) {
+            iroha_logger::warn!(
+                ?err,
+                path = %root.display(),
+                "tiered-state: failed to sync snapshot root after recovery"
+            );
         }
         Ok(())
     }
@@ -474,7 +472,7 @@ impl TieredStateBackend {
         self.collect_world_entries(world, snapshot_idx, &mut scores, &mut seen)?;
         self.entries.retain(|id, _| seen.contains(id));
         self.entry_keys.retain(|id, _| seen.contains(id));
-        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None);
         Ok(Some(plan))
     }
     #[cfg(test)]
@@ -490,7 +488,7 @@ impl TieredStateBackend {
             self.apply_snapshot_diff(world, snapshot_idx, diff)?;
         }
         let scores = self.build_scores_from_keys(snapshot_idx);
-        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None);
         Ok(Some(plan))
     }
     fn prepare_snapshot(&mut self) -> Result<Option<(PathBuf, u64, PathBuf)>> {
@@ -534,7 +532,7 @@ impl TieredStateBackend {
         snapshot_dir: PathBuf,
         mut scores: Vec<EntryScore>,
         payloads: Option<&BTreeMap<TieredEntryId, Vec<u8>>>,
-    ) -> Result<TieredSnapshotPlan> {
+    ) -> TieredSnapshotPlan {
         if scores.is_empty() {
             let manifest = TieredSnapshotManifest {
                 snapshot_index: snapshot_idx,
@@ -549,12 +547,12 @@ impl TieredStateBackend {
                 hot_budget_overflow_keys: 0,
                 hot_budget_overflow_bytes: 0,
             };
-            return Ok(TieredSnapshotPlan {
+            return TieredSnapshotPlan {
                 root,
                 snapshot_dir,
                 manifest,
                 cold_entries: Vec::new(),
-            });
+            };
         }
         scores.sort_by(|a, b| {
             let meta_a = self.entries.get(&a.id).expect("metadata populated");
@@ -732,12 +730,12 @@ impl TieredStateBackend {
             hot_budget_overflow_keys,
             hot_budget_overflow_bytes,
         };
-        Ok(TieredSnapshotPlan {
+        TieredSnapshotPlan {
             root,
             snapshot_dir,
             manifest,
             cold_entries: cold_plans,
-        })
+        }
     }
     #[cfg(test)]
     fn apply_snapshot_diff(
@@ -747,7 +745,7 @@ impl TieredStateBackend {
         diff: &TieredSnapshotDiff,
     ) -> Result<()> {
         for entry in &diff.entries {
-            let (id, key_encoded) = entry.entry_id()?;
+            let (id, key_encoded) = entry.entry_id();
             let Some((value_hash, value_size_bytes)) = entry.measure_value(world)? else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -779,7 +777,7 @@ impl TieredStateBackend {
     ) -> Result<SnapshotPayloadCache> {
         let mut cache = SnapshotPayloadCache::default();
         for entry in &payload.entries {
-            let (id, key_encoded) = entry.key.entry_id()?;
+            let (id, key_encoded) = entry.key.entry_id();
             let Some(value) = entry.value.as_ref() else {
                 self.entries.remove(&id);
                 self.entry_keys.remove(&id);
@@ -977,14 +975,14 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        if let Some(backup_path) = backup {
-            if let Err(err) = fs::remove_dir_all(&backup_path) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %backup_path.display(),
-                    "tiered-state: failed to remove snapshot backup directory"
-                );
-            }
+        if let Some(backup_path) = backup
+            && let Err(err) = fs::remove_dir_all(&backup_path)
+        {
+            iroha_logger::warn!(
+                ?err,
+                path = %backup_path.display(),
+                "tiered-state: failed to remove snapshot backup directory"
+            );
         }
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
@@ -1160,14 +1158,14 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        if let Some(backup_path) = backup {
-            if let Err(err) = fs::remove_dir_all(&backup_path) {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %backup_path.display(),
-                    "tiered-state: failed to remove snapshot backup directory"
-                );
-            }
+        if let Some(backup_path) = backup
+            && let Err(err) = fs::remove_dir_all(&backup_path)
+        {
+            iroha_logger::warn!(
+                ?err,
+                path = %backup_path.display(),
+                "tiered-state: failed to remove snapshot backup directory"
+            );
         }
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
@@ -1217,6 +1215,10 @@ impl TieredStateBackend {
     /// Whether incremental payloads can extend an actual complete baseline.
     pub(crate) fn snapshot_baseline_ready(&self) -> bool {
         self.snapshot_baseline_ready
+    }
+    /// The next persistence capture must include every row after skipped publications.
+    pub(crate) fn invalidate_snapshot_baseline(&mut self) {
+        self.snapshot_baseline_ready = false;
     }
     /// Returns the cached manifest of the latest snapshot, if any.
     #[cfg(any(test, feature = "telemetry"))]
@@ -1435,13 +1437,14 @@ impl TieredStateBackend {
             max_snapshots,
             max_cold_bytes,
         );
-        if self.enabled && cold_root_changed {
-            if let Err(err) = self.ensure_cold_roots() {
-                iroha_logger::warn!(
-                    ?err,
-                    "tiered-state: failed to prepare cold tier root after reconfigure"
-                );
-            }
+        if self.enabled
+            && cold_root_changed
+            && let Err(err) = self.ensure_cold_roots()
+        {
+            iroha_logger::warn!(
+                ?err,
+                "tiered-state: failed to prepare cold tier root after reconfigure"
+            );
         }
     }
     /// Update in-memory policy and caches without creating or changing storage.
@@ -1724,14 +1727,14 @@ impl TieredStateBackend {
             world.verifying_keys
         );
         collect_map!(
-            TieredSegment::RuntimeUpgrades,
-            RuntimeUpgrade,
-            world.runtime_upgrades
+            TieredSegment::RuntimeChangeSets,
+            RuntimeChangeSet,
+            world.runtime_change_sets
         );
         collect_map!(
-            TieredSegment::PrivacyActivations,
-            PrivacyActivation,
-            world.privacy_activations
+            TieredSegment::PrivacyProtocolPolicies,
+            PrivacyProtocolPolicy,
+            world.privacy_protocol_policies
         );
         collect_map!(
             TieredSegment::PrivacyPgcAccounts,
@@ -2019,8 +2022,10 @@ impl TieredStateBackend {
         Ok(())
     }
     fn write_manifest(snapshot_dir: &Path, manifest: &TieredSnapshotManifest) -> Result<()> {
-        let manifest_bytes = norito::json::to_vec_pretty(manifest)
-            .wrap_err("failed to serialize tiered state manifest")?;
+        // This is machine-read storage metadata. Pretty-printing encoded key byte
+        // arrays multiplies every full manifest write without adding information.
+        let manifest_bytes =
+            norito::json::to_vec(manifest).wrap_err("failed to serialize tiered state manifest")?;
         let manifest_path = snapshot_dir.join("manifest.json");
         let temp_path = snapshot_dir.join("manifest.json.tmp");
         let mut file = fs::OpenOptions::new()
@@ -2451,7 +2456,7 @@ fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usiz
     Ok((sha256(&encoded), encoded.len()))
 }
 /// Deterministic byte estimate for hot-tier sizing.
-pub(crate) trait MeasuredBytes {
+pub trait MeasuredBytes {
     /// Return the total measured byte footprint used for hot-tier budgeting.
     fn measured_bytes(&self) -> usize;
     /// Return bytes beyond the stack size of the value.
@@ -2538,16 +2543,13 @@ mod measured_bytes_impls {
         },
         nft::NftData,
         permission::Permission,
-        privacy::PrivacyProtocolActivationRecordV1,
+        privacy::PrivacyProtocolPolicyV1,
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, ProofId, ProofRecord, ProofStatus,
             VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
         },
         role::{Role, RoleId},
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
-            RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
-        },
+        runtime::lifecycle::{ChangeSetId, ChangeSetRecordV1},
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
@@ -2633,11 +2635,10 @@ mod measured_bytes_impls {
         ParliamentBody,
         ProofStatus,
         Repeats,
-        RuntimeUpgradeId,
-        RuntimeUpgradeStatus,
+        ChangeSetId,
         TleKeySessionId,
         TleKeySessionLifecycleV1,
-        PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolPolicyV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
         PrivacyPgcPoolInvariantV1,
@@ -3459,39 +3460,11 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for RuntimeUpgradeSbomDigest {
+    impl MeasuredBytes for ChangeSetRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeSbomDigest>();
-            total = total.saturating_add(self.algorithm.measured_bytes_extra());
-            total = total.saturating_add(self.digest.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeManifest {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeManifest>();
-            total = total.saturating_add(self.name.measured_bytes_extra());
-            total = total.saturating_add(self.description.measured_bytes_extra());
-            total = total.saturating_add(self.abi_version.measured_bytes_extra());
-            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
-            total = total.saturating_add(self.added_syscalls.measured_bytes_extra());
-            total = total.saturating_add(self.added_pointer_types.measured_bytes_extra());
-            total = total.saturating_add(self.start_height.measured_bytes_extra());
-            total = total.saturating_add(self.end_height.measured_bytes_extra());
-            total = total.saturating_add(self.sbom_digests.measured_bytes_extra());
-            total = total.saturating_add(self.slsa_attestation.measured_bytes_extra());
-            total = total.saturating_add(self.provenance.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeRecord>();
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.proposer.measured_bytes_extra());
-            total = total.saturating_add(self.created_height.measured_bytes_extra());
-            total
+            // A change-set record nests published descriptors and signed attestations; their
+            // canonical encoding bounds the retained heap.
+            size_of::<ChangeSetRecordV1>().saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
     impl MeasuredBytes for AccessSetHints {
@@ -3722,7 +3695,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
             total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
+            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
             total
         }
     }
@@ -4105,8 +4078,8 @@ enum TieredSegment {
     AccountRoles,
     TxSequences,
     VerifyingKeys,
-    RuntimeUpgrades,
-    PrivacyActivations,
+    RuntimeChangeSets,
+    PrivacyProtocolPolicies,
     PrivacyPgcAccounts,
     PrivacyPgcPoolInvariants,
     PrivacyNullifiers,
@@ -4183,8 +4156,8 @@ macro_rules! tiered_segment_table {
             AccountRoles, AccountRole, "account_roles", account_roles;
             TxSequences, TxSequence, "tx_sequences", tx_sequences;
             VerifyingKeys, VerifyingKey, "verifying_keys", verifying_keys;
-            RuntimeUpgrades, RuntimeUpgrade, "runtime_upgrades", runtime_upgrades;
-            PrivacyActivations, PrivacyActivation, "privacy_activations", privacy_activations;
+            RuntimeChangeSets, RuntimeChangeSet, "runtime_change_sets", runtime_change_sets;
+            PrivacyProtocolPolicies, PrivacyProtocolPolicy, "privacy_protocol_policies", privacy_protocol_policies;
             PrivacyPgcAccounts, PrivacyPgcAccount, "privacy_pgc_accounts", privacy_pgc_accounts;
             PrivacyPgcPoolInvariants, PrivacyPgcPoolInvariant, "privacy_pgc_pool_invariants", privacy_pgc_pool_invariants;
             PrivacyNullifiers, PrivacyNullifier, "privacy_nullifiers", privacy_nullifiers;
@@ -4405,7 +4378,11 @@ impl EntryScore {
 }
 /// Key handle for tiered snapshot entries.
 #[derive(Debug, Clone)]
-pub(crate) enum TieredKeyHandle {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Native key handles retain complete identity inline without allocating during lookup or refusal"
+)]
+pub enum TieredKeyHandle {
     Domain(iroha_model_base::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
     AccountRekey(iroha_data_model::account::rekey::AccountAlias),
@@ -4430,8 +4407,8 @@ pub(crate) enum TieredKeyHandle {
     AccountRole(crate::role::RoleIdWithOwner),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
-    RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
-    PrivacyActivation(crate::privacy_state::PrivacyActivationKeyV1),
+    RuntimeChangeSet(iroha_data_model::runtime::lifecycle::ChangeSetId),
+    PrivacyProtocolPolicy(iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
     PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
@@ -4491,99 +4468,89 @@ impl TieredKeyHandle {
         }
         tiered_segment_table!(handle_segments)
     }
-    fn encode_key(&self) -> Result<Vec<u8>> {
+    fn encode_key(&self) -> Vec<u8> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractSubjectBinding(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractAliasBinding(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRecoveryPolicy(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRecoveryRequest(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinitionAliasBinding(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::ContractInstance(key)
+            | TieredKeyHandle::ContractSubjectBinding(key)
+            | TieredKeyHandle::ContractAliasBinding(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Domain(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Account(key)
+            | TieredKeyHandle::AccountPermission(key)
+            | TieredKeyHandle::TxSequence(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AccountRekey(key)
+            | TieredKeyHandle::AccountRecoveryPolicy(key)
+            | TieredKeyHandle::AccountRecoveryRequest(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AssetDefinition(key)
+            | TieredKeyHandle::AxtAssetIncarnation(key)
+            | TieredKeyHandle::ZkAsset(key)
+            | TieredKeyHandle::AssetDefinitionAliasBinding(key)
+            | TieredKeyHandle::AssetDefinitionDirectHome(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Asset(key) | TieredKeyHandle::AssetMetadata(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtPolicy(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtHandleCounter(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtAssetIncarnation(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AssetDefinitionDirectHome(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::AxtPolicy(key) | TieredKeyHandle::AxtHandleCounter(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::AxtReplay(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtSpendNonce(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtSourceTransferReplay(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AxtHandleBudget(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyActivation(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyPgcAccount(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyPgcPoolInvariant(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyNullifier(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivacyRootHead(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaWalletLedger(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AxtReplay(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtSpendNonce(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtSourceTransferReplay(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AxtHandleBudget(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Nft(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Rwa(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Role(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::AccountRole(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::VerifyingKey(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::RuntimeChangeSet(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyProtocolPolicy(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyPgcAccount(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyPgcPoolInvariant(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyNullifier(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyCommitment(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyRoot(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyRootHead(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::KagemushaWalletLedger(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivateSettlementGovernance(key)
-            | TieredKeyHandle::PrivateSettlementPool(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementRoot(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementNullifier(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
-            TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::PrivateSettlementStagedLock(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
+            | TieredKeyHandle::PrivateSettlementPool(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementRoot(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementNullifier(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementOutput(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivateSettlementStagedLock(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivateSettlementReceipt(key)
-            | TieredKeyHandle::PrivateSettlementAbort(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            | TieredKeyHandle::PrivateSettlementAbort(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Proof(key) | TieredKeyHandle::ProofTag(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractManifest(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCode(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCodeUpload(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ContractCodeUploadChunk(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::MinistryAgendaProposal(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceProposal(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ValidatorCommitteeTransition(key) => {
-                Ok(norito::codec::Encode::encode(key))
+            TieredKeyHandle::ProofByTag(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ContractManifest(key) | TieredKeyHandle::ContractCode(key) => {
+                norito::codec::Encode::encode(key)
             }
-            TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconKeySession(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconActiveSession(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
-            TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractCodeUpload(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ContractCodeUploadChunk(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::SmartContractState(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::Election(key)
+            | TieredKeyHandle::MinistryAgendaProposal(key)
+            | TieredKeyHandle::GovernanceReferendum(key)
+            | TieredKeyHandle::GovernanceLock(key)
+            | TieredKeyHandle::GovernanceSlash(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::GovernanceProposal(key)
+            | TieredKeyHandle::GlobalBeaconDkg(key)
+            | TieredKeyHandle::GlobalBeaconKeySession(key)
+            | TieredKeyHandle::GlobalBeaconPulse(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::ParliamentAttempt(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TleKeySession(key)
+            | TieredKeyHandle::TleKeySessionRoster(key)
+            | TieredKeyHandle::TleKeySessionLifecycle(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TleActiveKeySession(key)
+            | TieredKeyHandle::GlobalBeaconLatestPulse(key)
+            | TieredKeyHandle::ValidatorCommitteeTransition(key)
+            | TieredKeyHandle::GlobalBeaconActiveSession(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::TimedOvnEvidence(key) => norito::codec::Encode::encode(key),
         }
     }
-    fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
-        let key_encoded = self.encode_key()?;
+    fn entry_id(&self) -> (TieredEntryId, Vec<u8>) {
+        let key_encoded = self.encode_key();
         let key_hash = sha256(&key_encoded);
-        Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
+        (TieredEntryId::new(self.segment(), key_hash), key_encoded)
     }
     #[cfg(test)]
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
@@ -4693,9 +4660,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
-            TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
-            TieredKeyHandle::PrivacyActivation(id) => {
-                write!(f, "privacy_activation:{id:?}")
+            TieredKeyHandle::RuntimeChangeSet(id) => write!(f, "runtime_change_set:{id:?}"),
+            TieredKeyHandle::PrivacyProtocolPolicy(id) => {
+                write!(f, "privacy_protocol_policy:{id:?}")
             }
             TieredKeyHandle::PrivacyPgcAccount(id) => {
                 write!(f, "privacy_pgc_account:{id:?}")
@@ -4850,6 +4817,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn persisted_manifest_is_compact_and_preserves_all_hot_and_cold_metadata() {
+        let temp = tempfile::tempdir().expect("manifest directory");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
+        let mut world = World::default();
+        for seed in [1, 2] {
+            // Long canonical keys reproduce the byte-array whitespace amplification
+            // observed in the live manifest, with both hot and spilled entries.
+            let key: StatePath = format!("manifest_{seed}_{}", "x".repeat(1024))
+                .parse()
+                .unwrap();
+            world.smart_contract_state.insert(key, vec![seed; 3]);
+        }
+        backend.record_world_snapshot(&world).expect("snapshot");
+        let expected = backend.last_manifest().expect("manifest");
+        assert_eq!(expected.hot_entries.len(), 1);
+        assert_eq!(expected.cold_entries.len(), 1);
+        let snapshot_dir = temp.path().join(format!("{:020}", expected.snapshot_index));
+        let bytes = fs::read(snapshot_dir.join("manifest.json")).expect("persisted manifest");
+        let decoded: TieredSnapshotManifest = json::from_slice(&bytes).expect("read manifest");
+        assert_eq!(
+            json::to_value(&decoded).unwrap(),
+            json::to_value(expected).unwrap()
+        );
+        let pretty = json::to_vec_pretty(expected).unwrap();
+        assert!(
+            bytes.len() < pretty.len() / 2,
+            "encoded keys must not incur indentation amplification"
+        );
+        assert!(!snapshot_dir.join("manifest.json.tmp").exists());
+        let cold = &decoded.cold_entries[0];
+        let payload = fs::read(snapshot_dir.join(cold.spill_path.as_ref().unwrap())).unwrap();
+        let _: Vec<u8> = json::from_slice(&payload).expect("cold payload still decodes");
+        assert_eq!(cold.spill_bytes, Some(payload.len() as u64));
+    }
+
+    #[test]
     fn funded_public_reserve_charges_allowance_magnitude_in_hot_tier() {
         use crate::privacy_state::{PrivacyPublicReserveOwnerV1, PrivacyStateItemRecordV1};
         use iroha_data_model::{
@@ -4927,10 +4931,8 @@ mod tests {
         world.proofs_by_tag.insert(first.clone(), ());
         world.proofs_by_tag.insert(second.clone(), ());
         backend.record_world_snapshot(&world).unwrap();
-        let first_key = TieredKeyHandle::ProofByTag(first.clone())
-            .encode_key()
-            .unwrap();
-        let second_key = TieredKeyHandle::ProofByTag(second).encode_key().unwrap();
+        let first_key = TieredKeyHandle::ProofByTag(first.clone()).encode_key();
+        let second_key = TieredKeyHandle::ProofByTag(second).encode_key();
         assert_ne!(first_key, second_key);
         {
             let mut block = world.proofs_by_tag.block();
@@ -4973,7 +4975,7 @@ mod tests {
             }),
         );
         let mut previous = None;
-        for (epoch, byte) in [(1, 81), (2, 83)] {
+        for (index, (epoch, byte)) in [(1, 81), (2, 83)].into_iter().enumerate() {
             let root = PrivacyRootV1::new([byte; 32]);
             let anchor = PrivacyZkX509TrustAnchorRecordV1::new(
                 issuer,
@@ -5013,16 +5015,25 @@ mod tests {
             );
             world.privacy_root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, publication.role).expect("head key"),
-                PrivacyRootHeadRecordV1::new(epoch, root, provenance, None).expect("head"),
+                PrivacyRootHeadRecordV1::new(
+                    epoch,
+                    root,
+                    provenance,
+                    None,
+                    u32::try_from(index + 1).expect("inserted root count fits u32"),
+                )
+                .expect("head"),
             );
         }
         world
     }
 
-    fn validate_tiered_x509_root_world(world: &World) -> Result<(), String> {
+    fn validate_tiered_x509_root_world(
+        world: &World,
+    ) -> Result<(), crate::privacy_state::PrivacyStateValidationErrorV1> {
         crate::privacy_state::validate_privacy_persisted_state_v1(
             &iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
-            &world.privacy_activations.view(),
+            &world.privacy_protocol_policies.view(),
             crate::privacy_state::PrivacyPgcStateReadV1 {
                 accounts: &world.privacy_pgc_accounts.view(),
                 pool_invariants: &world.privacy_pgc_pool_invariants.view(),
@@ -5078,7 +5089,7 @@ mod tests {
             MeasuredBytes::measured_bytes(&fixed),
             std::mem::size_of::<PrivacyRootProvenanceV1>()
         );
-        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None)
+        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None, 1)
             .expect("fixed head");
         assert_eq!(
             MeasuredBytes::measured_bytes(&head),
@@ -5204,8 +5215,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            expected.root().expect("prior root"),
-            changed_root.root().expect("changed root")
+            expected.baseline_root().expect("prior root"),
+            changed_root.baseline_root().expect("changed root")
         );
         drop(block);
         let missing_history = tiered_x509_root_world();
@@ -5385,8 +5396,8 @@ mod tests {
                 cold
             );
             assert_ne!(
-                predecessor.root().expect("prior root"),
-                cold.root().expect("pool root")
+                predecessor.baseline_root().expect("prior root"),
+                cold.baseline_root().expect("pool root")
             );
             block.commit();
             cold
@@ -5451,8 +5462,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            changed_root.root().expect("changed root"),
-            expected.root().expect("original root")
+            changed_root.baseline_root().expect("changed root"),
+            expected.baseline_root().expect("original root")
         );
     }
 
@@ -5769,9 +5780,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn assert_retained_value(backend: &TieredStateBackend, key: &StatePath, value: &[u8]) {
-        let encoded_key = TieredKeyHandle::SmartContractState(key.clone())
-            .encode_key()
-            .unwrap();
+        let encoded_key = TieredKeyHandle::SmartContractState(key.clone()).encode_key();
         let manifest = backend.last_manifest().expect("retained snapshot manifest");
         let entry = manifest
             .hot_entries
@@ -6459,12 +6468,8 @@ mod tests {
             .record_world_snapshot_with_diff(&world, &diff)
             .expect("diff snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let key1_payload = TieredKeyHandle::SmartContractState(key1)
-            .encode_key()
-            .expect("first state key encode");
-        let key2_payload = TieredKeyHandle::SmartContractState(key2)
-            .encode_key()
-            .expect("second state key encode");
+        let key1_payload = TieredKeyHandle::SmartContractState(key1).encode_key();
+        let key2_payload = TieredKeyHandle::SmartContractState(key2).encode_key();
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
@@ -6506,12 +6511,8 @@ mod tests {
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let key1_payload = TieredKeyHandle::SmartContractState(key1)
-            .encode_key()
-            .expect("first state key encode");
-        let key2_payload = TieredKeyHandle::SmartContractState(key2)
-            .encode_key()
-            .expect("second state key encode");
+        let key1_payload = TieredKeyHandle::SmartContractState(key1).encode_key();
+        let key2_payload = TieredKeyHandle::SmartContractState(key2).encode_key();
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()

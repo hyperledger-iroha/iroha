@@ -497,13 +497,162 @@ mod frame_tests {
 pub struct ConsensusConfigCaps {
     /// Canonical V1 identity of every boot policy input which can affect execution.
     pub execution_policy_hash: [u8; 32],
-    /// Canonical digest of deterministic, locally configured Nexus policy.
+    /// Canonical Nexus policy digest, binding loaded policy identities and the
+    /// authenticated original signed-genesis fee policy, not current-height fees.
     pub nexus_policy_digest: [u8; 32],
     /// Canonical signed-genesis native consensus-configuration fingerprint.
     pub native_config_fingerprint: [u8; 32],
-    /// Canonical digest of the complete IVM gas schedule in this binary.
-    pub ivm_gas_schedule_hash: [u8; 32],
+    /// Host profiles this release implements. A peer checks that they cover every host profile
+    /// its committed selection activates; extra, dormant profiles never block a connection.
+    pub host_profiles: HostProfileSet,
 }
+
+/// Most host profiles one handshake advertises.
+pub const MAX_HANDSHAKE_HOST_PROFILES: usize = 8;
+
+/// Host-profile definition identities (`specs/live_runtime_upgrades.md` §6, "Handshake"): the
+/// ones a release implements, or the ones a committed selection activates. Canonical when
+/// sorted, unique and at most [`MAX_HANDSHAKE_HOST_PROFILES`] long, with zero padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
+pub struct HostProfileSet {
+    len: u8,
+    ids: [[u8; 32]; MAX_HANDSHAKE_HOST_PROFILES],
+}
+
+/// A host-profile set too large for the handshake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a handshake advertises at most {MAX_HANDSHAKE_HOST_PROFILES} host profiles")]
+pub struct HostProfileSetOverflow;
+
+impl HostProfileSet {
+    /// The canonical set of `ids`.
+    ///
+    /// # Errors
+    /// More than [`MAX_HANDSHAKE_HOST_PROFILES`] distinct identities.
+    pub fn new(ids: impl IntoIterator<Item = [u8; 32]>) -> Result<Self, HostProfileSetOverflow> {
+        let mut sorted: Vec<[u8; 32]> = ids.into_iter().collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let len = u8::try_from(sorted.len())
+            .ok()
+            .filter(|len| usize::from(*len) <= MAX_HANDSHAKE_HOST_PROFILES)
+            .ok_or(HostProfileSetOverflow)?;
+        let mut set = Self {
+            len,
+            ..Self::default()
+        };
+        set.ids[..sorted.len()].copy_from_slice(&sorted);
+        Ok(set)
+    }
+
+    /// The identities in order; empty for a set a peer encoded out of canonical form.
+    #[must_use]
+    pub fn as_slice(&self) -> &[[u8; 32]] {
+        self.ids.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+
+    /// Whether the set is canonical: a bounded length, sorted unique identities, zero padding.
+    #[must_use]
+    pub fn is_canonical(&self) -> bool {
+        let len = usize::from(self.len);
+        len <= MAX_HANDSHAKE_HOST_PROFILES
+            && self.ids[..len].windows(2).all(|pair| pair[0] < pair[1])
+            && self.ids[len..].iter().all(|id| *id == [0; 32])
+    }
+
+    /// The first identity of `self` that `supported` lacks.
+    #[must_use]
+    pub fn first_missing_from(&self, supported: &Self) -> Option<[u8; 32]> {
+        self.as_slice()
+            .iter()
+            .find(|id| supported.as_slice().binary_search(id).is_err())
+            .copied()
+    }
+}
+
+/// The host profiles the local committed selection activates, as the handshake reads them
+/// (`specs/live_runtime_upgrades.md` §6, "Handshake"): a peer must implement each one. The node
+/// replaces the set when a change set activates; one cell lives for the whole process.
+#[derive(Debug)]
+pub struct RequiredHostProfiles(std::sync::RwLock<HostProfileSet>);
+
+impl RequiredHostProfiles {
+    /// A process-lifetime cell holding `initial`.
+    #[must_use]
+    pub fn leak(initial: HostProfileSet) -> &'static Self {
+        Box::leak(Box::new(Self(std::sync::RwLock::new(initial))))
+    }
+
+    /// Replace the requirement once the committed selection changed.
+    pub fn set(&self, required: HostProfileSet) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = required;
+    }
+
+    /// The current requirement.
+    #[must_use]
+    pub fn current(&self) -> HostProfileSet {
+        *self
+            .0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod host_profile_set_tests {
+    use super::*;
+
+    #[test]
+    fn a_host_profile_set_is_sorted_unique_and_bounded() {
+        let set = HostProfileSet::new([[3; 32], [1; 32], [3; 32]]).expect("set");
+        assert_eq!(set.as_slice(), &[[1; 32], [3; 32]]);
+        assert!(set.is_canonical());
+        assert_eq!(
+            set.first_missing_from(&HostProfileSet::new([[1; 32]]).unwrap()),
+            Some([3; 32])
+        );
+        let too_many =
+            (0..=MAX_HANDSHAKE_HOST_PROFILES).map(|byte| [u8::try_from(byte).unwrap(); 32]);
+        assert_eq!(HostProfileSet::new(too_many), Err(HostProfileSetOverflow));
+    }
+
+    #[test]
+    fn a_decoded_set_out_of_canonical_form_reads_as_empty_and_is_refused() {
+        let mut set = HostProfileSet::new([[1; 32], [2; 32]]).expect("set");
+        set.ids.swap(0, 1);
+        assert!(!set.is_canonical());
+        let mut padded = HostProfileSet::new([[1; 32]]).expect("set");
+        padded.ids[3] = [9; 32];
+        assert!(!padded.is_canonical());
+        let mut overlong = HostProfileSet::default();
+        overlong.len = u8::MAX;
+        assert!(!overlong.is_canonical());
+        assert!(overlong.as_slice().is_empty());
+        let encoded = HostProfileSet::new([[5; 32]]).expect("set").encode();
+        let decoded = HostProfileSet::decode(&mut encoded.as_slice()).expect("decode");
+        assert_eq!(decoded.as_slice(), &[[5; 32]]);
+    }
+
+    #[test]
+    fn the_required_host_profiles_cell_is_replaced_in_place() {
+        let required = RequiredHostProfiles::leak(HostProfileSet::default());
+        assert!(required.current().as_slice().is_empty());
+        required.set(HostProfileSet::new([[7; 32]]).expect("set"));
+        assert_eq!(required.current().as_slice(), &[[7; 32]]);
+    }
+}
+
+/// Cells are the same requirement exactly when they are the same cell.
+impl PartialEq for RequiredHostProfiles {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for RequiredHostProfiles {}
 /// Optional consensus handshake capabilities exchanged during p2p handshake.
 ///
 /// These fields allow peers to gate connections by consensus mode/protocol
@@ -518,6 +667,9 @@ pub struct ConsensusHandshakeCaps {
     pub consensus_fingerprint: [u8; 32],
     /// Canonical v2 shared-config fingerprint.
     pub config: ConsensusConfigCaps,
+    /// Host profiles the local committed selection activates; a peer must implement each.
+    /// `None` requires none (a peer's advertised set must still be canonical).
+    pub required_host_profiles: Option<&'static RequiredHostProfiles>,
 }
 /// Optional confidential-handshake capabilities exchanged during p2p handshake.
 ///

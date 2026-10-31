@@ -17,7 +17,7 @@ use base64::{
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use norito::json::{self, Value};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use reqwest::{
     Client, StatusCode, Url,
     header::{HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue},
@@ -449,10 +449,7 @@ impl GatewayFetchContext {
             .connect_timeout(connect_timeout)
             .timeout(request_timeout);
         if let Some(roots) = tls_roots {
-            client_builder = client_builder.tls_built_in_root_certs(false);
-            for root in roots {
-                client_builder = client_builder.add_root_certificate(root);
-            }
+            client_builder = client_builder.tls_certs_only(roots);
         }
         for (host, addresses) in &resolved_hosts {
             client_builder = client_builder.resolve_to_addrs(host, addresses);
@@ -1335,7 +1332,7 @@ impl ProviderDescriptor {
             .with_max_concurrent_chunks(capacity)
             .with_metadata(metadata);
         let mut nonce_prefix = [0u8; 16];
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         rng.try_fill_bytes(&mut nonce_prefix)
             .map_err(|source| GatewayBuildError::RandomBytes {
                 message: source.to_string(),

@@ -254,7 +254,7 @@ fn world_with_three_ordered_musubi_archive_groups() -> (World, [ArchiveId; 3]) {
                 let binding = &record.attestation.payload.binding;
                 let mut pin = PinManifestRecord::new(
                     current.pin_manifest,
-                    archive.commitment.root_cid.clone(),
+                    archive.commitment.root_cid,
                     archive.commitment.chunker.clone(),
                     *archive.commitment.chunk_plan_digest.as_bytes(),
                     *archive.commitment.por_root.as_bytes(),
@@ -277,7 +277,7 @@ fn world_with_three_ordered_musubi_archive_groups() -> (World, [ArchiveId; 3]) {
                     ReplicationOrderRecord {
                         order_id,
                         manifest_digest: current.pin_manifest,
-                        manifest_root_cid: archive.commitment.root_cid.clone(),
+                        manifest_root_cid: archive.commitment.root_cid,
                         musubi_archive: Some(archive.archive_id),
                         issued_by: archive.registered_by.clone(),
                         issued_epoch: 1,
@@ -648,26 +648,37 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
         _marker: PhantomData,
     };
     let budget = iroha_allocation::AllocationBudget::new(0);
+    let error = parse_world(
+        &budget,
+        SnapshotJsonMap::parse(&encoded, "world").unwrap(),
+        &seed,
+    )
+    .err()
+    .expect("zero original capacity cannot restore a valid World");
+    let StateRestoreError::Parameters(parameter_cell::ParameterCellRestoreError::Initialization(
+        mv::cell::CellInitializationError::Admission(refusal),
+    )) = error
+    else {
+        panic!("first parameter Cell must preserve its original admission refusal: {error:?}");
+    };
     assert!(matches!(
-        parse_world(
-            &budget,
-            SnapshotJsonMap::parse(&encoded, "world").unwrap(),
-            &seed
-        ),
-        Err(StateRestoreError::Admission(
-            crate::state::StateAdmissionError::Storage(
-                crate::state::StateStorageAdmissionError::World(
-                    mv::storage::AdmittedStorageError::Allocation(
-                        iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-                    )
-                )
-            )
-        ))
+        refusal,
+        iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
     ));
+    assert_eq!(
+        refusal,
+        budget
+            .try_reserve_layouts(mv::cell::CellInitialization::<
+                crate::pipeline_gas_policy::RetainedStateParameters,
+            >::allocation_layouts())
+            .err()
+            .expect("the same seven initial parameter Cell backings exceed this zero pool")
+    );
     assert_eq!(budget.reserved_bytes(), 0);
-    // Complete World rollback acquisition now precedes Musubi scratch. Check
-    // the original scratch refusal at that exact validator boundary as well;
-    // neither local resource refusal becomes malformed snapshot content.
+    // Zero total restore capacity now refuses parameter Cell admission before
+    // World rollback or Musubi scratch. Check the original scratch refusal at
+    // its exact validator boundary as well; neither local resource refusal
+    // becomes malformed snapshot content.
     let Err(StateRestoreError::ExecutionDeferred(refusal)) =
         validate_musubi_live_projections(&world, &budget)
     else {
@@ -684,13 +695,22 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
         )
     );
     assert_eq!(budget.reserved_bytes(), 0);
+    // Parameter admission precedes the later required fields. Fund the same
+    // original pool before asserting malformed content, so allocation refusal
+    // cannot legitimately stop decoding before the missing-field check.
+    budget.set_limit_bytes(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES);
     let mut malformed = SnapshotJsonMap::parse(&encoded, "world").unwrap();
     malformed.remove("account_aliases").unwrap();
     assert!(matches!(
         parse_world(&budget, malformed, &seed),
         Err(StateRestoreError::Serialization(_))
     ));
-    budget.set_limit_bytes(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES);
+    collect_musubi_restore_ebr_until(&budget, 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        0,
+        "malformed restore returns every original allocation"
+    );
     let restored = parse_world(
         &budget,
         SnapshotJsonMap::parse(&encoded, "world").unwrap(),
@@ -699,16 +719,22 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
     .unwrap();
     let (retired_generations, _) =
         crate::state::world_acquisition::original_world_funded_cell_bytes(&restored);
+    let parameter_graphs =
+        crate::state::initial_custody_test_support::retain_parameter_graphs(&restored);
     let retirement_pin = crossbeam_epoch::pin();
     drop(restored);
     retirement_pin.flush();
-    assert_eq!(
-        budget.reserved_bytes(),
-        retired_generations,
-        "every restored funded Cell retains its exact current and undo generations until epoch retirement",
-    );
+    let pinned_bytes = budget.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(retired_generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    collect_musubi_restore_ebr_until(&budget, 0);
+    collect_musubi_restore_ebr_until(&budget, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - budget.reserved_bytes(),
+        retired_generations,
+        "every restored funded Cell refunds its exact current and undo generations after epoch retirement",
+    );
+    drop(parameter_graphs);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

@@ -272,7 +272,7 @@ fn segments<R: DeepRelation>(
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
         let proof = ProducerPlan::new(&relation, producer_limits)?
-            .build(columns, &mut rand::rngs::OsRng)?;
+            .build(columns, &mut rand::rngs::SysRng)?;
         let length = proof.len();
         check(
             "max_proof_bytes",

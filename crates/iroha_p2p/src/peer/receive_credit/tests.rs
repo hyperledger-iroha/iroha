@@ -3,7 +3,7 @@
 use super::*;
 use crate::network::admission_class_tests::AdmissionFixture as Fixture;
 use iroha_crypto::{Algorithm, KeyPair, encryption::ChaCha20Poly1305};
-use iroha_data_model::peer::Peer;
+use iroha_model_base::peer::Peer;
 use stream::CreditStream;
 
 type Cipher = ChaCha20Poly1305;

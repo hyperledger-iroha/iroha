@@ -19,7 +19,7 @@ use crate::secret::SecretPolynomial;
 use ff::{Field, PrimeField};
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 use rayon::prelude::*;
 
 use super::{ProverError, batch::invert_column_cancellable, random_values, write_point};
@@ -87,7 +87,7 @@ pub(super) fn commit<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let shape = protocol.shape();
     let n = shape.n;
@@ -151,8 +151,7 @@ where
                 for column in &values {
                     let mut delta_omega = column_delta * start_power;
                     for (offset, value) in out.iter_mut().enumerate() {
-                        *value *=
-                            crate::norm_factor(column[start + offset] + delta_omega + gamma);
+                        *value *= crate::norm_factor(column[start + offset] + delta_omega + gamma);
                         delta_omega *= omega;
                     }
                     column_delta *= <C::ScalarExt as PrimeField>::DELTA;

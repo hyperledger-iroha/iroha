@@ -107,7 +107,7 @@ fn fixture(apple: bool) -> VerifierRequestV1 {
     };
     let payment = p256::ecdsa::SigningKey::from_slice(&[17; 32]).unwrap();
     let payment = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        payment.verifying_key().to_encoded_point(false).as_bytes(),
+        payment.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .unwrap();
     let evidence = if apple {
@@ -151,7 +151,7 @@ fn scheme() -> KagemushaWalletSchemeV1 {
         version: 1,
         network_id: *Hash::new(b"private worker vector DATA").as_ref(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            root.verifying_key().to_encoded_point(false).as_bytes(),
+            root.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [19; 32],
@@ -275,7 +275,7 @@ fn projection(request: &VerifierRequestV1) -> Value {
 }
 fn framed(value: &Value) -> Vec<u8> {
     let bytes = json::to_vec(value).unwrap();
-    let mut frame = (bytes.len() as u32).to_le_bytes().to_vec();
+    let mut frame = u32::try_from(bytes.len()).unwrap().to_le_bytes().to_vec();
     frame.extend(bytes);
     frame
 }
@@ -283,7 +283,7 @@ fn reply_with(
     configuration: [u8; 32],
     exchange: &VerifierExchangeV1,
     outcome: &str,
-    evidence: Value,
+    evidence: &Value,
 ) -> Value {
     let packet = decode(&exchange.frame()[4..], MAX_PACKET).unwrap();
     norito::json!({
@@ -293,10 +293,10 @@ fn reply_with(
         "outcome": (outcome), "evidence_base64": (evidence), "refusal_code": (Value::Null),
     })
 }
-fn reply(exchange: &VerifierExchangeV1, outcome: &str, evidence: Value) -> Value {
+fn reply(exchange: &VerifierExchangeV1, outcome: &str, evidence: &Value) -> Value {
     reply_with([7; 32], exchange, outcome, evidence)
 }
-fn response(request: &VerifierRequestV1, outcome: &str, evidence: Value) -> Value {
+fn response(request: &VerifierRequestV1, outcome: &str, evidence: &Value) -> Value {
     reply(&exchange(request, [9; 32]), outcome, evidence)
 }
 
@@ -394,7 +394,7 @@ fn worker_originals_rederive_digest_and_keep_exact_private_result() {
         let value = response(
             &request,
             "evidence",
-            Value::from(STANDARD.encode(&original)),
+            &Value::from(STANDARD.encode(&original)),
         );
         let OutcomeV1::Evidence(result) = request
             .response(&exchange(&request, [9; 32]), &framed(&value))
@@ -481,7 +481,7 @@ fn projection_rejects_foreign_identity_time_kind_facts_and_originals() {
 fn uncertain_and_unavailable_outcomes_never_become_evidence() {
     let request = fixture(false);
     for outcome in ["outcome_unknown", "unavailable"] {
-        let value = response(&request, outcome, Value::Null);
+        let value = response(&request, outcome, &Value::Null);
         let result = request
             .response(&exchange(&request, [9; 32]), &framed(&value))
             .unwrap();
@@ -530,12 +530,12 @@ fn uncertain_and_unavailable_outcomes_never_become_evidence() {
             request
                 .response(
                     &exchange(&request, [9; 32]),
-                    &framed(&response(&request, outcome, Value::Null))
+                    &framed(&response(&request, outcome, &Value::Null))
                 )
                 .is_err()
         );
     }
-    let mut missing = response(&request, "unavailable", Value::Null);
+    let mut missing = response(&request, "unavailable", &Value::Null);
     missing.as_object_mut().unwrap().remove("refusal_code");
     assert!(
         request
@@ -549,7 +549,7 @@ fn refusals_carry_exactly_one_closed_platform_code_for_the_configured_platform()
     for apple in [false, true] {
         let request = fixture(apple);
         for reason in KagemushaWalletEnrollmentRefusalV1::ALL {
-            let mut value = response(&request, "refused", Value::Null);
+            let mut value = response(&request, "refused", &Value::Null);
             change(&mut value, "refusal_code", Value::from(reason.code()));
             let result = request.response(&exchange(&request, [9; 32]), &framed(&value));
             if !reason.is_eligibility() && reason.applies_to(!apple) {
@@ -569,7 +569,7 @@ fn refusals_carry_exactly_one_closed_platform_code_for_the_configured_platform()
             Value::from(13_u16),
             Value::from(-1),
         ] {
-            let mut value = response(&request, "refused", Value::Null);
+            let mut value = response(&request, "refused", &Value::Null);
             change(&mut value, "refusal_code", code.clone());
             assert!(
                 request
@@ -578,7 +578,7 @@ fn refusals_carry_exactly_one_closed_platform_code_for_the_configured_platform()
                 "{code:?}"
             );
         }
-        let mut with_evidence = response(&request, "refused", Value::from(STANDARD.encode(b"x")));
+        let mut with_evidence = response(&request, "refused", &Value::from(STANDARD.encode(b"x")));
         change(&mut with_evidence, "refusal_code", Value::from(9_u16));
         assert!(
             request
@@ -590,7 +590,7 @@ fn refusals_carry_exactly_one_closed_platform_code_for_the_configured_platform()
         let mut evidence = response(
             &request,
             "evidence",
-            Value::from(STANDARD.encode(&original)),
+            &Value::from(STANDARD.encode(&original)),
         );
         change(&mut evidence, "refusal_code", Value::from(9_u16));
         assert!(
@@ -709,7 +709,7 @@ fn private_decode_rejects_duplicate_fields_bad_numbers_and_noncanonical_binary()
     assert!(binary("Zm9v", 1).is_err());
     assert!(digest(&norito::json!({"x": ("AA".repeat(32))}), "x").is_err());
     let request = fixture(false);
-    let frame = framed(&response(&request, "unavailable", Value::Null));
+    let frame = framed(&response(&request, "unavailable", &Value::Null));
     assert!(
         request
             .packet(

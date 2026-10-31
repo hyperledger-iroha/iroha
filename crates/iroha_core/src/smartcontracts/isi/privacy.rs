@@ -4,37 +4,27 @@
 //! Proof admission is added only through the exhaustive native verifier
 //! boundary; there is deliberately no generic or opaque fallback verifier.
 //!
-//! `SubmitPrivacyProofV1` is the one instruction of every Exact12 role and its
-//! handler is the one state executor. The handler resolves the single role of
-//! the envelope once, loads trusted state for that role, calls the single
-//! verifier dispatch and applies exactly the effect sealed for that role.
+//! X.509 uses the proof-free `SubmitPrivacyZkX509CertificateV1` and its original
+//! signed proof occurrence. Other Exact12 roles use `SubmitPrivacyProofV1`.
+//! Each role has one State/effect owner: authenticated inputs enter the shared
+//! native verifier boundary before its sealed effect is applied atomically.
 use super::Execute;
 #[cfg(test)]
 use crate::privacy_verifier::VerifiedProofManagedPoolLedgerEffectTestPartsV1;
 use crate::{
-    privacy::{validate_privacy_lifecycle_transition_v1, validate_privacy_registration_v1},
     privacy_engines::{
-        anonymous_pgc::{
-            AnonymousPgcParametersV1, TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
-            bootstrap::{
-                AnonymousPgcBootstrapStatementV1, MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-                verify_bootstrap_encoded,
-            },
-        },
-        p256::{CompressedPointV1, TranscriptBindingV1},
-        proof_managed_pool_initial_root_v1,
-        zk_ams::zk_ams_registry_transition_root_v1,
+        anonymous_pgc::bootstrap::MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, p256::CompressedPointV1,
+        proof_managed_pool_initial_root_v1, zk_ams::zk_ams_registry_transition_root_v1,
     },
-    privacy_profiles::validate_compiled_privacy_activation_v1,
     privacy_state::{
-        PrivacyActivationKeyV1, PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1,
-        PrivacyOrchardPoolStateV1, PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1,
-        PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
+        PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1, PrivacyOrchardPoolStateV1,
+        PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1,
+        PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
         PrivacyProofManagedAccumulatorStateV1, PrivacyProofManagedPoolAccumulatorStateV1,
         PrivacyProofManagedPoolSnapshotV1, PrivacyPublicReserveOwnerV1, PrivacyRootHeadKeyV1,
         PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
         PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1, PrivacyVegaIssuerRegistryFactsV1,
-        compute_privacy_pgc_account_state_root_v1, load_privacy_bootle_lantern_issuer_policy_v1,
+        derive_privacy_pgc_account_state_root_v1, load_privacy_bootle_lantern_issuer_policy_v1,
         load_privacy_orchard_pool_snapshot_v1, load_privacy_pgc_pool_snapshot_v1,
         load_privacy_proof_managed_pool_snapshot_v1, load_privacy_vega_issuer_v1,
         load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
@@ -44,8 +34,7 @@ use crate::{
         privacy_vega_issuer_record_count_v1, privacy_vega_issuer_registry_facts_v1,
         privacy_zk_ace_policy_count_v1, privacy_zk_x509_ca_namespace_v1,
         privacy_zk_x509_crl_lineage_count_v1, privacy_zk_x509_governance_record_counts_v1,
-        proof_managed_pool_root_role_v1, resolve_qualified_privacy_activation_v1,
-        validate_privacy_exact12_qualification_registration_v1,
+        proof_managed_pool_root_role_v1, resolve_admitted_privacy_protocol_v1,
         validate_privacy_zk_x509_policy_revocation_dependencies_v1,
         validate_privacy_zk_x509_trust_anchor_revocation_dependencies_v1,
         validate_privacy_zk_x509_trust_anchor_root_state_v1,
@@ -64,6 +53,7 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
+use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
 use iroha_data_model::{
     asset::AssetId,
     isi::{
@@ -72,7 +62,6 @@ use iroha_data_model::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
             PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
-            RegisterPrivacyExact12QualificationV1, RegisterPrivacyProtocolActivationV1,
             RegisterPrivacyVegaIssuerV1, RegisterPrivacyZkAcePolicyV1,
             RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
             RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
@@ -81,9 +70,8 @@ use iroha_data_model::{
             RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyBootleLanternIssuerPolicyV1,
             RotatePrivacyVegaIssuerV1, RotatePrivacyZkAcePolicyV1,
             RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
-            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyUpdateV1,
+            SchedulePrivacyProtocolLimitsUpdateV1, SubmitPrivacyProofV1,
         },
     },
     permission::Permission,
@@ -93,14 +81,15 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
         IrohaIvmPrivateNoteStarkStatementV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
         PqMaspStarkStatementV1, PrivacyActionRoleV1, PrivacyCommitmentV1,
-        PrivacyConsensusPolicyTighteningV1, PrivacyFcmpInputPublicV1, PrivacyFcmpOutputTupleV1,
-        PrivacyFcmpTreeRootV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProofEnvelopeV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusPolicyUpdateV1, PrivacyFcmpInputPublicV1,
+        PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+        PrivacyProofEnvelopeV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, PrivacyRootManagementV1,
+        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509PresentationBoundsV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
         ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
         ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
@@ -149,11 +138,50 @@ fn role_statement_invariant_v1(role: PrivacyActionRoleV1) -> Error {
         format!("resolved action role {role} disagrees with its typed statement").into(),
     )
 }
-fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
+fn privacy_verification_error(
+    error: PrivacyVerificationErrorV1,
+) -> crate::execution_attempt::ExecutionAttemptError<Error> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let error = match error {
+        PrivacyVerificationErrorV1::AttachedZkX509(source) => {
+            if let iroha_data_model::isi::privacy::PrivacyZkX509RequestErrorV1::Attachment(
+                iroha_data_model::transaction::signed_attachments::SignedAttachmentErrorV1::LocalResource(original),
+            ) = source.as_ref() {
+                return ExecutionAttemptError::Deferred(original.clone().into());
+            }
+            PrivacyVerificationErrorV1::AttachedZkX509(source)
+        }
+        PrivacyVerificationErrorV1::AnonymousPgcRoot { code, source } => {
+            return pgc_root_attempt_error(source, |source| {
+                Error::InvariantViolation(
+                    format!("trusted Anonymous PGC root derivation {code:?}: {source}").into(),
+                )
+            });
+        }
+        PrivacyVerificationErrorV1::NativeAnonymousPgc(source) => {
+            use crate::privacy_engines::anonymous_pgc::AnonymousPgcReadError;
+            return match *source {
+                AnonymousPgcReadError::Codec(original) => {
+                    crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
+                        invalid_privacy_parameter(format!(
+                            "privacy PGC payment canonical decoding failed: {error}"
+                        ))
+                    })
+                }
+                AnonymousPgcReadError::Relation(original) => {
+                    ExecutionAttemptError::Rejected(invalid_privacy_parameter(format!(
+                        "privacy PGC payment verification failed: {original}"
+                    )))
+                }
+            };
+        }
+        original => original,
+    };
     let message = format!("privacy proof admission rejected: {error}");
-    let invariant = match &error {
-        PrivacyVerificationErrorV1::CompiledActivation(_)
-        | PrivacyVerificationErrorV1::CanonicalEncoding(_) => true,
+    let invariant = match error {
+        PrivacyVerificationErrorV1::CompiledProfile(_)
+        | PrivacyVerificationErrorV1::CanonicalEncoding(_)
+        | PrivacyVerificationErrorV1::AnonymousPgcRoot { .. } => true,
         PrivacyVerificationErrorV1::Context(detail) => {
             detail.code == PrivacyVerificationContextFailureCodeV1::ZeroGenesisHash
         }
@@ -208,6 +236,7 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         PrivacyVerificationErrorV1::EffectRoleMismatch(_) => true,
         PrivacyVerificationErrorV1::UnsupportedOperation(_)
         | PrivacyVerificationErrorV1::Envelope(_)
+        | PrivacyVerificationErrorV1::AttachedZkX509(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
@@ -222,17 +251,18 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         #[cfg(feature = "zk-stark")]
         PrivacyVerificationErrorV1::NativeZkAce(_) => false,
     };
-    if invariant {
+    ExecutionAttemptError::Rejected(if invariant {
         Error::InvariantViolation(message.into())
     } else {
         invalid_privacy_parameter(message)
-    }
+    })
 }
 type PreparedProofManagedNoteApplyV1 = (
     Vec<PrivacyNullifierKeyV1>,
     Vec<(PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1)>,
     PrivacyProofManagedPoolAccumulatorStateV1,
 );
+#[derive(Clone, Copy)]
 struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     effect: &'a VerifiedProofManagedPoolLedgerEffectV1,
     snapshot: &'a PrivacyProofManagedPoolSnapshotV1,
@@ -241,6 +271,7 @@ struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     expected_action_index: u32,
     state_transaction: &'a StateTransaction<'block, 'state>,
 }
+#[derive(Clone, Copy)]
 enum TypedProofManagedNoteApplyV1<'a> {
     IvmPrivateNote {
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
@@ -424,73 +455,8 @@ fn prepare_proof_managed_note_apply_v1(
         PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(expected_successor),
     ))
 }
-impl Execute for RegisterPrivacyProtocolActivationV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
-        let current_height = state_transaction._curr_block.height().get();
-        let key = PrivacyActivationKeyV1::new(self.activation.protocol_id);
-        validate_privacy_registration_v1(
-            &state_transaction
-                .world
-                .privacy_consensus_policy
-                .get()
-                .current_limits,
-            state_transaction.world.privacy_activations.get(&key),
-            &self.activation,
-            current_height,
-        )
-        .map_err(|error| {
-            invalid_privacy_parameter(format!("privacy activation registration rejected: {error}"))
-        })?;
-        state_transaction
-            .world
-            .privacy_activations
-            .insert(key, self.activation);
-        Ok(())
-    }
-}
-impl Execute for RegisterPrivacyExact12QualificationV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
-        if state_transaction
-            .world
-            .privacy_exact12_qualification
-            .get()
-            .is_some()
-        {
-            return Err(invalid_privacy_parameter(
-                "privacy Exact12 qualification is immutable and already registered",
-            ));
-        }
-        validate_privacy_exact12_qualification_registration_v1(
-            &self.qualification,
-            &state_transaction.chain_id,
-            state_transaction.network_id,
-            state_transaction.block_height(),
-            &state_transaction.world.privacy_activations,
-            state_transaction.commit_topology.get(),
-        )
-        .map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "privacy Exact12 qualification registration rejected: {error}"
-            ))
-        })?;
-        *state_transaction
-            .world
-            .privacy_exact12_qualification
-            .get_mut() = Some(self.qualification);
-        Ok(())
-    }
-}
-impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
+
+impl Execute for SchedulePrivacyConsensusPolicyUpdateV1 {
     fn execute(
         self,
         authority: &AccountId,
@@ -504,12 +470,80 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
                 format!("persisted privacy consensus policy is invalid: {error}").into(),
             )
         })?;
-        if current.pending_tightening.is_some() {
+        if current.pending_update.is_some() {
             return Err(invalid_privacy_parameter(
-                "privacy consensus policy already has a pending tightening",
+                "privacy consensus policy already has a pending update",
             ));
         }
-        let pending = PrivacyConsensusPolicyTighteningV1 {
+        let pending = PrivacyConsensusPolicyUpdateV1 {
+            // SPEC: §13.4 HC497 records an ordinary update at the genesis schedule height.
+            scheduled_at_height: if cfg!(all(test, sumeragi_core_mutation = "HC497")) {
+                1
+            } else {
+                incoming_height
+            },
+            effective_at_height: self.effective_at_height,
+            next_limits: self.next_limits,
+        };
+        pending
+            .validate_against(&current.current_limits)
+            .map_err(|error| {
+                invalid_privacy_parameter(format!(
+                    "privacy consensus policy update rejected: {error}"
+                ))
+            })?;
+        validate_unanchored_privacy_root_retention_v1(
+            &state_transaction.world.privacy_roots,
+            self.next_limits.retained_root_count,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("privacy consensus policy update rejected: {error}"))
+        })?;
+        *state_transaction.world.privacy_consensus_policy.get_mut() =
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                current_limits: current.current_limits,
+                pending_update: Some(pending),
+            };
+        Ok(())
+    }
+}
+impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let incoming_height = state_transaction.block_height();
+        let key = PrivacyProtocolPolicyKeyV1::new(self.protocol_id);
+        let current = state_transaction
+            .world
+            .privacy_protocol_policies
+            .get(&key)
+            .copied()
+            .unwrap_or(PrivacyProtocolPolicyV1 {
+                protocol_id: self.protocol_id,
+                current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(self.protocol_id),
+                pending_update: None,
+            });
+        if current.protocol_id != self.protocol_id {
+            return Err(Error::InvariantViolation(
+                "privacy policy key and protocol differ".into(),
+            ));
+        }
+        current
+            .validate_at_committed_height(incoming_height)
+            .map_err(|error| {
+                Error::InvariantViolation(
+                    format!("persisted privacy policy is invalid: {error}").into(),
+                )
+            })?;
+        if current.pending_update.is_some() {
+            return Err(invalid_privacy_parameter(
+                "privacy protocol already has a pending limit update",
+            ));
+        }
+        let pending = PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: incoming_height,
             effective_at_height: self.effective_at_height,
             next_limits: self.next_limits,
@@ -518,117 +552,103 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
             .validate_against(&current.current_limits)
             .map_err(|error| {
                 invalid_privacy_parameter(format!(
-                    "privacy consensus policy tightening rejected: {error}"
+                    "privacy protocol-limit update rejected: {error}"
                 ))
             })?;
-        validate_unanchored_privacy_root_retention_v1(
-            &state_transaction.world.privacy_roots,
-            self.next_limits.retained_root_count,
-        )
-        .map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "privacy consensus policy tightening rejected: {error}"
-            ))
-        })?;
-        *state_transaction.world.privacy_consensus_policy.get_mut() =
-            iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
-                current_limits: current.current_limits,
-                pending_tightening: Some(pending),
-            };
-        Ok(())
-    }
-}
-impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
-        let incoming_height = state_transaction.block_height();
-        let key = PrivacyActivationKeyV1::new(self.protocol_id);
-        let current = state_transaction
-            .world
-            .privacy_activations
-            .get(&key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter(format!(
-                    "privacy protocol {:?} is not registered",
-                    self.protocol_id
-                ))
-            })?;
-        current.validate().map_err(|error| {
-            Error::InvariantViolation(
-                format!("persisted privacy activation is invalid: {error}").into(),
-            )
-        })?;
-        if current.pending_protocol_limits_tightening.is_some() {
-            return Err(invalid_privacy_parameter(format!(
-                "privacy protocol {:?} already has a pending limit tightening",
-                self.protocol_id
-            )));
-        }
-        let pending = PrivacyProtocolLimitsTighteningV1 {
-            scheduled_at_height: incoming_height,
-            effective_at_height: self.effective_at_height,
-            next_limits: self.next_limits,
+        let next = PrivacyProtocolPolicyV1 {
+            pending_update: Some(pending),
+            ..current
         };
-        pending
-            .validate_against(&current.protocol_limits)
+        next.validate_at_committed_height(incoming_height)
             .map_err(|error| {
-                invalid_privacy_parameter(format!(
-                    "privacy protocol-limit tightening rejected: {error}"
-                ))
+                invalid_privacy_parameter(format!("privacy protocol policy rejected: {error}"))
             })?;
-        let mut executable_successor = current;
-        executable_successor.protocol_limits = self.next_limits;
-        executable_successor.pending_protocol_limits_tightening = None;
-        validate_compiled_privacy_activation_v1(&executable_successor).map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "privacy protocol-limit tightening is not executable: {error}"
-            ))
-        })?;
-        let mut next = current;
-        next.pending_protocol_limits_tightening = Some(pending);
+        // Capture the original admission horizon and exact closure target before
+        // publishing either the protocol row or its companion parameter.
+        if iroha_data_model::privacy::private_settlement_protocol_closes_v1(
+            &current.current_limits,
+            &pending.next_limits,
+        ) && (state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+            || state_transaction
+                .world
+                .private_settlement_staged_locks
+                .iter()
+                .next()
+                .is_some())
+        {
+            let mut extension = crate::private_settlement::policy::read(
+                state_transaction.world.parameters.get(),
+                Some(&current),
+                incoming_height,
+            )
+            .map_err(|error| {
+                state_transaction.world.attempt_error_to_instruction_error(
+                    error.map_rejection(invalid_privacy_parameter),
+                )
+            })?;
+            extension.protocol_closure_drain = Some(
+                iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1::capture(
+                    self.protocol_id,
+                    &pending,
+                    extension.current_limits.max_expiry_blocks,
+                )
+                .map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?,
+            );
+            extension
+                .validate_protocol_policy(Some(&next))
+                .map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?;
+            let parameter = iroha_data_model::parameter::Parameter::Custom(
+                extension.to_custom_parameter().map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::private_settlement::policy::attempt(error)
+                            .map_rejection(invalid_privacy_parameter),
+                    )
+                })?,
+            );
+            let prepared = state_transaction
+                .prepare_parameter_change(&parameter, None, None)
+                .map_err(|error| state_transaction.parameter_change_instruction_error(error))?;
+            state_transaction
+                .world
+                .install_parameter_change(prepared)
+                .map_err(|error| state_transaction.parameter_change_instruction_error(error))?;
+        }
         state_transaction
             .world
-            .privacy_activations
+            .privacy_protocol_policies
             .insert(key, next);
         Ok(())
     }
 }
-impl Execute for TransitionPrivacyProtocolLifecycleV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
-        let current_height = state_transaction._curr_block.height().get();
-        let key = PrivacyActivationKeyV1::new(self.protocol_id);
-        let current = state_transaction
-            .world
-            .privacy_activations
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                invalid_privacy_parameter(format!(
-                    "privacy protocol {:?} is not registered",
-                    self.protocol_id
-                ))
-            })?;
-        validate_privacy_lifecycle_transition_v1(&current, self.next_lifecycle, current_height)
-            .map_err(|error| {
-                invalid_privacy_parameter(format!("privacy lifecycle transition rejected: {error}"))
-            })?;
-        let mut next = current;
-        next.lifecycle = self.next_lifecycle;
-        state_transaction
-            .world
-            .privacy_activations
-            .insert(key, next);
-        Ok(())
+
+// Compute cardinality before changing either the root table or its authenticated head.
+fn planned_privacy_root_count_v1(
+    head: Option<&PrivacyRootHeadRecordV1>,
+    pruned_count: usize,
+) -> Result<u32, Error> {
+    match head {
+        Some(head) => head
+            .retained_count_after_append(pruned_count)
+            .map_err(invalid_privacy_parameter),
+        None if pruned_count == 0 => Ok(1),
+        None => Err(Error::InvariantViolation(
+            "root append prunes history without an authenticated head".into(),
+        )),
     }
 }
 impl Execute for PublishPrivacyRootV1 {
@@ -657,26 +677,12 @@ impl Execute for PublishPrivacyRootV1 {
             ));
         }
         let current_height = state_transaction._curr_block.height().get();
-        let activation_key = PrivacyActivationKeyV1::new(self.publication.namespace.protocol_id());
-        let activation = state_transaction
-            .world
-            .privacy_activations
-            .get(&activation_key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter(format!(
-                    "privacy protocol {:?} is not registered",
-                    self.publication.namespace.protocol_id()
-                ))
-            })?;
-        activation.validate().map_err(|error| {
-            invalid_privacy_parameter(format!("registered privacy activation is invalid: {error}"))
-        })?;
-        if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Retired(_)) {
-            return Err(invalid_privacy_parameter(
-                "cannot publish a root for a retired privacy protocol",
-            ));
-        }
+        let _admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
+            self.publication.namespace.protocol_id(),
+            state_transaction.block_height(),
+        )
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
         if self.publication.role.management() == PrivacyRootManagementV1::ProofManaged {
             return Err(invalid_privacy_parameter(
                 "proof-managed privacy roots require their protocol-specific typed bootstrap and cannot be published generically",
@@ -769,6 +775,7 @@ impl Execute for PublishPrivacyRootV1 {
             self.publication.root,
             provenance.clone(),
             retention_anchor,
+            planned_privacy_root_count_v1(current_head, removals.len())?,
         )
         .map_err(invalid_privacy_parameter)?;
         for key in removals {
@@ -804,35 +811,12 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             invalid_privacy_parameter(format!("Orchard pool bootstrap rejected: {error}"))
         })?;
         let current_height = state_transaction._curr_block.height().get();
-        let activation_key =
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-        let activation = state_transaction
-            .world
-            .privacy_activations
-            .get(&activation_key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter("Orchard privacy protocol is not registered")
-            })?;
-        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
-            Error::InvariantViolation(
-                format!("registered Orchard activation is not executable: {error}").into(),
-            )
-        })?;
-        activation.validate().map_err(|error| {
-            invalid_privacy_parameter(format!("registered Orchard activation is invalid: {error}"))
-        })?;
-        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
-            return Err(invalid_privacy_parameter(
-                "cannot bootstrap a pool before Orchard is active",
-            ));
-        };
-        if current_height < active.state_since_height {
-            return Err(invalid_privacy_parameter(format!(
-                "Orchard activation is not effective until block {}",
-                active.state_since_height
-            )));
-        }
+        let _admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            state_transaction.block_height(),
+        )
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
         super::asset::isi::validate_committed_public_balance_scope(
             state_transaction,
             &self.bootstrap.asset_definition_id,
@@ -927,6 +911,7 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             pool_state.root(),
             root_provenance.clone(),
             None,
+            1,
         )
         .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
@@ -998,41 +983,12 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             ));
         }
         let current_height = state_transaction._curr_block.height().get();
-        let activation_key = PrivacyActivationKeyV1::new(protocol_id);
-        let activation = state_transaction
-            .world
-            .privacy_activations
-            .get(&activation_key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter(format!(
-                    "proof-managed privacy protocol {protocol_id:?} is not registered"
-                ))
-            })?;
-        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
-            Error::InvariantViolation(
-                format!(
-                    "registered proof-managed activation {protocol_id:?} is not executable: {error}"
-                )
-                .into(),
-            )
-        })?;
-        activation.validate().map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "registered proof-managed activation {protocol_id:?} is invalid: {error}"
-            ))
-        })?;
-        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
-            return Err(invalid_privacy_parameter(format!(
-                "cannot bootstrap a pool before {protocol_id:?} is active"
-            )));
-        };
-        if current_height < active.state_since_height {
-            return Err(invalid_privacy_parameter(format!(
-                "{protocol_id:?} activation is not effective until block {}",
-                active.state_since_height
-            )));
-        }
+        let _admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
+            protocol_id,
+            state_transaction.block_height(),
+        )
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
         state_transaction
             .world
             .asset_definition(self.bootstrap.asset_definition_id())
@@ -1161,9 +1117,9 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             || {
                 self.bootstrap
                     .initial_note_commitments()
-                    .map_or(0, |values| values.len())
+                    .map_or(0, <[iroha_data_model::privacy::PrivacyCommitmentV1]>::len)
             },
-            |values| values.len(),
+            <[iroha_data_model::privacy::PrivacyFcmpOutputTupleV1]>::len,
         );
         let mut output_records = Vec::new();
         output_records
@@ -1245,6 +1201,7 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             initial_root,
             root_provenance.clone(),
             None,
+            1,
         )
         .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
@@ -1323,34 +1280,12 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
         )?;
         let current_height = state_transaction._curr_block.height().get();
         let namespace = self.bootstrap.namespace();
-        let activation_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaZkAmsV1);
-        let activation = state_transaction
-            .world
-            .privacy_activations
-            .get(&activation_key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter("ZK-AMS privacy protocol is not registered")
-            })?;
-        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
-            Error::InvariantViolation(
-                format!("registered ZK-AMS activation is not executable: {error}").into(),
-            )
-        })?;
-        activation.validate().map_err(|error| {
-            invalid_privacy_parameter(format!("registered ZK-AMS activation is invalid: {error}"))
-        })?;
-        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
-            return Err(invalid_privacy_parameter(
-                "cannot bootstrap a registry before ZK-AMS is active",
-            ));
-        };
-        if current_height < active.state_since_height {
-            return Err(invalid_privacy_parameter(format!(
-                "ZK-AMS activation is not effective until block {}",
-                active.state_since_height
-            )));
-        }
+        let _admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
+            PrivacyProtocolIdV1::IrohaZkAmsV1,
+            state_transaction.block_height(),
+        )
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
         let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
             .map_err(invalid_privacy_parameter)?;
         if state_transaction
@@ -1434,6 +1369,7 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
             self.bootstrap.initial_registry_root,
             root_provenance.clone(),
             None,
+            1,
         )
         .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
@@ -1443,8 +1379,7 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
                 .world
                 .privacy_consensus_policy
                 .get()
-                .current_limits
-                .retained_root_count,
+                .admission_retained_root_count(),
         )
         .map_err(|error| {
             invalid_privacy_parameter(format!("ZK-AMS registry bootstrap root rejected: {error}"))
@@ -1473,308 +1408,316 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
 impl Execute for BootstrapPrivacyPgcAccountsV1 {
     fn execute(
         self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
+        _authority: &AccountId,
+        _state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
-        let encoded_action_bytes = norito::canonical_frame_len(&self)
-            .ok()
-            .and_then(|length| u64::try_from(length).ok())
-            .ok_or_else(|| {
-                Error::InvariantViolation("privacy PGC bootstrap canonical encoding failed".into())
-            })?;
-        let expected_action_index = state_transaction.next_privacy_action_index();
-        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        self.bootstrap.validate().map_err(|error| {
-            invalid_privacy_parameter(format!("privacy PGC account bootstrap rejected: {error}"))
-        })?;
-        self.proof.validate().map_err(|error| {
-            invalid_privacy_parameter(format!("privacy PGC bootstrap proof rejected: {error}"))
-        })?;
-        let native_proof_cap = u32::try_from(MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1).map_err(|_| {
-            Error::InvariantViolation(
-                "native PGC bootstrap proof cap cannot be represented by consensus".into(),
-            )
-        })?;
-        if native_proof_cap != TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1 {
-            return Err(Error::InvariantViolation(
-                "native and data-model PGC bootstrap proof caps differ".into(),
-            ));
+        Err(invalid_privacy_parameter(
+            "PGC bootstrap requires its original signed invocation context",
+        ))
+    }
+}
+fn pgc_root_attempt_error(
+    error: crate::privacy_state::PrivacyPgcAccountStateRootErrorV1,
+    rejected: impl FnOnce(crate::privacy_state::PrivacyPgcAccountStateRootErrorV1) -> Error,
+) -> crate::execution_attempt::ExecutionAttemptError<Error> {
+    use crate::execution_attempt::{ExecutionAttemptError, canonical_decode_attempt_error};
+    use crate::privacy_state::PrivacyPgcAccountStateRootErrorV1;
+    match error {
+        PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(original) => {
+            canonical_decode_attempt_error(original, |original| {
+                rejected(PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(
+                    original,
+                ))
+            })
         }
-        let current_height = state_transaction._curr_block.height().get();
-        let activation_key = PrivacyActivationKeyV1::new(self.bootstrap.namespace.protocol_id());
-        let activation = state_transaction
-            .world
-            .privacy_activations
-            .get(&activation_key)
-            .copied()
-            .ok_or_else(|| {
-                invalid_privacy_parameter("Anonymous PGC privacy protocol is not registered")
-            })?;
-        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
-            Error::InvariantViolation(
-                format!("registered Anonymous PGC activation is not executable: {error}").into(),
-            )
-        })?;
-        activation.validate().map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "registered Anonymous PGC activation is invalid: {error}"
+        original => ExecutionAttemptError::Rejected(rejected(original)),
+    }
+}
+fn pgc_account_root_error(
+    state: &mut StateTransaction<'_, '_>,
+    error: crate::privacy_state::PrivacyPgcAccountStateRootErrorV1,
+) -> Error {
+    let attempt = pgc_root_attempt_error(error, |error| {
+        invalid_privacy_parameter(format!("privacy PGC account-state root rejected: {error}"))
+    });
+    state.attempt_error_to_instruction_error(attempt)
+}
+fn privacy_state_validation_error(
+    error: crate::privacy_state::PrivacyStateValidationErrorV1,
+) -> crate::execution_attempt::ExecutionAttemptError<Error> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::privacy_state::PrivacyStateValidationErrorV1;
+    match error {
+        PrivacyStateValidationErrorV1::PgcAccountRoot(original) => {
+            pgc_root_attempt_error(original, |original| {
+                Error::InvariantViolation(
+                    format!("trusted Anonymous PGC pool state failed validation: {original}")
+                        .into(),
+                )
+            })
+        }
+        PrivacyStateValidationErrorV1::Invalid(message) => {
+            ExecutionAttemptError::Rejected(Error::InvariantViolation(
+                format!("trusted Anonymous PGC pool state failed validation: {message}").into(),
             ))
-        })?;
-        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
-            return Err(invalid_privacy_parameter(
-                "cannot bootstrap accounts before the Anonymous PGC protocol is active",
-            ));
-        };
-        if current_height < active.state_since_height {
-            return Err(invalid_privacy_parameter(format!(
-                "Anonymous PGC activation is not effective until block {}",
-                active.state_since_height
-            )));
         }
-        let head_key =
-            PrivacyRootHeadKeyV1::new(self.bootstrap.namespace, PrivacyRootRoleV1::PgcAccountState)
-                .map_err(invalid_privacy_parameter)?;
-        let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(self.bootstrap.namespace)
+    }
+}
+fn pgc_attachment_error(
+    state: &mut StateTransaction<'_, '_>,
+    error: crate::executor::attachment_custody::pgc_bootstrap::BootstrapError,
+) -> Error {
+    use crate::execution_attempt::{ExecutionAttemptError, canonical_decode_attempt_error};
+    use crate::executor::attachment_custody::{CustodyError, pgc_bootstrap::BootstrapError};
+    let attempt = match error {
+        BootstrapError::Root(original) => return pgc_account_root_error(state, original),
+        BootstrapError::Custody(CustodyError::Declaration(
+            iroha_data_model::transaction::signed_attachments::SignedAttachmentErrorV1::LocalResource(original),
+        )) => ExecutionAttemptError::Deferred(original.into()),
+        BootstrapError::Custody(CustodyError::Signature(
+            iroha_data_model::transaction::signed::TransactionSignatureError::UnsupportedImplementation(original),
+        )) => ExecutionAttemptError::Deferred(ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original).into()),
+        BootstrapError::NativeRead(crate::privacy_engines::anonymous_pgc::AnonymousPgcReadError::Codec(original)) => canonical_decode_attempt_error(original, |error| invalid_privacy_parameter(format!("privacy PGC bootstrap proof verification failed: original canonical decoding: {error}"))),
+        BootstrapError::Encoding(original) => canonical_decode_attempt_error(original, |error| invalid_privacy_parameter(format!("privacy PGC canonical encoding failed: {error}"))),
+        original => ExecutionAttemptError::Rejected(invalid_privacy_parameter(format!("privacy PGC bootstrap proof verification failed: {original}"))),
+    };
+    state.attempt_error_to_instruction_error(attempt)
+}
+/// Apply a governed PGC bootstrap through its original signed attachment owner.
+/// All permission, current-State and budget checks remain in this single handler.
+/// A detached instruction or a guest reference alone cannot invoke this route.
+pub(crate) fn execute_pgc_bootstrap(
+    instruction: &BootstrapPrivacyPgcAccountsV1,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    invocation: &mut crate::executor::attachment_custody::Invocation<'_, '_>,
+) -> Result<(), Error> {
+    ensure_privacy_governance(authority, state_transaction)?;
+    let encoded_action_bytes =
+        norito::core::classify_decode_attempt(|| norito::canonical_frame_len(instruction))
+            .map_err(|original| {
+                state_transaction.attempt_error_to_instruction_error(
+                    crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
+                        Error::InvariantViolation(
+                            format!("privacy PGC bootstrap canonical encoding failed: {error}")
+                                .into(),
+                        )
+                    }),
+                )
+            })?;
+    let encoded_action_bytes = u64::try_from(encoded_action_bytes)
+        .map_err(|_| invalid_privacy_parameter("PGC request byte length exceeds u64"))?;
+    let (proof_handle, proof_bytes) = invocation
+        .open_pgc_bootstrap(instruction)
+        .map_err(|error| pgc_attachment_error(state_transaction, error))?;
+    let encoded_action_bytes = encoded_action_bytes
+        .checked_add(proof_bytes)
+        .ok_or_else(|| {
+            invalid_privacy_parameter("PGC request and original proof byte length overflow")
+        })?;
+    // The resource counter is separate from the signed global action ordinal.
+    let expected_action_index = state_transaction.next_privacy_action_index();
+    state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+    instruction.bootstrap.validate().map_err(|error| {
+        invalid_privacy_parameter(format!("privacy PGC account bootstrap rejected: {error}"))
+    })?;
+    let native_proof_cap = u32::try_from(MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1).map_err(|_| {
+        Error::InvariantViolation(
+            "native PGC bootstrap proof cap cannot be represented by consensus".into(),
+        )
+    })?;
+    if native_proof_cap != TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1 {
+        return Err(Error::InvariantViolation(
+            "native and data-model PGC bootstrap proof caps differ".into(),
+        ));
+    }
+    let current_height = state_transaction._curr_block.height().get();
+    let admitted = resolve_admitted_privacy_protocol_v1(
+        &state_transaction.world.privacy_protocol_policies,
+        instruction.bootstrap.namespace.protocol_id(),
+        state_transaction.block_height(),
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    let head_key = PrivacyRootHeadKeyV1::new(
+        instruction.bootstrap.namespace,
+        PrivacyRootRoleV1::PgcAccountState,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(instruction.bootstrap.namespace)
+        .map_err(invalid_privacy_parameter)?;
+    if state_transaction
+        .world
+        .privacy_root_heads
+        .get(&head_key)
+        .is_some()
+    {
+        return Err(invalid_privacy_parameter(
+            "Anonymous PGC account state is already initialized",
+        ));
+    }
+    if state_transaction
+        .world
+        .privacy_pgc_pool_invariants
+        .get(&invariant_key)
+        .is_some()
+    {
+        return Err(Error::InvariantViolation(
+            "Anonymous PGC pool invariant exists without a current head".into(),
+        ));
+    }
+    if state_transaction
+        .world
+        .privacy_roots
+        .range(PrivacyRootKeyV1::history_range(
+            instruction.bootstrap.namespace,
+            PrivacyRootRoleV1::PgcAccountState,
+        ))
+        .next()
+        .is_some()
+    {
+        return Err(Error::InvariantViolation(
+            "Anonymous PGC root history exists without a current head".into(),
+        ));
+    }
+    if state_transaction
+        .world
+        .privacy_pgc_accounts
+        .range(PrivacyPgcAccountKeyV1::pool_range(
+            instruction.bootstrap.namespace,
+        ))
+        .next()
+        .is_some()
+    {
+        return Err(Error::InvariantViolation(
+            "Anonymous PGC accounts exist without a current head".into(),
+        ));
+    }
+    let computed_root = crate::privacy_state::derive_privacy_pgc_account_state_root_v1(
+        instruction.bootstrap.namespace,
+        instruction.bootstrap.initial_epoch,
+        instruction.bootstrap.total_supply,
+        &instruction.bootstrap.accounts,
+    )
+    .map_err(|error| pgc_account_root_error(state_transaction, error))?;
+    if computed_root != instruction.bootstrap.initial_root {
+        return Err(invalid_privacy_parameter(
+            "privacy PGC bootstrap root does not match the canonical account table",
+        ));
+    }
+    let bootstrap_digest = norito::core::classify_decode_attempt(|| instruction.bootstrap.digest())
+        .map_err(|original| {
+            state_transaction.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
+                    Error::InvariantViolation(
+                        format!("privacy PGC bootstrap canonical encoding failed: {error}").into(),
+                    )
+                }),
+            )
+        })?;
+    let genesis_hash = state_transaction
+        .block_hashes()
+        .first()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                "privacy PGC bootstrap requires a committed genesis block".into(),
+            )
+        })?;
+    let bootstrap_proof_digest = invocation
+        .consume_pgc_bootstrap(
+            instruction.proof_ref.action_index,
+            &instruction.bootstrap,
+            proof_handle,
+            crate::executor::attachment_custody::pgc_bootstrap::BootstrapContext {
+                network_id: &state_transaction.network_id,
+                genesis_hash,
+                profile: admitted.profile(),
+            },
+        )
+        .map_err(|error| pgc_attachment_error(state_transaction, error))?;
+    let pool_invariant = PrivacyPgcPoolInvariantV1::new(
+        instruction.bootstrap.total_supply,
+        instruction.bootstrap.initial_root,
+        bootstrap_digest,
+        bootstrap_proof_digest,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let account_provenance = PrivacyPgcAccountProvenanceV1::bootstrap(
+        bootstrap_digest,
+        bootstrap_proof_digest,
+        current_height,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let mut account_updates = Vec::with_capacity(instruction.bootstrap.accounts.len());
+    for account in &instruction.bootstrap.accounts {
+        let key = PrivacyPgcAccountKeyV1::new(instruction.bootstrap.namespace, account.public_key)
             .map_err(invalid_privacy_parameter)?;
-        if state_transaction
+        let state = PrivacyPgcAccountStateV1::new(
+            account.encrypted_balance,
+            instruction.bootstrap.initial_epoch,
+            account_provenance,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        account_updates.push((key, state));
+    }
+    let root_provenance = PrivacyRootProvenanceV1::verified_bootstrap(
+        bootstrap_digest,
+        bootstrap_proof_digest,
+        current_height,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let root_key = PrivacyRootKeyV1::new(
+        instruction.bootstrap.namespace,
+        PrivacyRootRoleV1::PgcAccountState,
+        instruction.bootstrap.initial_epoch,
+        instruction.bootstrap.initial_root,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let root_head = PrivacyRootHeadRecordV1::new(
+        instruction.bootstrap.initial_epoch,
+        instruction.bootstrap.initial_root,
+        root_provenance.clone(),
+        None,
+        1,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let removals = plan_privacy_root_history_update_v1(
+        &state_transaction.world.privacy_roots,
+        &[root_key],
+        state_transaction
             .world
-            .privacy_root_heads
-            .get(&head_key)
-            .is_some()
-        {
-            return Err(invalid_privacy_parameter(
-                "Anonymous PGC account state is already initialized",
-            ));
-        }
-        if state_transaction
-            .world
-            .privacy_pgc_pool_invariants
-            .get(&invariant_key)
-            .is_some()
-        {
-            return Err(Error::InvariantViolation(
-                "Anonymous PGC pool invariant exists without a current head".into(),
-            ));
-        }
-        if state_transaction
-            .world
-            .privacy_roots
-            .range(PrivacyRootKeyV1::history_range(
-                self.bootstrap.namespace,
-                PrivacyRootRoleV1::PgcAccountState,
-            ))
-            .next()
-            .is_some()
-        {
-            return Err(Error::InvariantViolation(
-                "Anonymous PGC root history exists without a current head".into(),
-            ));
-        }
-        if state_transaction
+            .privacy_consensus_policy
+            .get()
+            .admission_retained_root_count(),
+    )
+    .map_err(|error| {
+        invalid_privacy_parameter(format!("privacy PGC bootstrap root rejected: {error}"))
+    })?;
+    if !removals.is_empty() {
+        return Err(Error::InvariantViolation(
+            "new Anonymous PGC root history unexpectedly requires pruning".into(),
+        ));
+    }
+    state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+    state_transaction
+        .world
+        .privacy_pgc_pool_invariants
+        .insert(invariant_key, pool_invariant);
+    for (key, state) in account_updates {
+        state_transaction
             .world
             .privacy_pgc_accounts
-            .range(PrivacyPgcAccountKeyV1::pool_range(self.bootstrap.namespace))
-            .next()
-            .is_some()
-        {
-            return Err(Error::InvariantViolation(
-                "Anonymous PGC accounts exist without a current head".into(),
-            ));
-        }
-        let computed_root = compute_privacy_pgc_account_state_root_v1(
-            self.bootstrap.namespace,
-            self.bootstrap.initial_epoch,
-            self.bootstrap.total_supply,
-            &self.bootstrap.accounts,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        if computed_root != self.bootstrap.initial_root {
-            return Err(invalid_privacy_parameter(
-                "privacy PGC bootstrap root does not match the canonical account table",
-            ));
-        }
-        let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
-            Error::InvariantViolation(
-                format!("privacy PGC bootstrap canonical encoding failed: {error}").into(),
-            )
-        })?;
-        let namespace_encoding =
-            norito::encode_canonical(&self.bootstrap.namespace).map_err(|error| {
-                Error::InvariantViolation(
-                    format!("privacy PGC namespace canonical encoding failed: {error}").into(),
-                )
-            })?;
-        let native_public_keys = self
-            .bootstrap
-            .accounts
-            .iter()
-            .map(|account| {
-                TwistedElGamalPublicKeyV1::from_sec1_bytes(account.public_key.as_bytes())
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                invalid_privacy_parameter(format!(
-                    "privacy PGC bootstrap public key rejected: {error}"
-                ))
-            })?;
-        let native_balances = self
-            .bootstrap
-            .accounts
-            .iter()
-            .map(|account| {
-                TwistedElGamalCiphertextV1::from_sec1_bytes(
-                    account.encrypted_balance.left.as_bytes(),
-                    account.encrypted_balance.right.as_bytes(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                invalid_privacy_parameter(format!(
-                    "privacy PGC bootstrap ciphertext rejected: {error}"
-                ))
-            })?;
-        let genesis_hash = state_transaction
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                Error::InvariantViolation(
-                    "privacy PGC bootstrap requires a committed genesis block".into(),
-                )
-            })?;
-        let parameters = AnonymousPgcParametersV1::get().map_err(|error| {
-            Error::InvariantViolation(
-                format!("native Anonymous PGC parameters are unavailable: {error}").into(),
-            )
-        })?;
-        let native_statement = AnonymousPgcBootstrapStatementV1::new(
-            &namespace_encoding,
-            *self.bootstrap.initial_root.as_bytes(),
-            self.bootstrap.initial_epoch,
-            self.bootstrap.total_supply,
-            &native_public_keys,
-            &native_balances,
-            TranscriptBindingV1 {
-                network_id: state_transaction.network_id.as_bytes(),
-                genesis_hash,
-                action_index: expected_action_index,
-                statement_digest: *bootstrap_digest.as_bytes(),
-                parameter_id: *activation.parameter_id.as_bytes(),
-                parameter_digest: *activation.parameter_digest.as_bytes(),
-                verifier_digest: *activation.verifier_digest.as_bytes(),
-                statement_schema_digest: *activation.statement_schema_digest.as_bytes(),
-                engine_manifest_digest: *activation.engine_manifest_digest.as_bytes(),
-                generator_digest: parameters.generator_digest(),
-            },
-        )
-        .map_err(|error| {
-            invalid_privacy_parameter(format!("privacy PGC bootstrap statement rejected: {error}"))
-        })?;
-        let verified = verify_bootstrap_encoded(&native_statement, self.proof.as_bytes()).map_err(
-            |error| {
-                invalid_privacy_parameter(format!(
-                    "privacy PGC bootstrap proof verification failed: {error}"
-                ))
-            },
-        )?;
-        if verified.total_supply() != self.bootstrap.total_supply
-            || verified.account_count() != self.bootstrap.accounts.len()
-            || verified.bootstrap_table_digest() != native_statement.bootstrap_table_digest()
-        {
-            return Err(Error::InvariantViolation(
-                "native PGC bootstrap verifier returned inconsistent effects".into(),
-            ));
-        }
-        let bootstrap_proof_digest = self.proof.digest().map_err(|error| {
-            Error::InvariantViolation(
-                format!("verified PGC bootstrap proof digest failed: {error}").into(),
-            )
-        })?;
-        let pool_invariant = PrivacyPgcPoolInvariantV1::new(
-            self.bootstrap.total_supply,
-            self.bootstrap.initial_root,
-            bootstrap_digest,
-            bootstrap_proof_digest,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        let account_provenance = PrivacyPgcAccountProvenanceV1::bootstrap(
-            bootstrap_digest,
-            bootstrap_proof_digest,
-            current_height,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        let mut account_updates = Vec::with_capacity(self.bootstrap.accounts.len());
-        for account in &self.bootstrap.accounts {
-            let key = PrivacyPgcAccountKeyV1::new(self.bootstrap.namespace, account.public_key)
-                .map_err(invalid_privacy_parameter)?;
-            let state = PrivacyPgcAccountStateV1::new(
-                account.encrypted_balance,
-                self.bootstrap.initial_epoch,
-                account_provenance,
-            )
-            .map_err(invalid_privacy_parameter)?;
-            account_updates.push((key, state));
-        }
-        let root_provenance = PrivacyRootProvenanceV1::verified_bootstrap(
-            bootstrap_digest,
-            bootstrap_proof_digest,
-            current_height,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        let root_key = PrivacyRootKeyV1::new(
-            self.bootstrap.namespace,
-            PrivacyRootRoleV1::PgcAccountState,
-            self.bootstrap.initial_epoch,
-            self.bootstrap.initial_root,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        let root_head = PrivacyRootHeadRecordV1::new(
-            self.bootstrap.initial_epoch,
-            self.bootstrap.initial_root,
-            root_provenance.clone(),
-            None,
-        )
-        .map_err(invalid_privacy_parameter)?;
-        let removals = plan_privacy_root_history_update_v1(
-            &state_transaction.world.privacy_roots,
-            &[root_key],
-            state_transaction
-                .world
-                .privacy_consensus_policy
-                .get()
-                .current_limits
-                .retained_root_count,
-        )
-        .map_err(|error| {
-            invalid_privacy_parameter(format!("privacy PGC bootstrap root rejected: {error}"))
-        })?;
-        if !removals.is_empty() {
-            return Err(Error::InvariantViolation(
-                "new Anonymous PGC root history unexpectedly requires pruning".into(),
-            ));
-        }
-        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
-        state_transaction
-            .world
-            .privacy_pgc_pool_invariants
-            .insert(invariant_key, pool_invariant);
-        for (key, state) in account_updates {
-            state_transaction
-                .world
-                .privacy_pgc_accounts
-                .insert(key, state);
-        }
-        state_transaction
-            .world
-            .privacy_roots
-            .insert(root_key, root_provenance);
-        state_transaction
-            .world
-            .privacy_root_heads
-            .insert(head_key, root_head);
-        Ok(())
+            .insert(key, state);
     }
+    state_transaction
+        .world
+        .privacy_roots
+        .insert(root_key, root_provenance);
+    state_transaction
+        .world
+        .privacy_root_heads
+        .insert(head_key, root_head);
+    Ok(())
 }
 fn validate_zk_ace_policy_references(
     policy: &iroha_data_model::privacy::PrivacyZkAcePolicyRecordV1,
@@ -1896,6 +1839,7 @@ fn plan_zk_x509_root_append_v1(
         publication.root,
         provenance.clone(),
         retention_anchor,
+        planned_privacy_root_count_v1(current_head, removals.len())?,
     )
     .map_err(invalid_privacy_parameter)?;
     Ok(PlannedZkX509RootAppendV1 {
@@ -1951,33 +1895,33 @@ fn apply_zk_x509_root_append_v1(
         .privacy_root_heads
         .insert(plan.head_key, plan.next_head);
 }
-// TODO(X.6): take this verdict from the canonical interval definition
-// (`PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())`
-// containing the block second). The predicate below is the same on every block
-// second within the RFC 5280 calendar; it is pinned as a `deferred` site in
-// specs/zk_x509_presentation_interval_sites.json and compared with the
-// definition by `deferred_sites_equal_the_canonical_definition_on_a_boundary_grid`.
+// Registration and rotation use the same signed-interval definition as proof
+// admission. Eligibility never selects an older CRL: State holds only the exact
+// governed current revision, and a rejected successor leaves it unchanged.
 fn validate_zk_x509_crl_freshness_v1(
     record: PrivacyZkX509CrlRecordV1,
     block_timestamp_ms: u64,
 ) -> Result<(), Error> {
     let block_unix_seconds = block_timestamp_ms / 1_000;
-    if block_unix_seconds < record.this_update_unix_seconds
-        || block_unix_seconds >= record.next_update_unix_seconds
+    if PrivacyZkX509PresentationBoundsV1::from_crl(record.update_interval())
+        .is_ok_and(|bounds| bounds.contains_unix_seconds(block_unix_seconds))
     {
-        return Err(invalid_privacy_parameter(
-            "X.509 signed CRL is not current at the executing block timestamp",
-        ));
+        return Ok(());
     }
-    let age = block_unix_seconds
-        .checked_sub(record.this_update_unix_seconds)
-        .ok_or_else(|| invalid_privacy_parameter("X.509 signed CRL begins in the future"))?;
-    if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
-        return Err(invalid_privacy_parameter(format!(
-            "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
-        )));
+    // Keep useful diagnostics after the canonical rejection. These branches
+    // cannot admit a record or extend the RFC 5280 calendar.
+    if block_unix_seconds < record.next_update_unix_seconds {
+        if let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds) {
+            if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
+                return Err(invalid_privacy_parameter(format!(
+                    "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
+                )));
+            }
+        }
     }
-    Ok(())
+    Err(invalid_privacy_parameter(
+        "X.509 signed CRL is not current at the executing block timestamp",
+    ))
 }
 fn validate_current_zk_x509_ca_root_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -1989,7 +1933,8 @@ fn validate_current_zk_x509_ca_root_v1(
             .world
             .privacy_consensus_policy
             .get()
-            .admission_retained_root_count(),
+            .current_limits
+            .retained_root_count,
         &state_transaction.world.privacy_roots,
         &state_transaction.world.privacy_root_heads,
     )
@@ -2056,75 +2001,38 @@ fn x509_certificate_policy_lineage_revision_count_v1(
     }
     Ok(count)
 }
-fn require_registered_zk_ace_protocol(
+fn require_admitted_zk_ace_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let activation_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
-    let activation = state_transaction
-        .world
-        .privacy_activations
-        .get(&activation_key)
-        .ok_or_else(|| invalid_privacy_parameter("ZK-ACE privacy protocol is not registered"))?;
-    activation.validate().map_err(|error| {
-        Error::InvariantViolation(
-            format!("registered ZK-ACE activation is invalid: {error}").into(),
-        )
-    })?;
-    validate_compiled_privacy_activation_v1(activation).map_err(|error| {
-        Error::InvariantViolation(
-            format!("registered ZK-ACE activation is not executable: {error}").into(),
-        )
-    })
+    let _admitted = resolve_admitted_privacy_protocol_v1(
+        &state_transaction.world.privacy_protocol_policies,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+        state_transaction.block_height(),
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    Ok(())
 }
-fn require_registered_bootle_lantern_protocol(
+fn require_admitted_bootle_lantern_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
-    let activation = state_transaction
-        .world
-        .privacy_activations
-        .get(&PrivacyActivationKeyV1::new(protocol_id))
-        .ok_or_else(|| {
-            invalid_privacy_parameter("Bootle/Lantern privacy protocol is not registered")
-        })?;
-    if activation.protocol_id != protocol_id {
-        return Err(Error::InvariantViolation(
-            "registered Bootle/Lantern activation has a mismatched protocol id".into(),
-        ));
-    }
-    activation.validate().map_err(|error| {
-        Error::InvariantViolation(
-            format!("registered Bootle/Lantern activation is invalid: {error}").into(),
-        )
-    })?;
-    validate_compiled_privacy_activation_v1(activation).map_err(|error| {
-        Error::InvariantViolation(
-            format!("registered Bootle/Lantern activation is not executable: {error}").into(),
-        )
-    })
+    let _admitted = resolve_admitted_privacy_protocol_v1(
+        &state_transaction.world.privacy_protocol_policies,
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        state_transaction.block_height(),
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    Ok(())
 }
-fn require_registered_vega_protocol(
+fn require_admitted_vega_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
-    let activation = state_transaction
-        .world
-        .privacy_activations
-        .get(&PrivacyActivationKeyV1::new(protocol_id))
-        .ok_or_else(|| invalid_privacy_parameter("Vega privacy protocol is not registered"))?;
-    if activation.protocol_id != protocol_id {
-        return Err(Error::InvariantViolation(
-            "registered Vega activation has a mismatched protocol id".into(),
-        ));
-    }
-    activation.validate().map_err(|error| {
-        Error::InvariantViolation(format!("registered Vega activation is invalid: {error}").into())
-    })?;
-    validate_compiled_privacy_activation_v1(activation).map_err(|error| {
-        Error::InvariantViolation(
-            format!("registered Vega activation is not executable: {error}").into(),
-        )
-    })
+    let _admitted = resolve_admitted_privacy_protocol_v1(
+        &state_transaction.world.privacy_protocol_policies,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+        state_transaction.block_height(),
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    Ok(())
 }
 impl Execute for RegisterPrivacyZkX509TrustAnchorV1 {
     fn execute(
@@ -2760,7 +2668,8 @@ impl Execute for RotatePrivacyZkX509CrlV1 {
             .world
             .privacy_consensus_policy
             .get()
-            .admission_retained_root_count();
+            .current_limits
+            .retained_root_count;
         let authoritative = load_privacy_zk_x509_authoritative_state_v1(
             self.successor.trust_anchor_id,
             self.successor.certificate_policy_id,
@@ -2824,7 +2733,8 @@ impl Execute for RevokePrivacyZkX509CrlV1 {
             .world
             .privacy_consensus_policy
             .get()
-            .admission_retained_root_count();
+            .current_limits
+            .retained_root_count;
         let authoritative = load_privacy_zk_x509_authoritative_state_v1(
             self.successor.trust_anchor_id,
             self.successor.certificate_policy_id,
@@ -2880,7 +2790,7 @@ impl Execute for RegisterPrivacyZkAcePolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_zk_ace_protocol(state_transaction)?;
+        require_admitted_zk_ace_protocol(state_transaction)?;
         self.policy.validate_initial().map_err(|error| {
             invalid_privacy_parameter(format!("ZK-ACE policy registration rejected: {error}"))
         })?;
@@ -2938,7 +2848,7 @@ impl Execute for RotatePrivacyZkAcePolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_zk_ace_protocol(state_transaction)?;
+        require_admitted_zk_ace_protocol(state_transaction)?;
         if self.expected_current_record_digest.is_zero() {
             return Err(invalid_privacy_parameter(
                 "ZK-ACE expected current policy digest must be non-zero",
@@ -2994,7 +2904,7 @@ impl Execute for RevokePrivacyZkAcePolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_zk_ace_protocol(state_transaction)?;
+        require_admitted_zk_ace_protocol(state_transaction)?;
         if self.expected_current_record_digest.is_zero() {
             return Err(invalid_privacy_parameter(
                 "ZK-ACE expected current policy digest must be non-zero",
@@ -3054,7 +2964,7 @@ impl Execute for RegisterPrivacyBootleLanternIssuerPolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_bootle_lantern_protocol(state_transaction)?;
+        require_admitted_bootle_lantern_protocol(state_transaction)?;
         self.policy.validate_initial().map_err(|error| {
             invalid_privacy_parameter(format!(
                 "Bootle/Lantern issuer-policy registration rejected: {error}"
@@ -3119,7 +3029,7 @@ impl Execute for RotatePrivacyBootleLanternIssuerPolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_bootle_lantern_protocol(state_transaction)?;
+        require_admitted_bootle_lantern_protocol(state_transaction)?;
         if self.expected_current_record_digest.is_zero() {
             return Err(invalid_privacy_parameter(
                 "Bootle/Lantern expected current issuer-policy digest must be non-zero",
@@ -3193,7 +3103,7 @@ impl Execute for RevokePrivacyBootleLanternIssuerPolicyV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_bootle_lantern_protocol(state_transaction)?;
+        require_admitted_bootle_lantern_protocol(state_transaction)?;
         if self.expected_current_record_digest.is_zero() {
             return Err(invalid_privacy_parameter(
                 "Bootle/Lantern expected current issuer-policy digest must be non-zero",
@@ -3316,9 +3226,9 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_vega_protocol(state_transaction)?;
+        require_admitted_vega_protocol(state_transaction)?;
         execute_register_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3326,7 +3236,7 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
     }
 }
 fn execute_register_privacy_vega_issuer_after_admission_v1(
-    instruction: RegisterPrivacyVegaIssuerV1,
+    instruction: &RegisterPrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3380,9 +3290,9 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_vega_protocol(state_transaction)?;
+        require_admitted_vega_protocol(state_transaction)?;
         execute_rotate_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3390,7 +3300,7 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
     }
 }
 fn execute_rotate_privacy_vega_issuer_after_admission_v1(
-    instruction: RotatePrivacyVegaIssuerV1,
+    instruction: &RotatePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3486,9 +3396,9 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
-        require_registered_vega_protocol(state_transaction)?;
+        require_admitted_vega_protocol(state_transaction)?;
         execute_revoke_privacy_vega_issuer_after_admission_v1(
-            self,
+            &(self),
             expected_action_index,
             encoded_action_bytes,
             state_transaction,
@@ -3496,7 +3406,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
     }
 }
 fn execute_revoke_privacy_vega_issuer_after_admission_v1(
-    instruction: RevokePrivacyVegaIssuerV1,
+    instruction: &RevokePrivacyVegaIssuerV1,
     expected_action_index: u32,
     encoded_action_bytes: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3653,26 +3563,25 @@ impl Execute for SubmitPrivacyProofV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let submission = PreparedPrivacySubmissionV1::prepare(self, authority, state_transaction)?;
-        let activation = *resolve_qualified_privacy_activation_v1(
-            state_transaction
-                .world
-                .privacy_exact12_qualification
-                .get()
-                .as_ref(),
-            &state_transaction.world.privacy_activations,
+        let admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
             submission.envelope.protocol_id,
             state_transaction.block_height(),
         )
-        .map_err(invalid_privacy_parameter)?
-        .activation();
-        submission.execute_after_admission(authority, state_transaction, activation)
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+        submission.execute_after_admission(
+            authority,
+            state_transaction,
+            *admitted.profile(),
+            *admitted.protocol_limits(),
+        )
     }
 }
 
 /// Exact signed submission with its transaction binding consumed and resource limits checked.
 ///
-/// Preparation does not attest production qualification. The public instruction handler must
-/// resolve the registered Exact12 qualification before entering native proof/state execution.
+/// The public handler resolves the selected implementation and committed per-protocol policy
+/// before native proof/state execution. Release evidence never authorizes execution.
 struct PreparedPrivacySubmissionV1 {
     envelope: PrivacyProofEnvelopeV1,
     encoded_action_bytes: u64,
@@ -3685,6 +3594,11 @@ impl PreparedPrivacySubmissionV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<Self, Error> {
+        if instruction.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+            return Err(invalid_privacy_parameter(
+                "X.509 presentations require the canonical signed-attachment instruction",
+            ));
+        }
         let transaction_intent_digest = instruction
             .envelope
             .statement
@@ -3727,7 +3641,8 @@ impl PreparedPrivacySubmissionV1 {
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-        activation: PrivacyProtocolActivationRecordV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
+        protocol_limits: PrivacyProtocolLimitsV1,
     ) -> Result<(), Error> {
         let expected_action_index = self.expected_action_index;
         let encoded_action_bytes = self.encoded_action_bytes;
@@ -3765,10 +3680,8 @@ impl PreparedPrivacySubmissionV1 {
                     &state_transaction.world.privacy_root_heads,
                 )
                 .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("trusted Anonymous PGC pool state failed validation: {error}")
-                            .into(),
-                    )
+                    state_transaction
+                        .attempt_error_to_instruction_error(privacy_state_validation_error(error))
                 })?,
             )
         } else {
@@ -3784,7 +3697,8 @@ impl PreparedPrivacySubmissionV1 {
                     .world
                     .privacy_consensus_policy
                     .get()
-                    .admission_retained_root_count(),
+                    .current_limits
+                    .retained_root_count,
                 &state_transaction.world.privacy_commitments,
                 &state_transaction.world.privacy_roots,
                 &state_transaction.world.privacy_root_heads,
@@ -3926,7 +3840,8 @@ impl PreparedPrivacySubmissionV1 {
                     .world
                     .privacy_consensus_policy
                     .get()
-                    .admission_retained_root_count(),
+                    .current_limits
+                    .retained_root_count,
                 &state_transaction.world.privacy_commitments,
                 &state_transaction.world.privacy_roots,
                 &state_transaction.world.privacy_root_heads,
@@ -3962,7 +3877,10 @@ impl PreparedPrivacySubmissionV1 {
             if let Some(root) = fcmp_root
                 && current_epoch == snapshot.current_epoch()
                 && current_root == snapshot.current_root()
-                && snapshot.fcmp_accumulator_state().map(|state| state.root()) != Some(root)
+                && snapshot
+                    .fcmp_accumulator_state()
+                    .map(iroha_core_privacy::privacy_state::PrivacyFcmpAccumulatorStateV1::root)
+                    != Some(root)
             {
                 return Err(invalid_privacy_parameter(
                     "FCMP++ statement typed root differs from the authoritative curve frontier",
@@ -4157,7 +4075,8 @@ impl PreparedPrivacySubmissionV1 {
                     .world
                     .privacy_consensus_policy
                     .get()
-                    .admission_retained_root_count(),
+                    .current_limits
+                    .retained_root_count,
                 &state_transaction.world.privacy_commitments,
                 &state_transaction.world.privacy_roots,
                 &state_transaction.world.privacy_root_heads,
@@ -4387,77 +4306,6 @@ impl PreparedPrivacySubmissionV1 {
         } else {
             None
         };
-        let (zk_x509_snapshot, zk_x509_nullifier_key, zk_x509_nullifier_consumed) =
-            if let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &self.envelope.statement
-            {
-                if authority != &statement.wallet_account {
-                    return Err(invalid_privacy_parameter(
-                        "X.509 certificate proof must be submitted by its bound wallet account",
-                    ));
-                }
-                if state_transaction
-                    .world
-                    .accounts
-                    .get(&statement.wallet_account)
-                    .is_none()
-                {
-                    return Err(invalid_privacy_parameter(
-                        "X.509 statement wallet account does not exist",
-                    ));
-                }
-                let snapshot = load_privacy_zk_x509_authoritative_state_v1(
-                    statement.trust_anchor_id,
-                    statement.certificate_policy_id,
-                    state_transaction
-                        .world
-                        .privacy_consensus_policy
-                        .get()
-                        .admission_retained_root_count(),
-                    &state_transaction.world.privacy_commitments,
-                    &state_transaction.world.privacy_roots,
-                    &state_transaction.world.privacy_root_heads,
-                )
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("trusted X.509 authoritative state failed validation: {error}")
-                            .into(),
-                    )
-                })?;
-                let nullifier_key = PrivacyNullifierKeyV1::zk_x509_certificate_nullifier(
-                    snapshot.namespace(),
-                    statement.certificate_nullifier,
-                )
-                .map_err(invalid_privacy_parameter)?;
-                let consumed = if let Some(record) = state_transaction
-                    .world
-                    .privacy_nullifiers
-                    .get(&nullifier_key)
-                {
-                    record.validate().map_err(|error| {
-                        Error::InvariantViolation(
-                        format!(
-                            "persisted X.509 certificate-nullifier provenance is invalid: {error}"
-                        )
-                        .into(),
-                    )
-                    })?;
-                    if !matches!(
-                        record,
-                        PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier { .. }
-                    ) {
-                        return Err(Error::InvariantViolation(
-                            "persisted X.509 certificate nullifier has wrong-role provenance"
-                                .into(),
-                        ));
-                    }
-                    true
-                } else {
-                    false
-                };
-                (Some(snapshot), Some(nullifier_key), consumed)
-            } else {
-                (None, None, false)
-            };
         let bootle_lantern_policy =
             if let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) =
                 &self.envelope.statement
@@ -4625,7 +4473,8 @@ impl PreparedPrivacySubmissionV1 {
         let effects = verify_privacy_envelope_v1(
             &self.envelope,
             &PrivacyVerificationContextV1 {
-                activation: &activation,
+                profile: &profile,
+                protocol_limits: &protocol_limits,
                 consensus_limits: &state_transaction
                     .world
                     .privacy_consensus_policy
@@ -4639,17 +4488,14 @@ impl PreparedPrivacySubmissionV1 {
                 pgc_state: pgc_verification_state,
                 orchard_state: orchard_snapshot.as_ref(),
                 proof_managed_state: proof_managed_snapshot.as_ref(),
-                zk_x509_state: zk_x509_snapshot.as_ref().map(|authoritative_state| {
-                    PrivacyZkX509VerificationStateV1 {
-                        authoritative_state,
-                        certificate_nullifier_consumed: zk_x509_nullifier_consumed,
-                    }
-                }),
+                zk_x509_state: None,
                 bootle_lantern_policy: bootle_lantern_policy.as_ref(),
                 vega_issuer_record: vega_issuer_record.as_ref(),
             },
         )
-        .map_err(privacy_verification_error)?;
+        .map_err(|error| {
+            state_transaction.attempt_error_to_instruction_error(privacy_verification_error(error))
+        })?;
         if effects.role() != role
             || effects.protocol_id() != self.envelope.protocol_id
             || effects.statement_digest() != self.envelope.statement_digest
@@ -4663,96 +4509,9 @@ impl PreparedPrivacySubmissionV1 {
         match effects.into_ledger() {
             VerifiedPrivacyLedgerEffectsV1::None => state_transaction
                 .reserve_privacy_action(expected_action_index, encoded_action_bytes),
-            VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) => {
-                let snapshot = zk_x509_snapshot.as_ref().ok_or_else(|| {
-                    Error::InvariantViolation(
-                        "native X.509 effect has no trusted authoritative snapshot".into(),
-                    )
-                })?;
-                let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) =
-                    &self.envelope.statement
-                else {
-                    return Err(Error::InvariantViolation(
-                        "native X.509 effect has a different statement type".into(),
-                    ));
-                };
-                let trust_anchor = snapshot.trust_anchor();
-                let certificate_policy = snapshot.certificate_policy();
-                let crl = snapshot.crl_record();
-                if effect.namespace != snapshot.namespace()
-                    || effect.certificate_nullifier != statement.certificate_nullifier
-                    || effect.trust_anchor_record_digest != trust_anchor.record_digest
-                    || effect.trust_anchor_record_epoch != trust_anchor.record_epoch
-                    || effect.certificate_policy_record_digest != certificate_policy.record_digest
-                    || effect.certificate_policy_record_epoch != certificate_policy.record_epoch
-                    || effect.crl_record_digest != crl.record_digest
-                    || effect.crl_record_epoch != crl.record_epoch
-                {
-                    return Err(Error::InvariantViolation(
-                        "native X.509 effect is inconsistent with trusted state or its statement"
-                            .into(),
-                    ));
-                }
-                let nullifier_key = PrivacyNullifierKeyV1::zk_x509_certificate_nullifier(
-                    effect.namespace,
-                    effect.certificate_nullifier,
-                )
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("verified X.509 certificate nullifier is invalid: {error}").into(),
-                    )
-                })?;
-                if zk_x509_nullifier_key != Some(nullifier_key) {
-                    return Err(Error::InvariantViolation(
-                        "native X.509 effect selected a different replay key".into(),
-                    ));
-                }
-                if let Some(record) = state_transaction
-                    .world
-                    .privacy_nullifiers
-                    .get(&nullifier_key)
-                {
-                    record.validate().map_err(|error| {
-                        Error::InvariantViolation(
-                            format!(
-                                "persisted X.509 certificate-nullifier provenance is invalid: {error}"
-                            )
-                            .into(),
-                        )
-                    })?;
-                    if !matches!(
-                        record,
-                        PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier { .. }
-                    ) {
-                        return Err(Error::InvariantViolation(
-                            "persisted X.509 certificate nullifier has wrong-role provenance"
-                                .into(),
-                        ));
-                    }
-                    return Err(invalid_privacy_parameter(
-                        "X.509 certificate nullifier was already consumed",
-                    ));
-                }
-                let provenance = PrivacyStateItemRecordV1::zk_x509_verified_certificate_nullifier(
-                    effect.trust_anchor_record_digest,
-                    effect.trust_anchor_record_epoch,
-                    effect.certificate_policy_record_digest,
-                    effect.certificate_policy_record_epoch,
-                    effect.crl_record_digest,
-                    effect.crl_record_epoch,
-                    self.envelope.statement_digest,
-                    state_transaction.block_height(),
-                    expected_action_index,
-                )
-                .map_err(invalid_privacy_parameter)?;
-                state_transaction
-                    .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
-                state_transaction
-                    .world
-                    .privacy_nullifiers
-                    .insert(nullifier_key, provenance);
-                Ok(())
-            }
+            VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(_) => Err(Error::InvariantViolation(
+                "generic privacy submission returned a retired X.509 effect".into(),
+            )),
             VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {
                 let snapshot = orchard_snapshot.as_ref().ok_or_else(|| {
                     Error::InvariantViolation(
@@ -4900,6 +4659,10 @@ impl PreparedPrivacySubmissionV1 {
                     effect.successor_state().root(),
                     root_provenance.clone(),
                     retention_anchor,
+                    planned_privacy_root_count_v1(
+                        state_transaction.world.privacy_root_heads.get(&head_key),
+                        removals.len(),
+                    )?,
                 )
                 .map_err(invalid_privacy_parameter)?;
                 state_transaction
@@ -5314,6 +5077,10 @@ impl PreparedPrivacySubmissionV1 {
                     effect.next_root(),
                     root_provenance.clone(),
                     retention_anchor,
+                    planned_privacy_root_count_v1(
+                        state_transaction.world.privacy_root_heads.get(&head_key),
+                        removals.len(),
+                    )?,
                 )
                 .map_err(invalid_privacy_parameter)?;
                 state_transaction
@@ -5454,8 +5221,7 @@ impl PreparedPrivacySubmissionV1 {
                     self.envelope.statement_digest,
                     &effect.asset_definition_id,
                     effect.public_balance_scope,
-                    &effect.source,
-                    &effect.destination,
+                    (&effect.source, &effect.destination),
                     amount,
                 )?;
                 state_transaction
@@ -5636,6 +5402,10 @@ impl PreparedPrivacySubmissionV1 {
                     computed_next_root,
                     root_provenance.clone(),
                     retention_anchor,
+                    planned_privacy_root_count_v1(
+                        state_transaction.world.privacy_root_heads.get(&head_key),
+                        removals.len(),
+                    )?,
                 )
                 .map_err(invalid_privacy_parameter)?;
                 state_transaction
@@ -5770,10 +5540,9 @@ impl PreparedPrivacySubmissionV1 {
                         "verified ZK-AMS provisioning target account already exists",
                     ));
                 }
-                super::domain::isi::ensure_controller_capabilities(
+                super::domain::isi::ensure_controller_policy(
                     effect.account_id.controller(),
-                    &state_transaction.crypto.allowed_signing,
-                    &state_transaction.crypto.allowed_curve_ids,
+                    state_transaction.crypto_admission_policy().map_err(|message| iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message.into()))?,
                 )?;
                 let item_provenance = PrivacyStateItemRecordV1::zk_ams_verified_proof(
                     snapshot.bootstrap_digest(),
@@ -5821,17 +5590,22 @@ impl PreparedPrivacySubmissionV1 {
                             .into(),
                     ));
                 }
-                let computed_next_root = compute_privacy_pgc_account_state_root_v1(
+                let computed_next_root = derive_privacy_pgc_account_state_root_v1(
                     effect.namespace(),
                     effect.next_epoch(),
                     effect.total_supply(),
                     effect.accounts(),
                 )
                 .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("verified Anonymous PGC successor table is not canonical: {error}")
+                    let attempt = pgc_root_attempt_error(error, |error| {
+                        Error::InvariantViolation(
+                            format!(
+                                "verified Anonymous PGC successor table is not canonical: {error}"
+                            )
                             .into(),
-                    )
+                        )
+                    });
+                    state_transaction.attempt_error_to_instruction_error(attempt)
                 })?;
                 if computed_next_root != effect.next_root() {
                     return Err(Error::InvariantViolation(
@@ -5899,8 +5673,7 @@ impl PreparedPrivacySubmissionV1 {
                         .world
                         .privacy_consensus_policy
                         .get()
-                        .current_limits
-                        .retained_root_count,
+                        .admission_retained_root_count(),
                 )
                 .map_err(|error| {
                     invalid_privacy_parameter(format!(
@@ -5918,6 +5691,10 @@ impl PreparedPrivacySubmissionV1 {
                     effect.next_root(),
                     root_provenance.clone(),
                     retention_anchor,
+                    planned_privacy_root_count_v1(
+                        state_transaction.world.privacy_root_heads.get(&head_key),
+                        removals.len(),
+                    )?,
                 )
                 .map_err(invalid_privacy_parameter)?;
                 state_transaction
@@ -5946,13 +5723,26 @@ impl PreparedPrivacySubmissionV1 {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn root_append_cannot_prune_history_without_an_authenticated_head() {
+        assert_eq!(super::planned_privacy_root_count_v1(None, 0).unwrap(), 1);
+        assert!(super::planned_privacy_root_count_v1(None, 1).is_err());
+        assert!(super::planned_privacy_root_count_v1(None, usize::MAX).is_err());
+    }
+
+    #[cfg(feature = "privacy-release-evidence")]
+    mod x509_submission_tests;
     use super::*;
     use crate::{
         kura::Kura,
         privacy_engines::{
             anonymous_pgc::{
-                AnonymousPgcPoolInvariantV1, TwistedElGamalKeyPairV1, add_ciphertexts,
-                bootstrap::{AnonymousPgcBootstrapWitnessV1, prove_bootstrap},
+                AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1, TwistedElGamalCiphertextV1,
+                TwistedElGamalKeyPairV1, add_ciphertexts,
+                bootstrap::{
+                    AnonymousPgcBootstrapStatementV1, AnonymousPgcBootstrapWitnessV1,
+                    prove_bootstrap,
+                },
                 encrypt_with_randomness,
                 payment::{
                     AnonymousPgcPaymentStatementV1, AnonymousPgcPaymentWitnessV1,
@@ -5960,7 +5750,7 @@ mod tests {
                 },
             },
             ivm_private_note::private_note_statement_fixture_v1,
-            p256::SecretScalarV1,
+            p256::{SecretScalarV1, TranscriptBindingV1},
             pq_masp::relation::test_fixtures::valid_fixture as pq_masp_fixture,
         },
         privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1},
@@ -5980,19 +5770,18 @@ mod tests {
         block::BlockHeader,
         domain::Domain,
         privacy::{
-            AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
+            AnonymousPgcKOutOfNStatementV1, AnonymousPgcLimitsV1,
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
             BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
-            BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
-            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
-            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-            PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
-            PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyProtocolIdV1, PrivacyRootPublicationV1, PrivacyRootV1,
+            BootleLanternPolynomialV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
+            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+            PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLimitsV1, PrivacyRootPublicationV1, PrivacyRootV1,
             PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
             PrivacyTrustAnchorPolicyNamespaceV1, PrivacyX509CrlDerDigestV1,
@@ -6009,7 +5798,6 @@ mod tests {
     use iroha_model_base::name::Name;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::Storage;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
     use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
@@ -6021,7 +5809,7 @@ mod tests {
             Hash::prehashed(TEST_GENESIS_HASH),
         ))
     }
-    fn activation_execution_state() -> State {
+    fn governance_execution_state() -> State {
         use crate::sumeragi::{
             startup,
             test_chain::{CertifiedTestChain, TestChainConfig},
@@ -6052,7 +5840,7 @@ mod tests {
         state
     }
 
-    fn activation_execution_header(state: &State) -> BlockHeader {
+    fn governance_execution_header(state: &State) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT).unwrap(),
             state.view().latest_block_hash(),
@@ -6063,141 +5851,292 @@ mod tests {
     }
 
     #[test]
-    fn governed_registration_and_activation_share_one_state_transaction() {
-        let state = activation_execution_state();
-        let mut block = state.block(activation_execution_header(&state));
+    fn baseline_native_protocol_closure_keeps_original_row_only_without_obligations() {
+        use iroha_data_model::privacy::{IvmPrivateNoteLimitsV1, PrivateSettlementPolicyV1};
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
         let mut transaction = block.transaction();
-        assert!(
-            crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
-            "governance matrix requires the authenticated ordinary execution root"
-        );
         grant_governance(&mut transaction);
-        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-            .expect("compiled profile")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: TEST_BLOCK_HEIGHT,
-                },
-            ));
-        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
-        crate::executor::Executor::Initial
-            .execute_instruction(
-                &mut transaction,
-                &ALICE_ID,
-                RegisterPrivacyProtocolActivationV1::new(proposal).into(),
-            )
-            .expect("authorized registration");
-        assert_eq!(
-            transaction.world.privacy_activations.get(&key),
-            Some(&proposal)
+        let original_parameters = transaction.world.parameters.get().clone();
+        let events = transaction.world.internal_event_buf.len();
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        SchedulePrivacyProtocolLimitsUpdateV1::new(
+            protocol,
+            TEST_BLOCK_HEIGHT + 1,
+            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                max_input_count: 1,
+                max_output_count: 1,
+            }),
+        )
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+        assert_eq!(*transaction.world.parameters.get(), original_parameters);
+        assert_eq!(transaction.world.internal_event_buf.len(), events);
+        assert!(
+            !transaction
+                .world
+                .parameters
+                .get()
+                .custom()
+                .contains_key(PrivateSettlementPolicyV1::parameter_id())
         );
-        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: TEST_BLOCK_HEIGHT,
-            activated_at_height: TEST_BLOCK_HEIGHT,
-            state_since_height: TEST_BLOCK_HEIGHT,
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let retained = transaction
+            .world
+            .privacy_protocol_policies
+            .get(&key)
+            .unwrap();
+        let policy = crate::private_settlement::policy::read(
+            transaction.world.parameters.get(),
+            Some(retained),
+            TEST_BLOCK_HEIGHT,
+        )
+        .unwrap();
+        assert_eq!(
+            iroha_data_model::privacy::private_settlement_admission_deadline_v1(
+                &policy,
+                Some(retained)
+            ),
+            Some(TEST_BLOCK_HEIGHT + 1)
+        );
+    }
+
+    #[test]
+    fn native_private_policy_schedules_drain_original_obligations_before_activation() {
+        use iroha_data_model::privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyProtocolLimitsV1, PrivateSettlementPolicyUpdateV1,
+            PrivateSettlementPolicyV1, private_settlement_admission_deadline_v1,
+        };
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        transaction.world.add_account_permission(
+            &ALICE_ID,
+            iroha_data_model::permission::Permission::from(
+                iroha_executor_data_model::permission::parameter::CanSetParameters,
+            ),
+        );
+        let original =
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap();
+        let span = original.current_limits.max_expiry_blocks;
+        let last = TEST_BLOCK_HEIGHT + span;
+        let mut next = original.current_limits;
+        next.max_carrier_bytes -= 1;
+        let schedule = |height| {
+            iroha_data_model::isi::SetParameter::new(
+                iroha_data_model::parameter::Parameter::Custom(
+                    PrivateSettlementPolicyV1 {
+                        pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+                            scheduled_at_height: 1,
+                            effective_at_height: height,
+                            next_limits: next,
+                        }),
+                        ..original
+                    }
+                    .to_custom_parameter()
+                    .unwrap(),
+                ),
+            )
+        };
+        let execute = |instruction: iroha_data_model::isi::InstructionBox,
+                       tx: &mut StateTransaction<'_, '_>| {
+            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, instruction)
+        };
+        assert!(execute(schedule(last).into(), &mut transaction).is_err());
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap(),
+            original
+        );
+        execute(schedule(last + 1).into(), &mut transaction).unwrap();
+        let pending =
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get()).unwrap();
+        assert_eq!(
+            pending.pending_update.unwrap().effective_at_height,
+            last + 1
+        );
+        let frame = norito::encode_canonical(&pending).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<PrivateSettlementPolicyV1>(&frame).unwrap(),
+            pending
+        );
+
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let closing = PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            max_input_count: 1,
+            max_output_count: 1,
         });
+        assert!(
+            execute(
+                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, last, closing).into(),
+                &mut transaction
+            )
+            .is_err()
+        );
+        assert!(
+            transaction
+                .world
+                .privacy_protocol_policies
+                .get(&key)
+                .is_none()
+        );
+        execute(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, last + 2, closing).into(),
+            &mut transaction,
+        )
+        .unwrap();
+        let retained = *transaction
+            .world
+            .privacy_protocol_policies
+            .get(&key)
+            .unwrap();
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_parameters(transaction.world.parameters.get())
+                .unwrap()
+                .protocol_closure_drain
+                .unwrap()
+                .original_max_expiry_blocks,
+            span
+        );
+        assert_eq!(
+            private_settlement_admission_deadline_v1(&pending, Some(&retained)),
+            Some(last + 1)
+        );
+        let admission = pending.current_limits;
+        admission
+            .validate_admission(
+                2,
+                TEST_BLOCK_HEIGHT,
+                last,
+                TEST_BLOCK_HEIGHT,
+                Some(last + 1),
+            )
+            .unwrap();
+        assert!(
+            admission
+                .validate_admission(
+                    2,
+                    TEST_BLOCK_HEIGHT + 1,
+                    last + 1,
+                    TEST_BLOCK_HEIGHT + 1,
+                    Some(last + 1)
+                )
+                .is_err()
+        );
+        drop(transaction);
+        assert_eq!(
+            PrivateSettlementPolicyV1::from_parameters(block.world.parameters.get()).unwrap(),
+            original,
+            "uncommitted schedules roll back together"
+        );
+        assert!(block.world.privacy_protocol_policies.get(&key).is_none());
+    }
+
+    #[test]
+    fn governed_policy_update_uses_defaults_and_is_committed_atomically() {
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        assert!(
+            transaction
+                .world
+                .privacy_protocol_policies
+                .get(&key)
+                .is_none()
+        );
+        let defaults = PrivacyProtocolPolicyV1::canonical_default_v1(protocol);
+        let next = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(
+            iroha_data_model::privacy::VeRangeLimitsV1 {
+                max_aggregation_count: 1,
+            },
+        );
         crate::executor::Executor::Initial
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
+                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next)
+                    .into(),
             )
-            .expect("authorized same-transaction activation");
-        let expected = PrivacyProtocolActivationRecordV1 {
-            lifecycle: active,
-            ..proposal
+            .expect("authorized ordinary update from implicit defaults");
+        let expected = PrivacyProtocolPolicyV1 {
+            pending_update: Some(iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: TEST_BLOCK_HEIGHT,
+                effective_at_height: TEST_BLOCK_HEIGHT + 1,
+                next_limits: next,
+            }),
+            ..defaults
         };
         assert_eq!(
-            transaction.world.privacy_activations.get(&key),
+            transaction.world.privacy_protocol_policies.get(&key),
             Some(&expected)
         );
         transaction.apply();
-        assert_eq!(block.world.privacy_activations.get(&key), Some(&expected));
-        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
-            &block.world.privacy_activations,
-            TEST_BLOCK_HEIGHT,
-        )
-        .expect("same-block activation is a valid durable history");
+        assert_eq!(
+            block.world.privacy_protocol_policies.get(&key),
+            Some(&expected)
+        );
     }
     #[test]
-    fn explicit_activation_keeps_authority_height_and_transaction_rollback_checks() {
-        let state = activation_execution_state();
-        let mut block = state.block(activation_execution_header(&state));
-        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-            .expect("compiled profile")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: TEST_BLOCK_HEIGHT,
-                },
-            ));
-        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+    fn policy_update_preserves_authority_schedule_and_transaction_rollback() {
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
+        let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let next = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(
+            iroha_data_model::privacy::VeRangeLimitsV1 {
+                max_aggregation_count: 1,
+            },
+        );
         {
             let mut transaction = block.transaction();
-            assert!(
-                crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
-                "governance matrix requires the authenticated ordinary execution root"
-            );
+            let instruction =
+                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next);
             let error = crate::executor::Executor::Initial
-                .execute_instruction(
-                    &mut transaction,
-                    &ALICE_ID,
-                    RegisterPrivacyProtocolActivationV1::new(proposal).into(),
-                )
-                .expect_err("post-genesis registration requires governance authority");
+                .execute_instruction(&mut transaction, &ALICE_ID, instruction.clone().into())
+                .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
-            assert!(transaction.world.privacy_activations.get(&key).is_none());
+            assert!(
+                transaction
+                    .world
+                    .privacy_protocol_policies
+                    .get(&key)
+                    .is_none()
+            );
             grant_governance(&mut transaction);
-            crate::executor::Executor::Initial
-                .execute_instruction(
-                    &mut transaction,
-                    &ALICE_ID,
-                    RegisterPrivacyProtocolActivationV1::new(proposal).into(),
-                )
-                .expect("authorized registration");
-            let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: TEST_BLOCK_HEIGHT,
-                activated_at_height: TEST_BLOCK_HEIGHT,
-                state_since_height: TEST_BLOCK_HEIGHT,
-            });
             let error = crate::executor::Executor::Initial
                 .execute_instruction(
                     &mut transaction,
                     &iroha_test_samples::BOB_ID,
-                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
+                    instruction.clone().into(),
                 )
-                .expect_err("activation independently requires governance authority");
+                .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
-            assert_eq!(
-                transaction.world.privacy_activations.get(&key),
-                Some(&proposal)
-            );
-            let future = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: TEST_BLOCK_HEIGHT,
-                activated_at_height: TEST_BLOCK_HEIGHT + 1,
-                state_since_height: TEST_BLOCK_HEIGHT + 1,
-            });
             crate::executor::Executor::Initial
                 .execute_instruction(
                     &mut transaction,
                     &ALICE_ID,
-                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, future).into(),
+                    SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT, next)
+                        .into(),
                 )
-                .expect_err("a signed activation cannot claim another block height");
-            assert_eq!(
-                transaction.world.privacy_activations.get(&key),
-                Some(&proposal)
+                .expect_err("updates must be strictly future");
+            assert!(
+                transaction
+                    .world
+                    .privacy_protocol_policies
+                    .get(&key)
+                    .is_none()
             );
             crate::executor::Executor::Initial
-                .execute_instruction(
-                    &mut transaction,
-                    &ALICE_ID,
-                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
-                )
-                .expect("valid explicit activation");
+                .execute_instruction(&mut transaction, &ALICE_ID, instruction.into())
+                .unwrap();
         }
         assert!(
-            block.world.privacy_activations.get(&key).is_none(),
-            "an unapplied transaction rolls back both registration and activation"
+            block.world.privacy_protocol_policies.get(&key).is_none(),
+            "dropping the uncommitted transaction rolls back the optional policy row"
         );
     }
     struct KatRng {
@@ -6209,18 +6148,19 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for KatRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_be_bytes(bytes))
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_be_bytes(bytes))
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
                 hash.update(b"iroha.privacy.pgc-runtime-test-rng.v1");
@@ -6230,127 +6170,235 @@ mod tests {
                 let block: [u8; 32] = hash.finalize().into();
                 chunk.copy_from_slice(&block[..chunk.len()]);
             }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         SecretScalarV1::from_bytes(bytes).expect("canonical non-zero scalar")
     }
-    include!("privacy/active_lifecycle_helper.rs");
-    fn valid_bootstrap_instruction() -> BootstrapPrivacyPgcAccountsV1 {
-        static INSTRUCTION: OnceLock<BootstrapPrivacyPgcAccountsV1> = OnceLock::new();
+    /// Actual signed request producer; proof bytes are exclusively in its signed occurrence.
+    #[derive(Clone)]
+    struct PgcBootstrapFixture {
+        network_id: NetworkId,
+        request: BootstrapPrivacyPgcAccountsV1,
+        proof: PrivacyPgcBootstrapProofBytesV1,
+    }
+    impl PgcBootstrapFixture {
+        fn signed_source(&self) -> iroha_data_model::transaction::SignedTransaction {
+            use iroha_data_model::transaction::{
+                FeePaymentIntent, TransactionBuilder,
+                signed_attachments::{
+                    ActionAuthorityBindingV1, ActionInvocationBindingV1, ActionOperationV1,
+                    ActionPublicInputsDigestV1, ActionRoleV1, AttachmentKindV1, AttachmentRoleV1,
+                    PlannedActionV1, PlannedAttachmentV1, SignedAttachmentPlanV1,
+                },
+            };
+            let mut plan = SignedAttachmentPlanV1::new();
+            plan.push_action(PlannedActionV1 {
+                operation: ActionOperationV1::NativeInstruction(
+                    BootstrapPrivacyPgcAccountsV1::WIRE_ID.to_owned(),
+                ),
+                role: ActionRoleV1::Administrative,
+                authority: ActionAuthorityBindingV1::TransactionAuthority,
+                invocation: ActionInvocationBindingV1::Direct {
+                    instruction_index: 0,
+                },
+                public_inputs_digest: ActionPublicInputsDigestV1::new(
+                    *self
+                        .request
+                        .bootstrap
+                        .digest()
+                        .expect("bootstrap digest")
+                        .as_bytes(),
+                ),
+                attachments: vec![PlannedAttachmentV1 {
+                    kind: AttachmentKindV1::Proof,
+                    role: AttachmentRoleV1::ActionProof,
+                    bytes: self.proof.as_bytes().to_vec(),
+                }],
+            });
+            let mut builder = TransactionBuilder::new(
+                self.network_id,
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(vec![], None),
+            )
+            .with_instructions([self.request.clone()])
+            .with_signed_attachments(plan.declare());
+            builder.set_creation_time(std::time::Duration::from_millis(1234));
+            builder.set_nonce(std::num::NonZeroU32::new(1).unwrap());
+            builder.sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+        }
+        fn execute_signed(
+            self,
+            authority: &AccountId,
+            state: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            execute_signed_pgc_source(&self.signed_source(), authority, state)
+        }
+    }
+    fn execute_signed_pgc_source(
+        source: &iroha_data_model::transaction::SignedTransaction,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use crate::executor::attachment_custody::{
+            AttachmentCustody, CustodyError, pgc_bootstrap::BootstrapError,
+        };
+        #[derive(Debug, thiserror::Error)]
+        enum FixtureError {
+            #[error(transparent)]
+            Custody(#[from] CustodyError),
+            #[error(transparent)]
+            Native(#[from] Error),
+        }
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            source.instructions()
+        else {
+            panic!("original direct request");
+        };
+        let original = instructions[0]
+            .as_any()
+            .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
+            .expect("exact original request");
+        let mut custody = AttachmentCustody::new(source)
+            .map_err(|error| pgc_attachment_error(state, BootstrapError::Custody(error)))?;
+        let result: Result<(), FixtureError> = custody.direct(0, authority, |invocation| {
+            execute_pgc_bootstrap(original, authority, state, invocation).map_err(Into::into)
+        });
+        result.map_err(|error| match error {
+            FixtureError::Custody(error) => {
+                pgc_attachment_error(state, BootstrapError::Custody(error))
+            }
+            FixtureError::Native(error) => error,
+        })?;
+        custody
+            .finish()
+            .map_err(|error| pgc_attachment_error(state, BootstrapError::Custody(error)))
+    }
+    fn valid_bootstrap_fixture() -> PgcBootstrapFixture {
+        static INSTRUCTION: OnceLock<PgcBootstrapFixture> = OnceLock::new();
         INSTRUCTION
-            .get_or_init(|| {
-                let namespace = PrivacyNamespaceV1::new(
-                    PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
-                        pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
-                    }),
-                );
-                let balances = vec![100_u32; 16];
-                let total_supply = balances.iter().copied().sum();
-                let mut key_pairs = (2_u64..18)
-                    .map(|value| {
-                        TwistedElGamalKeyPairV1::from_secret(secret(value)).expect("PGC key pair")
-                    })
-                    .collect::<Vec<_>>();
-                key_pairs.sort_by_key(TwistedElGamalKeyPairV1::public_key);
-                let public_keys = key_pairs
-                    .iter()
-                    .map(TwistedElGamalKeyPairV1::public_key)
-                    .collect::<Vec<_>>();
-                let randomness = (0_u64..16)
-                    .map(|index| secret(200 + index))
-                    .collect::<Vec<_>>();
-                let encrypted_balances = public_keys
-                    .iter()
-                    .copied()
-                    .zip(&balances)
-                    .zip(&randomness)
-                    .map(|((public_key, balance), randomness)| {
-                        encrypt_with_randomness(public_key, *balance, randomness)
-                            .expect("PGC encrypted balance")
-                    })
-                    .collect::<Vec<_>>();
-                let accounts = public_keys
-                    .iter()
-                    .zip(&encrypted_balances)
-                    .map(|(public_key, encrypted_balance)| PrivacyPgcAccountV1 {
-                        public_key: PrivacyP256PointV1::new(*public_key.as_point().as_bytes()),
-                        encrypted_balance: PrivacyP256CiphertextV1 {
-                            left: PrivacyP256PointV1::new(*encrypted_balance.left().as_bytes()),
-                            right: PrivacyP256PointV1::new(*encrypted_balance.right().as_bytes()),
-                        },
-                    })
-                    .collect::<Vec<_>>();
-                let initial_epoch = 1;
-                let initial_root = compute_privacy_pgc_account_state_root_v1(
-                    namespace,
-                    initial_epoch,
-                    total_supply,
-                    &accounts,
-                )
-                .expect("canonical PGC root");
-                let bootstrap = PrivacyPgcAccountBootstrapV1 {
-                    namespace,
-                    initial_root,
-                    initial_epoch,
-                    total_supply,
-                    accounts,
-                };
-                let bootstrap_digest = bootstrap.digest().expect("bootstrap digest");
-                let namespace_encoding = norito::to_bytes(&namespace).expect("namespace encoding");
-                let compiled =
-                    compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-                        .expect("compiled Anonymous PGC profile");
-                let parameters = AnonymousPgcParametersV1::get().expect("Anonymous PGC parameters");
-                let statement = AnonymousPgcBootstrapStatementV1::new(
-                    &namespace_encoding,
-                    *initial_root.as_bytes(),
-                    initial_epoch,
-                    total_supply,
-                    &public_keys,
-                    &encrypted_balances,
-                    TranscriptBindingV1 {
-                        network_id: &TEST_GENESIS_HASH,
-                        genesis_hash: TEST_GENESIS_HASH,
-                        action_index: 0,
-                        statement_digest: *bootstrap_digest.as_bytes(),
-                        parameter_id: *compiled.parameter_id.as_bytes(),
-                        parameter_digest: *compiled.parameter_digest.as_bytes(),
-                        verifier_digest: *compiled.verifier_digest.as_bytes(),
-                        statement_schema_digest: *compiled.statement_schema_digest.as_bytes(),
-                        engine_manifest_digest: *compiled.engine_manifest_digest.as_bytes(),
-                        generator_digest: parameters.generator_digest(),
-                    },
-                )
-                .expect("native bootstrap statement");
-                let witness = AnonymousPgcBootstrapWitnessV1 {
-                    balances: &balances,
-                    randomness: &randomness,
-                };
-                let proof = prove_bootstrap(&statement, &witness, &mut KatRng::new([0xB7; 32]))
-                    .expect("native bootstrap proof")
-                    .encode();
-                BootstrapPrivacyPgcAccountsV1::new(
-                    bootstrap,
-                    PrivacyPgcBootstrapProofBytesV1::new(proof),
-                )
-            })
+            .get_or_init(|| bootstrap_fixture_for_network(test_network_id()))
             .clone()
+    }
+    fn bootstrap_fixture_for_network(network_id: NetworkId) -> PgcBootstrapFixture {
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
+            }),
+        );
+        let balances = vec![100_u32; 16];
+        let total_supply = balances.iter().copied().sum();
+        let mut key_pairs = (2_u64..18)
+            .map(|value| TwistedElGamalKeyPairV1::from_secret(secret(value)).expect("PGC key pair"))
+            .collect::<Vec<_>>();
+        key_pairs.sort_by_key(TwistedElGamalKeyPairV1::public_key);
+        let public_keys = key_pairs
+            .iter()
+            .map(TwistedElGamalKeyPairV1::public_key)
+            .collect::<Vec<_>>();
+        let randomness = (0_u64..16)
+            .map(|index| secret(200 + index))
+            .collect::<Vec<_>>();
+        let encrypted_balances = public_keys
+            .iter()
+            .copied()
+            .zip(&balances)
+            .zip(&randomness)
+            .map(|((public_key, balance), randomness)| {
+                encrypt_with_randomness(public_key, *balance, randomness)
+                    .expect("PGC encrypted balance")
+            })
+            .collect::<Vec<_>>();
+        let accounts = public_keys
+            .iter()
+            .zip(&encrypted_balances)
+            .map(|(public_key, encrypted_balance)| PrivacyPgcAccountV1 {
+                public_key: PrivacyP256PointV1::new(*public_key.as_point().as_bytes()),
+                encrypted_balance: PrivacyP256CiphertextV1 {
+                    left: PrivacyP256PointV1::new(*encrypted_balance.left().as_bytes()),
+                    right: PrivacyP256PointV1::new(*encrypted_balance.right().as_bytes()),
+                },
+            })
+            .collect::<Vec<_>>();
+        let initial_epoch = 1;
+        let initial_root = derive_privacy_pgc_account_state_root_v1(
+            namespace,
+            initial_epoch,
+            total_supply,
+            &accounts,
+        )
+        .expect("canonical PGC root");
+        let bootstrap = PrivacyPgcAccountBootstrapV1 {
+            namespace,
+            initial_root,
+            initial_epoch,
+            total_supply,
+            accounts,
+        };
+        let mut fixture = PgcBootstrapFixture {
+            network_id,
+            request: BootstrapPrivacyPgcAccountsV1::new(
+                bootstrap,
+                iroha_data_model::transaction::signed_attachments::ActionAttachmentRefV1 {
+                    action_index: 0,
+                    slot_index: 0,
+                },
+            ),
+            proof: PrivacyPgcBootstrapProofBytesV1::new(vec![1]),
+        };
+        let signed = fixture.signed_source();
+        let statement_digest = signed
+            .attachments()
+            .expect("signed attachments")
+            .action(0)
+            .expect("signed action")
+            .statement_digest;
+        let namespace_encoding = norito::to_bytes(&namespace).expect("namespace encoding");
+        let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+            .expect("compiled Anonymous PGC profile");
+        let parameters = AnonymousPgcParametersV1::get().expect("Anonymous PGC parameters");
+        let statement = AnonymousPgcBootstrapStatementV1::new(
+            &namespace_encoding,
+            *initial_root.as_bytes(),
+            initial_epoch,
+            total_supply,
+            &public_keys,
+            &encrypted_balances,
+            &TranscriptBindingV1 {
+                network_id: network_id.as_bytes(),
+                genesis_hash: *network_id.as_bytes(),
+                action_index: 0,
+                statement_digest: *statement_digest.as_bytes(),
+                parameter_id: *compiled.parameter_id.as_bytes(),
+                parameter_digest: *compiled.parameter_digest.as_bytes(),
+                verifier_digest: *compiled.verifier_digest.as_bytes(),
+                statement_schema_digest: *compiled.statement_schema_digest.as_bytes(),
+                engine_manifest_digest: *compiled.engine_manifest_digest.as_bytes(),
+                generator_digest: parameters.generator_digest(),
+            },
+        )
+        .expect("native bootstrap statement");
+        let witness = AnonymousPgcBootstrapWitnessV1 {
+            balances: &balances,
+            randomness: &randomness,
+        };
+        let proof = prove_bootstrap(&statement, &witness, &mut KatRng::new([0xB7; 32]))
+            .expect("native bootstrap proof")
+            .encode();
+        fixture.proof = PrivacyPgcBootstrapProofBytesV1::new(proof);
+        fixture
     }
     fn valid_payment_instruction() -> SubmitPrivacyProofV1 {
         static INSTRUCTION: OnceLock<SubmitPrivacyProofV1> = OnceLock::new();
         INSTRUCTION
             .get_or_init(|| {
-                let bootstrap_instruction = valid_bootstrap_instruction();
-                let bootstrap = &bootstrap_instruction.bootstrap;
+                let bootstrap_instruction = valid_bootstrap_fixture();
+                let bootstrap = &bootstrap_instruction.request.bootstrap;
                 let compiled =
                     compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
                         .expect("compiled Anonymous PGC profile");
@@ -6429,7 +6477,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 let next_epoch = bootstrap.initial_epoch + 1;
-                let next_root = compute_privacy_pgc_account_state_root_v1(
+                let next_root = derive_privacy_pgc_account_state_root_v1(
                     bootstrap.namespace,
                     next_epoch,
                     bootstrap.total_supply,
@@ -6486,7 +6534,7 @@ mod tests {
                     &current_balances,
                     recipient_count,
                     pool_invariant,
-                    TranscriptBindingV1 {
+                    &TranscriptBindingV1 {
                         network_id: &TEST_GENESIS_HASH,
                         genesis_hash: TEST_GENESIS_HASH,
                         action_index: 0,
@@ -6578,22 +6626,20 @@ mod tests {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        // Exercise the same intent binding, resource preflight, native verifier, and state
-        // transition as Execute. This component fixture supplies an exact compiled activation;
-        // it does not construct or claim the separate Exact12 deployment qualification.
         let submission =
             PreparedPrivacySubmissionV1::prepare(instruction, authority, state_transaction)?;
-        let activation = *state_transaction
-            .world
-            .privacy_activations
-            .get(&PrivacyActivationKeyV1::new(
-                submission.envelope.protocol_id,
-            ))
-            .expect("proof execution fixture has its exact protocol activation");
-        assert_eq!(activation.protocol_id, submission.envelope.protocol_id);
-        validate_compiled_privacy_activation_v1(&activation)
-            .expect("proof execution fixture has exact compiled cryptographic bindings");
-        submission.execute_after_admission(authority, state_transaction, activation)
+        let admitted = resolve_admitted_privacy_protocol_v1(
+            &state_transaction.world.privacy_protocol_policies,
+            submission.envelope.protocol_id,
+            state_transaction.block_height(),
+        )
+        .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+        submission.execute_after_admission(
+            authority,
+            state_transaction,
+            *admitted.profile(),
+            *admitted.protocol_limits(),
+        )
     }
     fn install_synthetic_privacy_genesis_hash(state: &mut State, genesis_hash: [u8; 32]) {
         assert_eq!(
@@ -6611,16 +6657,9 @@ mod tests {
             Hash::prehashed(genesis_hash),
         ));
     }
-    fn state_with_activation(lifecycle: PrivacyProtocolLifecycleV1) -> State {
-        let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-            .expect("compiled Anonymous PGC profile")
-            .activation_record(lifecycle);
+    fn state_with_default_privacy_policy() -> State {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut world = World::with([], [alice], []);
-        world.privacy_activations.insert(
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
-            activation,
-        );
+        let world = World::with([], [alice], []);
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -6741,20 +6780,11 @@ mod tests {
             .expect("canonical terminal successor");
         successor
     }
-    fn state_with_exact_bootle_lantern_activation() -> State {
-        let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
-        let activation = compiled_privacy_profile_v1(protocol_id)
-            .expect("compiled Bootle/Lantern profile")
-            .activation_record(active_lifecycle());
-        validate_compiled_privacy_activation_v1(&activation)
-            .expect("exact compiled Bootle/Lantern activation");
+    fn state_with_bootle_lantern_issuer_domain() -> State {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut world = World::with([domain], [alice], []);
-        world
-            .privacy_activations
-            .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        let world = World::with([domain], [alice], []);
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -6888,7 +6918,7 @@ mod tests {
         )
         .expect("canonical X.509 signed-CRL fixture")
     }
-    fn state_without_zk_ace_activation() -> State {
+    fn zk_ace_test_state() -> State {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6938,10 +6968,6 @@ mod tests {
         )
         .build(&ALICE_ID);
         let mut world = World::with([domain], [alice], [asset_definition]);
-        world.privacy_activations.insert(
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1),
-            fixture.activation,
-        );
         let snapshot = &fixture.snapshot;
         let namespace = snapshot.namespace();
         let bootstrap = snapshot.bootstrap().clone();
@@ -7002,6 +7028,7 @@ mod tests {
                 snapshot.current_root(),
                 root_provenance,
                 None,
+                1,
             )
             .expect("FCMP++ bootstrap root head"),
         );
@@ -7129,6 +7156,7 @@ mod tests {
         );
     }
     include!("privacy/core_state_tests.rs");
+    include!("privacy/root_retention_policy_tests.rs");
     include!("privacy/role_dispatch_tests.rs");
     #[test]
     fn private_note_apply_rejections_preserve_every_proof_managed_record() {
@@ -7250,6 +7278,7 @@ mod tests {
                 snapshot.current_root(),
                 root_provenance,
                 None,
+                1,
             )
             .expect("private-IVM head"),
         );
@@ -7412,6 +7441,8 @@ mod tests {
     }
     #[test]
     fn bootle_lantern_submit_policy_resolution_is_exact_and_fail_closed() {
+        type StatementMutation = fn(&mut IrohaBootleLanternAnoncredStatementV1);
+
         let policy = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let statement = bootle_lantern_statement(&policy);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
@@ -7436,7 +7467,7 @@ mod tests {
                 .expect("exact active policy"),
             policy
         );
-        let statement_mutations: [(&str, fn(&mut IrohaBootleLanternAnoncredStatementV1), &str); 6] = [
+        let statement_mutations: [(&str, StatementMutation, &str); 6] = [
             (
                 "issuer",
                 |statement| statement.issuer_id.0[0] ^= 1,
@@ -7537,55 +7568,33 @@ mod tests {
         );
     }
     #[test]
-    fn bootle_lantern_governance_requires_the_exact_registered_activation() {
+    fn bootle_lantern_governance_uses_compiled_defaults_without_protocol_registration() {
+        let state = state_with_bootle_lantern_issuer_domain();
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        assert_eq!(
+            transaction.world.privacy_protocol_policies.iter().count(),
+            0
+        );
         let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
             initial.issuer_id,
             initial.policy_id,
         )
-        .expect("Bootle/Lantern policy key");
-        let state = state_with_activation(active_lifecycle());
-        let mut block = state.block(test_header());
-        let mut transaction = block.transaction();
-        grant_governance(&mut transaction);
-        let budget_before = transaction.privacy_budget_for_testing();
-        let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+        .unwrap();
+        RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial)
             .execute(&ALICE_ID, &mut transaction)
-            .expect_err("an unrelated compiled activation does not register Bootle/Lantern");
-        assert!(
-            smart_contract_parameter_message(&error).contains("not registered"),
-            "{error:?}"
+            .expect("actual implementation and ordinary issuer authority suffice");
+        assert!(transaction.world.privacy_commitments.get(&key).is_some());
+        assert_eq!(
+            transaction.world.privacy_protocol_policies.iter().count(),
+            0
         );
-        assert_eq!(transaction.world.privacy_commitments.get(&key), None);
-        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
-        let unrelated_activation = *transaction
-            .world
-            .privacy_activations
-            .get(&PrivacyActivationKeyV1::new(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            ))
-            .expect("unrelated compiled activation");
-        transaction.world.privacy_activations.insert(
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1),
-            unrelated_activation,
-        );
-        let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial)
-            .execute(&ALICE_ID, &mut transaction)
-            .expect_err("a wrong-role activation under the exact key fails closed");
-        assert!(
-            matches!(error, Error::InvariantViolation(_)),
-            "wrong-role activation returned {error:?}"
-        );
-        assert!(
-            error.to_string().contains("mismatched protocol id"),
-            "{error}"
-        );
-        assert_eq!(transaction.world.privacy_commitments.get(&key), None);
-        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
     #[test]
     fn bootle_lantern_governance_registers_rotates_revokes_and_is_failure_atomic() {
-        let state = state_with_exact_bootle_lantern_activation();
+        let state = state_with_bootle_lantern_issuer_domain();
         let header = test_header();
         let header_hash = header.hash();
         let mut block = state.block(header);
@@ -7803,7 +7812,7 @@ mod tests {
     }
     #[test]
     fn bootle_lantern_governance_rejects_transition_substitution_without_mutation() {
-        let state = state_with_exact_bootle_lantern_activation();
+        let state = state_with_bootle_lantern_issuer_domain();
         let mut block = state.block(test_header());
         let current = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
@@ -7963,7 +7972,7 @@ mod tests {
             initial.policy_id,
         )
         .expect("Bootle/Lantern policy key");
-        let state = state_with_exact_bootle_lantern_activation();
+        let state = state_with_bootle_lantern_issuer_domain();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
@@ -7981,7 +7990,7 @@ mod tests {
         );
         assert_eq!(transaction.world.privacy_commitments.get(&key), None);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
-        let state = state_with_exact_bootle_lantern_activation();
+        let state = state_with_bootle_lantern_issuer_domain();
         let mut block = state.block(test_header());
         {
             let mut transaction = block.transaction();
@@ -8085,8 +8094,8 @@ mod tests {
     #[path = "zk_x509_governance_tests.rs"]
     mod zk_x509_governance_tests;
     #[test]
-    fn zk_ace_policy_governance_fails_closed_without_activation() {
-        let state = state_without_zk_ace_activation();
+    fn zk_ace_policy_governance_retains_actual_missing_engine_refusal() {
+        let state = zk_ace_test_state();
         let mut block = state.block(test_header());
         let initial = valid_zk_ace_policy();
         let policy_key =
@@ -8098,7 +8107,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("unavailable ZK-ACE profile must not admit policy state");
         assert!(
-            smart_contract_parameter_message(&error).contains("not registered"),
+            smart_contract_parameter_message(&error).contains("native privacy engine"),
             "{error:?}"
         );
         assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
@@ -8106,7 +8115,7 @@ mod tests {
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn zk_ace_submit_has_no_activatable_compiled_profile() {
+    fn zk_ace_submit_has_no_available_compiled_profile() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
@@ -8148,10 +8157,6 @@ mod tests {
         )
         .expect("ZK-AMS issuer record key");
         let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.privacy_activations.insert(
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaZkAmsV1),
-            fixture.activation,
-        );
         world.privacy_commitments.insert(
             issuer_record_key,
             PrivacyStateItemRecordV1::zk_ams_governance(bootstrap_digest, 2)
@@ -8198,6 +8203,7 @@ mod tests {
                 fixture.current_root,
                 prestate_provenance,
                 None,
+                2,
             )
             .expect("ZK-AMS prestate root head"),
         );
@@ -8374,7 +8380,7 @@ mod tests {
         );
     }
     #[test]
-    fn zk_ace_policy_governance_has_no_compiled_activation_to_substitute() {
+    fn zk_ace_policy_governance_has_no_compiled_implementation_to_substitute() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
@@ -8384,14 +8390,14 @@ mod tests {
                 }
             )
         );
-        let state = state_without_zk_ace_activation();
+        let state = zk_ace_test_state();
         let mut block = state.block(test_header());
         let transaction = block.transaction();
         assert!(
             transaction
                 .world
-                .privacy_activations
-                .get(&PrivacyActivationKeyV1::new(protocol_id))
+                .privacy_protocol_policies
+                .get(&PrivacyProtocolPolicyKeyV1::new(protocol_id))
                 .is_none()
         );
     }
@@ -8400,9 +8406,8 @@ mod tests {
         let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
         next_limits.max_actions_per_block -= 1;
         next_limits.retained_root_count -= 1;
-        let valid =
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, next_limits);
-        let state = state_with_activation(active_lifecycle());
+        let valid = SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT + 1, next_limits);
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let original = *transaction.world.privacy_consensus_policy.get();
@@ -8414,10 +8419,10 @@ mod tests {
         assert_eq!(*transaction.world.privacy_consensus_policy.get(), original);
         grant_governance(&mut transaction);
         for invalid in [
-            SchedulePrivacyConsensusPolicyTighteningV1::new(1, next_limits),
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT, next_limits),
-            SchedulePrivacyConsensusPolicyTighteningV1::new(0, next_limits),
-            SchedulePrivacyConsensusPolicyTighteningV1::new(
+            SchedulePrivacyConsensusPolicyUpdateV1::new(1, next_limits),
+            SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT, next_limits),
+            SchedulePrivacyConsensusPolicyUpdateV1::new(0, next_limits),
+            SchedulePrivacyConsensusPolicyUpdateV1::new(
                 TEST_BLOCK_HEIGHT + 1,
                 PrivacyConsensusLimitsV1::taira_default(),
             ),
@@ -8425,12 +8430,12 @@ mod tests {
                 let mut increased = next_limits;
                 increased.max_actions_per_block =
                     PrivacyConsensusLimitsV1::taira_default().max_actions_per_block + 1;
-                SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, increased)
+                SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT + 1, increased)
             },
         ] {
             invalid
                 .execute(&ALICE_ID, &mut transaction)
-                .expect_err("malformed or non-tightening schedule");
+                .expect_err("malformed or unchanged schedule");
             assert_eq!(
                 *transaction.world.privacy_consensus_policy.get(),
                 original,
@@ -8439,17 +8444,17 @@ mod tests {
         }
         valid
             .execute(&ALICE_ID, &mut transaction)
-            .expect("next-block strict tightening");
+            .expect("next-block bounded update");
         let scheduled = *transaction.world.privacy_consensus_policy.get();
         assert_eq!(scheduled.current_limits, original.current_limits);
-        let pending = scheduled.pending_tightening.expect("pending tightening");
+        let pending = scheduled.pending_update.expect("pending update");
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
         assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 1);
         assert_eq!(pending.next_limits, next_limits);
         let mut other_limits = next_limits;
         other_limits.retained_root_count -= 1;
         let error =
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 2, other_limits)
+            SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT + 2, other_limits)
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("a pending schedule cannot be overwritten");
         assert!(
@@ -8463,30 +8468,28 @@ mod tests {
         );
     }
     #[test]
-    fn protocol_limit_schedule_rejects_bad_authority_mismatch_increase_noop_and_overwrite() {
-        let state = state_with_activation(active_lifecycle());
+    fn protocol_limit_schedule_rejects_bad_authority_mismatch_over_cap_noop_and_overwrite() {
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
-        let key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
-        let mut current = *transaction
-            .world
-            .privacy_activations
-            .get(&key)
-            .expect("Anonymous PGC activation");
-        current.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-            AnonymousPgcActivationLimitsV1 {
+        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
+        let mut current = PrivacyProtocolPolicyV1::canonical_default_v1(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        );
+        current.current_limits =
+            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 32,
                 max_recipient_count: 8,
-            },
-        );
-        transaction.world.privacy_activations.insert(key, current);
-        let next = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-            AnonymousPgcActivationLimitsV1 {
-                max_anonymity_set_size: 16,
-                max_recipient_count: 8,
-            },
-        );
-        let valid = SchedulePrivacyProtocolLimitsTighteningV1::new(
+            });
+        transaction
+            .world
+            .privacy_protocol_policies
+            .insert(key, current);
+        let next = PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            max_anonymity_set_size: 16,
+            max_recipient_count: 8,
+        });
+        let valid = SchedulePrivacyProtocolLimitsUpdateV1::new(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             TEST_BLOCK_HEIGHT + 1,
             next,
@@ -8497,47 +8500,35 @@ mod tests {
             .expect_err("governance permission is mandatory");
         assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
         assert_eq!(
-            transaction.world.privacy_activations.get(&key),
+            transaction.world.privacy_protocol_policies.get(&key),
             Some(&current)
         );
         grant_governance(&mut transaction);
         let invalid = [
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 TEST_BLOCK_HEIGHT - 1,
                 next,
             ),
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 TEST_BLOCK_HEIGHT + 1,
-                current.protocol_limits,
+                current.current_limits,
             ),
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 TEST_BLOCK_HEIGHT + 1,
-                PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-                    AnonymousPgcActivationLimitsV1 {
-                        max_anonymity_set_size: 64,
-                        max_recipient_count: 8,
-                    },
-                ),
+                PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+                    max_anonymity_set_size: 128,
+                    max_recipient_count: 8,
+                }),
             ),
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 TEST_BLOCK_HEIGHT + 1,
-                PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
-                    iroha_data_model::privacy::VeRangeActivationLimitsV1 {
+                PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(
+                    iroha_data_model::privacy::VeRangeLimitsV1 {
                         max_aggregation_count: 8,
-                    },
-                ),
-            ),
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
-                PrivacyProtocolIdV1::PqMaspStarkV1,
-                TEST_BLOCK_HEIGHT + 1,
-                PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(
-                    iroha_data_model::privacy::PqMaspActivationLimitsV1 {
-                        max_input_count: 1,
-                        max_output_count: 1,
                     },
                 ),
             ),
@@ -8547,27 +8538,25 @@ mod tests {
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("invalid protocol schedule");
             assert_eq!(
-                transaction.world.privacy_activations.get(&key),
+                transaction.world.privacy_protocol_policies.get(&key),
                 Some(&current),
-                "rejected scheduling must preserve the activation"
+                "rejected scheduling must preserve the policy"
             );
         }
         valid
             .execute(&ALICE_ID, &mut transaction)
-            .expect("next-block strict protocol tightening");
+            .expect("next-block bounded protocol update");
         let scheduled = *transaction
             .world
-            .privacy_activations
+            .privacy_protocol_policies
             .get(&key)
-            .expect("scheduled activation");
-        assert_eq!(scheduled.protocol_limits, current.protocol_limits);
-        let pending = scheduled
-            .pending_protocol_limits_tightening
-            .expect("pending protocol limits");
+            .expect("scheduled policy");
+        assert_eq!(scheduled.current_limits, current.current_limits);
+        let pending = scheduled.pending_update.expect("pending protocol limits");
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
         assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 1);
         assert_eq!(pending.next_limits, next);
-        let error = SchedulePrivacyProtocolLimitsTighteningV1::new(
+        let error = SchedulePrivacyProtocolLimitsUpdateV1::new(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             TEST_BLOCK_HEIGHT + 2,
             next,
@@ -8579,33 +8568,34 @@ mod tests {
             "{error}"
         );
         assert_eq!(
-            transaction.world.privacy_activations.get(&key),
+            transaction.world.privacy_protocol_policies.get(&key),
             Some(&scheduled)
         );
     }
     #[test]
-    fn next_block_tightening_applies_only_after_committed_schedule() {
+    fn next_block_update_applies_only_after_committed_schedule() {
         for commit_schedule in [false, true] {
-            let state = state_with_activation(active_lifecycle());
-            let key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
+            let state = state_with_default_privacy_policy();
+            let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
             let mut block = state.block(test_header());
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
             let original_policy = *transaction.world.privacy_consensus_policy.get();
-            let original_activation = *transaction.world.privacy_activations.get(&key).unwrap();
+            let original_protocol = PrivacyProtocolPolicyV1::canonical_default_v1(
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            );
             let mut next_policy = original_policy.current_limits;
             next_policy.retained_root_count -= 1;
-            let mut next_protocol = original_activation.protocol_limits;
-            let PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(ref mut limits) =
-                next_protocol
+            let mut next_protocol = original_protocol.current_limits;
+            let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut limits) = next_protocol
             else {
                 unreachable!("Anonymous PGC fixture")
             };
             limits.max_anonymity_set_size /= 2;
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, next_policy)
+            SchedulePrivacyConsensusPolicyUpdateV1::new(TEST_BLOCK_HEIGHT + 1, next_policy)
                 .execute(&ALICE_ID, &mut transaction)
                 .expect("governed next-block consensus tightening");
-            SchedulePrivacyProtocolLimitsTighteningV1::new(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 TEST_BLOCK_HEIGHT + 1,
                 next_protocol,
@@ -8624,11 +8614,11 @@ mod tests {
             assert_eq!(
                 transaction
                     .world
-                    .privacy_activations
+                    .privacy_protocol_policies
                     .get(&key)
                     .unwrap()
-                    .protocol_limits,
-                original_activation.protocol_limits
+                    .current_limits,
+                original_protocol.current_limits
             );
             if commit_schedule {
                 transaction.apply();
@@ -8641,10 +8631,14 @@ mod tests {
             let mut next_block = state.block(test_header_at(TEST_BLOCK_HEIGHT + 1));
             let transaction = next_block.transaction();
             let policy = transaction.world.privacy_consensus_policy.get();
-            let activation = transaction.world.privacy_activations.get(&key).unwrap();
-            assert_eq!(policy.pending_tightening, None);
-            assert_eq!(activation.pending_protocol_limits_tightening, None);
-            assert_eq!(activation.lifecycle, original_activation.lifecycle);
+            let protocol = transaction
+                .world
+                .privacy_protocol_policies
+                .get(&key)
+                .copied()
+                .unwrap_or(original_protocol);
+            assert_eq!(policy.pending_update, None);
+            assert_eq!(protocol.pending_update, None);
             assert_eq!(
                 policy.current_limits,
                 if commit_schedule {
@@ -8654,56 +8648,96 @@ mod tests {
                 }
             );
             assert_eq!(
-                activation.protocol_limits,
+                protocol.current_limits,
                 if commit_schedule {
                     next_protocol
                 } else {
-                    original_activation.protocol_limits
+                    original_protocol.current_limits
                 }
             );
         }
     }
     #[test]
-    fn pgc_bootstrap_rejects_authority_inactive_and_future_activation_without_mutation() {
-        let instruction = valid_bootstrap_instruction();
-        let state = state_with_activation(active_lifecycle());
+    fn authorized_protocol_updates_allow_both_directions_without_changing_compiled_profile() {
+        for (current_count, next_count) in [(1, 2), (2, 1)] {
+            let state = state_with_default_privacy_policy();
+            let mut block = state.block(test_header());
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+            let limits = |count| {
+                PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(
+                    iroha_data_model::privacy::VeRangeLimitsV1 {
+                        max_aggregation_count: count,
+                    },
+                )
+            };
+            let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+            let current = PrivacyProtocolPolicyV1 {
+                protocol_id: protocol,
+                current_limits: limits(current_count),
+                pending_update: None,
+            };
+            transaction
+                .world
+                .privacy_protocol_policies
+                .insert(key, current);
+            let original_profile = compiled_privacy_profile_v1(protocol).unwrap().snapshot();
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                protocol,
+                TEST_BLOCK_HEIGHT + 1,
+                limits(next_count),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .unwrap();
+            let stored = transaction
+                .world
+                .privacy_protocol_policies
+                .get(&key)
+                .unwrap();
+            assert_eq!(stored.current_limits, current.current_limits);
+            assert_eq!(
+                stored.pending_update.unwrap().next_limits,
+                limits(next_count)
+            );
+            let admitted = resolve_admitted_privacy_protocol_v1(
+                &transaction.world.privacy_protocol_policies,
+                protocol,
+                TEST_BLOCK_HEIGHT,
+            )
+            .unwrap();
+            assert_eq!(admitted.profile(), &original_profile);
+            assert_eq!(admitted.protocol_limits(), &current.current_limits);
+        }
+    }
+
+    #[test]
+    fn pgc_bootstrap_rejects_bad_authority_and_malformed_selected_policy_without_mutation() {
+        let instruction = valid_bootstrap_fixture();
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let error = instruction
             .clone()
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("authority without exact governance permission");
         assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
         assert_empty_and_unbudgeted(&transaction);
-        for lifecycle in [
-            PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                proposed_at_height: 1,
-            }),
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 20,
-                state_since_height: 20,
-            }),
-        ] {
-            let state = state_with_activation(lifecycle);
-            let mut block = state.block(test_header());
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            let error = instruction
-                .clone()
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("inactive or future activation");
-            assert!(
-                smart_contract_parameter_message(&error).contains("before")
-                    || smart_contract_parameter_message(&error).contains("not effective"),
-                "{error}"
-            );
-            assert_empty_and_unbudgeted(&transaction);
-        }
+        grant_governance(&mut transaction);
+        transaction.world.privacy_protocol_policies.insert(
+            PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
+            PrivacyProtocolPolicyV1::canonical_default_v1(
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            ),
+        );
+        instruction
+            .execute_signed(&ALICE_ID, &mut transaction)
+            .expect_err("selected malformed protocol policy is rejected");
+        assert_empty_and_unbudgeted(&transaction);
     }
     #[test]
     fn pgc_bootstrap_cap_and_action_budget_rejections_are_non_mutating() {
-        let mut oversized = valid_bootstrap_instruction();
+        let mut oversized = valid_bootstrap_fixture();
         oversized.proof = PrivacyPgcBootstrapProofBytesV1::new(vec![
             1;
             usize::try_from(
@@ -8712,19 +8746,19 @@ mod tests {
             .expect("proof cap fits usize")
                 + 1
         ]);
-        let state = state_with_activation(active_lifecycle());
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         let error = oversized
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("oversized bootstrap proof");
         assert!(
             smart_contract_parameter_message(&error).contains("exceeding maximum"),
             "{error:?}"
         );
         assert_empty_and_unbudgeted(&transaction);
-        let state = state_with_activation(active_lifecycle());
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
@@ -8732,8 +8766,8 @@ mod tests {
             .reserve_privacy_action(0, 64)
             .expect("consume the sole transaction action");
         let budget_before = transaction.privacy_budget_for_testing();
-        let error = valid_bootstrap_instruction()
-            .execute(&ALICE_ID, &mut transaction)
+        let error = valid_bootstrap_fixture()
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("exhausted action budget");
         assert!(
             smart_contract_parameter_message(&error)
@@ -8745,43 +8779,43 @@ mod tests {
     }
     #[test]
     fn altered_pgc_bootstrap_fields_and_proof_leave_all_state_unchanged() {
-        let mut altered_root = valid_bootstrap_instruction();
-        altered_root.bootstrap.initial_root = PrivacyRootV1::new([0xD1; 32]);
-        let state = state_with_activation(active_lifecycle());
+        let mut altered_root = valid_bootstrap_fixture();
+        altered_root.request.bootstrap.initial_root = PrivacyRootV1::new([0xD1; 32]);
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         let error = altered_root
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("altered public bootstrap root");
         assert!(
             smart_contract_parameter_message(&error).contains("root does not match"),
             "{error:?}"
         );
         assert_empty_and_unbudgeted(&transaction);
-        let mut altered_supply = valid_bootstrap_instruction();
-        altered_supply.bootstrap.total_supply += 1;
-        let state = state_with_activation(active_lifecycle());
+        let mut altered_supply = valid_bootstrap_fixture();
+        altered_supply.request.bootstrap.total_supply += 1;
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         let error = altered_supply
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("altered public aggregate supply");
         assert!(
             smart_contract_parameter_message(&error).contains("root does not match"),
             "{error:?}"
         );
         assert_empty_and_unbudgeted(&transaction);
-        let mut altered_proof = valid_bootstrap_instruction();
+        let mut altered_proof = valid_bootstrap_fixture();
         let middle = altered_proof.proof.bytes.len() / 2;
         altered_proof.proof.bytes[middle] ^= 1;
-        let state = state_with_activation(active_lifecycle());
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
         let error = altered_proof
-            .execute(&ALICE_ID, &mut transaction)
+            .execute_signed(&ALICE_ID, &mut transaction)
             .expect_err("altered native proof");
         assert!(
             smart_contract_parameter_message(&error).contains("proof verification failed"),
@@ -8798,8 +8832,12 @@ mod tests {
             Root,
             Head,
         }
-        let instruction = valid_bootstrap_instruction();
-        let bootstrap_digest = instruction.bootstrap.digest().expect("bootstrap digest");
+        let instruction = valid_bootstrap_fixture();
+        let bootstrap_digest = instruction
+            .request
+            .bootstrap
+            .digest()
+            .expect("bootstrap digest");
         let proof_digest = instruction.proof.digest().expect("proof digest");
         let root_provenance =
             PrivacyRootProvenanceV1::verified_bootstrap(bootstrap_digest, proof_digest, 9)
@@ -8807,42 +8845,46 @@ mod tests {
         let account_provenance =
             PrivacyPgcAccountProvenanceV1::bootstrap(bootstrap_digest, proof_digest, 9)
                 .expect("account provenance");
-        let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(instruction.bootstrap.namespace)
-            .expect("invariant key");
+        let invariant_key =
+            PrivacyPgcPoolInvariantKeyV1::new(instruction.request.bootstrap.namespace)
+                .expect("invariant key");
         let invariant = PrivacyPgcPoolInvariantV1::new(
-            instruction.bootstrap.total_supply,
-            instruction.bootstrap.initial_root,
+            instruction.request.bootstrap.total_supply,
+            instruction.request.bootstrap.initial_root,
             bootstrap_digest,
             proof_digest,
         )
         .expect("invariant");
-        let first_account = &instruction.bootstrap.accounts[0];
-        let account_key =
-            PrivacyPgcAccountKeyV1::new(instruction.bootstrap.namespace, first_account.public_key)
-                .expect("account key");
+        let first_account = &instruction.request.bootstrap.accounts[0];
+        let account_key = PrivacyPgcAccountKeyV1::new(
+            instruction.request.bootstrap.namespace,
+            first_account.public_key,
+        )
+        .expect("account key");
         let account_state = PrivacyPgcAccountStateV1::new(
             first_account.encrypted_balance,
-            instruction.bootstrap.initial_epoch,
+            instruction.request.bootstrap.initial_epoch,
             account_provenance,
         )
         .expect("account state");
         let root_key = PrivacyRootKeyV1::new(
-            instruction.bootstrap.namespace,
+            instruction.request.bootstrap.namespace,
             PrivacyRootRoleV1::PgcAccountState,
-            instruction.bootstrap.initial_epoch,
-            instruction.bootstrap.initial_root,
+            instruction.request.bootstrap.initial_epoch,
+            instruction.request.bootstrap.initial_root,
         )
         .expect("root key");
         let head_key = PrivacyRootHeadKeyV1::new(
-            instruction.bootstrap.namespace,
+            instruction.request.bootstrap.namespace,
             PrivacyRootRoleV1::PgcAccountState,
         )
         .expect("head key");
         let head = PrivacyRootHeadRecordV1::new(
-            instruction.bootstrap.initial_epoch,
-            instruction.bootstrap.initial_root,
+            instruction.request.bootstrap.initial_epoch,
+            instruction.request.bootstrap.initial_root,
             root_provenance.clone(),
             None,
+            1,
         )
         .expect("root head");
         for orphan in [
@@ -8851,7 +8893,7 @@ mod tests {
             Orphan::Root,
             Orphan::Head,
         ] {
-            let state = state_with_activation(active_lifecycle());
+            let state = state_with_default_privacy_policy();
             let mut block = state.block(test_header());
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -8884,8 +8926,8 @@ mod tests {
             let counts_before = privacy_map_counts(&transaction);
             let budget_before = transaction.privacy_budget_for_testing();
             assert!(
-                valid_bootstrap_instruction()
-                    .execute(&ALICE_ID, &mut transaction)
+                valid_bootstrap_fixture()
+                    .execute_signed(&ALICE_ID, &mut transaction)
                     .is_err(),
                 "{orphan:?} must reject"
             );
@@ -8903,21 +8945,22 @@ mod tests {
     }
     #[test]
     fn successful_pgc_bootstrap_is_atomic_and_double_bootstrap_rejects() {
-        let instruction = valid_bootstrap_instruction();
+        let instruction = valid_bootstrap_fixture();
         let encoded_action_bytes = u64::try_from(
-            norito::to_bytes(&instruction)
+            norito::to_bytes(&instruction.request)
                 .expect("instruction encoding")
                 .len(),
         )
-        .expect("encoded length");
-        let state = state_with_activation(active_lifecycle());
+        .expect("encoded length")
+            + u64::try_from(instruction.proof.as_bytes().len()).expect("original proof length");
+        let state = state_with_default_privacy_policy();
         let mut block = state.block(test_header());
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
             instruction
                 .clone()
-                .execute(&ALICE_ID, &mut transaction)
+                .execute_signed(&ALICE_ID, &mut transaction)
                 .expect("complete native bootstrap");
             assert_eq!(privacy_map_counts(&transaction), (1, 16, 1, 1));
             assert_eq!(
@@ -8931,7 +8974,7 @@ mod tests {
             let counts_before = privacy_map_counts(&transaction);
             let budget_before = transaction.privacy_budget_for_testing();
             let error = instruction
-                .execute(&ALICE_ID, &mut transaction)
+                .execute_signed(&ALICE_ID, &mut transaction)
                 .expect_err("double bootstrap");
             assert!(
                 smart_contract_parameter_message(&error).contains("already initialized"),
@@ -8941,5 +8984,464 @@ mod tests {
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
     }
+    #[test]
+    fn detached_pgc_reference_cannot_apply_even_with_governance_permission() {
+        let fixture = valid_bootstrap_fixture();
+        let state = state_with_default_privacy_policy();
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let error = fixture
+            .request
+            .execute(&ALICE_ID, &mut transaction)
+            .unwrap_err();
+        assert!(smart_contract_parameter_message(&error).contains("original signed invocation"));
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    #[test]
+    fn rebound_nonce_with_original_pgc_proof_fails_before_state_or_budget() {
+        let fixture = valid_bootstrap_fixture();
+        let original = fixture.signed_source();
+        let mut payload = original.payload().clone();
+        payload.nonce = std::num::NonZeroU32::new(2);
+        payload.bind_attachment_statements_v1().unwrap();
+        let changed = iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
+            .unwrap()
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        assert_ne!(
+            original.ordered_intent_digest_v1().unwrap(),
+            changed.ordered_intent_digest_v1().unwrap()
+        );
+        assert_eq!(
+            original.attachments().unwrap().occurrences()[0].bytes,
+            changed.attachments().unwrap().occurrences()[0].bytes
+        );
+        let state = state_with_default_privacy_policy();
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let error = execute_signed_pgc_source(&changed, &ALICE_ID, &mut transaction).unwrap_err();
+        assert!(smart_contract_parameter_message(&error).contains("proof verification failed"));
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    #[test]
+    fn verified_signed_pgc_publication_rolls_back_when_transaction_overlay_is_dropped() {
+        let fixture = valid_bootstrap_fixture();
+        let state = state_with_default_privacy_policy();
+        let mut block = state.block(test_header());
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            fixture.execute_signed(&ALICE_ID, &mut transaction).unwrap();
+            assert_eq!(privacy_map_counts(&transaction), (1, 16, 1, 1));
+        }
+        let transaction = block.transaction();
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    fn executor_pgc_state_and_source() -> (State, iroha_data_model::transaction::SignedTransaction)
+    {
+        let state = governance_execution_state();
+        let fixture = bootstrap_fixture_for_network(state.network_id);
+        (state, fixture.signed_source())
+    }
+    fn original_pgc_instruction(
+        source: &iroha_data_model::transaction::SignedTransaction,
+    ) -> &iroha_data_model::isi::InstructionBox {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            source.instructions()
+        else {
+            panic!("direct fixture source");
+        };
+        &instructions[0]
+    }
+    #[test]
+    fn original_direct_pgc_runs_after_initial_and_installed_executor_approval() {
+        use crate::executor::{Executor, attachment_custody::AttachmentCustody};
+        for executor in [
+            Executor::Initial,
+            crate::executor::allowing_executor_for_testing(),
+        ] {
+            let (state, source) = executor_pgc_state_and_source();
+            let mut block = state.block(governance_execution_header(&state));
+            {
+                let mut transaction = block.transaction();
+                grant_governance(&mut transaction);
+                let mut custody = AttachmentCustody::new(&source).unwrap();
+                executor
+                    .execute_original_direct_instruction(
+                        &mut transaction,
+                        &ALICE_ID,
+                        original_pgc_instruction(&source),
+                        0,
+                        Some(&mut custody),
+                    )
+                    .expect("actual approved native State dispatch");
+                custody.finish().expect("one original proof consumed");
+                assert_eq!(privacy_map_counts(&transaction), (1, 16, 1, 1));
+                assert_eq!(transaction.privacy_budget_for_testing().0, 1);
+                // Do not publish the State overlay: verified native effects must still roll back.
+            }
+            assert_empty_and_unbudgeted(&block.transaction());
+        }
+    }
+    #[test]
+    fn installed_executor_rejection_precedes_native_pgc_consumption_and_state() {
+        use crate::executor::attachment_custody::{AttachmentCustody, CustodyError};
+        let (state, source) = executor_pgc_state_and_source();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let mut custody = AttachmentCustody::new(&source).unwrap();
+        let error =
+            crate::executor::denying_executor_for_testing("PGC denied by installed executor")
+                .execute_original_direct_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    original_pgc_instruction(&source),
+                    0,
+                    Some(&mut custody),
+                )
+                .unwrap_err();
+        assert!(
+            matches!(error, iroha_data_model::ValidationFail::NotPermitted(ref message) if message == "PGC denied by installed executor")
+        );
+        assert_eq!(custody.finish(), Err(CustodyError::FailedAttempt));
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    #[test]
+    fn direct_pgc_cannot_replace_the_original_instruction_with_an_equal_clone() {
+        use crate::executor::{
+            Executor,
+            attachment_custody::{AttachmentCustody, CustodyError},
+        };
+        let (state, source) = executor_pgc_state_and_source();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let original = original_pgc_instruction(&source);
+        let clone = original.clone();
+        assert_eq!(
+            norito::encode_canonical(original).unwrap(),
+            norito::encode_canonical(&clone).unwrap()
+        );
+        assert!(!core::ptr::eq(original, &clone));
+        let mut custody = AttachmentCustody::new(&source).unwrap();
+        let error = Executor::Initial
+            .execute_original_direct_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                &clone,
+                0,
+                Some(&mut custody),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, iroha_data_model::ValidationFail::NotPermitted(ref message) if message.contains("another original owner"))
+        );
+        assert_eq!(custody.finish(), Err(CustodyError::FailedAttempt));
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    #[test]
+    fn approved_direct_pgc_still_requires_current_governance_permission() {
+        use crate::executor::{
+            Executor,
+            attachment_custody::{AttachmentCustody, CustodyError},
+        };
+        let (state, source) = executor_pgc_state_and_source();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        let mut custody = AttachmentCustody::new(&source).unwrap();
+        let error = Executor::Initial
+            .execute_original_direct_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                original_pgc_instruction(&source),
+                0,
+                Some(&mut custody),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                iroha_data_model::ValidationFail::InstructionFailed(_)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(custody.finish(), Err(CustodyError::FailedAttempt));
+        assert_empty_and_unbudgeted(&transaction);
+    }
+    #[test]
+    fn original_direct_pgc_local_refusal_keeps_source_cause_and_fresh_state_retry() {
+        use crate::executor::{
+            Executor,
+            attachment_custody::{AttachmentCustody, CustodyError},
+        };
+        let (state, source) = executor_pgc_state_and_source();
+        let bytes = &source.attachments().unwrap().occurrences()[0].bytes;
+        let original_pointer = bytes.as_ptr();
+        let original_bytes = bytes.clone();
+        let mut block = state.block(governance_execution_header(&state));
+        let original_refusal;
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let mut custody = AttachmentCustody::new(&source).unwrap();
+            let result = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+                || {
+                    Executor::Initial.execute_original_direct_instruction(
+                        &mut transaction,
+                        &ALICE_ID,
+                        original_pgc_instruction(&source),
+                        0,
+                        Some(&mut custody),
+                    )
+                },
+            );
+            assert!(result.is_err());
+            let retained = transaction
+                .take_execution_deferral()
+                .expect("actual local codec refusal, not proof invalidity");
+            assert_eq!(
+                retained.reason(),
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+            );
+            let original = retained
+                .decode_refusal()
+                .expect("original codec scope survives handler");
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeLocalRefusalKind::EnclosingLimit
+            );
+            original_refusal = original.clone();
+            assert!(
+                retained.allocation_refusal().is_none(),
+                "no fabricated pool release source"
+            );
+            assert!(transaction.take_execution_deferral().is_none());
+            assert_eq!(custody.finish(), Err(CustodyError::FailedAttempt));
+            assert_empty_and_unbudgeted(&transaction);
+        }
+        assert_eq!(
+            source.attachments().unwrap().occurrences()[0]
+                .bytes
+                .as_ptr(),
+            original_pointer
+        );
+        assert_eq!(
+            source.attachments().unwrap().occurrences()[0].bytes,
+            original_bytes
+        );
+        // The original local refusal remains latched on its carrier. A new child
+        // of that carrier cannot turn the failed attempt into a fresh one.
+        match block.try_transaction() {
+            Err(crate::state::StateStorageAdmissionError::RootScopeDecode(original)) => {
+                assert_eq!(original, original_refusal);
+            }
+            Err(other) => panic!("original root-scope refusal changed: {other:?}"),
+            Ok(_) => panic!("refused carrier must not grant a fresh child"),
+        }
+        assert_eq!(block.committed_fragment_count(), 0);
+        drop(block);
+        // Retry the unchanged signed source against the same State predecessor,
+        // with a fresh execution carrier after abandoning the refused one.
+        let mut retry_block = state.block(governance_execution_header(&state));
+        let mut retry = retry_block.transaction();
+        grant_governance(&mut retry);
+        let mut custody = AttachmentCustody::new(&source).unwrap();
+        Executor::Initial
+            .execute_original_direct_instruction(
+                &mut retry,
+                &ALICE_ID,
+                original_pgc_instruction(&source),
+                0,
+                Some(&mut custody),
+            )
+            .expect("new State attempt consumes the unchanged original source");
+        custody.finish().unwrap();
+        assert_eq!(privacy_map_counts(&retry), (1, 16, 1, 1));
+    }
+    #[test]
+    fn pgc_root_original_encoding_refusal_reaches_state_and_same_input_retry() {
+        use crate::executor::attachment_custody::pgc_bootstrap::BootstrapError;
+        use crate::privacy_state::{
+            PrivacyPgcAccountStateRootErrorV1, derive_privacy_pgc_account_state_root_v1,
+        };
+        let (state, source) = executor_pgc_state_and_source();
+        let request = original_pgc_instruction(&source)
+            .as_any()
+            .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
+            .unwrap();
+        let accounts = &request.bootstrap.accounts;
+        let pointer = accounts.as_ptr();
+        let derive = || {
+            derive_privacy_pgc_account_state_root_v1(
+                request.bootstrap.namespace,
+                request.bootstrap.initial_epoch,
+                request.bootstrap.total_supply,
+                accounts,
+            )
+        };
+        let original = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            derive,
+        )
+        .unwrap_err();
+        let PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(ref original_codec) = original
+        else {
+            panic!("actual root namespace encoding refused")
+        };
+        let expected = original_codec.local_refusal().unwrap();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut tx = block.transaction();
+        let _error = pgc_attachment_error(&mut tx, BootstrapError::Root(original));
+        let retained = tx
+            .take_execution_deferral()
+            .expect("root origin reaches original State owner");
+        assert_eq!(retained.decode_refusal(), Some(&expected));
+        assert_eq!(
+            retained.reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert!(
+            retained.allocation_refusal().is_none(),
+            "no fabricated pool allocation cause"
+        );
+        assert!(tx.take_execution_deferral().is_none());
+        assert_empty_and_unbudgeted(&tx);
+        drop(tx);
+        assert_eq!(accounts.as_ptr(), pointer);
+        assert_eq!(derive().unwrap(), request.bootstrap.initial_root);
+        let mut retry = block.transaction();
+        let _invalid =
+            pgc_account_root_error(&mut retry, PrivacyPgcAccountStateRootErrorV1::ZeroEpoch);
+        assert!(
+            !retry.is_execution_deferred(),
+            "intrinsic invalidity is not a local retry"
+        );
+        assert_empty_and_unbudgeted(&retry);
+    }
+    #[test]
+    fn pgc_native_read_projection_keeps_original_retry_and_intrinsic_rejection() {
+        use crate::execution_attempt::ExecutionAttemptError;
+        use crate::privacy_engines::anonymous_pgc::{AnonymousPgcError, AnonymousPgcReadError};
+        let bytes = norito::codec::encode_adaptive(&vec![7_u8; 32]);
+        let codec = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128),
+            || {
+                norito::core::classify_decode_attempt(|| {
+                    norito::codec::decode_exact_from_slice::<Vec<u8>>(&bytes)
+                })
+            },
+        )
+        .unwrap_err();
+        let owner = codec.local_refusal().expect("actual local decoder scope");
+        let ExecutionAttemptError::Deferred(deferred) =
+            privacy_verification_error(PrivacyVerificationErrorV1::NativeAnonymousPgc(Box::new(
+                AnonymousPgcReadError::Codec(codec),
+            )))
+        else {
+            panic!("native original local cause must defer")
+        };
+        assert_eq!(deferred.decode_refusal(), Some(&owner));
+        let malformed = norito::core::classify_decode_attempt(|| {
+            norito::codec::decode_exact_from_slice::<u64>(&[])
+        })
+        .unwrap_err();
+        assert!(malformed.local_refusal().is_none());
+        for cause in [
+            AnonymousPgcReadError::Codec(malformed),
+            AnonymousPgcReadError::Relation(AnonymousPgcError::InvalidPaymentProofShape),
+        ] {
+            assert!(matches!(
+                privacy_verification_error(PrivacyVerificationErrorV1::NativeAnonymousPgc(
+                    Box::new(cause)
+                )),
+                ExecutionAttemptError::Rejected(_)
+            ));
+        }
+    }
+    #[test]
+    fn pgc_payment_snapshot_and_successor_root_owners_reach_original_state_attempt() {
+        use crate::execution_attempt::ExecutionAttemptError;
+        use crate::privacy_state::{
+            PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1,
+            derive_privacy_pgc_account_state_root_v1,
+        };
+        let (state, source) = executor_pgc_state_and_source();
+        let request = original_pgc_instruction(&source)
+            .as_any()
+            .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
+            .unwrap();
+        let derive = || {
+            derive_privacy_pgc_account_state_root_v1(
+                request.bootstrap.namespace,
+                request.bootstrap.initial_epoch,
+                request.bootstrap.total_supply,
+                &request.bootstrap.accounts,
+            )
+        };
+        let mut block = state.block(governance_execution_header(&state));
+        for owner in 0..4 {
+            let original = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+                derive,
+            )
+            .unwrap_err();
+            let PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(ref codec) = original else {
+                panic!("actual original root encoding refusal");
+            };
+            let expected = codec.local_refusal().unwrap();
+            let attempt = match owner {
+                0 | 1 => privacy_verification_error(PrivacyVerificationErrorV1::AnonymousPgcRoot {
+                    code: if owner == 0 {
+                        PrivacyAnonymousPgcStateFailureCodeV1::CurrentRootRecomputationFailed
+                    } else {
+                        PrivacyAnonymousPgcStateFailureCodeV1::NextRootRecomputationFailed
+                    },
+                    source: original,
+                }),
+                2 => privacy_state_validation_error(PrivacyStateValidationErrorV1::PgcAccountRoot(
+                    original,
+                )),
+                _ => pgc_root_attempt_error(original, |_| {
+                    panic!("local successor failure became invariant rejection")
+                }),
+            };
+            let mut tx = block.transaction();
+            let _error = tx.attempt_error_to_instruction_error(attempt);
+            let deferred = tx
+                .take_execution_deferral()
+                .expect("original State keeps local cause");
+            assert_eq!(deferred.decode_refusal(), Some(&expected));
+            assert!(
+                deferred.allocation_refusal().is_none(),
+                "no invented pool wake source"
+            );
+            assert!(tx.take_execution_deferral().is_none());
+            assert_empty_and_unbudgeted(&tx);
+        }
+        assert_eq!(derive().unwrap(), request.bootstrap.initial_root);
+        for attempt in [
+            privacy_verification_error(PrivacyVerificationErrorV1::AnonymousPgcRoot {
+                code: PrivacyAnonymousPgcStateFailureCodeV1::CurrentRootRecomputationFailed,
+                source: PrivacyPgcAccountStateRootErrorV1::ZeroEpoch,
+            }),
+            privacy_state_validation_error(PrivacyStateValidationErrorV1::Invalid(
+                "orphan table".to_owned(),
+            )),
+        ] {
+            assert!(
+                matches!(
+                    attempt,
+                    ExecutionAttemptError::Rejected(Error::InvariantViolation(_))
+                ),
+                "malformed trusted state remains an invariant failure"
+            );
+        }
+    }
     include!("privacy_pgc_payment_tests.rs");
 }
+
+mod x509_submission;
+pub(crate) use x509_submission::execute_x509_submission;

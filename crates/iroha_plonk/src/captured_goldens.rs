@@ -156,7 +156,10 @@ fn replay_circuit<C: PastaCurve, Ci: Circuit<C::ScalarExt> + Sync>(
                 );
                 let expected = bytes(&case["proof"]);
                 assert_eq!(
-                    format!("{:x}", Sha256::digest(&expected)),
+                    Sha256::digest(&expected)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>(),
                     case["proof_sha256"].as_str().expect("proof hash")
                 );
                 let seed = u8::try_from(case["seed_byte"].as_u64().expect("seed"))

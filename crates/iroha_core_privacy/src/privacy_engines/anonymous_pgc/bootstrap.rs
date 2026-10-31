@@ -7,7 +7,7 @@
 //! accounts, `64 * (2^32 - 1)` is far below the P-256 scalar order; aggregate equality in the group
 //! is therefore equality of the represented integers, not merely equality modulo the scalar field.
 use super::{
-    AnonymousPgcError, AnonymousPgcParametersV1, TwistedElGamalCiphertextV1,
+    AnonymousPgcError, AnonymousPgcParametersV1, AnonymousPgcReadError, TwistedElGamalCiphertextV1,
     TwistedElGamalPublicKeyV1, fixed_array::FixedProofArray,
 };
 use crate::privacy_engines::p256::{
@@ -15,7 +15,7 @@ use crate::privacy_engines::p256::{
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
 use p256::{ProjectivePoint, Scalar};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 /// Closed suite for the complete PGC account-bootstrap proof.
 pub const PGC_BOOTSTRAP_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.p256.sha256.v1";
@@ -88,7 +88,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
         total_supply: u32,
         public_keys: &'a [TwistedElGamalPublicKeyV1],
         encrypted_balances: &'a [TwistedElGamalCiphertextV1],
-        transcript_binding: TranscriptBindingV1<'a>,
+        transcript_binding: &TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
         if initial_epoch != PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
             return Err(AnonymousPgcError::InvalidBootstrapEpoch {
@@ -96,7 +96,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
                 expected: PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
             });
         }
-        super::validate_binding(&transcript_binding)?;
+        super::validate_binding(transcript_binding)?;
         if namespace_encoding.is_empty()
             || namespace_encoding.len() > MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1
         {
@@ -145,7 +145,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
             total_supply,
             public_keys,
             encrypted_balances,
-            transcript_binding,
+            transcript_binding: *transcript_binding,
             bootstrap_table_digest,
         })
     }
@@ -290,29 +290,33 @@ impl AnonymousPgcBootstrapProofV1 {
     /// # Errors
     ///
     /// Rejects oversized, truncated, trailing, malformed, noncanonical, unknown-version, or
-    /// incorrectly shaped proof bytes. Canonicality is enforced explicitly by byte-for-byte
-    /// re-encoding before any equation is attempted.
+    /// incorrectly shaped proof bytes. Canonicality is authenticated by fallible fixed-V1
+    /// streaming comparison before any equation. Original local refusals remain typed.
     pub fn decode_exact(
         bytes: &[u8],
         statement: &AnonymousPgcBootstrapStatementV1<'_>,
-    ) -> Result<Self, AnonymousPgcError> {
+    ) -> Result<Self, AnonymousPgcReadError> {
         if bytes.len() > MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1 {
             return Err(AnonymousPgcError::EncodingTooLarge {
                 actual: bytes.len(),
                 max: MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-            });
+            }
+            .into());
         }
-        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
-            bytes,
-            bootstrap_proof_decode_limits(statement, bytes.len()),
-        )
-        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
-        if proof.encode().as_slice() != bytes {
-            return Err(AnonymousPgcError::InvalidNoritoEncoding);
-        }
+        let proof = norito::core::classify_decode_attempt(|| {
+            let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+                bytes,
+                bootstrap_proof_decode_limits(statement, bytes.len()),
+            )?;
+            // Authenticate the same fixed-V1 bare layout against the borrowed
+            // source without a second proof Vec or infallible re-encoding.
+            norito::codec::verify_exact_payload(&proof, bytes)?;
+            Ok(proof)
+        })?;
         proof.validate_shape(statement)?;
         Ok(proof)
     }
+
     fn validate_shape(
         &self,
         statement: &AnonymousPgcBootstrapStatementV1<'_>,
@@ -482,7 +486,7 @@ fn prove_well_formed<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapWellFormedProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let key = statement.public_keys[index].point.to_projective()?;
@@ -567,7 +571,7 @@ fn prove_unsigned_range<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapUnsignedRangeProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let commitment = statement.encrypted_balances[index].right.to_projective()?;
@@ -777,7 +781,7 @@ fn prove_aggregate_supply<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapAggregateSupplyProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let aggregate_right = sum_points(
@@ -877,7 +881,7 @@ pub fn prove_bootstrap<R>(
     rng: &mut R,
 ) -> Result<AnonymousPgcBootstrapProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     super::validate_binding(&statement.transcript_binding)?;
     let aggregate_randomness = validate_witness(statement, witness)?;
@@ -953,15 +957,14 @@ pub fn verify_bootstrap(
 pub fn verify_bootstrap_encoded(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     proof_bytes: &[u8],
-) -> Result<VerifiedAnonymousPgcBootstrapV1, AnonymousPgcError> {
+) -> Result<VerifiedAnonymousPgcBootstrapV1, AnonymousPgcReadError> {
     let proof = AnonymousPgcBootstrapProofV1::decode_exact(proof_bytes, statement)?;
-    verify_bootstrap(statement, &proof)
+    verify_bootstrap(statement, &proof).map_err(Into::into)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
@@ -1001,56 +1004,63 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            let mut offset = 0;
-            while offset < destination.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.anonymous-pgc.bootstrap.kat-rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (destination.len() - offset).min(block.len());
-                destination[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < destination.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.anonymous-pgc.bootstrap.kat-rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (destination.len() - offset).min(block.len());
+                    destination[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     struct PeriodicRng;
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("PGC bootstrap must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
-                *byte = ((index % 16) as u8).wrapping_mul(19).wrapping_add(7);
+                *byte = u8::try_from(index % 16)
+                    .expect("sample nibble")
+                    .wrapping_mul(19)
+                    .wrapping_add(7);
             }
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
@@ -1141,7 +1151,7 @@ mod tests {
                 self.total_supply,
                 &self.public_keys,
                 &self.encrypted_balances,
-                binding(),
+                &binding(),
             )
             .expect("bootstrap statement")
         }
@@ -1301,7 +1311,7 @@ mod tests {
             fixture.total_supply + 1,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("wrong-supply public statement is structurally valid");
         assert!(matches!(
@@ -1331,7 +1341,7 @@ mod tests {
             fixture.total_supply,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed namespace");
         assert_ne!(changed_namespace.bootstrap_table_digest(), baseline);
@@ -1345,7 +1355,7 @@ mod tests {
             fixture.total_supply,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed root");
         assert_ne!(changed_root_statement.bootstrap_table_digest(), baseline);
@@ -1357,7 +1367,7 @@ mod tests {
             fixture.total_supply + 1,
             &fixture.public_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed supply public field");
         assert_ne!(changed_supply.bootstrap_table_digest(), baseline);
@@ -1377,7 +1387,7 @@ mod tests {
             fixture.total_supply,
             &alternative_keys,
             &fixture.encrypted_balances,
-            binding(),
+            &binding(),
         )
         .expect("changed ordered keys");
         assert_ne!(changed_keys.bootstrap_table_digest(), baseline);
@@ -1396,7 +1406,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &encrypted,
-                binding(),
+                &binding(),
             )
             .expect("changed ciphertext");
             assert_ne!(changed.bootstrap_table_digest(), baseline);
@@ -1423,7 +1433,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed
+                &changed
             )
             .is_err(),
             "network/genesis disagreement must reject before proof evaluation"
@@ -1454,7 +1464,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_binding,
+                &changed_binding,
             )
             .expect("changed valid binding");
             assert!(verify_bootstrap(&changed, &proof).is_err());
@@ -1469,7 +1479,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_parameter,
+                &changed_parameter,
             ),
             Err(AnonymousPgcError::ParameterDigestMismatch)
         ));
@@ -1483,7 +1493,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                changed_generator,
+                &changed_generator,
             ),
             Err(AnonymousPgcError::GeneratorDigestMismatch)
         ));
@@ -1503,7 +1513,7 @@ mod tests {
                 fixture.total_supply,
                 &reordered_keys,
                 &reordered_ciphertexts,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
@@ -1517,7 +1527,7 @@ mod tests {
                 fixture.total_supply,
                 &duplicate_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
@@ -1529,7 +1539,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys[..15],
                 &fixture.encrypted_balances[..15],
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::InvalidBootstrapAccountCount { count: 15 })
         ));
@@ -1541,7 +1551,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances[..15],
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::BootstrapLengthMismatch { .. })
         ));
@@ -1625,19 +1635,25 @@ mod tests {
                 &vec![0; MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1 + 1],
                 &statement,
             ),
-            Err(AnonymousPgcError::EncodingTooLarge { .. })
+            Err(AnonymousPgcReadError::Relation(
+                AnonymousPgcError::EncodingTooLarge { .. }
+            ))
         ));
         let mut unknown_version = proof.clone();
         unknown_version.version += 1;
         assert!(matches!(
             AnonymousPgcBootstrapProofV1::decode_exact(&unknown_version.encode(), &statement),
-            Err(AnonymousPgcError::UnsupportedBootstrapProofVersion { .. })
+            Err(AnonymousPgcReadError::Relation(
+                AnonymousPgcError::UnsupportedBootstrapProofVersion { .. }
+            ))
         ));
         let mut wrong_account_shape = proof.clone();
         wrong_account_shape.accounts.pop();
         assert!(matches!(
             AnonymousPgcBootstrapProofV1::decode_exact(&wrong_account_shape.encode(), &statement),
-            Err(AnonymousPgcError::InvalidBootstrapProofShape)
+            Err(AnonymousPgcReadError::Relation(
+                AnonymousPgcError::InvalidBootstrapProofShape
+            ))
         ));
         let mut oversized_accounts = proof.clone();
         oversized_accounts
@@ -1646,7 +1662,7 @@ mod tests {
         let oversized = oversized_accounts.encode();
         assert!(matches!(
             AnonymousPgcBootstrapProofV1::decode_exact(&oversized, &statement),
-            Err(AnonymousPgcError::InvalidNoritoEncoding)
+            Err(AnonymousPgcReadError::Codec(ref original)) if original.local_refusal().is_none()
         ));
         let encoded_count = 17_u64.to_le_bytes();
         let count_offset = oversized
@@ -1657,7 +1673,7 @@ mod tests {
         forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(matches!(
             AnonymousPgcBootstrapProofV1::decode_exact(&forged, &statement),
-            Err(AnonymousPgcError::InvalidNoritoEncoding)
+            Err(AnonymousPgcReadError::Codec(ref original)) if original.local_refusal().is_none()
         ));
         let legacy = LegacyBootstrapProofV1 {
             version: proof.version,
@@ -1679,7 +1695,7 @@ mod tests {
         assert_ne!(legacy_bytes, proof.encode());
         assert!(matches!(
             AnonymousPgcBootstrapProofV1::decode_exact(&legacy_bytes, &statement),
-            Err(AnonymousPgcError::InvalidNoritoEncoding)
+            Err(AnonymousPgcReadError::Codec(ref original)) if original.local_refusal().is_none()
         ));
     }
     #[test]
@@ -1692,7 +1708,7 @@ mod tests {
                 0,
                 &[],
                 &[],
-                TranscriptBindingV1 {
+                &TranscriptBindingV1 {
                     network_id: &[0; 32],
                     genesis_hash: [0; 32],
                     action_index: 0,
@@ -1727,7 +1743,7 @@ mod tests {
                     fixture.total_supply,
                     &fixture.public_keys,
                     &fixture.encrypted_balances,
-                    binding(),
+                    &binding(),
                 ),
                 Err(AnonymousPgcError::InvalidBootstrapNamespaceLength { .. })
             ));
@@ -1740,7 +1756,7 @@ mod tests {
                 fixture.total_supply,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::ZeroBootstrapRoot)
         ));
@@ -1752,9 +1768,82 @@ mod tests {
                 0,
                 &fixture.public_keys,
                 &fixture.encrypted_balances,
-                binding(),
+                &binding(),
             ),
             Err(AnonymousPgcError::ZeroPgcTotalSupply)
+        ));
+    }
+    #[test]
+    fn bootstrap_decoder_preserves_original_enclosing_refusal_and_same_source_retry() {
+        let fixture = Fixture::new_16();
+        let statement = fixture.statement();
+        let bytes = fixture.prove().encode();
+        let pointer = bytes.as_ptr();
+        let limit = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let first = norito::with_decode_limits_scope(limit, || {
+            verify_bootstrap_encoded(&statement, &bytes)
+        })
+        .unwrap_err();
+        let AnonymousPgcReadError::Codec(first) = first else {
+            panic!("actual decoder refusal must retain codec owner")
+        };
+        let retained = first.local_refusal().expect("original enclosing quota");
+        assert_eq!(
+            retained.kind(),
+            norito::core::DecodeLocalRefusalKind::EnclosingLimit
+        );
+        let norito::Error::ScopedDecodeResource(original) = first.error() else {
+            panic!("original scoped error")
+        };
+        assert_eq!(
+            retained.resource_error(),
+            first.error().decode_resource_error().unwrap()
+        );
+        assert_eq!(retained.to_string(), original.to_string());
+        let second = norito::with_decode_limits_scope(limit, || {
+            verify_bootstrap_encoded(&statement, &bytes)
+        })
+        .unwrap_err();
+        let AnonymousPgcReadError::Codec(second) = second else {
+            panic!("second original decoder refusal")
+        };
+        let second_owner = second.local_refusal().unwrap();
+        assert_eq!(retained.resource_error(), second_owner.resource_error());
+        assert_ne!(
+            retained, second_owner,
+            "equal quotas cannot share original scope identity"
+        );
+        assert_eq!(bytes.as_ptr(), pointer);
+        let retried = verify_bootstrap_encoded(&statement, &bytes)
+            .expect("fresh unconstrained original-source retry");
+        assert_eq!(retried.account_count(), 16);
+        assert_eq!(retried.total_supply(), fixture.total_supply);
+        assert_eq!(bytes.as_ptr(), pointer);
+    }
+    #[test]
+    fn bootstrap_decoder_intrinsic_and_malformed_refusals_never_become_local_capacity() {
+        let fixture = Fixture::new_16();
+        let statement = fixture.statement();
+        let proof = fixture.prove();
+        let mut too_many = proof.clone();
+        too_many.accounts.push(proof.accounts[0].clone());
+        let oversized = too_many.encode();
+        let mut trailing = proof.encode();
+        trailing.push(0);
+        for bytes in [oversized.as_slice(), trailing.as_slice(), &[]] {
+            let error = verify_bootstrap_encoded(&statement, bytes).unwrap_err();
+            let AnonymousPgcReadError::Codec(original) = error else {
+                panic!("actual structural wire refusal")
+            };
+            assert!(original.local_refusal().is_none());
+        }
+        let mut wrong_version = proof;
+        wrong_version.version += 1;
+        assert!(matches!(
+            verify_bootstrap_encoded(&statement, &wrong_version.encode()),
+            Err(AnonymousPgcReadError::Relation(
+                AnonymousPgcError::UnsupportedBootstrapProofVersion { .. }
+            ))
         ));
     }
 }

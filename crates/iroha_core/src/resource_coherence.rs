@@ -6,11 +6,12 @@ use iroha_data_model::parameter::system::resource_coherence::{
     SuccessorResourceCoherenceError, validate_successor_resource_limits,
 };
 
-use crate::state::WorldReadOnly;
+use crate::{execution_attempt::ExecutionAttemptError, state::WorldReadOnly};
+use mv::storage::StorageReadOnly;
 
 /// A semantic policy or authenticated schedule inconsistency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum PolicyCoherenceError {
+pub enum PolicyCoherenceError {
     /// The final candidate cannot describe its two successor heights.
     #[error("two successor heights cannot follow committed height {committed_height}")]
     HeightOverflow { committed_height: u64 },
@@ -29,6 +30,9 @@ pub(crate) enum PolicyCoherenceError {
         parameter_max_block_bytes: u32,
         scheduled_max_block_bytes: u32,
     },
+    /// The committed private-settlement extension or its bound protocol drain is invalid.
+    #[error("committed private-settlement policy or protocol drain is invalid")]
+    PrivateSettlementPolicy,
     /// A complete privacy/chain candidate is incoherent at an effective height.
     #[error(transparent)]
     Effective(#[from] SuccessorResourceCoherenceError),
@@ -60,10 +64,10 @@ fn scheduled_cap(
 }
 
 /// Validate the final invocation/block candidate without mutating either policy owner.
-pub(crate) fn validate_final_policy(
+pub fn validate_final_policy(
     world: &impl WorldReadOnly,
     committed_height: u64,
-) -> Result<(), PolicyCoherenceError> {
+) -> Result<(), ExecutionAttemptError<PolicyCoherenceError>> {
     let parameters = world.parameters();
     let after_next_cap = parameters.sumeragi().max_block_bytes();
     let next_height = committed_height
@@ -75,6 +79,15 @@ pub(crate) fn validate_final_policy(
     } else {
         scheduled_cap(world, next_height)?
     };
+    let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+        iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    );
+    let private_policy = crate::private_settlement::policy::read(
+        parameters,
+        world.privacy_protocol_policies().get(&protocol_key),
+        committed_height,
+    )
+    .map_err(|error| error.map_rejection(|_| PolicyCoherenceError::PrivateSettlementPolicy))?;
     validate_successor_resource_limits(
         committed_height,
         parameters.transaction().max_tx_bytes(),
@@ -82,7 +95,17 @@ pub(crate) fn validate_final_policy(
         next_cap,
         after_next_cap,
         world.privacy_consensus_policy(),
-    )?;
+        parameters
+            .custom()
+            .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+            .then_some(&private_policy),
+        world
+            .private_settlement_staged_locks()
+            .iter()
+            .next()
+            .is_some(),
+    )
+    .map_err(PolicyCoherenceError::from)?;
     Ok(())
 }
 
@@ -90,10 +113,10 @@ pub(crate) fn validate_final_policy(
 mod tests;
 
 /// Check restored original policies against both admitted successor schedule slots.
-pub(crate) fn validate_restored_policy(
+pub fn validate_restored_policy(
     world: &impl WorldReadOnly,
     committed_height: u64,
-) -> Result<(), PolicyCoherenceError> {
+) -> Result<(), ExecutionAttemptError<PolicyCoherenceError>> {
     let parameters = world.parameters();
     let parameter_cap = parameters.sumeragi().max_block_bytes();
     let (next, after_next) = if committed_height == 0 {
@@ -113,10 +136,20 @@ pub(crate) fn validate_restored_policy(
                 height: after_height,
                 parameter_max_block_bytes: parameter_cap.get(),
                 scheduled_max_block_bytes: after_cap.get(),
-            });
+            }
+            .into());
         }
         (scheduled_cap(world, next_height)?, after_cap)
     };
+    let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+        iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    );
+    let private_policy = crate::private_settlement::policy::read(
+        parameters,
+        world.privacy_protocol_policies().get(&protocol_key),
+        committed_height,
+    )
+    .map_err(|error| error.map_rejection(|_| PolicyCoherenceError::PrivateSettlementPolicy))?;
     validate_successor_resource_limits(
         committed_height,
         parameters.transaction().max_tx_bytes(),
@@ -124,6 +157,16 @@ pub(crate) fn validate_restored_policy(
         next,
         after_next,
         world.privacy_consensus_policy(),
-    )?;
+        parameters
+            .custom()
+            .contains_key(iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id())
+            .then_some(&private_policy),
+        world
+            .private_settlement_staged_locks()
+            .iter()
+            .next()
+            .is_some(),
+    )
+    .map_err(PolicyCoherenceError::from)?;
     Ok(())
 }

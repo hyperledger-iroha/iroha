@@ -43,7 +43,7 @@ mod kaigi_response_format_tests {
         let relay_id = kaigi_relay_metadata_test_account(0x51);
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
-            hpke_public_key: vec![0xA5; 32],
+            hpke_public_key: test_kaigi_relay_hpke_key(0xA5),
             bandwidth_class: 3,
         };
         let registration_key =
@@ -82,7 +82,7 @@ mod kaigi_response_format_tests {
             .expect("mismatched relay key");
         let value = IrohaJson::new(KaigiRelayRegistration {
             relay_id: embedded_relay,
-            hpke_public_key: vec![0x5A; 32],
+            hpke_public_key: test_kaigi_relay_hpke_key(0x5A),
             bandwidth_class: 2,
         });
         let error = decode_kaigi_relay_registration(&key, &value)
@@ -102,7 +102,7 @@ mod kaigi_response_format_tests {
         });
         let error = decode_kaigi_relay_registration(&key, &value)
             .expect_err("empty HPKE keys must fail closed");
-        assert_kaigi_relay_metadata_error(error, "HPKE public key");
+        assert_kaigi_relay_metadata_error(error, "invalid HPKE key");
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod kaigi_response_format_tests {
             .expect("relay metadata key");
         let value = IrohaJson::new(KaigiRelayRegistration {
             relay_id,
-            hpke_public_key: vec![0x5A; 32],
+            hpke_public_key: test_kaigi_relay_hpke_key(0x5A),
             bandwidth_class: 0,
         });
         let error = decode_kaigi_relay_registration(&key, &value)

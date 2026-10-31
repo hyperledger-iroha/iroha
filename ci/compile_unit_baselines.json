@@ -11,7 +11,7 @@
       "iroha_data_model"
     ],
     "target": "lib",
-    "toolchain": "1.93.1",
+    "toolchain": "1.99.1",
     "workspace": false
   },
   "schema_version": 2

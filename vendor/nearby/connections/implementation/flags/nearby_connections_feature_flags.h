@@ -1,0 +1,132 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Mendel flags, auto-generated. DO NOT EDIT.
+#ifndef THIRD_PARTY_NEARBY_CONNECTIONS_IMPLEMENTATION_FLAGS_NEARBY_CONNECTIONS_FEATURE_FLAGS_H_
+#define THIRD_PARTY_NEARBY_CONNECTIONS_IMPLEMENTATION_FLAGS_NEARBY_CONNECTIONS_FEATURE_FLAGS_H_
+
+#include <cstdint>
+
+#include "absl/strings/string_view.h"
+#include "internal/flags/flag.h"
+
+namespace nearby {
+namespace connections {
+namespace config_package_nearby {
+
+constexpr absl::string_view kConfigPackage = "nearby";
+
+namespace nearby_connections_feature {
+// The timeout in millis to report peripheral device lost.
+constexpr auto kBlePeripheralLostTimeoutMillis =
+    flags::Flag<int64_t>(kConfigPackage, "45411439", 12000);
+// When true, delete incomplete incoming file payloads on Close() instead of
+// closing and retaining the partial file.
+constexpr auto kDeleteIncompleteIncomingFile =
+    flags::Flag<bool>(kConfigPackage, "45864313", true);
+// Enable/Disable AWDL in Nearby connections SDK.
+constexpr auto kEnableAwdl =
+    flags::Flag<bool>(kConfigPackage, "45690762", false);
+// Enable/Disable Wi-Fi Aware as a PCP medium (advertising, discovery and
+// listening for incoming connections). When false, WIFI_AWARE_R4 requested via
+// AdvertisingOptions/DiscoveryOptions/ConnectionListeningOptions is ignored by
+// the PCP handler; Wi-Fi Aware stays available as a bandwidth upgrade medium
+// under kEnableWifiAware.
+constexpr auto kEnableAwarePcp =
+    flags::Flag<bool>(kConfigPackage, "45856767", false);
+// Disable/Enable BLE L2CAP in Nearby Connections SDK.
+constexpr auto kEnableBleL2cap =
+    flags::Flag<bool>(kConfigPackage, "45685706", false);
+// Enable/Disable BLE medium injection.
+constexpr auto kEnableBleMediumInjection =
+    flags::Flag<bool>(kConfigPackage, "45743128", false);
+// Enable/Disable DCT advertising/scanning specification.
+constexpr auto kEnableDct =
+    flags::Flag<bool>(kConfigPackage, "45697202", false);
+// Disable/Enable dynamic role switch in Nearby Connections SDK.
+// Prototype only. Defaulted to true so that the Wi-Fi Aware
+// R4 role switch (Android is always the publisher, Apple is always the
+// subscriber) is reachable without a Phenotype push. Revert to false before
+// this leaves the prototype branch.
+constexpr auto kEnableDynamicRoleSwitch =
+    flags::Flag<bool>(kConfigPackage, "45696452", true);
+// Enable/Disable GATT client disconnection.
+constexpr auto kEnableGattClientDisconnection =
+    flags::Flag<bool>(kConfigPackage, "45698964", false);
+// When true, enable multiplexing in NC for Bluetooth.
+constexpr auto kEnableMultiplexBluetooth =
+    flags::Flag<bool>(kConfigPackage, "45676646", false);
+// Enable/Disable preferences for Nearby Connections.
+constexpr auto kEnableNearbyConnectionsPreferences =
+    flags::Flag<bool>(kConfigPackage, "45732423", false);
+// Enable/Disable payload-received-ack feature.
+constexpr auto kEnablePayloadReceivedAck =
+    flags::Flag<bool>(kConfigPackage, "45425840", false);
+// Enable/Disable safe-to-disconnect feature.
+constexpr auto kEnableSafeToDisconnect =
+    flags::Flag<bool>(kConfigPackage, "45425789", false);
+// Enable/Disable usage of shared CBPeripheralManager for GATT and L2CAP
+// servers.
+constexpr auto kEnableSharedPeripheralManager =
+    flags::Flag<bool>(kConfigPackage, "45770787", false);
+// Enable/Disable single copy read/write for input/output buffers.
+constexpr auto kEnableSingleCopy =
+    flags::Flag<bool>(kConfigPackage, "45782646", true);
+// Stop BLE_V2 scanning when upgrading to WIFI Hotspot or WFD.
+constexpr auto kEnableStopBleScanningOnWifiUpgrade =
+    flags::Flag<bool>(kConfigPackage, "45687902", false);
+// Enable/Disable Wi-Fi Aware in Nearby connections SDK.
+constexpr auto kEnableWifiAware =
+    flags::Flag<bool>(kConfigPackage, "45833001", true);
+// Enable/Disable Wi-Fi Direct in Nearby connections SDK.
+constexpr auto kEnableWifiDirect =
+    flags::Flag<bool>(kConfigPackage, "45741157", false);
+// Enable/Disable WIFI_LAN as a supported connection/bandwidth upgrade medium.
+// Should be defaulted to false so that Wi-Fi Aware is selected instead of
+// WIFI_LAN when both devices share a Wi-Fi network.
+constexpr auto kEnableWifiLanUpgrade =
+    flags::Flag<bool>(kConfigPackage, "45852183", true);
+// by default, enable Wi-Fi Hotspot client.
+constexpr auto kEnableWifiHotspotClient =
+    flags::Flag<bool>(kConfigPackage, "45648734", true);
+// Enforces frame filtering on unconfirmed endpoints in EndpointManager and
+// BaseEndpointChannel so application payloads and upgrade requests are blocked
+// before connection acceptance.
+constexpr auto kFilterUnconfirmedEndpointFrames =
+    flags::Flag<bool>(kConfigPackage, "45813128", true);
+// When true, fix the BleServerSocket deadlock/use-after-free (b/494335036).
+constexpr auto kFixBleServerSocketDeadlock =
+    flags::Flag<bool>(kConfigPackage, "45782647", true);
+// Default max transmit packet size for medium.
+constexpr auto kMediumDefaultMaxTransmitPacketSize =
+    flags::Flag<int64_t>(kConfigPackage, "45669529", 65536);
+// Default max allowed read bytes for medium.
+constexpr auto kMediumMaxAllowedReadBytes =
+    flags::Flag<int64_t>(kConfigPackage, "45669530", 1048576);
+// Disable/Enable refactor of BLE/L2CAP in Nearby Connections SDK.
+constexpr auto kRefactorBleL2cap =
+    flags::Flag<bool>(kConfigPackage, "45737079", false);
+// Set the safe-to-disconnect version.
+// 0. Disabled all. 1. safe-to-disconnect 2. reserved 3.
+// auto-reconnect(deprecated)
+// 4. auto-resume  5. non-distance-constraint-recovery 6. payload_ack
+constexpr auto kSafeToDisconnectVersion =
+    flags::Flag<int64_t>(kConfigPackage, "45425841", 0);
+
+}  // namespace nearby_connections_feature
+}  // namespace config_package_nearby
+}  // namespace connections
+}  // namespace nearby
+
+#endif  // THIRD_PARTY_NEARBY_CONNECTIONS_IMPLEMENTATION_FLAGS_NEARBY_CONNECTIONS_FEATURE_FLAGS_H_

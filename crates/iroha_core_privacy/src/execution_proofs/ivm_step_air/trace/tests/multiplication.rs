@@ -6,13 +6,18 @@ fn expected(opcode: u8, left: u64, right: u64) -> u64 {
     match opcode {
         wide::arithmetic::MUL => left.wrapping_mul(right),
         wide::arithmetic::MULHU => ((u128::from(left) * u128::from(right)) >> 64) as u64,
-        wide::arithmetic::MULHSU => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64) as u64
-        }
-        wide::arithmetic::MULH => {
-            ((i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64)
-                as u64
-        }
+        wide::arithmetic::MULHSU => u64::from_le_bytes(
+            i128::to_le_bytes((i128::from(u64::cast_signed(left)) * i128::from(right)) >> 64)[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
+        wide::arithmetic::MULH => u64::from_le_bytes(
+            i128::to_le_bytes(
+                (i128::from(u64::cast_signed(left)) * i128::from(u64::cast_signed(right))) >> 64,
+            )[..8]
+                .try_into()
+                .expect("low-byte width"),
+        ),
         _ => unreachable!("multiply fixture opcode"),
     }
 }
@@ -22,7 +27,12 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
     let body_words = MAX_WORDS - return_words;
     let mut body = (0..body_words - 1)
         .map(|index| match index % 7 {
-            0..=3 => enc::encode_rr(MULTIPLY_OPS[index % 7], 8 + (index % 4) as u8, 6, 7),
+            0..=3 => enc::encode_rr(
+                MULTIPLY_OPS[index % 7],
+                8 + u8::try_from(index % 4).expect("bounded fixture value"),
+                6,
+                7,
+            ),
             4 => enc::encode_rr(wide::arithmetic::CLZ, 20, 6, 255),
             5 => enc::encode_rr(wide::arithmetic::CTZ, 21, 7, 255),
             _ => enc::encode_ri(wide::arithmetic::XORI, 22, 6, -128),
@@ -30,7 +40,7 @@ fn maximum_segment() -> (ScalarSegment, Vec<DiagnosticStepRecord>) {
         .collect::<Vec<_>>();
     body.push(enc::encode_offset24(
         wide::control::JMP,
-        -((body_words - 1) as i32),
+        -i32::try_from(body_words - 1).expect("bounded fixture body"),
     ));
     let (segment, records) = recorded(
         &body,
@@ -135,8 +145,8 @@ fn forged_result(
     let changed = ScalarSegment::new(
         segment.contract.clone(),
         1,
-        forged[0].before,
-        forged[0].after,
+        &forged[0].before,
+        &forged[0].after,
         SegmentOutcome::Continue,
     )
     .unwrap();
@@ -354,9 +364,9 @@ fn common_source_view_preserves_every_old_family_and_all_profile_columns() {
         let sources = Sources::new(&rows[1][SOURCES..ALU]);
         let expected =
             operands(word, family(word).unwrap()).map(|source| source.value(&records[1].before));
-        for operand in 0..2 {
+        for (operand, &value) in expected.iter().enumerate() {
             for half in 0..2 {
-                assert_eq!(sources.half(operand, half), halves(expected[operand])[half]);
+                assert_eq!(sources.half(operand, half), halves(value)[half]);
             }
         }
         for column in 0..ROW_WIDTH {
@@ -391,8 +401,8 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
             ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                before,
-                segment.after,
+                &before,
+                &segment.after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -403,8 +413,8 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
             ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                segment.before,
-                after,
+                &segment.before,
+                &after,
                 SegmentOutcome::Continue
             )
             .is_err()
@@ -465,8 +475,8 @@ fn native_stark_proves_maximum_multiply_segment_and_binds_signedness_and_outputs
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             segment.steps,
-            segment.before,
-            after,
+            &segment.before,
+            &after,
             SegmentOutcome::Continue,
         )
         .unwrap();
@@ -479,8 +489,8 @@ fn native_stark_proves_maximum_multiply_segment_and_binds_signedness_and_outputs
     let changed = ScalarSegment::new(
         ivm::prepare_contract(Arc::from(artifact)).unwrap(),
         segment.steps,
-        segment.before,
-        segment.after,
+        &segment.before,
+        &segment.after,
         SegmentOutcome::Continue,
     )
     .unwrap();

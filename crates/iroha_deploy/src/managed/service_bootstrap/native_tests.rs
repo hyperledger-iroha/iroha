@@ -896,6 +896,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     let child_options = original.fees.options(options.deadline);
     let policies = &original.policies;
     let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+    native.retain_http_listeners(&prepared, &ports);
     let log = quote_instructions(
         &native,
         &owner.authority.config,
@@ -1057,7 +1058,7 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             (child, original, operation)
         })
         .collect();
-    let mut peers = UnavailablePeers::start(&prepared);
+    let mut peers = native.unavailable_peers(&prepared);
     assert_original_offline_recovery(
         &prepared,
         &original,

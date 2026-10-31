@@ -107,6 +107,34 @@ public enum KaigiRelayBoundsV1 {
   public static let maxHPKEPublicKeyBytes = 4_096
 }
 
+/// HPKE suite of a relay key, using the transport's suite identifiers.
+public enum KaigiRelayHPKESuiteV1: UInt16, Sendable, CaseIterable {
+  case mlKem768AuthPsk = 0x0001
+  case mlKem1024AuthPsk = 0x0002
+
+  /// Exact public-key length of this suite.
+  public var publicKeyByteCount: Int {
+    switch self {
+    case .mlKem768AuthPsk: return 1_184
+    case .mlKem1024AuthPsk: return 1_568
+    }
+  }
+
+  /// Frame a raw public key as the descriptor a relay registers and a hop carries:
+  /// a little-endian suite identifier, then the exact key. The ledger rejects anything
+  /// else, and the relay fingerprint commits to the suite this way.
+  public func descriptor(publicKey: Data) throws -> Data {
+    guard publicKey.count == publicKeyByteCount else {
+      throw KaigiV1Error.invalidValue(
+        "Kaigi relay HPKE keys for this suite must contain exactly \(publicKeyByteCount) bytes."
+      )
+    }
+    var descriptor = Data([UInt8(rawValue & 0xff), UInt8(rawValue >> 8)])
+    descriptor.append(publicKey)
+    return descriptor
+  }
+}
+
 /// Exact canonical little-endian Pasta Fp public output, without Hash marker packing.
 /// Zero is valid; private blinding requirements belong to the proving relation.
 public struct KaigiAuthorizationScalarV1: Equatable, Hashable, Sendable {

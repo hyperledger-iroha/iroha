@@ -52,9 +52,12 @@ async fn rwas_endpoints_exist() {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid Torii RWA fixture");

@@ -180,13 +180,19 @@ import Foundation
     var enrollment: KagemushaWalletEnrollmentV1?
     private var dispatch: Data?
     var closed = false
+    nonisolated let exchangeIngress = KagemushaProbeExchangeIngress()
+    var admittedCall: KagemushaWalletExchangeCallV1?
     var wallet: KagemushaWalletV1?
+    var walletLifecycle = KagemushaProbeWalletLifecycle()
+    var walletActivity: KagemushaProbeActivityBinding?
+    var walletObservation: KagemushaProbeActivityObservation?
+    private var commandInFlight = false
     var pendingReview: KagemushaProbePendingReview?
     let nearbyIdentity = KagemushaNearbyDiagnosticIdentity()
     var nearbyRun: KagemushaNearbyDiagnostic?
     var qrRun: KagemushaQRDiagnostic?
     var carrierBusy = false
-    var timeExchange: KagemushaWalletTimeExchangeV1?
+    var timeExchange: (challenge: KagemushaWalletTimeExchangeV1, exchange: KagemushaWalletExchangeV1)?
     init(configuration: Configuration) throws {
       config = configuration
       let support = try config.files.url(config.actorPath + "/custody")
@@ -201,6 +207,9 @@ import Foundation
       guard !closed, let enrollment else { throw EnrollmentProbeFailure.lifecycle }
       return enrollment
     }
+    func checkActivityFailure() throws {
+      try walletActivity?.checkFailure()
+    }
     /// Public originals are separate from private input copies, runtime credentials and custody.
     func output(_ name: String, _ bytes: Data, sequence: Int) throws {
       try config.files.publish(
@@ -214,7 +223,47 @@ import Foundation
         action: .evidence, dispatchOriginal: dispatch, evidenceOriginal: bytes)
       try output("service-evidence.norito", frame.canonicalOriginal, sequence: sequence)
     }
-    func execute(_ command: Command, sequence: Int) async throws -> String {
+    nonisolated func admit(_ command: Command) throws -> KagemushaWalletExchangeCallV1? {
+      if KagemushaMonetaryProbeManifest.actions.contains(command.action) {
+        try KagemushaMonetaryProbeManifest.validate(command.action, names: Set(command.inputs.keys))
+      }
+      switch command.action {
+      case "begin-exchange": try exchangeIngress.begin(); return nil
+      case "end-exchange": try exchangeIngress.requestEnd(); return nil
+      case "decide-review":
+        guard let pin = command.inputs["decision"],
+          pin.path.hasPrefix("inbox/" + config.invocation + "/")
+        else { throw EnrollmentProbeFailure.input }
+        let bytes = try config.files.pinned(pin, maximum: 4096)
+        return try KagemushaMonetaryProbeManifest.reviewDecisionConfirms(bytes)
+          ? exchangeIngress.admit() : nil
+      default: return KagemushaMonetaryProbeManifest.exchangeActions.contains(command.action)
+        ? try exchangeIngress.admit() : nil
+      }
+    }
+    func mutationOwner() throws -> KagemushaWalletExchangeCallV1 {
+      guard let admittedCall else { throw EnrollmentProbeFailure.lifecycle }
+      return admittedCall
+    }
+    func execute(_ command: Command, sequence: Int, admission: KagemushaWalletExchangeCallV1?) async throws -> String {
+      defer { admission?.finish() }
+
+      guard !commandInFlight else { throw EnrollmentProbeFailure.lifecycle }
+      try walletLifecycle.requireIdle()
+      let cleanup = command.action == "stop" || command.action == "release-wallet"
+      if wallet != nil && !cleanup {
+        _ = try walletOwner()
+      }
+      commandInFlight = true
+      admittedCall = admission
+      defer { commandInFlight = false; admittedCall = nil }
+      let result = try await executeCommand(command, sequence: sequence)
+      // Surface a callback failure that arrived during a synchronous Native command.
+      // Its monetary outcome remains in Native custody; this does not imply rollback.
+      if !cleanup { try walletActivity?.requireHealthy() }
+      return result
+    }
+    private func executeCommand(_ command: Command, sequence: Int) async throws -> String {
       guard !closed, !carrierBusy else { throw EnrollmentProbeFailure.lifecycle }
       if KagemushaMonetaryProbeManifest.actions.contains(command.action) {
         return try await executeMonetary(command, sequence: sequence)
@@ -357,16 +406,23 @@ import Foundation
         }
         return status
       case "stop":
-        try close()
+        try await closeOwners()
         return "closed-with-custody-retained"
       default: throw EnrollmentProbeFailure.input
       }
     }
     /// Release is explicit and awaited; no abandonment, key deletion, replacement or bootstrap.
-    func close() throws {
+    func close() async throws {
+      guard !commandInFlight else { throw EnrollmentProbeFailure.lifecycle }
+      commandInFlight = true
+      defer { commandInFlight = false }
+      try await closeOwners()
+    }
+    private func closeOwners() async throws {
       guard !carrierBusy else { throw EnrollmentProbeFailure.lifecycle }
+      try walletLifecycle.requireIdle()
       if closed { return }
-      try releaseWallet()
+      try await releaseWallet()
       if let enrollment {
         try enrollment.close()
         self.enrollment = nil

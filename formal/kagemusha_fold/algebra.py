@@ -1,7 +1,10 @@
-"""Bounded Laurent-polynomial controls for the native non-hiding IPA recurrence.
+"""Bounded Laurent-polynomial lemmas for abstract pre-mask IPA offsets.
 
-These are finite algebra checks, not a transcript model or a proof of privacy.
-Variables are alpha, z, zeta, followed by the round challenges in native order.
+Variables are alpha, z, zeta and formal round values in fold order. The scalar
+recurrence matches the offsets before the selected native fold adds W masks.
+It omits D, the input/mask digest, masks, gamma and transcript feedback. In
+particular, round variables here are not the selected total nz(raw) mapping.
+These finite algebra checks establish no native abort rate or privacy law.
 """
 
 from math import prod
@@ -77,7 +80,16 @@ class Ring:
 
 
 def abort_coefficient(k, inputs):
-    """Numerator of the independent-tape encoding/zero-event union bound."""
+    """Numerator for an explicitly hypothetical raw-variable exception union.
+
+    Fix nonzero source challenges with at least one full-width source, and
+    nonzero generator/auxiliary logs, over a prime field before the experiment.
+    Under independent scalar variables with maximum atom lambda, charge any
+    round variable equal to zero, any pre-mask L/R offset equal to identity,
+    or the final generator equal to identity. The bound is min(1, result*lambda).
+    The selected native fold masks L/R, applies nz to actual round challenges
+    and accepts full-group G; this is not its abort or privacy bound.
+    """
     if type(k) is not int or not 1 <= k <= 16:
         raise ValueError("supported mathematical fold depth is 1..16")
     if type(inputs) is not int or inputs < 1:
@@ -86,11 +98,15 @@ def abort_coefficient(k, inputs):
 
 
 def recurrence(k, sources, generator_logs, auxiliary_log=1, modulus=None):
-    """Expand at most four rounds/inputs, retaining each denominator-cleared point.
+    """Expand bounded pre-mask offsets and retain their cleared polynomials.
 
-    Source challenges use their actual short width and occupy the low coefficient
-    prefix. A short-only input is deliberately permitted for the negative control.
+    Each abstract source uses its supplied width and occupies the low coefficient
+    prefix. An empty source denotes the constant vector [1]; this algebraic
+    boundary case is not admitted by native FoldInput, which requires k>=1.
+    A short-only input is also permitted to test the full-length hypothesis.
     Logs describe a cyclic additive group; no log independence is assumed.
+    Raw formal round variables may be zero only after denominators are cleared;
+    the rational recurrence itself requires nonzero round values.
     """
     if type(k) is not int or not 1 <= k <= 4 or not 1 <= len(sources) <= 4:
         raise ValueError("bounded control permits k=1..4 and one to four inputs")

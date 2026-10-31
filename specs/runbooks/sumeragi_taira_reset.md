@@ -69,17 +69,18 @@ ones. For the fresh Phase A public reset, use the authenticated same-revision Ka
 approved Linux guest through the maintained native invocation transport:
 
 ```sh
-kagami localnet generate --peers 4 \
+kagami sora-network generate --profile nexus --peers 4 \
   --chain-id fc56984b-2be7-431d-840e-21514d1883f0 \
-  --chain-discriminant 369 --sora-profile nexus --consensus-mode npos \
+  --chain-discriminant 369 \
   --bind-host 127.0.0.1 --public-host 127.0.0.1 \
   --base-api-port 8080 --base-p2p-port 1337 \
   --out-dir /private/runtime/taira-public-reset/REVIEWED_FRESH_RUN/network
 ```
 
 This command generates private keys and signs genesis; run it only with the reset owner's
-authorization. Select a fresh owner-private run directory, omit `--seed` and sample/application
-asset options, and keep its private output on that guest. It does not start validators. The
+authorization. Sora networks always run NPoS, and `kagami localnet generate` refuses the Taira
+chain identity. Select a fresh owner-private run directory, omit `--seed`, and keep its private
+output on that guest. It does not start validators. The
 generator constructs the current bootstrap, exact BLS topology/PoPs and lane policy, executes
 genesis under the staged configuration, and publishes `genesis.json`, `genesis.signed.nrt`,
 the checked identity files and `nexus-amx-context.v1.bin`. Validators select the published
@@ -158,7 +159,7 @@ the chain never commits. The only recovery before any block commits is to stop e
 validator, delete its `records_dir` and `installation_log` (nothing was signed) and repeat the
 first boot with the assertion.
 
-`kagami localnet` start scripts pass the assertion only when a peer's
+Generated `kagami localnet` and `kagami sora-network` start scripts pass the assertion only when a peer's
 `state/peer<i>/sumeragi-records` directory does not exist yet. That inference is for disposable
 networks only: a production launcher must not derive the assertion from a missing directory,
 because a lost record store looks the same.

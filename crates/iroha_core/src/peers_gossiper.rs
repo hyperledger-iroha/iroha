@@ -6,8 +6,9 @@
 use crate::{IrohaNetwork, NetworkMessage};
 use iroha_config::parameters::actual::TrustedPeers;
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{NetworkId, peer::Peer};
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     Broadcast, PeerTransportCapabilities, UpdatePeerCapabilities, UpdatePeers, UpdateTopology,
@@ -923,8 +924,7 @@ impl PeersGossiper {
             trust,
             from_peer,
             allow_public,
-            &self.current_topology,
-            &self.trusted_peers,
+            (&self.current_topology, &self.trusted_peers),
             &mut self.trust,
             now,
         );
@@ -1012,8 +1012,7 @@ fn process_trust_records(
     trust: Vec<SignedPeerTrust>,
     from_peer: &Peer,
     allow_public: bool,
-    current_topology: &BTreeSet<PeerId>,
-    trusted_peers: &BTreeSet<PeerId>,
+    (current_topology, trusted_peers): (&BTreeSet<PeerId>, &BTreeSet<PeerId>),
     trust_book: &mut TrustBook,
     now: std::time::Instant,
 ) -> TrustGossipOutcome {
@@ -1177,13 +1176,13 @@ impl<'a> DeserializePayload<'a> for PeersGossip {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        if let Ok((wire, consumed)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes) {
-            if consumed == bytes.len() {
-                return Ok(Self {
-                    peers: UniqueVec::from_iter(wire.peers),
-                    peer_capabilities: wire.peer_capabilities,
-                });
-            }
+        if let Ok((wire, consumed)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes)
+            && consumed == bytes.len()
+        {
+            return Ok(Self {
+                peers: UniqueVec::from_iter(wire.peers),
+                peer_capabilities: wire.peer_capabilities,
+            });
         }
         let (peers, consumed) = ncore::decode_field_canonical::<Vec<Peer>>(bytes)?;
         if consumed != bytes.len() {
@@ -2184,8 +2183,7 @@ mod tests {
             trust,
             &from_peer,
             false,
-            &BTreeSet::new(),
-            &BTreeSet::from([from_peer.id().clone()]),
+            (&BTreeSet::new(), &BTreeSet::from([from_peer.id().clone()])),
             &mut trust_book,
             now,
         );
@@ -2232,8 +2230,10 @@ mod tests {
             trust,
             &from_peer,
             false,
-            &BTreeSet::from([reported_peer.id().clone()]),
-            &BTreeSet::from([from_peer.id().clone()]),
+            (
+                &BTreeSet::from([reported_peer.id().clone()]),
+                &BTreeSet::from([from_peer.id().clone()]),
+            ),
             &mut trust_book,
             now,
         );
@@ -2296,8 +2296,10 @@ mod tests {
                 trust,
                 &from_peer,
                 false,
-                &BTreeSet::from([reported_peer.id().clone()]),
-                &BTreeSet::from([from_peer.id().clone()]),
+                (
+                    &BTreeSet::from([reported_peer.id().clone()]),
+                    &BTreeSet::from([from_peer.id().clone()]),
+                ),
                 &mut trust_book,
                 now,
             );
@@ -2363,8 +2365,10 @@ mod tests {
                 trust,
                 &from_peer,
                 false,
-                &BTreeSet::from([reported_peer.id().clone()]),
-                &BTreeSet::from([from_peer.id().clone()]),
+                (
+                    &BTreeSet::from([reported_peer.id().clone()]),
+                    &BTreeSet::from([from_peer.id().clone()]),
+                ),
                 &mut trust_book,
                 now,
             );
@@ -2413,8 +2417,7 @@ mod tests {
             trust,
             &from_peer,
             false,
-            &BTreeSet::new(),
-            &BTreeSet::from([from_peer.id().clone()]),
+            (&BTreeSet::new(), &BTreeSet::from([from_peer.id().clone()])),
             &mut trust_book,
             now,
         );
@@ -2473,8 +2476,7 @@ mod tests {
             trust,
             &from_peer,
             true,
-            &BTreeSet::new(),
-            &BTreeSet::from([from_peer.id().clone()]),
+            (&BTreeSet::new(), &BTreeSet::from([from_peer.id().clone()])),
             &mut trust_book,
             now,
         );
@@ -2524,8 +2526,7 @@ mod tests {
             trust,
             &from_peer,
             false,
-            &BTreeSet::new(),
-            &BTreeSet::from([from_peer.id().clone()]),
+            (&BTreeSet::new(), &BTreeSet::from([from_peer.id().clone()])),
             &mut trust_book,
             now,
         );

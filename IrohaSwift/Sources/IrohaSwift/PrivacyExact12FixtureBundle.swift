@@ -141,11 +141,21 @@ public struct PrivacyExact12FixtureBundleV1: Equatable, Sendable {
 /// This codec does not load `NoritoBridge`. It validates canonical Norito
 /// framing and the bindings that Swift can reproduce soundly: closed protocol
 /// order, statement/envelope/proof discriminants, proof-system and engine
-/// selection, envelope reuse by the submit instruction, normalized and signed
+/// selection, per-protocol submit wiring, X509 signed-action bindings, normalized and signed
 /// transaction structure, signed-payload equality, and the pipeline hash.
 public enum PrivacyExact12FixtureCodecV1 {
     public static let schemaName = "iroha.privacy.exact12-typed-fixture-bundle.v1"
     public static let submitProofWireId = "iroha.privacy.submit_proof.v1"
+    /// Sole first-release X509 execution wire; the proof is a signed occurrence.
+    public static let submitX509WireId = PrivacyX509WireV1.wireId
+
+    static func instructionWireId(for protocolId: PrivacyProtocolIdV1) -> String {
+        protocolId == .irohaZkX509StarkP256V1 ? submitX509WireId : submitProofWireId
+    }
+
+    static func isPrivacyInstructionWire(_ wire: String) -> Bool {
+        wire == submitProofWireId || wire == submitX509WireId
+    }
     public static let version: UInt32 = 1
     public static let rowCount = 12
     public static let hashByteCount = 32
@@ -166,17 +176,12 @@ public enum PrivacyExact12FixtureCodecV1 {
     private static let statementSchemaName = "iroha.privacy.statement.v1"
     private static let envelopeSchemaName = "iroha.privacy.proof-envelope.v1"
     private static let proofWireMagic = Data([0x49, 0x52, 0x48, 0x5a, 0x4b, 0x31, 0xa5, 0x5a])
-    private static let catalogCommitment: Data = {
-        let words: [UInt64] = [
-            0x7c30_a004_39f1_37e0, 0x6b40_fb5c_d815_db00, 0x49a9_4401_d272_97d7,
-            0x2e34_8ea7_fdf3_f0de, 0xfabf_bf7c_7865_7f74, 0xffbb_e269_c311_4fc9,
-        ]
-        var bytes = Data()
-        for word in words {
-            appendUInt64LE(word, to: &bytes)
-        }
-        return bytes
-    }()
+    private static let catalogCommitment = Data([
+        0x5b, 0xcf, 0x36, 0x6f, 0xb1, 0x8d, 0x2e, 0x43,
+        0x61, 0x48, 0x6c, 0x01, 0x5d, 0xa5, 0xb4, 0x1a,
+        0x3f, 0xb0, 0x0e, 0xdf, 0x05, 0x61, 0x10, 0x42,
+        0xcc, 0xc4, 0x52, 0x12, 0x0d, 0x17, 0x6e, 0xb0,
+    ])
     private static let instructionSchemaName =
         "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
     private static let transactionPayloadSchemaName =
@@ -377,7 +382,7 @@ public enum PrivacyExact12FixtureCodecV1 {
         _ row: PrivacyExact12TypedFixtureRowV1,
         rowIndex: Int
     ) throws {
-        guard row.submitProofWireId == submitProofWireId else {
+        guard row.submitProofWireId == instructionWireId(for: row.protocolId) else {
             throw PrivacyExact12FixtureCodecErrorV1.invalidSubmitProofWireId
         }
         try requireBlob(
@@ -480,7 +485,7 @@ public enum PrivacyExact12FixtureCodecV1 {
             maximumUTF8Bytes: maximumWireIdBytes,
             label: "submit-proof wire id"
         )
-        guard wireId == submitProofWireId else {
+        guard wireId == instructionWireId(for: protocolId) else {
             throw PrivacyExact12FixtureCodecErrorV1.invalidSubmitProofWireId
         }
         let instruction = try reader.readRawByteVector(
@@ -591,68 +596,72 @@ public enum PrivacyExact12FixtureCodecV1 {
             rowIndex: rowIndex
         )
 
-        let instruction = try decodeFrame(
-            row.submitProofInstructionNorito,
-            schemaName: instructionSchemaName,
-            payloadAlignment: typedPrivacyPayloadAlignment,
-            maximumBytes: maximumInstructionBytes,
-            label: "row \(rowIndex) submit-proof instruction"
-        )
-        var instructionReader = Exact12Reader(instruction.payload)
-        let submittedEnvelope = try instructionReader.readField(
-            maximum: maximumEnvelopeBytes,
-            label: "submitted envelope"
-        )
-        try instructionReader.requireFinished(label: "submit-proof instruction")
-        guard submittedEnvelope == envelope.payload else {
-            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
-                row: rowIndex,
-                field: "instruction-to-envelope"
+        if row.protocolId == .irohaZkX509StarkP256V1 {
+            try PrivacyX509WireV1.validateFixture(row)
+        } else {
+            let instruction = try decodeFrame(
+                row.submitProofInstructionNorito,
+                schemaName: instructionSchemaName,
+                payloadAlignment: typedPrivacyPayloadAlignment,
+                maximumBytes: maximumInstructionBytes,
+                label: "row \(rowIndex) submit-proof instruction"
             )
-        }
-
-        let unsignedFields = try decodeTransactionPayload(
-            row.unsignedTransactionPayloadNorito,
-            expectedProtocolTag: protocolTag,
-            rowIndex: rowIndex,
-            label: "unsigned transaction",
-            expectedInstructionArchive: row.submitProofInstructionNorito,
-            normalizedProjection: false
-        )
-        let projection = try decodeFrame(
-            row.transactionIntentProjectionNorito,
-            schemaName: transactionPayloadSchemaName,
-            payloadAlignment: transactionPayloadAlignment,
-            maximumBytes: maximumIntentProjectionBytes,
-            label: "row \(rowIndex) transaction-intent projection"
-        )
-        let projectionFields = try decodeTransactionPayload(
-            projection.payload,
-            expectedProtocolTag: protocolTag,
-            rowIndex: rowIndex,
-            label: "transaction-intent projection",
-            expectedInstructionArchive: nil,
-            normalizedProjection: true
-        )
-        guard unsignedFields.count == projectionFields.count else {
-            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
-                row: rowIndex,
-                field: "projection field count"
+            var instructionReader = Exact12Reader(instruction.payload)
+            let submittedEnvelope = try instructionReader.readField(
+                maximum: maximumEnvelopeBytes,
+                label: "submitted envelope"
             )
-        }
-        for index in unsignedFields.indices where index != 3 {
-            guard unsignedFields[index] == projectionFields[index] else {
+            try instructionReader.requireFinished(label: "submit-proof instruction")
+            guard submittedEnvelope == envelope.payload else {
                 throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
                     row: rowIndex,
-                    field: "projection field \(index)"
+                    field: "instruction-to-envelope"
                 )
             }
-        }
-        guard row.unsignedTransactionPayloadNorito != projection.payload else {
-            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
-                row: rowIndex,
-                field: "projection normalization"
+
+            let unsignedFields = try decodeTransactionPayload(
+                row.unsignedTransactionPayloadNorito,
+                expectedProtocolTag: protocolTag,
+                rowIndex: rowIndex,
+                label: "unsigned transaction",
+                expectedInstructionArchive: row.submitProofInstructionNorito,
+                normalizedProjection: false
             )
+            let projection = try decodeFrame(
+                row.transactionIntentProjectionNorito,
+                schemaName: transactionPayloadSchemaName,
+                payloadAlignment: transactionPayloadAlignment,
+                maximumBytes: maximumIntentProjectionBytes,
+                label: "row \(rowIndex) transaction-intent projection"
+            )
+            let projectionFields = try decodeTransactionPayload(
+                projection.payload,
+                expectedProtocolTag: protocolTag,
+                rowIndex: rowIndex,
+                label: "transaction-intent projection",
+                expectedInstructionArchive: nil,
+                normalizedProjection: true
+            )
+            guard unsignedFields.count == projectionFields.count else {
+                throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
+                    row: rowIndex,
+                    field: "projection field count"
+                )
+            }
+            for index in unsignedFields.indices where index != 3 {
+                guard unsignedFields[index] == projectionFields[index] else {
+                    throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
+                        row: rowIndex,
+                        field: "projection field \(index)"
+                    )
+                }
+            }
+            guard row.unsignedTransactionPayloadNorito != projection.payload else {
+                throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
+                    row: rowIndex,
+                    field: "projection normalization"
+                )
+            }
         }
 
         try validateSignedTransaction(

@@ -1,6 +1,6 @@
 {
-  "compiler_lock_sha256_hex": "17643cde53ac15e679f499015c2af021c0de56210b159812c795286072ed9d0e",
-  "corridor_manifest_sha256_hex": "a8b2e09afd006ab77d513b7f6b140eb32ecbc441934f06650b812900db0f3337",
+  "compiler_lock_sha256_hex": "662879b8748edff9e0db12f895490f990576747e6b9bc73418b3d025a31a703b",
+  "corridor_manifest_sha256_hex": "f65a7a54e68e2d19808003b0cf0fdc9b5899015bd351868b1cae506cd92515e0",
   "schema": "iroha.sccp.contract-artifact-lock.v1",
   "targets": {
     "evm": {
@@ -173,7 +173,7 @@
           "runtime_template_keccak256_hex": "3878a8087f4f2b3fb7ce8239e6fb792d0130eab766c0968a616d662a7ce124c5"
         }
       },
-      "standard_json_input_sha256_hex": "a2bd91f4a0c5825d8aeb2e7e706d1498951a80680a73f5c2418e969d09ec3bc1"
+      "standard_json_input_sha256_hex": "f3778a1eb6a2b44cee2bdce9a095218b0848caf6acf77e946a7771f60f110fa8"
     }
   }
 }

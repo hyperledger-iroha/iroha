@@ -664,7 +664,7 @@ fn native_storage_reads_preserve_original_bytes_when_recovery_or_poison_blocks_a
     }
 }
 
-/// Network committed by the same genuine signed genesis used by NativeBlocks.
+/// Network committed by the same genuine signed genesis used by `NativeBlocks`.
 pub(super) fn native_storage_network_id() -> iroha_data_model::NetworkId {
     static NETWORK: std::sync::OnceLock<iroha_data_model::NetworkId> = std::sync::OnceLock::new();
     *NETWORK.get_or_init(|| {
@@ -693,7 +693,7 @@ fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>>
             .expect("read snapshot directory")
             .map(|entry| entry.expect("read snapshot entry"))
             .collect::<Vec<_>>();
-        entries.sort_by_key(|entry| entry.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path).expect("inspect snapshot entry");

@@ -1,4 +1,4 @@
-//! Offline SoraFS instruction preparation for `iroha tx stdin`.
+//! Offline `SoraFS` instruction preparation for `iroha tx stdin`.
 //!
 //! Typed command options feed the canonical instruction builders. This capability
 //! writes one instruction array without client configuration, signing, network
@@ -34,7 +34,7 @@ use std::{
     process::ExitCode,
 };
 
-/// Prepare one canonical SoraFS instruction as transaction-stdin JSON.
+/// Prepare one canonical `SoraFS` instruction as transaction-stdin JSON.
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
     /// Convert a canonical capacity-declaration summary into an instruction.
@@ -42,7 +42,7 @@ pub enum Command {
     /// Convert a canonical replication-order summary into an instruction.
     ReplicationOrder(ReplicationOrderArgs),
     /// Bind a completion to its authority, assignment and finalized anchor.
-    CompleteOrder(CompleteOrderArgs),
+    CompleteOrder(Box<CompleteOrderArgs>),
     /// Expire a pending replication order at an explicit epoch.
     ExpireOrder(ExpireOrderArgs),
 }
@@ -50,7 +50,7 @@ pub enum Command {
 /// A canonical capacity declaration and its registration metadata.
 #[derive(Debug, clap::Args)]
 pub struct CapacityDeclarationArgs {
-    /// JSON object containing only the canonical declaration_b64 payload.
+    /// JSON object containing only the canonical `declaration_b64` payload.
     #[arg(long, value_name = "PATH")]
     summary: PathBuf,
 }
@@ -58,7 +58,7 @@ pub struct CapacityDeclarationArgs {
 /// A canonical replication order and optional Musubi archive binding.
 #[derive(Debug, clap::Args)]
 pub struct ReplicationOrderArgs {
-    /// JSON summary containing replication_order_b64.
+    /// JSON summary containing `replication_order_b64`.
     #[arg(long, value_name = "PATH")]
     summary: PathBuf,
     /// Nonzero archive ID in exactly 64 lowercase hex characters.
@@ -108,7 +108,7 @@ pub struct CompleteOrderArgs {
 }
 
 /// A pending replication order and its explicit expiration epoch.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Clone, Copy, clap::Args)]
 pub struct ExpireOrderArgs {
     /// Nonzero order ID in exactly 64 lowercase hex characters.
     #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
@@ -122,12 +122,12 @@ impl Command {
     /// Run local instruction preparation, preserving clean stdout and status.
     pub(super) fn run(self) -> ExitCode {
         let result = match self {
-            Self::CapacityDeclaration(args) => run_capacity_declaration(args),
-            Self::ReplicationOrder(args) => run_replication_order(args),
+            Self::CapacityDeclaration(args) => run_capacity_declaration(&(args)),
+            Self::ReplicationOrder(args) => run_replication_order(&(args)),
             Self::CompleteOrder(args) => {
-                complete_order_instruction(args).and_then(print_instruction_json)
+                complete_order_instruction(*args).and_then(|value| print_instruction_json(&value))
             }
-            Self::ExpireOrder(args) => print_instruction_json(expire_order_instruction(args)),
+            Self::ExpireOrder(args) => print_instruction_json(&(expire_order_instruction(args))),
         };
         match result {
             Ok(()) => ExitCode::SUCCESS,
@@ -139,7 +139,7 @@ impl Command {
     }
 }
 
-fn run_capacity_declaration(args: CapacityDeclarationArgs) -> Result<(), String> {
+fn run_capacity_declaration(args: &CapacityDeclarationArgs) -> Result<(), String> {
     let summary = read_json_map(&args.summary, "declaration summary")?;
     for key in summary.keys() {
         if key != "declaration_b64" {
@@ -177,12 +177,12 @@ fn run_capacity_declaration(args: CapacityDeclarationArgs) -> Result<(), String>
     if canonical_bytes != declaration_bytes {
         return Err("capacity declaration must use canonical first-release Norito".to_owned());
     }
-    print_instruction_json(InstructionBox::from(RegisterCapacityDeclaration::new(
-        declaration_bytes,
-    )))
+    print_instruction_json(
+        &(InstructionBox::from(RegisterCapacityDeclaration::new(declaration_bytes))),
+    )
 }
 
-fn run_replication_order(args: ReplicationOrderArgs) -> Result<(), String> {
+fn run_replication_order(args: &ReplicationOrderArgs) -> Result<(), String> {
     let musubi_archive = args.musubi_archive_id_hex.map(ArchiveId::new);
     let summary = read_json_map(&args.summary, "replication order summary")?;
     let order_b64 = require_string(&summary, "replication_order_b64")?;
@@ -211,7 +211,7 @@ fn run_replication_order(args: ReplicationOrderArgs) -> Result<(), String> {
         Some(archive_id) => instruction.for_musubi_archive(archive_id),
         None => instruction,
     };
-    print_instruction_json(InstructionBox::from(instruction))
+    print_instruction_json(&(InstructionBox::from(instruction)))
 }
 fn complete_order_instruction(args: CompleteOrderArgs) -> Result<InstructionBox, String> {
     let signer_policy_revision = args.signer_policy_revision.get();
@@ -352,8 +352,8 @@ fn require_lowercase_fixed_hex(
         ))
     }
 }
-fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
-    let encoded = to_bytes(&instruction)
+fn print_instruction_json(instruction: &InstructionBox) -> Result<(), String> {
+    let encoded = to_bytes(instruction)
         .map_err(|err| format!("failed to encode instruction payload: {err}"))?;
     let payload = Value::Array(vec![Value::String(BASE64_STD.encode(encoded))]);
     let rendered = json::to_string(&payload)
@@ -391,7 +391,7 @@ mod tests {
         let Command::CompleteOrder(args) = parse_command("complete-order", args)? else {
             unreachable!("selected complete-order")
         };
-        complete_order_instruction(args)
+        complete_order_instruction(*args)
     }
 
     fn parse_expire_instruction(

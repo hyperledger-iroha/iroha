@@ -5,12 +5,13 @@ use ed25519_dalek::SigningKey;
 struct FailingTryRng;
 #[derive(Debug)]
 struct FailingTryRngError;
+impl std::error::Error for FailingTryRngError {}
 impl std::fmt::Display for FailingTryRngError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("failing stream token RNG")
     }
 }
-impl TryRngCore for FailingTryRng {
+impl TryRng for FailingTryRng {
     type Error = FailingTryRngError;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Err(FailingTryRngError)
@@ -877,7 +878,7 @@ fn token_expiry_during_finality_read_is_rechecked_before_release() {
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                short.clone(),
+                short,
                 None,
             )
             .expect("every signed fixture is eligible before its exclusive deadline");
@@ -971,7 +972,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect("first token");
@@ -982,7 +983,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect("second token");
@@ -993,7 +994,7 @@ fn authenticated_subject_quota_is_enforced() {
             vec![0xAA],
             provider,
             "sorafs.sf1@1.0.0".to_string(),
-            overrides.clone(),
+            overrides,
             None,
         )
         .expect_err("quota exceeded");

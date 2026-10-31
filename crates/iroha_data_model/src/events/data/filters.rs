@@ -91,7 +91,7 @@ mod model {
         #[codec(index = 22)]
         Bridge(BridgeEventFilter),
         /// Matches governance lifecycle events
-        #[cfg(feature = "governance")]
+
         #[codec(index = 23)]
         Governance(GovernanceEventFilter),
         /// Native race events, optionally restricted to one race identifier.
@@ -191,7 +191,7 @@ mod model {
     )]
     pub struct RuntimeUpgradeEventFilter {
         /// If specified, matches only events for this runtime upgrade id
-        pub(super) id_matcher: Option<crate::runtime::RuntimeUpgradeId>,
+        pub(super) id_matcher: Option<crate::runtime::lifecycle::ChangeSetId>,
         /// Matches only events from this set
         pub(super) event_set: super::runtime_upgrade::RuntimeUpgradeEventSet,
     }
@@ -345,7 +345,7 @@ mod model {
         /// Matches only events from this set.
         pub(super) event_set: super::escrow::EscrowEventSet,
     }
-    #[cfg(feature = "governance")]
+
     /// An event filter for [`super::governance::GovernanceEvent`] values.
     ///
     /// Scope selectors are intersected. Because proposal and referendum event
@@ -641,7 +641,7 @@ impl_json_via_norito_bytes!(
     ExecutorEventFilter,
     EscrowEventFilter,
 );
-#[cfg(feature = "governance")]
+
 impl_json_via_norito_bytes!(GovernanceEventFilter);
 impl PeerEventFilter {
     /// Creates a new [`PeerEventFilter`] accepting all [`PeerEvent`]s.
@@ -717,9 +717,9 @@ impl RuntimeUpgradeEventFilter {
             event_set: super::runtime_upgrade::RuntimeUpgradeEventSet::all(),
         }
     }
-    /// Filter by runtime upgrade identifier.
+    /// Filter by change set.
     #[must_use]
-    pub fn for_runtime(mut self, id: crate::runtime::RuntimeUpgradeId) -> Self {
+    pub fn for_runtime(mut self, id: crate::runtime::lifecycle::ChangeSetId) -> Self {
         self.id_matcher = Some(id);
         self
     }
@@ -1157,11 +1157,7 @@ impl super::EventFilter for RuntimeUpgradeEventFilter {
         let id_ok = self
             .id_matcher
             .as_ref()
-            .is_none_or(|id_matcher| match event {
-                super::runtime_upgrade::RuntimeUpgradeEvent::Proposed(e) => id_matcher == &e.id,
-                super::runtime_upgrade::RuntimeUpgradeEvent::Activated(e) => id_matcher == &e.id,
-                super::runtime_upgrade::RuntimeUpgradeEvent::Canceled(e) => id_matcher == &e.id,
-            });
+            .is_none_or(|id_matcher| event.change_set() == Some(id_matcher));
         id_ok && self.event_set.matches(event)
     }
 }
@@ -1840,7 +1836,7 @@ impl super::EventFilter for BridgeEventFilter {
         self.matches_event(event)
     }
 }
-#[cfg(feature = "governance")]
+
 impl GovernanceEventFilter {
     /// Creates a new [`GovernanceEventFilter`] accepting all governance events.
     pub fn new() -> Self {
@@ -1873,7 +1869,7 @@ impl GovernanceEventFilter {
         self
     }
 }
-#[cfg(feature = "governance")]
+
 impl Default for GovernanceEventFilter {
     fn default() -> Self {
         Self::new()
@@ -1945,7 +1941,7 @@ impl DataEventFilter {
             | Self::Oracle(_)
             | Self::Social(_)
             | Self::Bridge(_) => {}
-            #[cfg(feature = "governance")]
+
             Self::Governance(_) => {}
         }
         updated
@@ -2054,7 +2050,7 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::Bridge(filter), DataEvent::Bridge(bridge_event)) => {
                 filter.matches_event(bridge_event)
             }
-            #[cfg(feature = "governance")]
+
             (DataEventFilter::Governance(filter), DataEvent::Governance(governance_event)) => {
                 governance_matches(filter, governance_event)
             }
@@ -2062,7 +2058,7 @@ impl EventFilter for DataEventFilter {
         }
     }
 }
-#[cfg(all(feature = "transparent_api", feature = "governance"))]
+#[cfg(feature = "transparent_api")]
 fn governance_matches(
     filter: &GovernanceEventFilter,
     event: &super::governance::GovernanceEvent,
@@ -2109,7 +2105,7 @@ fn governance_matches(
     }
 }
 pub mod prelude {
-    #[cfg(feature = "governance")]
+
     pub use super::model::GovernanceEventFilter;
     pub use super::model::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, ConfigurationEventFilter,
@@ -2186,7 +2182,6 @@ mod tests {
         assert_eq!(escrow.buyer_matcher, Some(new));
     }
 
-    #[cfg(feature = "governance")]
     #[test]
     fn governance_scopes_match_only_their_id_bearing_event_family() {
         use crate::events::data::governance::{
@@ -2636,14 +2631,12 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn runtime_upgrade_filter_matches_by_id() {
-        use crate::events::data::runtime_upgrade::{RuntimeUpgradeEvent, RuntimeUpgradeProposed};
-        let upgrade_id = crate::runtime::RuntimeUpgradeId([0xAB; 32]);
+        use crate::events::data::runtime_upgrade::{RuntimeUpgradeEvent, RuntimeUpgradeScheduled};
+        let upgrade_id = crate::runtime::lifecycle::ChangeSetId([0xAB; 32]);
         let event =
-            DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Proposed(RuntimeUpgradeProposed {
+            DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Scheduled(RuntimeUpgradeScheduled {
                 id: upgrade_id,
-                abi_version: 1,
-                start_height: 10,
-                end_height: 20,
+                effective_height: 10,
             }));
         let matching_filter = DataEventFilter::RuntimeUpgrade(
             RuntimeUpgradeEventFilter::new().for_runtime(upgrade_id),
@@ -2651,7 +2644,7 @@ mod tests {
         assert!(matching_filter.matches(&event));
         let other_filter = DataEventFilter::RuntimeUpgrade(
             RuntimeUpgradeEventFilter::new()
-                .for_runtime(crate::runtime::RuntimeUpgradeId([0xAC; 32])),
+                .for_runtime(crate::runtime::lifecycle::ChangeSetId([0xAC; 32])),
         );
         assert!(!other_filter.matches(&event));
         let event_set_filter = DataEventFilter::RuntimeUpgrade(
@@ -2659,6 +2652,18 @@ mod tests {
                 .for_events(crate::events::data::runtime_upgrade::RuntimeUpgradeEventSet::all()),
         );
         assert!(event_set_filter.matches(&event));
+        let contained = DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Contained(
+            crate::events::data::runtime_upgrade::RuntimeUpgradeContained {
+                containment: [0x01; 32],
+                incident: [0x02; 32],
+                effective_height: 11,
+            },
+        ));
+        assert!(
+            !matching_filter.matches(&contained),
+            "a change-set filter skips containment events"
+        );
+        assert!(event_set_filter.matches(&contained));
     }
     #[test]
     #[cfg(feature = "transparent_api")]

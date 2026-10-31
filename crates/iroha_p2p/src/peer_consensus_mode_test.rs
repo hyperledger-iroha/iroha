@@ -6,6 +6,7 @@ fn peer_admission_requires_an_exact_typed_consensus_mode() {
         proto_version: 2,
         consensus_fingerprint: [0xA5; 32],
         config: consensus_caps([0x5A; 32]),
+        required_host_profiles: None,
     };
     let matching = build_consensus_meta(Some(&caps));
     enforce_consensus_caps(Some(&caps), &matching)

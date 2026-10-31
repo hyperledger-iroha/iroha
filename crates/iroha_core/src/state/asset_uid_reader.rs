@@ -13,21 +13,18 @@ use iroha_data_model::{
     smart_contract::ContractAddress,
 };
 use iroha_primitives::numeric::Quantity;
-pub(crate) use same_uid::same_uid_for_contract;
+pub use same_uid::same_uid_for_contract;
 #[cfg(test)]
-pub(crate) use same_uid::tests::Fixture as SameUidReaderFixture;
+pub use same_uid::tests::Fixture as SameUidReaderFixture;
 
-pub(crate) const READER_ROOT: &str = "asset_uid_reader_v1/";
+pub const READER_ROOT: &str = "asset_uid_reader_v1/";
 type Error = InstructionExecutionError;
 
 fn reject(message: &str) -> Error {
     Error::InvariantViolation(message.into())
 }
 
-pub(crate) fn reader_key(
-    definition: &AssetDefinitionId,
-    controller: &ContractAddress,
-) -> StatePath {
+pub fn reader_key(definition: &AssetDefinitionId, controller: &ContractAddress) -> StatePath {
     format!(
         "{READER_ROOT}{}/{}",
         hex::encode(Hash::new(definition.to_string().as_bytes()).as_ref()),
@@ -37,7 +34,7 @@ pub(crate) fn reader_key(
     .expect("fixed native UID reader path")
 }
 
-pub(crate) fn reader(
+pub fn reader(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     controller: &ContractAddress,
@@ -63,7 +60,7 @@ pub(crate) fn reader(
 
 /// A native policy failure and a query resource refusal remain distinct.
 #[derive(Debug)]
-pub(crate) enum AssetUidHoldingQuoteError {
+pub enum AssetUidHoldingQuoteError {
     Execution(InstructionExecutionError),
     Query(QueryExecutionFail),
     Local(crate::execution_attempt::ExecutionDeferred),
@@ -113,12 +110,10 @@ where
 
 fn clone_account(account: &AccountId) -> Result<AccountId, AssetUidHoldingQuoteError> {
     norito::core::classify_decode_attempt(|| account.try_clone_for_admission()).map_err(|error| {
-        match error.into_local_refusal() {
-            Ok(original) => AssetUidHoldingQuoteError::Local(original.into()),
-            Err(_) => {
-                AssetUidHoldingQuoteError::Execution(reject("invalid native account in UID quote"))
-            }
-        }
+        error.into_local_refusal().map_or_else(
+            |_| AssetUidHoldingQuoteError::Execution(reject("invalid native account in UID quote")),
+            |original| AssetUidHoldingQuoteError::Local(original.into()),
+        )
     })
 }
 
@@ -127,7 +122,7 @@ fn clone_account(account: &AccountId) -> Result<AccountId, AssetUidHoldingQuoteE
 /// Every member and seller-index row is charged before inspection, including
 /// terminal and other-asset escrows. Unknown policies fail without liquid fallback.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn quote_for_contract(
+pub fn quote_for_contract(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractRuntimeExecutionContext,
@@ -246,7 +241,7 @@ pub(crate) fn quote_for_contract(
     Ok((quote, stats))
 }
 
-pub(crate) fn retained(
+pub fn retained(
     world: &impl WorldReadOnly,
     definition: Option<&AssetDefinitionId>,
     account: Option<&AccountId>,
@@ -266,7 +261,7 @@ pub(crate) fn retained(
 }
 
 /// Revoked grants remain canonical state and never restore as an implicit grant.
-pub(crate) fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
+pub fn validate_persistence(world: &impl WorldReadOnly) -> Result<(), Error> {
     for (key, bytes) in world.smart_contract_state().iter() {
         if key.as_ref() == READER_ROOT.trim_end_matches('/')
             || key.as_ref().starts_with(READER_ROOT)

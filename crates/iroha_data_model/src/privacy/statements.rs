@@ -1591,20 +1591,43 @@ impl PrivacyStatementV1 {
             }
             Self::PqMaspStarkV1(statement) => validate_pq_masp(statement, limits)?,
         }
-        let encoded_len = norito::canonical_frame_len(self)
-            .map_err(|_| PrivacyStatementValidationError::EncodingFailure)?;
-        let bytes = u64::try_from(encoded_len)
-            .map_err(|_| PrivacyStatementValidationError::PayloadLengthOverflow)?;
-        if bytes > u64::from(limits.max_statement_and_encrypted_output_bytes_per_transaction) {
-            return Err(
-                PrivacyStatementValidationError::StatementAndEncryptedOutputsTooLarge {
-                    bytes,
-                    max: limits.max_statement_and_encrypted_output_bytes_per_transaction,
-                },
-            );
-        }
-        Ok(())
+        validate_privacy_statement_size_v1(self, limits)
     }
+}
+impl IrohaZkX509StarkP256StatementV1 {
+    /// Validate the proof-free request shape without accepting a supplied derived digest.
+    pub(crate) fn validate_proof_free_v1(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyStatementValidationError> {
+        limits
+            .validate()
+            .map_err(PrivacyStatementValidationError::InvalidLimits)?;
+        self.context.validate_proof_free_v1(limits)?;
+        validate_zk_x509(self)?;
+        validate_privacy_statement_size_v1(
+            &PrivacyStatementV1::IrohaZkX509StarkP256V1(self.clone()),
+            limits,
+        )
+    }
+}
+fn validate_privacy_statement_size_v1(
+    statement: &PrivacyStatementV1,
+    limits: &PrivacyConsensusLimitsV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    let encoded_len = norito::canonical_frame_len(statement)
+        .map_err(|_| PrivacyStatementValidationError::EncodingFailure)?;
+    let bytes = u64::try_from(encoded_len)
+        .map_err(|_| PrivacyStatementValidationError::PayloadLengthOverflow)?;
+    if bytes > u64::from(limits.max_statement_and_encrypted_output_bytes_per_transaction) {
+        return Err(
+            PrivacyStatementValidationError::StatementAndEncryptedOutputsTooLarge {
+                bytes,
+                max: limits.max_statement_and_encrypted_output_bytes_per_transaction,
+            },
+        );
+    }
+    Ok(())
 }
 fn validate_zk_ace(
     statement: &ZkAcePqAuthorizationStatementV1,
@@ -2704,19 +2727,19 @@ fn first_duplicate_index<T: PartialEq>(values: &[T]) -> Option<usize> {
     }
     None
 }
-impl PrivacyProtocolActivationLimitsV1 {
+impl PrivacyProtocolLimitsV1 {
     /// Validate a statement against activation-specific governed count limits.
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyActivationStatementLimitsError`] if the statement uses
+    /// Returns [`PrivacyProfileStatementLimitsError`] if the statement uses
     /// another protocol or exceeds an activation-specific bound.
     pub fn validate_statement(
         &self,
         statement: &PrivacyStatementV1,
-    ) -> Result<(), PrivacyActivationStatementLimitsError> {
+    ) -> Result<(), PrivacyProfileStatementLimitsError> {
         if self.protocol_id() != statement.protocol_id() {
-            return Err(PrivacyActivationStatementLimitsError::ProtocolMismatch {
+            return Err(PrivacyProfileStatementLimitsError::ProtocolMismatch {
                 limits_protocol: self.protocol_id(),
                 statement_protocol: statement.protocol_id(),
             });
@@ -2730,7 +2753,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                 Self::VeRangeTransparentRangeV1(limits),
                 PrivacyStatementV1::VeRangeTransparentRangeV1(statement),
             ) => validate_activation_statement_count(
-                PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
+                PrivacyProtocolLimitFieldV1::VeRangeAggregationCount,
                 statement.aggregation_count,
                 limits.max_aggregation_count,
             ),
@@ -2741,7 +2764,7 @@ impl PrivacyProtocolActivationLimitsV1 {
                 Self::IrohaJindoPolynomialCommitmentV1(limits),
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement),
             ) => validate_activation_statement_count(
-                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                PrivacyProtocolLimitFieldV1::JindoPolynomialCount,
                 u32::try_from(statement.polynomial_commitments.len()).unwrap_or(u32::MAX),
                 limits.max_polynomial_count,
             ),
@@ -2765,109 +2788,109 @@ impl PrivacyProtocolActivationLimitsV1 {
     }
 }
 fn validate_anonymous_pgc_activation_statement(
-    limits: AnonymousPgcActivationLimitsV1,
+    limits: AnonymousPgcLimitsV1,
     statement: &AnonymousPgcKOutOfNStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+        PrivacyProtocolLimitFieldV1::AnonymousPgcAnonymitySetSize,
         statement.anonymity_set_public_keys.len(),
         limits.max_anonymity_set_size,
     )?;
     validate_activation_statement_count(
-        PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
+        PrivacyProtocolLimitFieldV1::AnonymousPgcRecipientCount,
         statement.recipient_count,
         limits.max_recipient_count,
     )
 }
 fn validate_zk_ams_activation_statement(
-    limits: ZkAmsActivationLimitsV1,
+    limits: ZkAmsLimitsV1,
     statement: &IrohaZkAmsStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     match &statement.action {
         PrivacyZkAmsActionV1::BatchAdmission(batch) => validate_activation_statement_len(
-            PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+            PrivacyProtocolLimitFieldV1::ZkAmsBatchSize,
             batch.anchors.len(),
             limits.max_batch_size,
         ),
         PrivacyZkAmsActionV1::ProvisionAccount(provision) => validate_activation_statement_len(
-            PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+            PrivacyProtocolLimitFieldV1::ZkAmsRingSize,
             provision.admitted_seed_key_ring.len(),
             limits.max_ring_size,
         ),
     }
 }
 fn validate_orchard_activation_statement(
-    limits: OrchardActivationLimitsV1,
+    limits: OrchardLimitsV1,
     statement: &OrchardHalo2ActionsStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::OrchardActionCount,
+        PrivacyProtocolLimitFieldV1::OrchardActionCount,
         statement.actions.len(),
         limits.max_action_count,
     )
 }
 fn validate_fcmp_activation_statement(
-    limits: FcmpActivationLimitsV1,
+    limits: FcmpLimitsV1,
     statement: &MoneroFcmpPlusPlusStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::FcmpInputCount,
+        PrivacyProtocolLimitFieldV1::FcmpInputCount,
         statement.inputs.len(),
         limits.max_input_count,
     )?;
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::FcmpOutputCount,
+        PrivacyProtocolLimitFieldV1::FcmpOutputCount,
         statement.outputs.len(),
         limits.max_output_count,
     )
 }
 fn validate_ivm_private_note_activation_statement(
-    limits: IvmPrivateNoteActivationLimitsV1,
+    limits: IvmPrivateNoteLimitsV1,
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
+        PrivacyProtocolLimitFieldV1::IvmPrivateNoteInputCount,
         statement.nullifiers.len(),
         limits.max_input_count,
     )?;
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
+        PrivacyProtocolLimitFieldV1::IvmPrivateNoteOutputCount,
         statement.output_commitments.len(),
         limits.max_output_count,
     )
 }
 fn validate_pq_masp_activation_statement(
-    limits: PqMaspActivationLimitsV1,
+    limits: PqMaspLimitsV1,
     statement: &PqMaspStarkStatementV1,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::PqMaspInputCount,
+        PrivacyProtocolLimitFieldV1::PqMaspInputCount,
         statement.nullifiers.len(),
         limits.max_input_count,
     )?;
     validate_activation_statement_len(
-        PrivacyActivationLimitFieldV1::PqMaspOutputCount,
+        PrivacyProtocolLimitFieldV1::PqMaspOutputCount,
         statement.output_commitments.len(),
         limits.max_output_count,
     )
 }
 fn validate_activation_statement_count(
-    field: PrivacyActivationLimitFieldV1,
+    field: PrivacyProtocolLimitFieldV1,
     count: u32,
     max: u32,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     if count > max {
-        return Err(PrivacyActivationStatementLimitsError::CountExceeds { field, count, max });
+        return Err(PrivacyProfileStatementLimitsError::CountExceeds { field, count, max });
     }
     Ok(())
 }
 fn validate_activation_statement_len(
-    field: PrivacyActivationLimitFieldV1,
+    field: PrivacyProtocolLimitFieldV1,
     count: usize,
     max: u32,
-) -> Result<(), PrivacyActivationStatementLimitsError> {
+) -> Result<(), PrivacyProfileStatementLimitsError> {
     if count > max as usize {
-        return Err(PrivacyActivationStatementLimitsError::CountExceeds {
+        return Err(PrivacyProfileStatementLimitsError::CountExceeds {
             field,
             count: u32::try_from(count).unwrap_or(u32::MAX),
             max,

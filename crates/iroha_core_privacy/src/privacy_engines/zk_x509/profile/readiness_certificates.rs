@@ -1,5 +1,6 @@
-//! Typed, digest-pinned activation certificates for the X.509 release profile.
+//! Typed diagnostic certificates for the X.509 release profile; never validity authority.
 use super::*;
+#[cfg(test)]
 use crate::privacy_engines::{
     aggregate_stark::{
         AggregateFriTheorem2BoundV1, AggregateFriTheorem2CertificateV1, AggregateProofLayoutV1,
@@ -26,21 +27,32 @@ use crate::privacy_engines::{
 };
 use iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
 const SOUNDNESS_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
+#[cfg(test)]
 const SOUNDNESS_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.soundness-certificate.payload.v1";
+#[cfg(test)]
 const SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1: u16 = 61;
+#[cfg(test)]
 const SOUNDNESS_ROUND_BY_ROUND_BITS_V1: u16 = 157;
+#[cfg(test)]
 const SOUNDNESS_RANDOM_ORACLE_BITS_V1: u16 = 256;
+#[cfg(test)]
 const SOUNDNESS_MAX_RANDOM_ORACLE_QUERY_LOG2_V1: u16 = 64;
+#[cfg(test)]
 const SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1: u8 = 7;
+#[cfg(test)]
 const SHA_MEMORY_EQUALITIES_V1: u8 = 2;
+#[cfg(test)]
 const SHA_CALL_EQUALITIES_V1: u8 = 1;
+#[cfg(test)]
 const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
 /// Independent SHA-256 pin for an accepted soundness-certificate payload.
 ///
 /// No certificate is installed while the joint relation, transcript security
 /// and correlated-opening hiding analysis await independent qualification.
 /// TODO: review the complete joint protocol before installing a certificate.
+#[cfg(test)]
 pub const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
 /// Schema version of the canonical native-resource certificate payload.
 pub const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
@@ -89,6 +101,7 @@ pub const ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1: u64 = 0;
 /// payload it authenticates.
 pub const ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 struct ZkX509SoundnessCertificateV1 {
     schema_version: u16,
     compiled_profile_digest: [u8; 32],
@@ -150,6 +163,10 @@ pub struct ZkX509ResourceEnvironmentV1<'a> {
 }
 /// Reviewed isolation and process ceilings, distinct from observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the resource certificate records independently required process isolation controls"
+)]
 pub struct ZkX509ResourceProcessLimitsV1 {
     /// Reviewed wall-clock ceiling, in milliseconds.
     pub elapsed_ceiling_millis: u64,
@@ -269,6 +286,7 @@ impl CertificateFrameV1 {
         self.0.finalize().into()
     }
 }
+#[cfg(test)]
 fn append_fri_certificate_v1(
     frame: &mut CertificateFrameV1,
     certificate: AggregateFriTheorem2CertificateV1,
@@ -297,6 +315,7 @@ fn append_fri_certificate_v1(
     frame.field(&[u8::from(certificate.uniform_rejection_sampling)]);
     frame.field(&certificate.claimed_query_error_bits.to_be_bytes());
 }
+#[cfg(test)]
 fn canonical_soundness_certificate_v1(
     compiled_profile_digest: [u8; 32],
 ) -> ZkX509SoundnessCertificateV1 {
@@ -310,7 +329,8 @@ fn canonical_soundness_certificate_v1(
         main_fri: fri_theorem_certificate_v1(
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
             ZK_X509_FRI_ROUNDS_V1,
-            ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+            u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+                .expect("fixed profile value fits u8"),
             ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ),
         ca_fri: fri_theorem_certificate_v1(
@@ -321,11 +341,15 @@ fn canonical_soundness_certificate_v1(
         ),
         goldilocks_modulus: ZK_X509_GOLDILOCKS_MODULUS_V1,
         rfc_event_bound: ZK_X509_RFC5280_STARK_RELATION_EVENT_BOUND_V1 as u64,
-        rfc_relation_count: ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1 as u16,
-        rfc_challenge_lanes: ZK_X509_RFC5280_STARK_BUS_LANES_V1 as u8,
+        rfc_relation_count: u16::try_from(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1)
+            .expect("fixed profile value fits u16"),
+        rfc_challenge_lanes: u8::try_from(ZK_X509_RFC5280_STARK_BUS_LANES_V1)
+            .expect("fixed profile value fits u8"),
         p256_factor_bound: P256_PERMUTATION_FACTOR_CARDINALITY_BOUND_V1 as u64,
-        p256_argument_count: P256_X5S1_PERMUTATION_ARGUMENTS_V1 as u16,
-        p256_challenge_lanes: P256_PERMUTATION_CHALLENGE_LANES_V1 as u8,
+        p256_argument_count: u16::try_from(P256_X5S1_PERMUTATION_ARGUMENTS_V1)
+            .expect("fixed profile value fits u16"),
+        p256_challenge_lanes: u8::try_from(P256_PERMUTATION_CHALLENGE_LANES_V1)
+            .expect("fixed profile value fits u8"),
         sha_memory_numerator: ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1,
         sha_memory_equalities: SHA_MEMORY_EQUALITIES_V1,
         sha_memory_challenge_lanes: ZK_X509_SHA_COLLISION_LANES_V1,
@@ -338,6 +362,7 @@ fn canonical_soundness_certificate_v1(
         round_by_round_union_terms: SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1,
     }
 }
+#[cfg(test)]
 fn soundness_certificate_digest_v1(certificate: ZkX509SoundnessCertificateV1) -> [u8; 32] {
     let mut frame = CertificateFrameV1::new(
         SOUNDNESS_CERTIFICATE_DOMAIN_V1,
@@ -370,6 +395,7 @@ fn soundness_certificate_digest_v1(certificate: ZkX509SoundnessCertificateV1) ->
     frame.field(&[certificate.round_by_round_union_terms]);
     frame.finish()
 }
+#[cfg(test)]
 fn validate_fri_certificate_v1(
     certificate: AggregateFriTheorem2CertificateV1,
     native_trace_log2: u8,
@@ -397,6 +423,7 @@ fn validate_fri_certificate_v1(
     .ok()?;
     validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate).ok()
 }
+#[cfg(test)]
 fn ceil_log2_v1(value: u16) -> Option<u16> {
     if value == 0 {
         return None;
@@ -407,6 +434,7 @@ fn ceil_log2_v1(value: u16) -> Option<u16> {
         u16::try_from(u16::BITS - (value - 1).leading_zeros()).ok()?
     })
 }
+#[cfg(test)]
 fn weighted_exponent_union_security_bits_v1(terms: &[(u16, u16)]) -> Option<u16> {
     let scale = terms.iter().map(|(bits, _)| *bits).max()?;
     let mut numerator = 0_u128;
@@ -423,6 +451,7 @@ fn weighted_exponent_union_security_bits_v1(terms: &[(u16, u16)]) -> Option<u16>
         u16::try_from(u128::BITS - (numerator.checked_sub(1)?).leading_zeros()).ok()?;
     scale.checked_sub(ceiling_log)
 }
+#[cfg(test)]
 fn collision_union_security_bits_v1(denominator: u64, terms: &[(u64, u8, u16)]) -> Option<u16> {
     let mut exponents = Vec::with_capacity(terms.len());
     for &(numerator, lanes, multiplicity) in terms {
@@ -438,6 +467,7 @@ fn collision_union_security_bits_v1(denominator: u64, terms: &[(u64, u8, u16)]) 
     }
     weighted_exponent_union_security_bits_v1(&exponents)
 }
+#[cfg(test)]
 fn exponent_union_security_bits_v1(terms: &[u16]) -> Option<u16> {
     let terms = terms.iter().map(|bits| (*bits, 1)).collect::<Vec<_>>();
     weighted_exponent_union_security_bits_v1(&terms)
@@ -445,12 +475,15 @@ fn exponent_union_security_bits_v1(terms: &[u16]) -> Option<u16> {
 /// Conservative paired-configuration factor for the conditional interactive argument.
 /// Each local configuration has agreement > 7/16 and degree/domain <= 9/64.
 /// The elementary incidence bound gives L < 6; eight per domain leaves slack.
+#[cfg(test)]
 const JOINT_CONFIGURATION_BOUND_V1: u16 = 8;
+#[cfg(test)]
 const JOINT_PAIRED_CONFIGURATION_BOUND_V1: u16 =
     JOINT_CONFIGURATION_BOUND_V1 * JOINT_CONFIGURATION_BOUND_V1;
 /// Check the algebraic error ledger only. This is not a Fiat-Shamir, qROM,
 /// transcript-simulation, or release-qualification certificate by itself.
 /// The mixed-domain argument and term census are in the joint-relation spec.
+#[cfg(test)]
 fn joint_relation_error_bits_v1(certificate: ZkX509SoundnessCertificateV1) -> Option<u16> {
     let main = certificate.main_fri;
     let ca = certificate.ca_fri;
@@ -498,6 +531,7 @@ fn joint_relation_error_bits_v1(certificate: ZkX509SoundnessCertificateV1) -> Op
     // is <64/2^252=2^-246. Their sum is strictly below 2^-219.
     Some(219)
 }
+#[cfg(test)]
 fn validate_soundness_certificate_payload_v1(
     certificate: ZkX509SoundnessCertificateV1,
 ) -> Option<[u8; 32]> {
@@ -511,8 +545,9 @@ fn validate_soundness_certificate_payload_v1(
     let main = validate_fri_certificate_v1(
         certificate.main_fri,
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
-        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8,
-        ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2() as u8,
+        ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2().to_le_bytes()[0],
+        u8::try_from(ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1.ilog2())
+            .expect("fixed profile value fits u8"),
         ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;
@@ -609,7 +644,8 @@ fn validate_soundness_certificate_payload_v1(
     // TODO: supply the concrete joint round-by-round/Fiat-Shamir reduction.
     // The interactive 157-bit ledger above is only the proposed RBR target.
     // This work-security arithmetic is conditional on that separate proof;
-    // numerical success does not establish it. The activation pin stays zero.
+    // numerical success does not establish it. Runtime admission reports the missing
+    // construction directly and does not consult this diagnostic pin.
     checked_transparent_stark_work_security_v1(
         certificate.target_bits,
         round_by_round_bits,
@@ -619,10 +655,12 @@ fn validate_soundness_certificate_payload_v1(
     .ok()?;
     Some(soundness_certificate_digest_v1(certificate))
 }
+#[cfg(test)]
 pub(super) fn soundness_certificate_is_pinned_v1(compiled_profile_digest: [u8; 32]) -> bool {
     let certificate = canonical_soundness_certificate_v1(compiled_profile_digest);
     soundness_certificate_matches_pin_v1(certificate, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1)
 }
+#[cfg(test)]
 fn soundness_certificate_matches_pin_v1(
     certificate: ZkX509SoundnessCertificateV1,
     expected_certificate_sha256: [u8; 32],
@@ -908,6 +946,7 @@ pub fn resource_certificate_matches_source_v1(
         ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1,
     )
 }
+#[cfg(test)]
 pub(super) fn resource_certificate_is_pinned_v1(compiled_profile_digest: [u8; 32]) -> bool {
     let certificate = source_resource_certificate_v1(compiled_profile_digest);
     resource_certificate_matches_source_v1(&certificate, ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1)

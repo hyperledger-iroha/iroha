@@ -178,6 +178,7 @@ mod tests {
             application_api::TRANSACTIONS_QUERY_POST,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST,
+            application_api::ASSETS_BY_DEFINITION_ID_MOVEMENTS_QUERY_POST,
             application_api::CONTRACTS_ACTIVITY_QUERY_POST,
             application_api::CONTRACTS_EVENTS_QUERY_POST,
             application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST,
@@ -348,6 +349,7 @@ mod tests {
             application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET,
+            application_api::ASSETS_BY_DEFINITION_ID_MOVEMENTS_GET,
             application_api::DOMAINS_GET,
             application_api::DOMAINS_QUERY_POST,
             application_api::ACCOUNTS_GET,
@@ -1653,6 +1655,19 @@ mod tests {
     fn kaigi_signal_history_is_account_gated_expensive_compute() {
         let route = application_api::KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET;
         assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.projections().sdk());
+        assert!(!route.projections().openapi());
+        assert_eq!(validate_catalog(&[route]), Ok(()));
+    }
+    #[test]
+    fn kaigi_participation_is_a_private_per_account_read() {
+        let route = application_api::KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET;
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
         assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
         assert_eq!(
             route.authentication(),

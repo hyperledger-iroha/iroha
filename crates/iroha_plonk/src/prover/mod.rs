@@ -57,7 +57,7 @@ use iroha_pasta::{
     poseidon::PoseidonField,
 };
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, Rng, SeedableRng, TryCryptoRng, TryRng};
 
 use crate::{
     cs::{
@@ -77,6 +77,8 @@ use crate::{
 mod advice;
 mod batch;
 mod lookup;
+mod memory;
+pub use memory::{ProvingColumns, peak_proving_columns};
 mod multiopen;
 mod permutation;
 mod rebuild;
@@ -312,9 +314,9 @@ impl From<MultiopenError> for ProverError {
 }
 
 /// A cryptographic random-number generator the prover may draw from.
-pub trait ProverRng: RngCore + CryptoRng {}
+pub trait ProverRng: Rng + CryptoRng {}
 
-impl<R: RngCore + CryptoRng + ?Sized> ProverRng for R {}
+impl<R: Rng + CryptoRng + ?Sized> ProverRng for R {}
 
 /// Where a fresh proof's random stream comes from.
 enum Source {
@@ -363,7 +365,7 @@ struct Binding {
 /// Draw one fresh seed, clearing this owned buffer on success or failure.
 fn os_entropy() -> Result<zeroize::Zeroizing<[u8; 32]>, ProverError> {
     let mut seed = zeroize::Zeroizing::new([0_u8; 32]);
-    rand_core_06::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(seed.as_mut())
         .map_err(|_| ProverError::Entropy)?;
     Ok(seed)
@@ -451,32 +453,24 @@ enum StreamRng {
     Boxed(Box<dyn ProverRng + Send>),
 }
 
-impl RngCore for StreamRng {
-    fn next_u32(&mut self) -> u32 {
+impl TryRng for StreamRng {
+    type Error = core::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         match self {
-            Self::ChaCha(rng) => rng.next_u32(),
+            Self::ChaCha(rng) => rng.try_next_u32(),
             #[cfg(test)]
-            Self::Boxed(rng) => rng.next_u32(),
+            Self::Boxed(rng) => rng.try_next_u32(),
         }
     }
-
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         match self {
-            Self::ChaCha(rng) => rng.next_u64(),
+            Self::ChaCha(rng) => rng.try_next_u64(),
             #[cfg(test)]
-            Self::Boxed(rng) => rng.next_u64(),
+            Self::Boxed(rng) => rng.try_next_u64(),
         }
     }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        match self {
-            Self::ChaCha(rng) => rng.fill_bytes(dest),
-            #[cfg(test)]
-            Self::Boxed(rng) => rng.fill_bytes(dest),
-        }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         match self {
             Self::ChaCha(rng) => rng.try_fill_bytes(dest),
             #[cfg(test)]
@@ -484,8 +478,7 @@ impl RngCore for StreamRng {
         }
     }
 }
-
-impl CryptoRng for StreamRng {}
+impl TryCryptoRng for StreamRng {}
 
 /// A witness: the advice columns and the instance columns of one circuit
 /// instance, checked against a proving key. Advice values are secret and
@@ -1291,7 +1284,7 @@ where
 }
 
 /// `Field::random` draws in sequence.
-fn random_values<F: Field, R: RngCore>(rng: &mut R, count: usize) -> Vec<F> {
+fn random_values<F: Field, R: Rng>(rng: &mut R, count: usize) -> Vec<F> {
     (0..count).map(|_| F::random(&mut *rng)).collect()
 }
 

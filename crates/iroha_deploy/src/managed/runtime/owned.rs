@@ -222,6 +222,7 @@ impl PeerProcesses {
         ownership: &File,
         daemon: &super::super::program::NativeProgram,
         launch: Option<Arc<GeneratedLaunch>>,
+        listeners: Option<&super::super::listeners::WorkerListeners>,
         budget: &activation::Budget,
     ) -> Result<()> {
         if !self.children.is_empty() || self.launch.is_some() {
@@ -258,6 +259,22 @@ impl PeerProcesses {
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
+            if let Some(listeners) = listeners {
+                // The timestamp precedes the remaining-budget read, so argument construction
+                // cannot grant the daemon time beyond this owner's original deadline.
+                let now = iroha_primitives::time::native_continuous_clock_nanos()?;
+                let remaining = budget
+                    .check()
+                    .map_err(|failure| Error::Invalid(failure.message()))?;
+                let deadline = now
+                    .checked_add(remaining.as_nanos())
+                    .ok_or_else(|| invalid("listener handoff deadline overflow"))?;
+                command
+                    .arg("--managed-listeners")
+                    .arg(listeners.directory())
+                    .arg("--managed-listener-deadline-ns")
+                    .arg(deadline.to_string());
+            }
             daemon.validate()?;
             self.children
                 .push(Arc::new(Mutex::new(spawn_with_launch_fence(
@@ -267,6 +284,18 @@ impl PeerProcesses {
                     daemon,
                     budget,
                 )?)));
+            if let Some(listeners) = listeners {
+                let mut child = self.children[index]
+                    .lock()
+                    .map_err(|_| invalid("owned child lock failed"))?;
+                listeners.send_to_child(
+                    index,
+                    &mut child,
+                    budget
+                        .deadline()
+                        .map_err(|failure| Error::Invalid(failure.message()))?,
+                )?;
+            }
         }
         if let Some(launch) = &self.launch {
             launch.validate()?;
@@ -318,18 +347,36 @@ impl PeerProcesses {
             .map_err(|_| invalid("owned gateway count differs"))
     }
 
+    #[cfg(test)]
     pub(super) fn any_exited(&mut self) -> Result<bool> {
-        for child in &self.children {
-            if child
+        Ok(self.first_exit()?.is_some())
+    }
+
+    /// The lowest-index owned validator that has exited, with its native exit status.
+    pub(super) fn first_exit(&mut self) -> Result<Option<(u8, std::process::ExitStatus)>> {
+        for (index, child) in self.children.iter().enumerate() {
+            if let Some(status) = child
                 .lock()
                 .map_err(|_| invalid("owned child lock failed"))?
                 .try_wait()?
-                .is_some()
             {
-                return Ok(true);
+                let index = u8::try_from(index)
+                    .map_err(|_| invalid("owned validator index exceeds the committee bound"))?;
+                return Ok(Some((index, status)));
             }
         }
-        Ok(false)
+        Ok(None)
+    }
+
+    /// One `Running` observation per owned child, in committee order.
+    pub(super) fn running_validators(&self) -> Vec<ManagedValidatorStatus> {
+        (0..self.children.len())
+            .filter_map(|index| u8::try_from(index).ok())
+            .map(|index| ManagedValidatorStatus {
+                index,
+                state: ManagedValidatorState::Running,
+            })
+            .collect()
     }
 
     pub(super) fn stop(&mut self) -> Result<()> {

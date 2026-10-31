@@ -151,16 +151,21 @@ mod tests {
             for cell in 0..12 {
                 for offset in [-9001, -9000, -1, 0, 9000, 9001] {
                     for lateral_offset in [-1401, -1400, 0, 1300, 1400, 1401] {
-                        let x =
-                            (env::laterals(track)[cell] + lateral_offset).clamp(-9000, 9000) as i32;
+                        let x = i32::try_from(
+                            (env::laterals(track)[cell] + lateral_offset).clamp(-9000, 9000),
+                        )
+                        .expect("bounded fixture value");
                         let p = env::centers(track)[cell] + offset;
                         for wet in [0, 1] {
                             let row =
                                 a.witness(&[p, i64::from(x), -319, -28, wet, 3300, 3300], &[]);
-                            let tick = env::rain_pattern(track)
-                                .iter()
-                                .position(|rain| *rain == wet)
-                                .unwrap() as u32
+                            let tick = u32::try_from(
+                                env::rain_pattern(track)
+                                    .iter()
+                                    .position(|rain| *rain == wet)
+                                    .unwrap(),
+                            )
+                            .expect("bounded fixture value")
                                 * env::WEATHER_TICKS;
                             assert_eq!(
                                 integer(vx, &row),

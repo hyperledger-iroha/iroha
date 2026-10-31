@@ -97,7 +97,7 @@ fn stored_disk() -> Disk {
 }
 
 /// The validators of `chain`, each on its own on-disk store.
-fn stored_disks(chain: &Chain) -> Vec<Disk> {
+fn stored_disks(chain: &NodeTestChain) -> Vec<Disk> {
     (0..chain.keys.len()).map(|_| stored_disk()).collect()
 }
 
@@ -155,7 +155,7 @@ fn assert_canonical_frames(frames: &[Vec<u8>]) {
 /// Rebuild a State from `disk` alone through the production startup path: an empty State, the
 /// `supplied` genesis (a restart supplies none) and no snapshot.
 fn cold_replay(
-    identity: &Chain,
+    identity: &NodeTestChain,
     disk: &Disk,
     supplied: Option<SignedBlock>,
 ) -> (Arc<State>, Result<Prepared, NodeError>) {
@@ -172,6 +172,10 @@ fn cold_replay(
 
 /// Drop a prepared instance and its State once the detached executor thread released it, so the
 /// next startup over the same store is the only owner again.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "This fixture consumes the final State owner after its executor has physically retired."
+)]
 fn release(state: Arc<State>, prepared: Prepared) {
     drop(prepared);
     await_sole_owner(
@@ -181,7 +185,7 @@ fn release(state: Arc<State>, prepared: Prepared) {
 }
 
 /// Commit `count` blocks of real work on a running four-validator chain.
-fn commit_work(chain: &Chain, validators: &[Validator], label: &str, count: usize) {
+fn commit_work(chain: &NodeTestChain, validators: &[Validator], label: &str, count: usize) {
     for index in 0..count {
         let hash = submit(chain, validators, &format!("{label} {index}"));
         wait_until(
@@ -216,6 +220,11 @@ fn world_root(state: &State) -> Result<String, String> {
 #[test]
 fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::history_cutover_tests::current_genesis_history_replays_from_reopened_stores_to_the_identical_state",
+    ) {
+        return;
+    }
     let chain = chain(4, 200);
     let disks = stored_disks(&chain);
     let validators = start_all(&chain, &disks, true);
@@ -251,7 +260,25 @@ fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state()
             frames[index],
             "reopening validator {index}'s store rewrites nothing"
         );
-        let (state, prepared) = cold_replay(&chain, disk, None);
+        let state = empty_state(&chain.chain_id, &chain.genesis, &disk.kura);
+        let tiered_root = disk.dir.path().join("replayed-tiered");
+        *state.tiered_backend.lock() = crate::state::TieredStateBackend::new(
+            true,
+            0,
+            0,
+            0,
+            Some(tiered_root.clone()),
+            None,
+            0,
+            0,
+        );
+        let prepared = prepare(PrepareInputs {
+            state: Arc::clone(&state),
+            events: tokio::sync::broadcast::channel(64).0,
+            genesis: None,
+            genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            consensus_mode: ConsensusMode::Permissioned,
+        });
         let prepared =
             prepared.expect("the persisted current-genesis history replays without other inputs");
         assert_eq!(startup::applied_height(&state), height as u64);
@@ -261,6 +288,25 @@ fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state()
             "replay reproduces the complete World root validator {index} had before shutdown"
         );
         assert_eq!(state.view().native_execution_tip(), tips[index]);
+        assert_eq!(
+            state
+                .tiered_backend
+                .lock()
+                .last_manifest()
+                .unwrap()
+                .snapshot_index,
+            1,
+            "genesis and every certified replay block produce one final tiered projection"
+        );
+        assert_eq!(
+            std::fs::read_dir(&tiered_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().join("manifest.json").exists())
+                .count(),
+            1,
+            "startup must not persist intermediate full-World manifests"
+        );
         assert_eq!(
             prepared.instance(),
             root_instance(&chain.genesis, chain.chain_id.as_ref()).unwrap(),
@@ -303,6 +349,11 @@ fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state()
 #[test]
 fn a_store_never_replays_under_another_genesis() {
     let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::history_cutover_tests::a_store_never_replays_under_another_genesis",
+    ) {
+        return;
+    }
     let old = chain(4, 200);
     // Any signed difference is another genesis; here one consensus parameter.
     let new = chain(4, 300);
@@ -556,7 +607,7 @@ fn pinned_history_of_an_earlier_build_replays_to_its_pinned_state() {
         pinned.block_hashes,
         "{PINNED_REPLAY_RULE}"
     );
-    let identity = Chain {
+    let identity = NodeTestChain {
         genesis: blocks[0].clone(),
         keys: Vec::new(),
         chain_id: pinned.chain_id.clone(),
@@ -639,7 +690,7 @@ fn pinned_history_of_an_earlier_build_replays_to_its_pinned_state() {
 /// Returns the SHA-256 of the frames in order, which the inventory records.
 fn write_pinned_history(
     dir: &Path,
-    chain: &Chain,
+    chain: &NodeTestChain,
     frames: &[Vec<u8>],
     world_state_root: &str,
     execution_tip: &Value,

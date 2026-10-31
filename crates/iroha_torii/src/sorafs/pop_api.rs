@@ -1,4 +1,4 @@
-//! Authenticated Torii boundary for the SoraFS proof-of-personhood service.
+//! Authenticated Torii boundary for the `SoraFS` proof-of-personhood service.
 //!
 //! This module never accepts plaintext enrollment, credential, issuance-draft, holder-secret, or
 //! Merkle-witness material over HTTP. Those values are supplied only by runtime-owned adapters and
@@ -14,7 +14,7 @@ use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production
 #[cfg(test)]
 use iroha_crypto::HybridSecretKey;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 use sorafs_manifest::{
     hybrid_envelope::HybridPayloadEnvelopeV1,
     pop_credentials::{
@@ -44,7 +44,7 @@ use tokio::sync::Mutex;
 pub const POP_AUTHORIZATION_HEADER_V1: &str = "sora-pop-authorization";
 /// Maximum canonical approval or other small signed control payload.
 pub const POP_CONTROL_PAYLOAD_MAX_BYTES_V1: usize = 256 * 1024;
-/// Maximum JSON/Norito request envelope for small PoP control operations.
+/// Maximum JSON/Norito request envelope for small `PoP` control operations.
 pub const POP_CONTROL_REQUEST_MAX_BYTES_V1: usize = 384 * 1024;
 /// Maximum request envelope for encrypted enrollment submission.
 pub const POP_ENROLLMENT_REQUEST_MAX_BYTES_V1: usize =
@@ -214,7 +214,7 @@ fn validate_pop_runtime_provider_handle(
         }
     })
 }
-/// Exact public bindings supplied to a deployment-owned PoP provider registry.
+/// Exact public bindings supplied to a deployment-owned `PoP` provider registry.
 ///
 /// The request contains stable handles and finalized public policy identity
 /// only. Durable paths, credentials, recipient secrets, witnesses,
@@ -363,7 +363,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         &self.wallet_wrapping_key_id
     }
 }
-/// Public identity of one deployment-owned PoP provider-registry policy.
+/// Public identity of one deployment-owned `PoP` provider-registry policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PopCredentialRuntimeProviderQualificationV1 {
     /// Non-zero external provider policy revision.
@@ -394,7 +394,7 @@ pub enum PopCredentialRuntimeProviderRegistryErrorV1 {
     /// The registry rejected the exact configured public bindings.
     RejectedBindings,
 }
-/// Deployment-owned factory for all PoP private runtime dependencies.
+/// Deployment-owned factory for all `PoP` private runtime dependencies.
 ///
 /// Implementations must change `qualification` whenever any signer, key-management, authentication,
 /// enrollment-recipient, wallet, witness, finalized-query, or transaction adapter identity/policy
@@ -956,7 +956,7 @@ impl PopWalletRecipientV1 for QualifiedPopWalletRecipientV1 {
         result
     }
 }
-/// Torii-owned PoP issuer, registry reconciler, wallet, and verifier runtime.
+/// Torii-owned `PoP` issuer, registry reconciler, wallet, and verifier runtime.
 pub struct PopCredentialToriiRuntimeV1 {
     config: PopCredentialRuntimeConfigV1,
     provider_registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
@@ -1191,7 +1191,7 @@ impl PopCredentialToriiRuntimeV1 {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown.receive() => {
+                    () = shutdown.receive() => {
                         return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                     }
                     _ = ticker.tick() => {
@@ -1378,7 +1378,7 @@ impl PopCredentialToriiRuntimeV1 {
             if draft.request_id != request_id {
                 return Err(PopCredentialServiceError::InvalidIssuance);
             }
-            service.issue(draft, now_epoch, &mut OsRng)
+            service.issue(draft, now_epoch, &mut SysRng)
         }
         .await;
         self.provider_registry.finish(result)
@@ -1695,7 +1695,7 @@ pub struct PopCanonicalPayloadRequestV1 {
 #[norito_schema(name = "iroha_torii::sorafs::pop_api::PopRequestIdRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-/// Request envelope selecting one durable PoP enrollment by identifier.
+/// Request envelope selecting one durable `PoP` enrollment by identifier.
 pub struct PopRequestIdRequestV1 {
     /// Non-zero 32-byte request id as lowercase hex.
     pub request_id_hex: String,
@@ -3259,7 +3259,7 @@ mod tests {
         });
         let approver_a = ed25519(0x42);
         let approver_b = ed25519(0x43);
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let enrollment_recipient =
             HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
         let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
@@ -4152,7 +4152,7 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let substituted_wallet_recipient =
             HybridKeyPair::generate(&mut rng).expect("substituted wallet recipient key");
         registry
@@ -4218,7 +4218,7 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let substituted_enrollment_recipient =
             HybridKeyPair::generate(&mut rng).expect("substituted enrollment recipient key");
         registry

@@ -237,7 +237,7 @@ pub(super) fn extend_witness(owf: OwfParams, key: &[u8], input: &[u8]) -> Zeroiz
 
 #[cfg(test)]
 mod tests {
-    use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
+    use aes::cipher::{Array, BlockCipherEncrypt, KeyInit};
 
     use super::*;
     use crate::params::{FAEST_PARAMETER_SETS, SecurityLevel};
@@ -344,7 +344,7 @@ mod tests {
                     .map(|i| i.wrapping_mul(29) ^ salt.wrapping_mul(101))
                     .collect();
                 let input: Vec<u8> = (0..16u8).map(|i| i.wrapping_mul(57) ^ salt).collect();
-                let mut block = GenericArray::clone_from_slice(&input);
+                let mut block = Array::try_from(input.as_slice()).expect("one AES block");
                 match bytes {
                     16 => aes::soft::Aes128::new_from_slice(&key)
                         .expect("key")

@@ -339,11 +339,12 @@ fn native_carrier_requires_actual_genesis_successor_and_configured_instance() {
     assert!(
         read_finalized_execution_carrier(
             chain.kura(),
-            &iroha_model_base::chain::ChainId::from("foreign-instance"),
-            *view.network_id(),
+            (
+                &iroha_model_base::chain::ChainId::from("foreign-instance"),
+                *view.network_id()
+            ),
             view.block_hashes(),
-            NonZeroUsize::new(2).unwrap(),
-            block.block_hash(),
+            (NonZeroUsize::new(2).unwrap(), block.block_hash()),
             work,
             bytes,
             &chain.state().ivm_execution_budget(),
@@ -779,6 +780,9 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
     use crate::execution_attempt::ExecutionAttemptError;
     use ivm::error::ExecutionDeferral;
 
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut chain = chain();
     while chain.height() < 3 {
         chain.commit(Vec::new());
@@ -788,16 +792,18 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
     let expected = original.block_hash();
     let original_wire = original.block().encode_wire().unwrap();
     let (work, bytes) = bounds(&chain, 3);
+    let state = std::sync::Arc::clone(chain.state());
+    let kura = std::sync::Arc::clone(chain.kura());
+    // Commit replies precede retirement of the worker's original request owners.
+    // Join the completed fixture executor before measuring this reader's refunds.
+    // The actual State, Kura, committed block and execution pool remain retained.
+    drop(chain);
     let limits = |allocation| {
         norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocation, 64)
     };
     let probe = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
     probe.with(|| {
-        chain
-            .kura()
-            .native_frame_read(3, expected)
-            .unwrap()
-            .unwrap();
+        kura.native_frame_read(3, expected).unwrap().unwrap();
     });
     let marker_work = probe.consumed_allocated_bytes();
     assert!(
@@ -806,26 +812,18 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
     );
     let context =
         norito::core::DecodeBudgetContext::new(limits(usize::try_from(marker_work).unwrap()));
-    let frames = chain.state().ivm_execution_budget();
+    let frames = state.ivm_execution_budget();
     let budget = crate::state::CanonicalHistoryReadBudget::new(frames.clone(), context.clone());
     budget.with(|| {
-        chain
-            .kura()
-            .native_frame_read(3, expected)
-            .unwrap()
-            .unwrap();
+        kura.native_frame_read(3, expected).unwrap().unwrap();
     });
     assert_eq!(context.consumed_allocated_bytes(), marker_work);
     let charge = frames.reserved_bytes();
-    chain.kura().reset_canonical_query_reads_for_test();
+    kura.reset_canonical_query_reads_for_test();
     let read = || {
         if event {
             budget
-                .with(|| {
-                    chain
-                        .state()
-                        .read_finalized_event_carrier(height, work, bytes)
-                })
+                .with(|| state.read_finalized_event_carrier(height, work, bytes))
                 .map_err(|error| match error {
                     crate::state::FinalizedEventReadError::Execution(error) => error,
                     error => panic!(
@@ -833,9 +831,7 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
                     ),
                 })
         } else {
-            chain
-                .state()
-                .read_finalized_execution_carrier_with_read_budget(height, work, bytes, &budget)
+            state.read_finalized_execution_carrier_with_read_budget(height, work, bytes, &budget)
         }
     };
     for _ in 0..2 {
@@ -854,22 +850,17 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
         );
         assert_eq!(context.consumed_allocated_bytes(), marker_work);
         assert_eq!(frames.reserved_bytes(), charge);
-        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
     }
     let retry_context = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
     let retry_budget =
         crate::state::CanonicalHistoryReadBudget::new(frames.clone(), retry_context.clone());
     let carrier = if event {
         retry_budget
-            .with(|| {
-                chain
-                    .state()
-                    .read_finalized_event_carrier(height, work, bytes)
-            })
+            .with(|| state.read_finalized_event_carrier(height, work, bytes))
             .unwrap()
     } else {
-        chain
-            .state()
+        state
             .read_finalized_execution_carrier_with_read_budget(height, work, bytes, &retry_budget)
             .unwrap()
     };
@@ -904,6 +895,9 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
     use crate::execution_attempt::ExecutionAttemptError;
     use ivm::error::ExecutionDeferral;
 
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let (expected, expected_wire_len) = {
         let target = chain.committed(2);
@@ -912,36 +906,32 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
             target.block().encode_wire().unwrap().len(),
         )
     };
+    let state = std::sync::Arc::clone(chain.state());
+    let kura = std::sync::Arc::clone(chain.kura());
+    // Retire the completed worker's request owners before measuring reader refunds.
+    drop(chain);
     let limits = |allocation| {
         norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocation, 64)
     };
     let probe = norito::core::DecodeBudgetContext::new(limits(48 * 1024 * 1024));
     probe.with(|| {
-        chain
-            .kura()
-            .native_frame_read(2, expected)
-            .unwrap()
-            .unwrap();
+        kura.native_frame_read(2, expected).unwrap().unwrap();
     });
     let marker_work = probe.consumed_allocated_bytes();
     assert!(marker_work > 0);
     let context =
         norito::core::DecodeBudgetContext::new(limits(usize::try_from(marker_work).unwrap()));
     context.with(|| {
-        chain
-            .kura()
-            .native_frame_read(2, expected)
-            .unwrap()
-            .unwrap();
+        kura.native_frame_read(2, expected).unwrap().unwrap();
     });
-    let pool = chain.state().ivm_execution_budget();
+    let pool = state.ivm_execution_budget();
     let charge = pool.reserved_bytes();
-    chain.kura().reset_canonical_query_reads_for_test();
+    kura.reset_canonical_query_reads_for_test();
     for _ in 0..2 {
         let error = context
             .with(|| {
                 crate::sumeragi::certified_chain::bounded_native_carrier_extent(
-                    &chain.state().view(),
+                    &state.view(),
                     2,
                     usize::try_from(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES).unwrap(),
                 )
@@ -953,17 +943,17 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
         assert_eq!(original.reason(), ExecutionDeferral::ActiveMemoryCapacity);
         assert!(original.allocation_refusal().is_none());
         assert_eq!(context.consumed_allocated_bytes(), marker_work);
-        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
         assert_eq!(pool.reserved_bytes(), charge);
     }
     let actual = crate::sumeragi::certified_chain::bounded_native_carrier_extent(
-        &chain.state().view(),
+        &state.view(),
         2,
         usize::try_from(crate::kura::STRICT_INIT_MAX_BLOCK_BYTES).unwrap(),
     )
     .unwrap();
     assert_eq!(actual, expected_wire_len);
-    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
     assert_eq!(context.consumed_allocated_bytes(), marker_work);
     assert_eq!(pool.reserved_bytes(), charge);
 }
@@ -971,13 +961,18 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
 #[test]
 fn completed_retained_carrier_rejects_reentry_without_reclassifying_committed_source() {
     use crate::execution_attempt::ExecutionAttemptError;
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
-    let state = chain.state();
+    let state = std::sync::Arc::clone(chain.state());
     let pool = state.ivm_execution_budget();
-    let baseline = pool.reserved_bytes();
     let height = NonZeroUsize::new(2).unwrap();
     let expected = chain.committed(2).block_hash();
     let (work, bytes) = bounds(&chain, 2);
+    // State retains the original Kura and pool after the completed worker joins.
+    drop(chain);
+    let baseline = pool.reserved_bytes();
     let mut original = state
         .begin_finalized_execution_carrier_read(height, work, bytes)
         .unwrap();

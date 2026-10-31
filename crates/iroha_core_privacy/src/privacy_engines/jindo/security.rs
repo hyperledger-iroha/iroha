@@ -14,10 +14,8 @@ use super::{
 use super::{
     parameters::JINDO_PARALLEL_REPETITIONS_V1, transcript::JindoSignedMonomialChallengeV1,
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 // Scalar arithmetic comes from the shared owner.
 use iroha_fhe::modular::{is_prime_u64, mod_pow_u64, mul_mod_u64};
 use std::sync::OnceLock;
@@ -192,7 +190,7 @@ fn check_prime_difference_classes_v1(
     if !is_prime_u64(modulus) {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotPrime { modulus });
     }
-    if (modulus - 1) % u64::from(ROOT_ORDER_V1) != 0 {
+    if !(modulus - 1).is_multiple_of(u64::from(ROOT_ORDER_V1)) {
         return Err(JindoUnitDifferenceCertificateErrorV1::ModulusNotNttFriendly { modulus });
     }
     if mod_pow_u64(psi, u64::from(ROOT_ORDER_V1), modulus) != 1

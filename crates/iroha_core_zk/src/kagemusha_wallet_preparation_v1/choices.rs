@@ -6,7 +6,7 @@ use crate::kagemusha_wallet_advance_v1::{
     KagemushaWalletUnavailableV1, kagemusha_wallet_provider_digest_v1 as digest,
 };
 use crate::kagemusha_wallet_state_v1::{self as state, NativeIntentV1, PreparationSourceV1};
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 const MAX_BYTES: usize = 4096;
 
@@ -79,7 +79,7 @@ fn bindings(
 impl NativeChoicesV1 {
     pub(crate) fn fresh_nonce(previous: &[u8; 32]) -> Result<[u8; 32]> {
         sample_nonce(previous, |bytes| {
-            rand::rngs::OsRng
+            rand::rngs::SysRng
                 .try_fill_bytes(bytes)
                 .map_err(|_| entropy_unavailable())
         })

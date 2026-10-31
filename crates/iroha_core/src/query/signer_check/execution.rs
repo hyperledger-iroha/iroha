@@ -7,7 +7,7 @@ use super::*;
 use crate::execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error};
 
 /// Prepared execution relation. Its source view and original round cannot be replaced.
-pub(crate) struct PreparedCheckExecutionV1<'view, 'state, 'round, 'bound> {
+pub struct PreparedCheckExecutionV1<'view, 'state, 'round, 'bound> {
     view: &'view StateView<'state>,
     round: &'round NativeCheckRoundV1,
     bound: &'bound mut Option<BoundNativeCheckV1>,
@@ -199,7 +199,7 @@ impl<'view, 'state, 'round, 'bound> PreparedCheckExecutionV1<'view, 'state, 'rou
 
 /// Metadata proof retains the exclusive original signed binding until final discharge.
 /// No method accepts an interchangeable frame or a replacement binding.
-pub(crate) struct BorrowedCheckExecutionCutV1<'view, 'state, 'bound> {
+pub struct BorrowedCheckExecutionCutV1<'view, 'state, 'bound> {
     view: &'view StateView<'state>,
     bound: &'bound mut Option<BoundNativeCheckV1>,
     data: CheckExecutionDataV1,

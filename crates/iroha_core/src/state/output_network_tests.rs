@@ -36,21 +36,15 @@ fn fixture_with_policy(
     fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
     configure: impl FnOnce(&mut crate::pipeline_validity_policy::PipelineValidityPolicyV1),
 ) -> State {
-    let state = state(row_bytes);
-    let mut expected_policy = state
-        .world
-        .parameters
-        .view()
-        .get()
-        .pipeline_policy()
-        .clone();
+    let mut state = state(row_bytes);
+    let mut expected_policy = *state.world.parameters.view().get().pipeline_policy();
     configure(&mut expected_policy);
     expected_policy
         .validate()
         .expect("valid fixture execution limits");
     if let Some(asset) = &fee_asset {
         use iroha_primitives::numeric::Quantity;
-        let mut fees = state.nexus_snapshot().fees;
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         fees.base_fee = Quantity::from(1_u32);
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
@@ -58,20 +52,19 @@ fn fixture_with_policy(
         fees.fee_asset_id = asset.clone();
         fees.fee_sink_account_id = iroha_test_samples::BOB_ID.clone();
         {
-            let mut parameters = state.world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            state
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                     fees.clone()
                         .into_custom_parameter()
                         .expect("explicit fixture policy"),
                 ))
                 .expect("valid fixture monetary projection");
-            parameters.commit();
         }
     }
     // Genesis executes under its original predecessor's policy. Its signed
     // parameter writes install these limits for the successor being tested.
-    let state = authenticate_output_state_with_policy(state, expected_policy.clone());
+    let state = authenticate_output_state_with_policy(state, expected_policy);
     assert_eq!(
         state.world.parameters.view().get().pipeline_policy(),
         &expected_policy,
@@ -212,12 +205,9 @@ fn recorded_network_block<'state>(
         .block_with_recorded_pristine_carrier_stage(
             source,
             |block| {
-                crate::smartcontracts::ivm::active_runtime_abi_hash(
-                    &block.world,
-                    source.header().height().get(),
-                )
-                .map(|_| ())
-                .map_err(|error| error.to_string())
+                crate::smartcontracts::ivm::active_host_abi_hashes(&block.world)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
             },
             |error| error,
         )
@@ -590,7 +580,7 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
@@ -701,9 +691,7 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
         };
         let mut parameters = state.world.block();
         parameters
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .set_parameter_for_testing(Parameter::Custom(policy.into_custom_parameter()))
             .unwrap();
         parameters.commit();
         let source = carrier(
@@ -726,7 +714,19 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
         let before = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         let result = network_row(&block, 0);
-        if !missing_assessment_permitted {
+        if missing_assessment_permitted {
+            assert!(result.result.is_ok());
+            assert_eq!(block.committed_fragment_count(), before + 1);
+            assert_eq!(
+                block
+                    .world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get("fraud_effect"),
+                Some(&Json::new(1_u32))
+            );
+        } else {
             assert!(
                 matches!(result.result.as_ref(), Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(reason))) if reason == "fraud monitoring requires an attached assessment")
@@ -741,18 +741,6 @@ fn frozen_fraud_admission_refuses_before_business_work_and_permission_preserves_
                     .metadata()
                     .get("fraud_effect")
                     .is_none()
-            );
-        } else {
-            assert!(result.result.is_ok());
-            assert_eq!(block.committed_fragment_count(), before + 1);
-            assert_eq!(
-                block
-                    .world
-                    .account(&ALICE_ID)
-                    .unwrap()
-                    .metadata()
-                    .get("fraud_effect"),
-                Some(&Json::new(1_u32))
             );
         }
     }
@@ -829,14 +817,15 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )
     .expect("canonical network XOR fee asset");
     let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
-    let mut parameters = state.world.parameters.block();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("fund original parameter Cell acquisition");
     let previous = parameters.get().block().fastpq_source();
     let mut intrinsic = previous.intrinsic;
     intrinsic.max_transcripts = 1;
@@ -848,10 +837,12 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
         1,
     )
     .unwrap();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)))
-        .expect("valid fixture parameters");
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Block(BlockParameter::FastpqSource(profile)),
+        state.world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     let alice = AssetId::of(asset.clone(), ALICE_ID.clone());
     let bob = AssetId::of(asset.clone(), iroha_test_samples::BOB_ID.clone());

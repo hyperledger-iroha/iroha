@@ -38,7 +38,9 @@ pub(crate) enum CommitTelemetryOrigin {
 }
 impl NativeExecutionAuthorization {
     /// The startup module can transfer only its own original signed-genesis execution.
-    pub(super) fn from_genesis(original: super::startup::GenesisExecutionAuthorization) -> Self {
+    pub(super) fn from_genesis(
+        original: super::startup::GenesisExecutionAuthorization<'_, '_>,
+    ) -> Self {
         let (state, tip, telemetry_origin) = original.into_parts();
         Self {
             state,
@@ -172,7 +174,7 @@ pub struct ExecutorContext {
     pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
-/// Configured SoraFS archives captured from the exact committed State before apply completes.
+/// Configured `SoraFS` archives captured from the exact committed State before apply completes.
 ///
 /// The executor is their single capture producer. A failed capture keeps the committed decision
 /// pending, so the driver cannot acknowledge it or advance to another height before recovery.
@@ -186,6 +188,10 @@ pub struct FinalizedArchives {
 }
 
 impl FinalizedArchives {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn capture(&self, view: &impl StateReadOnly) -> Result<(), PublicationError> {
         use crate::query::{
             provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as ProviderError,
@@ -320,6 +326,10 @@ type PendingInspection = Box<
     dyn for<'borrow, 'state> FnOnce(Result<PendingExecutionView<'borrow, 'state>, String>) + Send,
 >;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum Request {
     TakeFinalizedFastpqSource(
         super::certified_chain::AuthenticatedExecutionBlock,
@@ -354,6 +364,7 @@ enum Request {
         Qc,
         mpsc::SyncSender<Result<(), PublicationError>>,
     ),
+    ExecutedResult(Hash32, mpsc::SyncSender<Result<CertifiedResultV1, String>>),
     Build(
         u64,
         u64,
@@ -396,6 +407,10 @@ enum Request {
 }
 
 /// Only the exact verified frame and payload from this State pool may enter execution.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn require_body_admission(
     body: &AvailableBody,
     budget: &iroha_allocation::AllocationBudget,
@@ -599,6 +614,10 @@ impl StateExecutor {
     ///
     /// # Errors
     /// A producer is already attached or the serialized executor stopped.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn attach_beacon(
         &self,
         instance: Hash32,
@@ -616,13 +635,17 @@ impl StateExecutor {
 
     /// Re-apply a block Kura already holds (startup replay): execute it on the applied tip
     /// and require the certified result. The caller must admit any decoded witness to the
-    /// original State pool before this retained handoff; KuraBlockStore does that explicitly.
+    /// original State pool before this retained handoff; `KuraBlockStore` does that explicitly.
     /// Exact retries acknowledge the worker's original completion after its heavy execution
     /// owner retires; changed certificates or sources cannot reuse that acknowledgement.
     ///
     /// # Errors
     /// The block does not re-execute to its certified result, or a local failure retaining
     /// its original release source. A terminal publication failure requires recovery.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub fn replay(
         &mut self,
         block: &AvailableBody,
@@ -636,6 +659,10 @@ impl StateExecutor {
 
     /// Prepare the exact certified replay before its isolated Kura append. The
     /// original startup replay then consumes this same historical execution owner.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(crate) fn prepare_replay(
         &mut self,
         block: &AvailableBody,
@@ -644,6 +671,21 @@ impl StateExecutor {
         self.prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
     }
 
+    /// The execution result the retained execution of `block_hash` produced, for diagnosing a
+    /// replayed block whose result differs from its certificate (`iroha3d --check-replay`).
+    /// Read only: the execution, its overlay and its publication phase are unchanged.
+    ///
+    /// # Errors
+    /// No execution of `block_hash` is retained, or the worker stopped.
+    pub(crate) fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        self.call(|reply| Request::ExecutedResult(block_hash, reply))
+            .unwrap_or_else(|| Err("original execution Worker stopped".into()))
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_with_origin(
         &mut self,
         block: &AvailableBody,
@@ -791,6 +833,10 @@ impl std::ops::Deref for ScheduledAuthority {
 }
 
 /// Original completed execution inputs advance once through proof and result preparation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum FinishingPhase {
     ContextProof {
         inputs: iroha_allocation::RetainedPayload<NativeExecutionInputs>,
@@ -978,7 +1024,15 @@ struct SignatureDecodeAttempt {
     returned_refusal: Option<ReturnedDecodedRefusal>,
     /// Completed leg graphs and decoder controls from this exact original proposal.
     amx_legs: Option<super::amx::NativeAmxLegPreparations>,
+    /// Original captured UID binding rows and decoder prefixes survive overlay rollback.
+    /// TODO: retain the unfinished execution's other actual resources; their rollback
+    /// can still wake this job's original shared-pool refusal before external release.
+    uid_bindings: Option<crate::state::asset_uid::binding_custody::retry::BindingPreparations>,
     parent_service: super::certified_chain::ParentServicePreparation,
+    /// Original parent receipt and signed genesis survive pristine overlay retries.
+    successor_context: super::certified_chain::SuccessorContextPreparation,
+    /// Original policy decoder counters are admitted before disposable World state.
+    policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
 }
 
 /// Original failure retained beside the same graph after the validator returned ownership.
@@ -1061,6 +1115,10 @@ impl SignatureDecodeAttempt {
 
     /// Recover only the actual block returned by the consuming production validator.
     /// Its canonical projection must match the immutable original available wire exactly.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn retain_validation_return(
         &mut self,
         original: SignedBlock,
@@ -1149,6 +1207,10 @@ impl SignatureDecodeAttempt {
 }
 
 /// Re-sample the local clock at every handoff of an original completed execution.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn check_progress_clock(
     clock: Option<&crate::smartcontracts::isi::sccp::keepalive::ProgressClock>,
     wall: Duration,
@@ -1366,6 +1428,9 @@ impl<'s> Worker<'s> {
             Request::Replay(block, qc, reply) => {
                 let _ = reply.send(self.replay(&block, &qc));
             }
+            Request::ExecutedResult(block_hash, reply) => {
+                let _ = reply.send(self.executed_result(block_hash));
+            }
             Request::Build(height, view, max_bytes, exec_budget_ms, reply) => {
                 let _ = reply.send(self.build(height, view, max_bytes, exec_budget_ms));
             }
@@ -1483,6 +1548,10 @@ impl<'s> Worker<'s> {
 
     /// Answer an `Execute` (O4): the live overlay or a remembered verdict, `None` while the
     /// parent is not applied, otherwise a fresh execution.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn execute(
         &mut self,
         block: &AvailableBody,
@@ -1495,31 +1564,31 @@ impl<'s> Worker<'s> {
         if let Some(reason) = &self.recovery {
             return Err(PublicationError::RecoveryRequired(reason.clone()));
         }
-        if let Some(live) = &self.live {
-            if live.block_hash == block_hash {
-                if live.header != *block.header()
-                    || live.availability != *block.availability()
-                    || live.source != *block.source()
-                {
-                    return Ok(Some(invalid(
-                        block.header().height,
-                        &"execution retry changes its original header",
-                    )));
-                }
-                #[cfg(not(all(test, sumeragi_core_mutation = "HC335")))]
-                if let Err(refusal) = live.admission.check_freshness(certified) {
-                    if matches!(refusal, PublicationError::Retryable(_)) {
-                        return Err(refusal);
-                    }
-                    let failure = self.rollback_stale_live().err().unwrap_or(refusal);
-                    return Err(failure);
-                }
-                let live = self.live.as_ref().expect("same admitted original");
-                return Ok(Some(ExecOutcome::Valid {
-                    result: live.result,
-                    admission: prepare_admission::erased(&live.admission),
-                }));
+        if let Some(live) = &self.live
+            && live.block_hash == block_hash
+        {
+            if live.header != *block.header()
+                || live.availability != *block.availability()
+                || live.source != *block.source()
+            {
+                return Ok(Some(invalid(
+                    block.header().height,
+                    &"execution retry changes its original header",
+                )));
             }
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC335")))]
+            if let Err(refusal) = live.admission.check_freshness(certified) {
+                if matches!(refusal, PublicationError::Retryable(_)) {
+                    return Err(refusal);
+                }
+                let failure = self.rollback_stale_live().err().unwrap_or(refusal);
+                return Err(failure);
+            }
+            let live = self.live.as_ref().expect("same admitted original");
+            return Ok(Some(ExecOutcome::Valid {
+                result: live.result,
+                admission: prepare_admission::erased(&live.admission),
+            }));
         }
         if let Some((source, outcome)) = self.results.get(&block_hash) {
             return Ok(Some(if source == block.source() {
@@ -1594,6 +1663,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Execute `block` on the applied tip, keeping the overlay as the live one.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn run_execution(
         &mut self,
         block: &AvailableBody,
@@ -1614,6 +1687,10 @@ impl<'s> Worker<'s> {
         outcome
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn run_execution_with_encoder(
         &mut self,
         block: &AvailableBody,
@@ -1639,6 +1716,10 @@ impl<'s> Worker<'s> {
     }
 
     /// The callback receives the sole completed original, before any proof scratch allocation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn run_execution_with_finisher(
         &mut self,
         block: &AvailableBody,
@@ -1652,19 +1733,22 @@ impl<'s> Worker<'s> {
                 "the original prepared publication is still retained".into(),
             ));
         }
-        if let Some(original) = &self.finishing {
-            if original.block_hash == block_hash {
-                if original.header != *block.header()
-                    || original.availability != *block.availability()
-                    || original.source != *block.source()
-                {
-                    return invalid_attempt(
+        if let Some(original) = &self.finishing
+            && original.block_hash == block_hash
+        {
+            if original.header != *block.header()
+                || original.availability != *block.availability()
+                || original.source != *block.source()
+            {
+                return {
+                    invalid_attempt(
                         block.header().height,
                         &"result retry changes its original header",
                     );
-                }
-                return finish(self);
+                    Ok(None)
+                };
             }
+            return finish(self);
         }
         // An explicitly superseded candidate releases its original private execution.
         self.finishing = None;
@@ -1724,6 +1808,9 @@ impl<'s> Worker<'s> {
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: super::certified_chain::ParentServicePreparation::default(),
             });
         }
@@ -1748,8 +1835,24 @@ impl<'s> Worker<'s> {
             }
             Err(error) => {
                 self.signature_decode = None;
-                return invalid_attempt(height, &error);
+                return {
+                    invalid_attempt(height, &error);
+                    Ok(None)
+                };
             }
+        }
+        // Finish an already captured binding before reacquiring disposable World
+        // allocations. This is source preparation only; actual reads still verify
+        // their current row, path and occurrence before any UID can escape.
+        if let Some(original) = attempt.uid_bindings.as_ref() {
+            original
+                .prepare_captured(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?;
         }
         // One original nonblocking cut supplies the parent, scheduled authority and
         // retained parent-service preparation. Busy keeps the original decoded source.
@@ -1784,10 +1887,13 @@ impl<'s> Worker<'s> {
             }
         };
         if block.source().config() != &configured || block.header().epoch != configured.epoch.id {
-            return invalid_attempt(
-                height,
-                &"available custody does not bind the complete scheduled authority",
-            );
+            return {
+                invalid_attempt(
+                    height,
+                    &"available custody does not bind the complete scheduled authority",
+                );
+                Ok(None)
+            };
         }
         self.quarantine_context = None;
         // Decode solely inside the original header/payload validation boundary.
@@ -1799,10 +1905,13 @@ impl<'s> Worker<'s> {
             .and_then(|attempt| attempt.decoded.as_ref())
             .expect("original completed proposal remains before validation");
         if !proposal_matches_header(&iroha_block.header(), block) {
-            return invalid_attempt(
-                height,
-                &"the payload's height or view differs from the header",
-            );
+            return {
+                invalid_attempt(
+                    height,
+                    &"the payload's height or view differs from the header",
+                );
+                Ok(None)
+            };
         }
         // CT1 is a local refusal before effects, not deterministic invalidity. The original
         // decoded source remains available for retry after the clock advances or a genuine
@@ -1879,7 +1988,10 @@ impl<'s> Worker<'s> {
             {
                 Ok(()) => {}
                 Err(super::certified_chain::ParentServiceError::Invalid(reason)) => {
-                    return invalid_attempt(height, &reason);
+                    return {
+                        invalid_attempt(height, &reason);
+                        Ok(None)
+                    };
                 }
                 Err(error) => return Err(parent_service_preparation_error(error)),
             }
@@ -1929,7 +2041,10 @@ impl<'s> Worker<'s> {
                 return Err(PublicationError::Retryable(reason));
             }
             Err(error @ lanes::merge::MergeError::Invalid(_)) => {
-                return invalid_attempt(height, &error);
+                return {
+                    invalid_attempt(height, &error);
+                    Ok(None)
+                };
             }
             Err(lanes::merge::MergeError::Storage(error)) => {
                 let reason = format!("lane storage during execution: {error}");
@@ -1952,6 +2067,35 @@ impl<'s> Worker<'s> {
             .map(|member| member.validator.clone())
             .collect::<Vec<_>>();
         let topology = Topology::new(committee.clone());
+        // Admit the original shared binding bank before moving the decoded source.
+        // Every actual transaction/finalizer borrows it through the World block.
+        let attempt = self
+            .signature_decode
+            .as_mut()
+            .expect("original native binding attempt");
+        if attempt.uid_bindings.is_none() {
+            attempt.uid_bindings = Some(
+                crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?,
+            );
+        }
+        // Admit the actual shared policy counters once before disposable World state.
+        if attempt.policy_decode_controls.is_none() {
+            attempt.policy_decode_controls = Some(
+                crate::execution_attempt::PolicyDecodeControls::try_new(
+                    self.state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .map_err(|original| PublicationError::Deferred(original.into()))?,
+            );
+        }
         // All current authority/source gates ran on the borrowed original. The expansion
         // borrows only State; transfer that same graph to the real validator once.
         let iroha_block = self
@@ -2009,13 +2153,19 @@ impl<'s> Worker<'s> {
                 block.payload().as_slice(),
                 state,
                 amx_legs,
+                attempt
+                    .uid_bindings
+                    .as_ref()
+                    .expect("original native binding bank"),
                 (height > 2).then_some(&attempt.parent_service),
+                &mut attempt.successor_context,
+                attempt
+                    .policy_decode_controls
+                    .as_ref()
+                    .expect("original policy controls"),
             )
         }));
-        let validated = match validation_result(validated) {
-            Ok(completed) => completed,
-            Err(recovery) => return Err(recovery),
-        };
+        let validated = validation_result(validated)?;
         let mut events = Vec::new();
         let (valid, overlay) = match validated.unpack(|event| events.push(event.into())) {
             Ok(executed) => executed,
@@ -2038,6 +2188,15 @@ impl<'s> Worker<'s> {
                 }
                 let outcome = classify(height, *error);
                 if outcome.is_err() {
+                    // SPEC: §13.4 HC976 drops only the binding preparation owner on
+                    // a real local refusal, recreating self-refunded decoder retries.
+                    #[cfg(all(test, sumeragi_core_mutation = "HC976"))]
+                    {
+                        self.signature_decode
+                            .as_mut()
+                            .expect("original validation attempt")
+                            .uid_bindings = None;
+                    }
                     // Keep the actual original graph for a local validation refusal.
                     // Completed intrinsic rejection explicitly retires it as before.
                     self.signature_decode
@@ -2052,10 +2211,7 @@ impl<'s> Worker<'s> {
             .retain_validated_execution(
                 block,
                 block_hash,
-                valid,
-                overlay,
-                committee,
-                events,
+                (valid, overlay, committee, events),
                 due_work_max_lag_ms,
                 max_clock_drift_ms,
                 progress_clock,
@@ -2070,18 +2226,20 @@ impl<'s> Worker<'s> {
     /// Transfer one actual validator result into its completed owner. Witness extraction
     /// checks the retained source; absence cannot promise a retry after these owners drop.
     /// Some denotes the retained completed owner; None preserves intrinsic rejection.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn retain_validated_execution(
         &mut self,
         block: &AvailableBody,
         block_hash: Hash32,
-        valid: ValidBlock,
-        mut overlay: Box<StateBlock<'s>>,
-        committee: Vec<PeerId>,
-        events: Vec<EventBox>,
+        validated: (ValidBlock, Box<StateBlock<'s>>, Vec<PeerId>, Vec<EventBox>),
         due_work_max_lag_ms: u64,
         max_clock_drift_ms: u64,
         progress_clock: Option<crate::smartcontracts::isi::sccp::keepalive::ProgressClock>,
     ) -> Result<Option<()>, PublicationError> {
+        let (valid, mut overlay, committee, events) = validated;
         let height = block.header().height;
         if let Err(error) = overlay.take_sumeragi_lanes() {
             return classify_lane_step(height, error).map(|_| None);
@@ -2095,7 +2253,12 @@ impl<'s> Worker<'s> {
         };
         let applied_config = match inputs.get().schedule.applied_config() {
             Ok(config) => config,
-            Err(error) => return invalid_attempt(height, &error).map(|_| None),
+            Err(error) => {
+                return {
+                    invalid_attempt(height, &error);
+                    Ok(None)
+                };
+            }
         };
         let Some(witness) = overlay.take_exec_witness() else {
             if cfg!(all(test, sumeragi_core_mutation = "HC134")) {
@@ -2149,6 +2312,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Construct the mandatory context proof from the same original witness and input owner.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_original_result(&mut self) -> Result<(), PublicationError> {
         let original = self
             .finishing
@@ -2167,12 +2334,14 @@ impl<'s> Worker<'s> {
         let proof = match NativeLaneStateProof::from_witness(&original.witness, &budget) {
             Ok(proof) => proof,
             Err(error) => {
-                let failure = match original_lane_proof_deferral(&error) {
-                    Some(original) => PublicationError::Deferred(original.into()),
-                    None => PublicationError::RecoveryRequired(format!(
-                        "original context proof requires recovery: {error}"
-                    )),
-                };
+                let failure = original_lane_proof_deferral(&error).map_or_else(
+                    || {
+                        PublicationError::RecoveryRequired(format!(
+                            "original context proof requires recovery: {error}"
+                        ))
+                    },
+                    |original| PublicationError::Deferred(original.into()),
+                );
                 if !error.is_local_refusal() {
                     self.recovery = Some(failure.to_string());
                 }
@@ -2255,6 +2424,10 @@ impl<'s> Worker<'s> {
 
     /// Capture complete original values before any State publication. Retry reuses the same
     /// overlay and retained R; once admitted, the exact charged projection is never encoded twice.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_original_context_archive(&mut self) -> Result<(), PublicationError> {
         let original = self
             .finishing
@@ -2311,14 +2484,15 @@ impl<'s> Worker<'s> {
                     NativeContextArchiveError::Allocation(error) => {
                         PublicationError::Deferred(preparation::buffer_refusal(error).into())
                     }
-                    NativeContextArchiveError::Proof(error) => {
-                        match original_lane_proof_deferral(error) {
-                            Some(original) => PublicationError::Deferred(original.into()),
-                            None => PublicationError::RecoveryRequired(format!(
-                                "original native context archive requires recovery: {error}"
-                            )),
-                        }
-                    }
+                    NativeContextArchiveError::Proof(error) => original_lane_proof_deferral(error)
+                        .map_or_else(
+                            || {
+                                PublicationError::RecoveryRequired(format!(
+                                    "original native context archive requires recovery: {error}"
+                                ))
+                            },
+                            |original| PublicationError::Deferred(original.into()),
+                        ),
                     _ => PublicationError::RecoveryRequired(format!(
                         "original native context archive requires recovery: {error}"
                     )),
@@ -2333,6 +2507,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Retry only proof or encoding of the original completed execution.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_execution_with_encoder(
         &mut self,
         certified: bool,
@@ -2451,6 +2629,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Discard all provisional effects while restoring the same original signed graph.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn rollback_stale_finishing(&mut self) -> Result<(), PublicationError> {
         let original = self.finishing.take().expect("stale completed original");
         let mut decoder = original.signature_decode;
@@ -2462,6 +2644,10 @@ impl<'s> Worker<'s> {
         returned
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn rollback_stale_live(&mut self) -> Result<(), PublicationError> {
         if !self
             .live
@@ -2502,6 +2688,10 @@ impl<'s> Worker<'s> {
 
     /// Reconstruct authority from the independently authenticated committed source even
     /// during startup replay, using the exact authenticated BLS quorum.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn verify_prepared_certificate(
         &self,
         block: &AvailableBody,
@@ -2628,8 +2818,27 @@ impl<'s> Worker<'s> {
             })
     }
 
+    /// Clone the canonical result of the retained execution of `block_hash`. Read only: no
+    /// phase, overlay or witness changes, so preparation and discard proceed as before.
+    fn executed_result(&self, block_hash: Hash32) -> Result<CertifiedResultV1, String> {
+        let live = self
+            .live
+            .as_ref()
+            .filter(|live| live.block_hash == block_hash)
+            .ok_or_else(|| "no retained execution of this block".to_owned())?;
+        let Live {
+            _commitment: commitment,
+            ..
+        } = live;
+        Ok(commitment.get().clone())
+    }
+
     /// Pin the original execution and exactly one certified frame for durable append.
     #[cfg(test)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare(
         &mut self,
         block: &AvailableBody,
@@ -2638,6 +2847,10 @@ impl<'s> Worker<'s> {
         self.prepare_with_origin(block, qc, CommitTelemetryOrigin::Forward)
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_with_origin(
         &mut self,
         block: &AvailableBody,
@@ -2653,6 +2866,10 @@ impl<'s> Worker<'s> {
         })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_with_encoder(
         &mut self,
         block: &AvailableBody,
@@ -2672,6 +2889,10 @@ impl<'s> Worker<'s> {
     }
 
     /// The original cold operation runs only after normal certificate authentication.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_with_operations(
         &mut self,
         block: &AvailableBody,
@@ -2694,26 +2915,28 @@ impl<'s> Worker<'s> {
             return Err(PublicationError::RecoveryRequired(reason.clone()));
         }
 
-        match catch_unwind(AssertUnwindSafe(|| {
+        if let Ok(result) = catch_unwind(AssertUnwindSafe(|| {
             self.prepare_inner(block, qc, origin, &mut encode, execute)
         })) {
-            Ok(result) => result.map_err(|error| match error {
+            result.map_err(|error| match error {
                 // Cold execution already latched recovery for this owner. The latch is
                 // diagnostic state and must not replace the sole original refusal.
                 original @ PublicationError::RecoveryRefusal(_) => original,
-                other => match &self.recovery {
-                    Some(reason) => PublicationError::RecoveryRequired(reason.clone()),
-                    None => other,
-                },
-            }),
-            Err(_) => {
-                let reason = "publication preparation panicked; recovery required".to_owned();
-                self.recovery = Some(reason.clone());
-                Err(PublicationError::RecoveryRequired(reason))
-            }
+                other => self.recovery.as_ref().map_or(other, |reason| {
+                    PublicationError::RecoveryRequired(reason.clone())
+                }),
+            })
+        } else {
+            let reason = "publication preparation panicked; recovery required".to_owned();
+            self.recovery = Some(reason.clone());
+            Err(PublicationError::RecoveryRequired(reason))
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn prepare_inner(
         &mut self,
         block: &AvailableBody,
@@ -3006,6 +3229,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Publish the same prepared owner after its exact frame is durable.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn commit(
         &mut self,
         block: &AvailableBody,
@@ -3016,6 +3243,10 @@ impl<'s> Worker<'s> {
 
     // One original State boundary. Tests inject failures on either side of actual visibility
     // without replacing validation, authorization, metadata preparation or its original owner.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn commit_with(
         &mut self,
         block: &AvailableBody,
@@ -3041,6 +3272,10 @@ impl<'s> Worker<'s> {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn commit_inner(
         &mut self,
         block: &AvailableBody,
@@ -3051,7 +3286,7 @@ impl<'s> Worker<'s> {
             if !pending.matches(block, qc) {
                 return Err("another committed decision is awaiting archive capture".into());
             }
-            return self.finish_commit().map_err(Into::into);
+            return self.finish_commit();
         }
         let live = self
             .live
@@ -3206,10 +3441,14 @@ impl<'s> Worker<'s> {
         });
         live.phase = PublicationPhase::Published { staged, qc };
         self.recovery = None;
-        self.finish_commit().map_err(Into::into)
+        self.finish_commit()
     }
 
     /// Retry durable archive capture without publishing State or notifications twice.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_commit(&mut self) -> Result<AppliedConfig, PublicationError> {
         let pending = self
             .pending_commit
@@ -3246,10 +3485,19 @@ impl<'s> Worker<'s> {
                         ))
                     }
                 })?;
-            if let Err(error) = self
-                .context
-                .native_context_archive
-                .publish_fastpq_source(self.state.kura(), &pending.native_contexts)
+            // Startup replay re-derives already certified history: its optional proof transport
+            // was captured, or refused, by forward execution. Only an isolated FASTPQ replay
+            // exists to produce that transport.
+            let transport = pending.telemetry_origin != CommitTelemetryOrigin::HistoricalReplay
+                || self
+                    .context
+                    .native_context_archive
+                    .retains_isolated_fastpq_source();
+            if transport
+                && let Err(error) = self
+                    .context
+                    .native_context_archive
+                    .publish_fastpq_source(self.state.kura(), &pending.native_contexts)
             {
                 if self
                     .context
@@ -3300,6 +3548,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Build a payload for `(height, view)` over the applied tip (§6.10).
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn build(
         &mut self,
         height: u64,
@@ -3318,6 +3570,10 @@ impl<'s> Worker<'s> {
     }
 
     /// Borrow current source ownership inside the original operation pool's refund scope.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn build_with_original_refund_scope(
         &mut self,
         height: u64,
@@ -3442,13 +3698,15 @@ impl<'s> Worker<'s> {
         let parent = if retained_parent.is_some() {
             Ok(retained_parent)
         } else {
-            match std::num::NonZeroUsize::new(current_view.height()) {
-                Some(height) => current_view
-                    .canonical_history()
-                    .executed_block(height, |_, _| Ok(()))
-                    .map(Some),
-                None => Ok(None),
-            }
+            std::num::NonZeroUsize::new(current_view.height()).map_or_else(
+                || Ok(None),
+                |height| {
+                    current_view
+                        .canonical_history()
+                        .executed_block(height, |_, _| Ok(()))
+                        .map(Some)
+                },
+            )
         }
         .map_err(|error| {
             if matches!(
@@ -3668,6 +3926,10 @@ impl<'s> Worker<'s> {
         Ok(None)
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     fn finish_payload_build(&mut self) -> Result<Option<PayloadBytes>, PublicationError> {
         let creation_time = self
             .payload_build
@@ -3892,6 +4154,10 @@ fn invalid(height: u64, reason: &dyn std::fmt::Display) -> ExecOutcome {
 }
 
 /// A consuming validation unwind lost its original graph and cannot request a retry.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn validation_result<T>(outcome: std::thread::Result<T>) -> Result<T, PublicationError> {
     outcome.map_err(|_| {
         let reason = "block validation panicked".into();
@@ -3904,15 +4170,15 @@ fn validation_result<T>(outcome: std::thread::Result<T>) -> Result<T, Publicatio
 }
 
 /// Log a completed invalid attempt without manufacturing a local refusal.
-fn invalid_attempt(
-    height: u64,
-    reason: &dyn std::fmt::Display,
-) -> Result<Option<Hash32>, PublicationError> {
+fn invalid_attempt(height: u64, reason: &dyn std::fmt::Display) {
     invalid(height, reason);
-    Ok(None)
 }
 
 /// Custody allocator refusal is local; a semantic lane transition defect is deterministic.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn classify_lane_step(
     height: u64,
     error: lanes::step::LaneStepError,
@@ -3926,15 +4192,25 @@ fn classify_lane_step(
         lanes::step::LaneStepError::Deferred(original) => {
             Err(PublicationError::Deferred(original.into()))
         }
-        _ => invalid_attempt(height, &error),
+        _ => {
+            invalid_attempt(height, &error);
+            Ok(None)
+        }
     }
 }
 
 /// A direct local refusal remains typed; completed semantic rejection is invalid.
+#[expect(
+    clippy::result_large_err,
+    reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+)]
 fn classify(height: u64, error: BlockValidationError) -> Result<Option<Hash32>, PublicationError> {
     match preparation::validation_failure(error) {
         Ok(original) => Err(original),
-        Err(completed) => invalid_attempt(height, &completed),
+        Err(completed) => {
+            invalid_attempt(height, &completed);
+            Ok(None)
+        }
     }
 }
 
@@ -4171,6 +4447,10 @@ mod payload_refusal_tests;
 mod local_signature_preparation_tests;
 
 #[cfg(test)]
+#[path = "executor_uid_binding_retry_tests.rs"]
+mod uid_binding_retry_tests;
+
+#[cfg(test)]
 #[path = "executor_amx_retry_tests.rs"]
 mod amx_retry_tests;
 
@@ -4190,7 +4470,7 @@ fn parent_service_preparation_error(
             preparation::producer_deferral(original.into())
         }
         super::certified_chain::ParentServiceError::NativeSource(original) => {
-            parent_native_source_error(original)
+            parent_native_source_error(&original)
         }
         error => PublicationError::RecoveryRequired(error.to_string()),
     }
@@ -4208,7 +4488,7 @@ pub(super) fn classify_parent_service_deferral_for_test(
 
 /// Preserve the native loader's exact unavailable/corrupt distinction.
 fn parent_native_source_error(
-    original: super::certified_chain::ChainReadError,
+    original: &super::certified_chain::ChainReadError,
 ) -> PublicationError {
     use super::certified_chain::ChainReadError;
     match original {

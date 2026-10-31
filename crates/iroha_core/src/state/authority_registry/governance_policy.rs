@@ -1,15 +1,13 @@
 //! Exact first-release State governance policy, excluding diagnostic switches.
 //!
-//! Governance changes transaction admission, public reward and SoraFS policy,
+//! Governance changes transaction admission, public reward and `SoraFS` policy,
 //! and the Parliament schedule. Its actual-layer configuration has runtime-only
 //! representation; this typed projection gives each consensus field a stable
 //! Norito identity. Telemetry and debug tracing do not enter the State root.
 
 use std::collections::BTreeMap;
 
-use iroha_config::parameters::actual::{
-    Governance, RuntimeUpgradeProvenanceMode, SorafsPinApprovalSigner,
-};
+use iroha_config::parameters::actual::{Governance, SorafsPinApprovalSigner};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     account::AccountId,
@@ -28,6 +26,9 @@ struct VerifyingKeyRefV1 {
     name: String,
 }
 
+/// Terms of the deleted node-configured runtime-upgrade provenance check. Every governance
+/// authority committed them, so they keep their V1 values; provenance is the committed
+/// `runtime_provenance_policy_v1` (`specs/live_runtime_upgrades.md` §6).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha:state:runtime-upgrade-provenance:v1")]
@@ -38,6 +39,15 @@ struct RuntimeUpgradeProvenanceV1 {
     trusted_signers: Vec<PublicKey>,
     signature_threshold: u64,
 }
+
+/// The frozen V1 terms: optional mode, no SBOM or SLSA requirement, no signers.
+static RUNTIME_UPGRADE_PROVENANCE_V1: RuntimeUpgradeProvenanceV1 = RuntimeUpgradeProvenanceV1 {
+    mode: 0,
+    require_sbom: false,
+    require_slsa: false,
+    trusted_signers: Vec::new(),
+    signature_threshold: 0,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, NoritoSchema)]
 #[norito(deny_unknown_fields)]
@@ -213,7 +223,6 @@ impl GovernanceAuthorityV1 {
             backend: key.backend.clone(),
             name: key.name.clone(),
         };
-        let provenance = &config.runtime_upgrade_provenance;
         let viral = &config.viral_incentives;
         let pin = &config.sorafs_pin_policy;
         let penalty = &config.sorafs_penalty;
@@ -239,17 +248,7 @@ impl GovernanceAuthorityV1 {
                 .iter()
                 .map(|scheme| scheme.scheme_id())
                 .collect(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenanceV1 {
-                mode: match provenance.mode {
-                    RuntimeUpgradeProvenanceMode::Optional => 0,
-                    RuntimeUpgradeProvenanceMode::Required => 1,
-                },
-                require_sbom: provenance.require_sbom,
-                require_slsa: provenance.require_slsa,
-                trusted_signers: provenance.trusted_signers.iter().cloned().collect(),
-                signature_threshold: u64::try_from(provenance.signature_threshold)
-                    .expect("supported usize fits u64"),
-            },
+            runtime_upgrade_provenance: RUNTIME_UPGRADE_PROVENANCE_V1.clone(),
             viral_incentives: ViralIncentivesV1 {
                 incentive_pool_account: viral.incentive_pool_account.clone(),
                 escrow_account: viral.escrow_account.clone(),
@@ -273,7 +272,7 @@ impl GovernanceAuthorityV1 {
                 allowed_storage_classes: pin
                     .allowed_storage_classes
                     .as_ref()
-                    .map(|classes| classes.iter().cloned().collect()),
+                    .map(|classes| classes.iter().copied().collect()),
                 require_council_signatures: pin.require_council_signatures,
                 approval_quorum: pin.approval_quorum,
                 approval_signers: pin.approval_signers.iter().map(Into::into).collect(),
@@ -383,7 +382,6 @@ pub(super) fn borrowed(config: &Governance) -> impl norito::SerializePayload + '
         )
     }
 
-    let provenance = &config.runtime_upgrade_provenance;
     let viral = &config.viral_incentives;
     let pin = &config.sorafs_pin_policy;
     let penalty = &config.sorafs_penalty;
@@ -408,16 +406,7 @@ pub(super) fn borrowed(config: &Governance) -> impl norito::SerializePayload + '
             .jdg_signature_schemes
             .iter()
             .map(|scheme| scheme.scheme_id())),
-        record!(
-            match provenance.mode {
-                RuntimeUpgradeProvenanceMode::Optional => 0_u8,
-                RuntimeUpgradeProvenanceMode::Required => 1_u8,
-            },
-            provenance.require_sbom,
-            provenance.require_slsa,
-            Seq(provenance.trusted_signers.iter().map(Ref)),
-            u64::try_from(provenance.signature_threshold).expect("supported usize fits u64")
-        ),
+        Ref(&RUNTIME_UPGRADE_PROVENANCE_V1),
         record!(
             Ref(&viral.incentive_pool_account),
             Ref(&viral.escrow_account),
@@ -552,10 +541,6 @@ mod tests {
         let encoded = frame(&baseline);
         let mut changed = baseline.clone();
         changed.slash_double_vote_bps += 1;
-        assert_ne!(frame(&changed), encoded);
-        let mut changed = baseline.clone();
-        changed.runtime_upgrade_provenance.require_sbom =
-            !changed.runtime_upgrade_provenance.require_sbom;
         assert_ne!(frame(&changed), encoded);
         let mut changed = baseline.clone();
         changed.viral_incentives.halt = !changed.viral_incentives.halt;

@@ -1,7 +1,7 @@
 //! Domain-separated governance proposal fingerprints.
 use iroha_crypto::blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
+    Blake2b,
+    digest::{Digest, consts::U32},
 };
 use norito::codec::Encode;
 pub const DEPLOY_CONTRACT_V1: &[u8] = b"iroha.governance.proposal.deploy_contract.v1";
@@ -56,15 +56,11 @@ pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let domain_len = u64::try_from(domain.len())
         .expect("protocol-defined digest domains fit in u64")
         .to_le_bytes();
-    let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length is fixed and valid");
+    let mut hasher = Blake2b::<U32>::new();
     hasher.update(&domain_len);
     hasher.update(domain);
     hasher.update(&encoded);
-    let mut fingerprint = [0_u8; 32];
-    hasher
-        .finalize_variable(&mut fingerprint)
-        .expect("fingerprint output has the configured Blake2b length");
-    fingerprint
+    hasher.finalize().into()
 }
 #[cfg(test)]
 mod tests {

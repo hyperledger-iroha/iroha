@@ -16,14 +16,14 @@ use iroha_data_model::sorafs::{
 };
 use norito::codec::{Decode, Encode};
 
-pub(crate) use iroha_data_model::sorafs::stream_token_gateway::native::STREAM_TOKEN_GATEWAY_MAX_EXPIRY_ITEMS_V1 as MAX_EXPIRY_ITEMS;
+pub use iroha_data_model::sorafs::stream_token_gateway::native::STREAM_TOKEN_GATEWAY_MAX_EXPIRY_ITEMS_V1 as MAX_EXPIRY_ITEMS;
 /// Maximum individual row changes returned by a transition.
-pub(crate) const MAX_TRANSITION_WRITES: usize = 4 * MAX_EXPIRY_ITEMS as usize;
+pub const MAX_TRANSITION_WRITES: usize = 4 * MAX_EXPIRY_ITEMS as usize;
 
 /// Small per-gateway mutable head; historical rows are independently indexed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayHeadV1")]
-pub(crate) struct GatewayHeadV1 {
+pub struct GatewayHeadV1 {
     /// Strictly increasing revision for transitions that actually change state.
     pub revision: u64,
     /// Last allocated callback sequence, never reset by policy rotation or expiry.
@@ -39,7 +39,7 @@ pub(crate) struct GatewayHeadV1 {
 /// Exact original admission and its execution-derived provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::AdmissionRowV1")]
-pub(crate) struct AdmissionRowV1 {
+pub struct AdmissionRowV1 {
     /// Original complete validation attestation, including its original timestamp.
     pub request: StreamTokenGatewayAdmissionRequestV1,
     /// Byte-identical callback result and original policy snapshot.
@@ -51,7 +51,7 @@ pub(crate) struct AdmissionRowV1 {
 /// Permanent first ordered callback acknowledgement, never replaced by later retries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::AcknowledgementRowV1")]
-pub(crate) struct AcknowledgementRowV1 {
+pub struct AcknowledgementRowV1 {
     /// Exact retained admission and sequence handed to the reputation owner.
     pub record: StreamTokenGatewayAdmissionRecordV1,
     /// Original governed policy revision authorizing this acknowledgement.
@@ -66,7 +66,7 @@ pub(crate) struct AcknowledgementRowV1 {
 /// Permanent exact-context replay index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::ContextRowV1")]
-pub(crate) struct ContextRowV1 {
+pub struct ContextRowV1 {
     /// Original gateway sequence.
     pub sequence: u64,
     /// Domain-separated digest of the complete canonical original request.
@@ -76,7 +76,7 @@ pub(crate) struct ContextRowV1 {
 /// Permanent signed token identity, first pinned only by an Accepted Torii attestation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::TokenIdentityV1")]
-pub(crate) struct TokenIdentityV1 {
+pub struct TokenIdentityV1 {
     /// Authoritative serving provider.
     pub provider_id: ProviderId,
     /// Canonical token identifier within this provider and gateway.
@@ -98,7 +98,7 @@ pub(crate) struct TokenIdentityV1 {
 /// Bounded live counters; their clocks originate in native execution, never the request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::QuotaRowV1")]
-pub(crate) struct QuotaRowV1 {
+pub struct QuotaRowV1 {
     /// Exact permanent lifecycle generation of this active quota row.
     pub generation: u64,
     /// First accepted execution in the current sixty-second window.
@@ -118,7 +118,7 @@ pub(crate) struct QuotaRowV1 {
 /// Permanent token lifecycle distinguishes legitimate retirement from missing live counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::QuotaLifecycleV1")]
-pub(crate) struct QuotaLifecycleV1 {
+pub struct QuotaLifecycleV1 {
     /// Never-reused quota incarnation, zero before first successful quota admission.
     pub generation: u64,
     /// Exactly one live quota row exists if and only if this is true.
@@ -128,7 +128,7 @@ pub(crate) struct QuotaLifecycleV1 {
 /// Immutable accepted concurrency grant, retained after release or expiry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::LeaseRowV1")]
-pub(crate) struct LeaseRowV1 {
+pub struct LeaseRowV1 {
     /// Original admission sequence.
     pub sequence: u64,
     /// Domain-separated provider/token identity key.
@@ -142,7 +142,7 @@ pub(crate) struct LeaseRowV1 {
 /// Permanent terminal fact for a lease; either release or expiry prevents reacquisition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::LeaseTerminalV1")]
-pub(crate) struct LeaseTerminalV1 {
+pub struct LeaseTerminalV1 {
     /// Original governed policy revision authorizing release or maintenance.
     pub policy_revision: u64,
     /// Exact original immutable grant, repeated to bind terminal history to its row.
@@ -158,7 +158,7 @@ pub(crate) struct LeaseTerminalV1 {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayExpiryTargetV1")]
-pub(crate) enum GatewayExpiryTargetV1 {
+pub enum GatewayExpiryTargetV1 {
     /// Exact immutable lease identifier.
     Lease([u8; 32]),
     /// Exact live provider/token quota scope.
@@ -170,7 +170,7 @@ pub(crate) enum GatewayExpiryTargetV1 {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::query::stream_token_gateway::GatewayExpiryKeyV1")]
-pub(crate) struct GatewayExpiryKeyV1 {
+pub struct GatewayExpiryKeyV1 {
     /// Exclusive original expiry or conservative quota retirement time.
     pub at_unix_ms: u64,
     /// Exact indexed row identity.
@@ -179,7 +179,7 @@ pub(crate) struct GatewayExpiryKeyV1 {
 
 /// Gateway-local storage key. The World adapter prepends the independently bound gateway.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum GatewayRowKey {
+pub enum GatewayRowKey {
     /// Permanent original admission.
     Admission(u64),
     /// Permanent original callback acknowledgement indexed by admission sequence.
@@ -202,7 +202,7 @@ pub(crate) enum GatewayRowKey {
 
 /// Typed individually encoded row. A mismatched key/variant is corrupt history.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum GatewayRow {
+pub enum GatewayRow {
     /// Permanent original admission.
     Admission(AdmissionRowV1),
     /// Permanent exact first acknowledgement.
@@ -225,7 +225,7 @@ pub(crate) enum GatewayRow {
 
 /// Payload-free deterministic transition error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TransitionError {
+pub enum TransitionError {
     /// Malformed request or arithmetic bound.
     Invalid,
     /// Policy or request does not bind this gateway.
@@ -248,7 +248,7 @@ pub(crate) enum TransitionError {
 /// an authenticated ordered World range. An empty or short result claims complete absence of
 /// any further due key; an external caller, finite cache or filtered iterator cannot supply it.
 /// The adapter must bound each canonical row decode and reject other gateway namespaces.
-pub(crate) trait GatewayRows {
+pub trait GatewayRows {
     /// Read exactly one gateway-local typed row.
     fn read(&self, key: &GatewayRowKey) -> Result<Option<GatewayRow>, TransitionError>;
     /// Read the earliest due keys, never more than `max_items` (at most 257).
@@ -261,7 +261,7 @@ pub(crate) trait GatewayRows {
 
 /// One atomic compare-and-swap row change, fully prepared before World publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GatewayRowWrite {
+pub struct GatewayRowWrite {
     /// Exact gateway-local row key.
     pub key: GatewayRowKey,
     /// Exact source-view value expected before publication.
@@ -272,7 +272,11 @@ pub(crate) struct GatewayRowWrite {
 
 /// Result of a successful deterministic action, not proof of finalized execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TransitionResult {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The bounded transition returns its original admission result without an additional uncharged allocation"
+)]
+pub enum TransitionResult {
     /// Original immutable admission result.
     Admission(StreamTokenGatewayAdmissionResultV1),
     /// Exact ordered callback acknowledgement.
@@ -285,7 +289,7 @@ pub(crate) enum TransitionResult {
 
 /// Complete bounded delta. Integration must encode and validate every CAS before mutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TransitionDelta {
+pub struct TransitionDelta {
     /// Source-view head expected by the native executor.
     pub before: GatewayHeadV1,
     /// New head, unchanged for exact replay and empty maintenance.

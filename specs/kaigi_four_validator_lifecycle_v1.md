@@ -1,8 +1,8 @@
 # Final Kaigi four-validator lifecycle gate
 
 The opt-in `network_functional` gate exercises the production final Kaigi authorization and
-usage circuits against four real permissioned validators. Its implementation is pending
-compilation and real execution; this document does not assert deployment qualification.
+usage circuits against four real permissioned validators. It runs as a local diagnostic
+against a debug daemon; this document does not assert deployment qualification.
 
 `iroha_core::privacy_release_evidence::kaigi` owns pure fixture construction under the
 nonshipping `privacy-release-evidence` feature. It uses the migrated native PIPA-R
@@ -14,7 +14,7 @@ real PIPA-R proofs and the canonical circuit-owned authorization/usage context.
 
 The existing `crates/iroha_core/tests/kaigi_privacy.rs` assertions remain intact. Their
 pure key-generation, proof framing and circuit helpers supply the fixture implementation;
-the network gate installs the returned keys with signed governed instructions. The
+the network gate installs the returned keys in signed genesis. The
 network builder projects both ordinary Kaigi key references and enabled native PIPA-R state
 into signed genesis through its existing policy-hash owner. Daemon policy equality
 must remain enforced: a stale daemon failure cannot be repaired by altering genesis.
@@ -26,20 +26,26 @@ The single ignored network leaf is
 
 - Seed the universal host/participant identities through ordinary genesis, and fund the
   independently signing participant with an Applied transfer of the default fee asset.
-  Install both governed keys with the host's normal verifier-management permission.
+  Signed genesis installs both governed keys, because the default executor refuses
+  post-genesis key registration even with `CanManageVerifyingKeys`.
 - Sign Create, Join, Usage, Leave, Rejoin and End as their actual host or participant.
   Every positive submission must converge as the exact successful external transaction
   on all four peers, with identical complete call records and expected private counters,
   commitments, roots, nullifiers, original identity and sequence.
 - Reject forbidden envelope metadata, an actual native proof-byte mutation, host
   impersonation, altered usage billing, repeated Join/Usage, the old Join after departure
-  and restart, repeated End and recreation. Require the exact typed native rejection;
+  and restart, a Join proved against a superseded roster root, repeated End and recreation.
+  Require the exact typed native rejection, which the signer reads through the signed
+  transaction-details route because the public status route carries none;
   transport, timeout and unrelated failures cannot count. After each rejection, an
   independently Applied barrier must converge before comparing the unchanged record.
 - Cold-restart one validator after Leave and after End. Commit a new barrier with the
   remaining three; restart the fourth with its persisted configuration and storage,
   require a changed process ID, catch up that exact transaction, and compare records.
   The original Create must remain visible after both restarts.
+- Read each signer's own standing from `/v1/kaigi/calls/{call_id}/participation` at every
+  lifecycle step and compare it with the retained record. A private host stays hidden from
+  an account with no retained participation.
 - Validate structural revision-4 status on all peers, exact four-validator/three-vote
   summaries and a common committed subject. This is not an independent certificate
   signature verifier; the normal daemon owns authenticated QCs and signed RS16 data

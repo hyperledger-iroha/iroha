@@ -110,7 +110,7 @@ impl PendingTaikaiLineageCommit {
             .map_err(|(_, message)| message)?;
         self.guard
             .stage_ingest(
-                self.segment_window.clone(),
+                self.segment_window,
                 &self.manifest_digest_hex,
                 self.lane_id,
                 self.epoch,
@@ -376,11 +376,14 @@ fn reconcile_da_replay_state(
     Ok(())
 }
 
+/// Transformed metadata and optional Taikai SSM/TRM payloads retained for assignment.
+type ServerAssignedMetadata = (ExtraMetadata, Option<Vec<u8>>, Option<Vec<u8>>);
+
 fn metadata_for_server_assignment(
     request: &DaIngestRequest,
     transformed_metadata: &ExtraMetadata,
     enforced_retention: &RetentionPolicy,
-) -> Result<(ExtraMetadata, Option<Vec<u8>>, Option<Vec<u8>>), (StatusCode, String)> {
+) -> Result<ServerAssignedMetadata, (StatusCode, String)> {
     let mut metadata = transformed_metadata.clone();
     let taikai_ssm_payload = taikai_ingest::take_ssm_entry(&mut metadata)?;
     if matches!(request.blob_class, BlobClass::TaikaiSegment)
@@ -1505,7 +1508,7 @@ pub async fn handler_post_da_ingest(
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let encoded = manifest.encoded.clone();
-                let storage_ticket = manifest.storage_ticket.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1526,7 +1529,7 @@ pub async fn handler_post_da_ingest(
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let pdp_commitment = pdp_commitment.clone();
-                let storage_ticket = manifest.storage_ticket.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1584,7 +1587,7 @@ pub async fn handler_post_da_ingest(
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let commitment_record = commitment_record.clone();
-                let storage_ticket = manifest.storage_ticket.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1606,7 +1609,7 @@ pub async fn handler_post_da_ingest(
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let commitment_record = commitment_record.clone();
                 let pdp_commitment_bytes = pdp_commitment_bytes.clone();
-                let storage_ticket = manifest.storage_ticket.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1628,7 +1631,7 @@ pub async fn handler_post_da_ingest(
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let pin_scope = pin_scope.clone();
-                let storage_ticket = manifest.storage_ticket.clone();
+                let storage_ticket = manifest.storage_ticket;
                 let lane_id = request.lane_id;
                 let epoch = request.epoch;
                 let sequence = request.sequence;
@@ -1673,7 +1676,7 @@ pub async fn handler_post_da_ingest(
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let envelope_bytes = taikai.envelope_bytes.clone();
-                    let storage_ticket = manifest.storage_ticket.clone();
+                    let storage_ticket = manifest.storage_ticket;
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
@@ -1694,7 +1697,7 @@ pub async fn handler_post_da_ingest(
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let indexes_json = taikai.indexes_json.clone();
-                    let storage_ticket = manifest.storage_ticket.clone();
+                    let storage_ticket = manifest.storage_ticket;
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
@@ -1741,7 +1744,7 @@ pub async fn handler_post_da_ingest(
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let ssm_bytes_for_spool = ssm_bytes.clone();
-                    let storage_ticket = manifest.storage_ticket.clone();
+                    let storage_ticket = manifest.storage_ticket;
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
@@ -1808,7 +1811,7 @@ pub async fn handler_post_da_ingest(
                         taikai_ingest::TrmLineageValidation::Fresh
                     };
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
-                    let storage_ticket = manifest.storage_ticket.clone();
+                    let storage_ticket = manifest.storage_ticket;
                     let lane_id = request.lane_id;
                     let epoch = request.epoch;
                     let sequence = request.sequence;
@@ -1846,12 +1849,12 @@ pub async fn handler_post_da_ingest(
                         taikai_lineage_commit =
                             lineage_guard.map(|guard| PendingTaikaiLineageCommit {
                                 guard,
-                                segment_window: routing_manifest.segment_window.clone(),
+                                segment_window: routing_manifest.segment_window,
                                 manifest_digest_hex: manifest_digest_hex.clone(),
                                 lane_id: request.lane_id,
                                 epoch: request.epoch,
                                 sequence: request.sequence,
-                                storage_ticket: manifest.storage_ticket.clone(),
+                                storage_ticket: manifest.storage_ticket,
                                 fingerprint,
                             });
                         taikai_alias_rotation_event =
@@ -1916,7 +1919,7 @@ pub async fn handler_post_da_ingest(
                     let outcome = match receipt_log.append(
                         lane_epoch,
                         sequence,
-                        receipt,
+                        &receipt,
                         fingerprint,
                     ) {
                         Ok(outcome) => outcome,
@@ -2056,7 +2059,7 @@ pub async fn handler_post_da_ingest(
                 receipt: Some(receipt),
                 pin_scope: Some(pin_scope),
             };
-            let mut http_response = utils::respond_with_format(response, format);
+            let mut http_response = utils::respond_with_format(&(response), format);
             http_response.headers_mut().insert(
                 HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT),
                 pdp_header_value,
@@ -2124,8 +2127,7 @@ enum DuplicateDaArtifactsError {
 impl std::fmt::Display for DuplicateDaArtifactsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Client(_, message) => formatter.write_str(message),
-            Self::Conflict(message) => formatter.write_str(message),
+            Self::Client(_, message) | Self::Conflict(message) => formatter.write_str(message),
             Self::Internal(error) => std::fmt::Display::fmt(error, formatter),
         }
     }
@@ -2455,7 +2457,7 @@ fn duplicate_da_ingest_response_from_artifacts(
         receipt: Some(artifacts.receipt),
         pin_scope: Some(artifacts.pin_scope),
     };
-    let mut http_response = utils::respond_with_format(response, format);
+    let mut http_response = utils::respond_with_format(&(response), format);
     http_response.headers_mut().insert(
         HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT),
         pdp_header_value,
@@ -2565,7 +2567,7 @@ pub async fn handler_get_da_manifest(
             format,
         ))
     })?;
-    let response = utils::respond_value_with_format(body, format);
+    let response = utils::respond_value_with_format(&(body), format);
     attach_pdp_commitment_header_from_spool(
         &app.da_ingest.manifest_store_dir,
         &manifest_artifact,
@@ -2753,7 +2755,9 @@ fn verify_decompressed_len(
     expected_len: usize,
     algorithm: &'static str,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    if buffer.len() != expected_len {
+    if buffer.len() == expected_len {
+        Ok(buffer)
+    } else {
         Err((
             StatusCode::BAD_REQUEST,
             format!(
@@ -2762,8 +2766,6 @@ fn verify_decompressed_len(
                 expected_len
             ),
         ))
-    } else {
-        Ok(buffer)
     }
 }
 fn validate_request(
@@ -2994,7 +2996,7 @@ fn build_receipt(
     stripe_layout: DaStripeLayout,
 ) -> Result<DaIngestReceipt, (StatusCode, String)> {
     let mut receipt = DaIngestReceipt {
-        client_blob_id: request.client_blob_id.clone(),
+        client_blob_id: request.client_blob_id,
         lane_id: request.lane_id,
         epoch: request.epoch,
         blob_hash,
@@ -3218,7 +3220,7 @@ fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     hasher.update(&commitment.offset.to_le_bytes());
     hasher.update(&commitment.length.to_le_bytes());
     hasher.update(commitment.commitment.as_bytes());
-    hasher.update(&[commitment.parity as u8, role_tag(commitment.role)]);
+    hasher.update(&[u8::from(commitment.parity), role_tag(commitment.role)]);
     hasher.update(&commitment.group_id.to_le_bytes());
     let mut wide = [0u8; 64];
     hasher.finalize_xof().fill(&mut wide);
@@ -3415,7 +3417,7 @@ fn resolve_manifest_with_observer(
         (
             DaManifestV1 {
                 version: DaManifestV1::VERSION,
-                client_blob_id: request.client_blob_id.clone(),
+                client_blob_id: request.client_blob_id,
                 lane_id: request.lane_id,
                 epoch: request.epoch,
                 blob_class: request.blob_class,
@@ -3475,7 +3477,7 @@ fn build_da_commitment_record(
         request.lane_id,
         request.epoch,
         request.sequence,
-        request.client_blob_id.clone(),
+        request.client_blob_id,
         manifest_digest,
         proof_scheme,
         chunk_root,
@@ -3856,7 +3858,7 @@ fn verify_manifest_against_request(
 fn build_error_response(status: StatusCode, message: &str, format: ResponseFormat) -> Response {
     let payload =
         iroha_torii_shared::ErrorEnvelope::new(error_code_for_status(status), message.to_owned());
-    utils::respond_with_status_and_format(status, payload, format)
+    utils::respond_with_status_and_format(status, &(payload), format)
 }
 fn error_code_for_status(status: StatusCode) -> &'static str {
     match status {

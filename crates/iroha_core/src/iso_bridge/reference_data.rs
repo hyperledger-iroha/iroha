@@ -41,39 +41,39 @@ const REFERENCE_DATA_RECORD_OVERHEAD_BYTES: usize = 1024;
 const REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER: usize = 4;
 #[derive(Debug)]
 struct ReferenceDataLoadBudget {
-    remaining_input_bytes: usize,
-    remaining_records: usize,
-    remaining_retained_bytes: usize,
+    input_bytes: usize,
+    records: usize,
+    retained_bytes: usize,
 }
 impl Default for ReferenceDataLoadBudget {
     fn default() -> Self {
         Self {
-            remaining_input_bytes: REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES,
-            remaining_records: REFERENCE_DATA_MAX_TOTAL_RECORDS,
-            remaining_retained_bytes: REFERENCE_DATA_MAX_RETAINED_BYTES,
+            input_bytes: REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES,
+            records: REFERENCE_DATA_MAX_TOTAL_RECORDS,
+            retained_bytes: REFERENCE_DATA_MAX_RETAINED_BYTES,
         }
     }
 }
 impl ReferenceDataLoadBudget {
     fn charge_input(&mut self, kind: DatasetKind, bytes: usize) -> eyre::Result<()> {
-        if bytes > self.remaining_input_bytes {
+        if bytes > self.input_bytes {
             eyre::bail!(
                 "{} dataset would exceed the {}-byte aggregate input budget",
                 kind.label(),
                 REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
             );
         }
-        self.remaining_input_bytes -= bytes;
+        self.input_bytes -= bytes;
         Ok(())
     }
     fn charge_record(&mut self, kind: DatasetKind) -> eyre::Result<()> {
-        if self.remaining_records == 0 {
+        if self.records == 0 {
             eyre::bail!(
                 "{} dataset would exceed the {REFERENCE_DATA_MAX_TOTAL_RECORDS}-record aggregate limit",
                 kind.label()
             );
         }
-        self.remaining_records -= 1;
+        self.records -= 1;
         Ok(())
     }
     fn charge_retained_strings<S: AsRef<str>>(
@@ -101,14 +101,14 @@ impl ReferenceDataLoadBudget {
             .ok_or_else(|| {
                 eyre::eyre!("{} dataset retained-byte charge overflowed", kind.label())
             })?;
-        if charge > self.remaining_retained_bytes {
+        if charge > self.retained_bytes {
             eyre::bail!(
                 "{} dataset would exceed the {}-byte retained-index budget",
                 kind.label(),
                 REFERENCE_DATA_MAX_RETAINED_BYTES
             );
         }
-        self.remaining_retained_bytes -= charge;
+        self.retained_bytes -= charge;
         Ok(())
     }
 }
@@ -1682,7 +1682,7 @@ fn read_dataset_json_bounded(
             REFERENCE_DATA_MAX_DATASET_BYTES
         );
     }
-    if initial_len > budget.remaining_input_bytes {
+    if initial_len > budget.input_bytes {
         eyre::bail!(
             "{} dataset would exceed the {}-byte aggregate input budget",
             kind.label(),
@@ -1891,10 +1891,7 @@ mod tests {
             read_dataset_json_bounded(&first, DatasetKind::IsinCusip, &mut budget).unwrap(),
             "{}"
         );
-        assert_eq!(
-            budget.remaining_input_bytes,
-            REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES - 2
-        );
+        assert_eq!(budget.input_bytes, REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES - 2);
     }
     #[cfg(windows)]
     #[test]
@@ -1947,10 +1944,7 @@ mod tests {
         );
         let mut budget = ReferenceDataLoadBudget::default();
         assert!(read_dataset_json_bounded(&junction, DatasetKind::IsinCusip, &mut budget).is_err());
-        assert_eq!(
-            budget.remaining_input_bytes,
-            REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
-        );
+        assert_eq!(budget.input_bytes, REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES);
     }
     #[test]
     fn missing_snapshots_default_to_missing_state() {
@@ -2001,7 +1995,7 @@ mod tests {
             }"#,
         );
         let mut budget = ReferenceDataLoadBudget {
-            remaining_records: 0,
+            records: 0,
             ..Default::default()
         };
         let error = load_isin_crosswalk(&file, &mut budget).unwrap_err();
@@ -2012,11 +2006,11 @@ mod tests {
         let mut budget = ReferenceDataLoadBudget::default();
         let exact_charge =
             REFERENCE_DATA_RECORD_OVERHEAD_BYTES + REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER * 3;
-        budget.remaining_retained_bytes = exact_charge;
+        budget.retained_bytes = exact_charge;
         budget
             .charge_retained_strings(DatasetKind::CashLeg, ["USD"])
             .expect("exact retained budget");
-        assert_eq!(budget.remaining_retained_bytes, 0);
+        assert_eq!(budget.retained_bytes, 0);
         assert!(
             budget
                 .charge_retained_strings(DatasetKind::CashLeg, [""])

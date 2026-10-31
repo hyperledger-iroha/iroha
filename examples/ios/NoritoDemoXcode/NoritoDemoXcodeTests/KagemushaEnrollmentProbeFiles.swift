@@ -29,7 +29,7 @@ struct EnrollmentProbePin {
 /// Owner-only app-container I/O. Immutable outputs are staged and synchronized before
 /// atomic publication. Interrupted staging never occupies a final mailbox name.
 final class EnrollmentProbeFiles: @unchecked Sendable {
-  enum PublicationBoundary: Equatable {
+  enum PublicationBoundary: Equatable, Sendable {
     case staged, written, fileSynchronized, published, directorySynchronized
   }
   enum DirectoryBoundary: Equatable {
@@ -38,7 +38,7 @@ final class EnrollmentProbeFiles: @unchecked Sendable {
   }
   let root: URL
   private let setProtection: (URL) throws -> Void
-  private let publicationBoundary: (PublicationBoundary) throws -> Void
+  private let publicationBoundary: ((String, PublicationBoundary, Data) throws -> Void)?
   private let directoryBoundary: (DirectoryBoundary) throws -> Void
   init(
     root: URL,
@@ -46,7 +46,7 @@ final class EnrollmentProbeFiles: @unchecked Sendable {
       try FileManager.default.setAttributes(
         [.protectionKey: FileProtectionType.complete], ofItemAtPath: $0.path)
     },
-    publicationBoundary: @escaping (PublicationBoundary) throws -> Void = { _ in },
+    publicationBoundary: ((String, PublicationBoundary, Data) throws -> Void)? = nil,
     directoryBoundary: @escaping (DirectoryBoundary) throws -> Void = { _ in }
   ) throws {
     self.root = root
@@ -220,7 +220,7 @@ final class EnrollmentProbeFiles: @unchecked Sendable {
       _ = unlink(staging.path)
     }
     try setProtection(staging)
-    try publicationBoundary(.staged)
+    try publicationBoundary?(path, .staged, bytes)
     try bytes.withUnsafeBytes { source in
       var offset = 0
       while offset < source.count {
@@ -231,11 +231,11 @@ final class EnrollmentProbeFiles: @unchecked Sendable {
         offset += count
       }
     }
-    try publicationBoundary(.written)
+    try publicationBoundary?(path, .written, bytes)
     guard fsync(fd) == 0, fcntl(fd, F_FULLFSYNC) == 0 else {
       throw EnrollmentProbeFailure.custody
     }
-    try publicationBoundary(.fileSynchronized)
+    try publicationBoundary?(path, .fileSynchronized, bytes)
     if renamex_np(staging.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
       guard errno == EEXIST else { throw EnrollmentProbeFailure.custody }
       guard allowOriginalRecovery else { throw EnrollmentProbeFailure.lifecycle }
@@ -253,12 +253,12 @@ final class EnrollmentProbeFiles: @unchecked Sendable {
         fsync(retained) == 0, fcntl(retained, F_FULLFSYNC) == 0
       else { throw EnrollmentProbeFailure.custody }
     }
-    try publicationBoundary(.published)
+    try publicationBoundary?(path, .published, bytes)
     let parent = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard parent >= 0 else { throw EnrollmentProbeFailure.custody }
     defer { close(parent) }
     guard fsync(parent) == 0 else { throw EnrollmentProbeFailure.custody }
-    try publicationBoundary(.directorySynchronized)
+    try publicationBoundary?(path, .directorySynchronized, bytes)
   }
   func exists(_ path: String) throws -> Bool {
     var info = stat()

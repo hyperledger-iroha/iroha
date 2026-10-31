@@ -32,7 +32,7 @@ mod preauth_connection_lifetime_tests {
     use std::{convert::Infallible, sync::Arc};
     use tokio::sync::{Semaphore, mpsc};
     fn app_with_scheme_cap(scheme: &str) -> SharedAppState {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("test app state must be uniquely owned")
             .preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
@@ -297,7 +297,7 @@ mod preauth_connection_lifetime_tests {
     const TEST_SECOND_HBL_ONBOARDING_TOKEN: &str = "torii-second-hbl-onboarding-token-32-bytes";
     const TEST_UBL_ONBOARDING_TOKEN: &str = "torii-ubl-onboarding-test-token-32-bytes";
     fn app_with_onboarding_auth(require_global_token: bool) -> SharedAppState {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = require_global_token;
         state.api_token_digests = if require_global_token {
@@ -1570,6 +1570,7 @@ mod torii_proxy_session_id_tests {
 
     #[derive(Debug)]
     struct FailingEntropy;
+    impl std::error::Error for FailingEntropy {}
 
     impl core::fmt::Display for FailingEntropy {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1579,7 +1580,7 @@ mod torii_proxy_session_id_tests {
 
     struct FailingRng;
 
-    impl rand::rand_core::TryRngCore for FailingRng {
+    impl rand::rand_core::TryRng for FailingRng {
         type Error = FailingEntropy;
 
         fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
@@ -1798,7 +1799,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn api_token_authentication_precedes_stream_establishment() {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
         state.api_token_digests =
@@ -1853,7 +1854,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn stream_admission_precedes_syntax_and_uses_the_stable_route_id() {
-        let mut unauthorized_app = crate::mk_app_state_for_tests();
+        let mut unauthorized_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut unauthorized_app).expect("unique app state");
         state.require_api_token = true;
         state.api_token_digests =
@@ -1878,7 +1879,7 @@ mod canonical_stream_handshake_tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
         assert_eq!(unauthorized_app.events.receiver_count(), receivers_before);
-        let mut limited_app = crate::mk_app_state_for_tests();
+        let mut limited_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut limited_app)
             .expect("unique app state")
             .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -1919,7 +1920,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn stream_high_load_thresholds_shed_before_syntax_or_subscription_creation() {
-        let mut stream_app = crate::mk_app_state_for_tests();
+        let mut stream_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut stream_app).expect("unique app state");
         state.high_load_stream_tx_threshold = 0;
         state.high_load_subscription_tx_threshold = usize::MAX;
@@ -1938,7 +1939,7 @@ mod canonical_stream_handshake_tests {
         .expect("high-load stream response");
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
-        let mut subscription_app = crate::mk_app_state_for_tests();
+        let mut subscription_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut subscription_app).expect("unique app state");
         state.high_load_stream_tx_threshold = usize::MAX;
         state.high_load_subscription_tx_threshold = 0;
@@ -1962,7 +1963,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn stream_token_rate_limit_buckets_are_isolated_by_route() {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
         state.api_token_digests =
@@ -2024,7 +2025,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn stream_connect_info_rate_limit_buckets_are_isolated_by_route() {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
@@ -2089,7 +2090,7 @@ mod canonical_stream_handshake_tests {
     }
     #[tokio::test]
     async fn stream_admission_precedes_websocket_upgrade_and_subscriber_creation() {
-        let mut unauthorized_app = crate::mk_app_state_for_tests();
+        let mut unauthorized_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut unauthorized_app).expect("unique app state");
         state.require_api_token = true;
         state.api_token_digests =
@@ -2106,7 +2107,7 @@ mod canonical_stream_handshake_tests {
             .expect("unauthorized WebSocket response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(unauthorized_app.events.receiver_count(), receivers_before);
-        let mut limited_app = crate::mk_app_state_for_tests();
+        let mut limited_app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut limited_app)
             .expect("unique app state")
             .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));

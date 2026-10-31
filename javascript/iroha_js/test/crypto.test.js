@@ -1,3 +1,4 @@
+import { kaigiScalarBytesV1, sampleKaigiBlindingV1 } from "../src/kaigiScalarV1.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -28,8 +29,10 @@ import {
   sm2PublicKeyMultihash,
   signSm2,
   verifySm2,
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
   buildKaigiAuthorizationProofV1,
   buildKaigiUsageProofV1,
+  generateKaigiBlindingV1,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
@@ -39,7 +42,7 @@ import {
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { __resetNativeStateForTests } from "../src/native.js";
 import {
   normalizeCryptoAlgorithm as normalizeDistCryptoAlgorithm,
@@ -242,7 +245,7 @@ test("Ed25519 verification matches Rust strict rejection semantics", () => {
   assert.equal(verifyBrowserEd25519(message, ordinary, ordinaryPublicKey), true);
 
   const scalarAtOrder = Buffer.alloc(32);
-  let order = ed25519.CURVE.n;
+  let order = ed25519.Point.Fn.ORDER;
   for (let index = 0; index < scalarAtOrder.length; index += 1) {
     scalarAtOrder[index] = Number(order & 0xffn);
     order >>= 8n;
@@ -805,6 +808,37 @@ function kaigiAuthorizationResultV1(root) {
   return {commitment: Buffer.alloc(32, 1), nullifier: Buffer.alloc(32, 2),
     authorization: Buffer.alloc(32, 3), preRosterRoot: Buffer.from(root), proof: Buffer.from([1, 2, 3])};
 }
+
+test("generateKaigiBlindingV1 samples distinct canonical nonzero scalars", () => {
+  const first = generateKaigiBlindingV1();
+  const second = generateKaigiBlindingV1();
+  assert.equal(first.length, 32);
+  assert.notDeepEqual(first, second);
+  for (const blinding of [first, second]) {
+    assert.deepEqual(kaigiScalarBytesV1(blinding, "blinding"), blinding);
+    assert.ok(blinding.some((byte) => byte !== 0));
+  }
+});
+
+test("sampleKaigiBlindingV1 rejects zero and out-of-field draws and reports a broken source", () => {
+  let draws = 0;
+  const sampled = sampleKaigiBlindingV1((bytes) => {
+    draws += 1;
+    // Zero, then the masked all-ones value above the modulus, then a valid scalar.
+    bytes.fill(draws === 1 ? 0 : draws === 2 ? 0xff : 0x11);
+  });
+  assert.equal(draws, 3);
+  assert.deepEqual(sampled, new Uint8Array(32).fill(0x11));
+  assert.throws(
+    () => sampleKaigiBlindingV1((bytes) => bytes.fill(0)),
+    /never produced a canonical nonzero Kaigi scalar/u,
+  );
+});
+
+test("the public empty roster root is the exact marked hash a private create must bind", () => {
+  assert.match(KAIGI_EMPTY_ROSTER_ROOT_HEX_V1, /^[0-9a-f]{64}$/u);
+  assert.equal(Number.parseInt(KAIGI_EMPTY_ROSTER_ROOT_HEX_V1.slice(-2), 16) & 1, 1);
+});
 
 test("final Kaigi authorization preserves complete context and bigint and consumes the supplied view", () => {
   const input = kaigiAuthorizationInputV1();

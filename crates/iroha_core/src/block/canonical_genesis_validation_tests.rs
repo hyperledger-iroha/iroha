@@ -304,6 +304,11 @@ fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts(
             ExecutionOutputV1::Time(row) => {
                 ExecutionOutputV1::time_output_limit_rejection(row.invocation.clone())
             }
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                unreachable!("genesis_internal_outputs constructs only V1 internal fixtures")
+            }
             ExecutionOutputV1::Network(_) => unreachable!(),
         };
         let reason = rejected_outputs[index]

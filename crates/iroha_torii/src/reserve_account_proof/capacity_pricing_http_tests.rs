@@ -149,8 +149,8 @@ fn signed_sdk_capacity_and_pricing_are_exact_native_facts_before_service_activat
         transaction_status_timeout: Duration::from_secs(30),
         transaction_add_nonce: true,
         sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
-        sorafs_anonymity_policy: Default::default(),
-        sorafs_rollout_phase: Default::default(),
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
     })
     .build()
     .unwrap();

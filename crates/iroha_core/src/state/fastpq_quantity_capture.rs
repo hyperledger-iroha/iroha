@@ -13,9 +13,7 @@ use super::fastpq_quantity_archive::{
 };
 use super::fastpq_quantity_write_plan::{QuantityWriteKey, QuantityWritePlan};
 mod commitment_journal;
-pub(crate) use commitment_journal::{
-    AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
-};
+pub use commitment_journal::{AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry};
 mod source_census;
 use super::*;
 use commitment_journal::{CoverageGap, PreparedQuantityJournal, QuantityCommitmentJournal};
@@ -34,7 +32,7 @@ use source_census::QuantitySourceCensusState;
 
 /// A finite diagnostic; no attacker-controlled message or unbounded evidence is retained.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum QuantityCaptureIssue {
+pub enum QuantityCaptureIssue {
     /// No exact retained invocation/purpose owner authorized capture.
     UnsupportedOwner,
     /// A quantity helper changed state outside a supported typed operation scope.
@@ -76,7 +74,7 @@ impl QuantityCaptureIssue {
 
 /// Transaction-owned mutation observation, discarded with its original World overlay.
 #[derive(Debug, Default)]
-pub(crate) struct QuantityMutationObservation {
+pub struct QuantityMutationObservation {
     owned: bool,
     unowned: bool,
     plan: Option<QuantityWritePlan<QuantityWriteKey, Quantity>>,
@@ -93,7 +91,7 @@ impl QuantityMutationObservation {
 /// Original signed invocation and quota custody retained by a single teardown.
 /// Private fields and no serializer/constructor outside State prevent digest-only
 /// authority. This observer grants neither execution permission nor source finality.
-pub(crate) struct QuantityRetirementInvocation {
+pub struct QuantityRetirementInvocation {
     source: crate::fastpq::FastpqCapturedTranscriptSource,
     owner: crate::fastpq::source_reservation::entry_bundle::EntryBundleOwner,
     pool: iroha_allocation::AllocationBudget,
@@ -154,7 +152,7 @@ impl QuantityArchivedEntry {
 
 /// Whole candidate facts, never an authenticated source manifest.
 #[derive(Default)]
-pub(crate) struct QuantityCandidateArchive {
+pub struct QuantityCandidateArchive {
     entries: QuantityArchiveMap<QuantityArchivedEntry>,
     /// Mandatory fixed source commitments, independent of optional archive capacity.
     commitments: QuantityCommitmentJournal,
@@ -443,7 +441,7 @@ impl QuantityLifecycleOrder {
 }
 
 /// Move-only captured tape and exact write plan, still bound to its original execution owner.
-pub(crate) struct PreparedQuantityCapture {
+pub struct PreparedQuantityCapture {
     journal: Result<PreparedQuantityJournal, crate::execution_attempt::ExecutionDeferred>,
     archive: Result<PreparedQuantityArchive, QuantityCaptureIssue>,
 }
@@ -458,7 +456,7 @@ struct PreparedQuantityArchive {
 
 impl StateBlock<'_> {
     /// Compare the original MV writer lineage with every classified State transaction.
-    /// Direct WorldBlock mutation and a raw WorldTransaction apply cannot disappear
+    /// Direct `WorldBlock` mutation and a raw `WorldTransaction` apply cannot disappear
     /// merely because the final quantities happen to equal the captured post-state.
     pub(super) fn observe_quantity_block_journals(&mut self) {
         let balances = self.world.assets.write_observation();
@@ -508,7 +506,7 @@ impl StateTransaction<'_, '_> {
             lifecycle_ordinal,
         );
         self.world
-            .register_empty_asset_definition_entry(definition_id.clone(), definition)?;
+            .register_empty_asset_definition_entry(&(definition_id.clone()), definition)?;
         self.world
             .axt_asset_incarnations
             .insert(definition_id, incarnation);
@@ -755,12 +753,12 @@ impl StateTransaction<'_, '_> {
                 .world
                 .asset_definitions
                 .get(&asset.definition)
-                .map(|definition| definition.total_quantity()),
+                .map(iroha_data_model::asset::AssetDefinition::total_quantity),
             QuantityWriteKey::Supply(id) => self
                 .world
                 .asset_definitions
                 .get(id)
-                .map(|definition| definition.total_quantity()),
+                .map(iroha_data_model::asset::AssetDefinition::total_quantity),
         }
     }
 
@@ -771,13 +769,13 @@ impl StateTransaction<'_, '_> {
         let zero = Quantity::zero();
         let mut previous: Option<(&QuantityWriteKey, &Quantity)> = None;
         for (key, before, after) in plan.ordered_projections() {
-            if let QuantityWriteKey::Retire(asset) = key {
-                if !self.quantity_kind_matches_live_lifecycle(QuantityKindInput::Retire(
+            if let QuantityWriteKey::Retire(asset) = key
+                && !self.quantity_kind_matches_live_lifecycle(QuantityKindInput::Retire(
                     &asset.definition,
                     asset.incarnation,
-                )) {
-                    return false;
-                }
+                ))
+            {
+                return false;
             }
             let expected = match previous {
                 Some((previous_key, after)) if previous_key == key => after,
@@ -899,7 +897,7 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         entry_hash: Hash,
         authorization_context: Hash,
-        kinds: Vec<FastpqExecutionEffectKindV1>,
+        kinds: &[FastpqExecutionEffectKindV1],
     ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
         self.prepare_quantity_candidate_inputs(
             authority,
@@ -1080,9 +1078,7 @@ impl StateTransaction<'_, '_> {
         if pending.is_some_and(|entry| entry.measurement.baseline != baseline) {
             return Err(QuantityCaptureIssue::InvalidFacts);
         }
-        let old_full = pending
-            .map(|entry| entry.measurement.full)
-            .unwrap_or(baseline);
+        let old_full = pending.map_or(baseline, |entry| entry.measurement.full);
         let full = QuantityCandidateUsage {
             entries: 1,
             deltas: u64::try_from(total).map_err(|_| QuantityCaptureIssue::Capacity)?,
@@ -1150,8 +1146,7 @@ impl StateTransaction<'_, '_> {
         if self.is_execution_deferred() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "local execution attempt did not complete".into(),
-            )
-            .into());
+            ));
         }
         let (mut journal, prepared) = match prepared {
             Ok(PreparedQuantityCapture {
@@ -1161,8 +1156,7 @@ impl StateTransaction<'_, '_> {
                 let _ = self.defer_execution(refusal);
                 return Err(InstructionExecutionError::InvariantViolation(
                     "local execution attempt did not complete".into(),
-                )
-                .into());
+                ));
             }
             Ok(PreparedQuantityCapture {
                 journal: Ok(journal),
@@ -1233,58 +1227,57 @@ impl StateTransaction<'_, '_> {
         // A later error may be caught by an enclosing owner. Retain every complete
         // actual operation in this same rollback journal; dropping the transaction
         // discards it together with its World effects.
-        if permits_complete && post_state_matches {
-            if let Some(journal) = journal.take() {
-                if journal.publish(self).is_err() {
-                    self.pending_fastpq_quantity_candidate
-                        .commitments
-                        .invalidate();
-                }
-            }
+        if permits_complete
+            && post_state_matches
+            && let Some(journal) = journal.take()
+            && journal.publish(self).is_err()
+        {
+            self.pending_fastpq_quantity_candidate
+                .commitments
+                .invalidate();
         }
-        if result.is_ok() {
-            if let Some(mut prepared) = prepared {
-                let hash = prepared.tape.context.entry.entry_hash;
-                let current_full = self
-                    .pending_fastpq_quantity_candidate
-                    .entries
-                    .get(&hash)
-                    .or_else(|| self.block_fastpq_quantity_candidate.entries.get(&hash))
-                    .map(|entry| entry.measurement.full)
-                    .unwrap_or_default();
-                if self.pending_fastpq_quantity_candidate.issue.is_some()
-                    || self.block_fastpq_quantity_candidate.issue.is_some()
-                    || self.pending_fastpq_quantity_candidate.usage
-                        != prepared.accounting.pending_before
-                    || self.block_fastpq_quantity_candidate.usage
-                        != prepared.accounting.parent_before
-                    || current_full != prepared.accounting.old_full
-                {
-                    self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
-                    return result;
-                }
-                if !post_state_matches
-                    || !self.quantity_tape_matches_final_lifecycles(
-                        &prepared.tape.effects,
-                        &mut prepared.lifecycle_order,
-                    )
-                {
-                    self.quantity_candidate_issue(QuantityCaptureIssue::InvalidFacts);
-                    return result;
-                }
-                let pending = &mut self.pending_fastpq_quantity_candidate;
-                pending.entries.grow(prepared.pending_backing);
-                pending.entries.insert_reserved(
-                    hash,
-                    QuantityArchivedEntry {
-                        tape: prepared.tape,
-                        measurement: prepared.accounting.measurement,
-                    },
-                );
-                pending.parent_backing = Some(prepared.parent_backing);
-                pending.usage = prepared.accounting.pending_after;
-                pending.base_usage = Some(prepared.accounting.parent_before);
+        if result.is_ok()
+            && let Some(mut prepared) = prepared
+        {
+            let hash = prepared.tape.context.entry.entry_hash;
+            let current_full = self
+                .pending_fastpq_quantity_candidate
+                .entries
+                .get(&hash)
+                .or_else(|| self.block_fastpq_quantity_candidate.entries.get(&hash))
+                .map(|entry| entry.measurement.full)
+                .unwrap_or_default();
+            if self.pending_fastpq_quantity_candidate.issue.is_some()
+                || self.block_fastpq_quantity_candidate.issue.is_some()
+                || self.pending_fastpq_quantity_candidate.usage
+                    != prepared.accounting.pending_before
+                || self.block_fastpq_quantity_candidate.usage != prepared.accounting.parent_before
+                || current_full != prepared.accounting.old_full
+            {
+                self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
+                return result;
             }
+            if !post_state_matches
+                || !self.quantity_tape_matches_final_lifecycles(
+                    &prepared.tape.effects,
+                    &mut prepared.lifecycle_order,
+                )
+            {
+                self.quantity_candidate_issue(QuantityCaptureIssue::InvalidFacts);
+                return result;
+            }
+            let pending = &mut self.pending_fastpq_quantity_candidate;
+            pending.entries.grow(prepared.pending_backing);
+            pending.entries.insert_reserved(
+                hash,
+                QuantityArchivedEntry {
+                    tape: prepared.tape,
+                    measurement: prepared.accounting.measurement,
+                },
+            );
+            pending.parent_backing = Some(prepared.parent_backing);
+            pending.usage = prepared.accounting.pending_after;
+            pending.base_usage = Some(prepared.accounting.parent_before);
         }
         result
     }
@@ -1436,13 +1429,11 @@ impl StateTransaction<'_, '_> {
     ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
         let mut prepared = self.prepare_quantity_supply_candidate(
             authority,
-            entry_hash,
-            authorization_context,
+            (entry_hash, authorization_context),
             id,
             amount,
             false,
-            &Quantity::zero(),
-            supply_after,
+            (&Quantity::zero(), supply_after),
         )?;
         if let Ok(journal) = &mut prepared.journal {
             journal
@@ -1460,13 +1451,11 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn prepare_quantity_supply_candidate(
         &self,
         authority: &AccountId,
-        entry_hash: Hash,
-        authorization_context: Hash,
+        (entry_hash, authorization_context): (Hash, Hash),
         id: &AssetId,
         amount: &Quantity,
         mint: bool,
-        balance_after: &Quantity,
-        supply_after: &Quantity,
+        (balance_after, supply_after): (&Quantity, &Quantity),
     ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
         let zero = Quantity::zero();
         let balance = self.quantity_balance_input(id)?;
@@ -1477,12 +1466,7 @@ impl StateTransaction<'_, '_> {
         let change = QuantitySupplyInput {
             balance,
             amount,
-            balance_before: self
-                .world
-                .assets
-                .get(id)
-                .map(AsRef::as_ref)
-                .unwrap_or(&zero),
+            balance_before: self.world.assets.get(id).map_or(&zero, AsRef::as_ref),
             balance_after,
             supply_before: definition.total_quantity(),
             supply_after,

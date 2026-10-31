@@ -1,11 +1,11 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal 8-bit pixel buffers and plane homographies.
+"""Minimal 8-bit pixel buffers, plane homographies and camera poses.
 
 Pixel ``(i, j)`` covers ``[i, i+1) x [j, j+1)`` and its centre is at
-``(i + 0.5, j + 0.5)``. All homographies in this package map into these
-pixel-edge coordinates.
+``(i + 0.5, j + 0.5)``. All homographies and poses in this package map into
+these pixel-edge coordinates.
 
 Floating-point code here follows the Rust reference operation by operation in
 IEEE double precision, so decoders on every platform sample the same values.
@@ -22,7 +22,7 @@ from ._numeric import NAN as _NAN
 from ._numeric import ieee_div as _ieee_div
 from ._numeric import total_key as _total_key
 
-__all__ = ["Luma", "Rgb", "Homography"]
+__all__ = ["Luma", "Rgb", "Homography", "Pose"]
 
 
 class Luma:
@@ -318,6 +318,116 @@ class Homography:
 
 #: The identity transform.
 Homography.IDENTITY = Homography((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))  # type: ignore[attr-defined]
+
+
+class Pose:
+    """A camera pose: a homography from the canvas onto undistorted image pixels,
+    followed by radial lens distortion about the image centre.
+
+    A pixel that an undistorted camera would see at ``u`` is seen at
+    ``c + (u - c) * (1 + k * |u - c|^2 / s^2)``, with ``c`` the distortion
+    :attr:`center`, ``k`` the :attr:`distortion` (negative is barrel) and ``s^2`` the
+    :attr:`scale2` (``(0.8 * max(width, height))^2`` for a fitted pose). ``k = 0`` is a
+    plain homography.
+    """
+
+    __slots__ = ("homography", "distortion", "center", "scale2")
+
+    def __init__(
+        self,
+        homography: Homography,
+        distortion: float = 0.0,
+        center: Point = (0.0, 0.0),
+        scale2: float = 1.0,
+    ) -> None:
+        #: Canvas to undistorted pixels.
+        self.homography = homography
+        #: Radial distortion coefficient ``k``.
+        self.distortion = float(distortion)
+        #: Distortion centre in pixels.
+        self.center = (float(center[0]), float(center[1]))
+        #: Squared distortion scale ``s^2`` in pixels^2.
+        self.scale2 = float(scale2)
+
+    @classmethod
+    def plain(cls, homography: Homography) -> "Pose":
+        """A pose without lens distortion."""
+        return cls(homography)
+
+    def apply(self, x: float, y: float) -> Point:
+        """Map a canvas point to image pixels."""
+        ux, uy = self.homography.apply(x, y)
+        k = self.distortion
+        if k == 0.0:
+            return ux, uy
+        cx, cy = self.center
+        dx = ux - cx
+        dy = uy - cy
+        factor = 1.0 + _ieee_div(k * (dx * dx + dy * dy), self.scale2)
+        return cx + dx * factor, cy + dy * factor
+
+    @classmethod
+    def fit(
+        cls,
+        src: Sequence[Point],
+        dst: Sequence[Point],
+        distortion: float,
+        width: int,
+        height: int,
+    ) -> Optional["Pose"]:
+        """The pose with distortion ``distortion`` that takes the canvas points ``src`` to
+        the image points ``dst`` of a ``width x height`` image.
+
+        The image points are undistorted (six fixed-point rounds), then the homography is
+        fitted to them. Returns ``None`` for degenerate input.
+        """
+        cx = width / 2.0
+        cy = height / 2.0
+        side = 0.8 * float(max(width, height))
+        scale2 = side * side
+        undistorted = []
+        for px, py in dst:
+            dx = px - cx
+            dy = py - cy
+            ux, uy = dx, dy
+            if distortion != 0.0:
+                for _ in range(6):
+                    factor = 1.0 + _ieee_div(distortion * (ux * ux + uy * uy), scale2)
+                    ux = _ieee_div(dx, factor)
+                    uy = _ieee_div(dy, factor)
+            # mapped through the centre even without distortion, as the reference does
+            undistorted.append((cx + ux, cy + uy))
+        homography = Homography.from_points(src, undistorted)
+        if homography is None:
+            return None
+        return cls(homography, distortion, (cx, cy), scale2)
+
+    def scaled(self, factor: float) -> "Pose":
+        """The same pose for an image ``factor`` times larger (pixel coordinates scale
+        by ``factor``)."""
+        f = float(factor)
+        homography = Homography((f, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 1.0)).compose(self.homography)
+        cx, cy = self.center
+        return Pose(homography, self.distortion, (cx * f, cy * f), self.scale2 * f * f)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Pose):
+            return NotImplemented
+        return (
+            self.homography == other.homography
+            and self.distortion == other.distortion
+            and self.center == other.center
+            and self.scale2 == other.scale2
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.homography, self.distortion, self.center, self.scale2))
+
+    def __repr__(self) -> str:
+        return (
+            f"Pose(homography={self.homography!r}, distortion={self.distortion!r}, "
+            f"center={self.center!r}, scale2={self.scale2!r})"
+        )
 
 
 def _normalisation(points: Sequence[Point]) -> Tuple[Tuple[float, ...], float]:

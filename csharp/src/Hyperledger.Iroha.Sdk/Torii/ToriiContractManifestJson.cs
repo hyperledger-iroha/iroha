@@ -89,6 +89,7 @@ internal static class ToriiContractManifestJson
         "NftView",
         "QueryPage",
         "AssetUidHoldingQuote",
+        "PendingAction",
         "AxtDescriptor",
         "AxtAnchoredSpendV1",
         "ProofBlob",

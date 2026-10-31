@@ -299,7 +299,7 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
         ("SEED_PEER", format!("{VALIDATOR_PUBLIC}@127.0.0.1:1337")),
         ("SEED_PUBLIC_KEY", VALIDATOR_PUBLIC.to_owned()),
         ("SEED_POP", VALIDATOR_POP.to_owned()),
-        ("PUBLIC_ADDRESS", "addr:127.0.0.1:1337#8F78".to_owned()),
+        ("PUBLIC_ADDRESS", "127.0.0.1:1337".to_owned()),
         ("GENESIS_PUBLIC_KEY", GENESIS_PUBLIC.to_owned()),
         ("GENESIS_HASH", EXPECTED_HASH.to_owned()),
         (
@@ -332,6 +332,12 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
     assert_eq!(binding.unwrap().role, ProfileRole::Validator);
     assert_eq!(*config.common.chain_discriminant.value(), 369);
     assert!(config.soracloud_runtime.production_mode);
+    // The template's plain `host:port` addresses parse like their checked literals.
+    assert_eq!(
+        config.network.public_address.value().to_string(),
+        "127.0.0.1:1337"
+    );
+    assert_eq!(config.torii.address.value().to_string(), "127.0.0.1:8080");
 }
 
 #[test]
@@ -724,6 +730,272 @@ fn flat_data_dir_derives_paths_and_keeps_explicit_overrides() {
             .public_key()
             .to_string(),
         TRANSPORT_PUBLIC
+    );
+
+    // Enabled issuance can use the derived absolute path without losing its public bindings.
+    let issuer = dir.write(
+        "issuer.toml",
+        &format!(
+            "extends = \"flat.toml\"\n\
+             [torii.privacy_bootle_lantern_issuer]\n\
+             enabled = true\nmax_inflight = 2\n\
+             issuer_id_hex = \"{}\"\npolicy_id_hex = \"{}\"\n\
+             runtime_provider_registry_handle = \"runtime://privacy/bootle-lantern/primary\"\n\
+             runtime_provider_registry_revision = 7\n\
+             runtime_provider_registry_policy_digest_hex = \"{}\"\n",
+            "41".repeat(32),
+            "42".repeat(32),
+            "43".repeat(32),
+        ),
+    );
+    let (config, _) = parse(&issuer);
+    let issuer = config.torii.privacy_bootle_lantern_issuer.unwrap();
+    assert_eq!(
+        issuer.state_dir,
+        state.join("privacy_bootle_lantern_issuer")
+    );
+    assert_eq!(issuer.max_inflight.get(), 2);
+    assert_eq!(issuer.runtime_provider_registry_revision, 7);
+}
+
+#[test]
+fn data_dir_completes_enabled_service_paths() {
+    let dir = NodeDir::new("enabled_service_paths");
+    let path = dir.write(
+        "node.toml",
+        "data_dir = \"data\"\n\
+         [sorafs.storage.pop_credentials]\nenabled = true\n\
+         [sorafs.storage.moderation_orchestrator]\nenabled = true\n\
+         [sorafs.storage.evidence_viewer]\nenabled = true\n\
+         [sorafs.storage.reputation_runtime]\nenabled = true\n\
+         [sorafs.storage.reserve_transparency_runtime]\nenabled = true\n\
+         [sorafs.storage.hedging_billing_runtime]\nenabled = true\n\
+         [torii.privacy_bootle_lantern_issuer]\nenabled = true\n",
+    );
+    let reader = open(&path).unwrap();
+    for (key, relative) in [
+        (
+            "sorafs.storage.pop_credentials.issuer_state_dir",
+            "sorafs/pop/issuer",
+        ),
+        (
+            "sorafs.storage.pop_credentials.wallet_state_dir",
+            "sorafs/pop/wallet",
+        ),
+        (
+            "sorafs.storage.moderation_orchestrator.checkpoint_path",
+            "sorafs/moderation/orchestrator.norito",
+        ),
+        (
+            "sorafs.storage.evidence_viewer.checkpoint_path",
+            "sorafs/moderation/evidence-viewer.norito",
+        ),
+        (
+            "sorafs.storage.reputation_runtime.state_dir",
+            "sorafs/reputation",
+        ),
+        (
+            "sorafs.storage.reserve_transparency_runtime.state_dir",
+            "sorafs/reserve-transparency",
+        ),
+        (
+            "sorafs.storage.hedging_billing_runtime.state_dir",
+            "sorafs/hedging-billing",
+        ),
+        (
+            "torii.privacy_bootle_lantern_issuer.state_dir",
+            "privacy_bootle_lantern_issuer",
+        ),
+    ] {
+        assert_eq!(
+            completed_value(&reader, &key.split('.').collect::<Vec<_>>()),
+            dir.data_dir()
+                .join("state")
+                .join(relative)
+                .to_string_lossy(),
+            "{key}",
+        );
+    }
+    discard(reader);
+}
+
+#[test]
+fn data_dir_does_not_complete_inactive_service_paths() {
+    let dir = NodeDir::new("inactive_service_paths");
+    for (key, _) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let section = key[..key.len() - 1].join(".");
+        for contents in [
+            "data_dir = \"data\"".to_owned(),
+            format!("data_dir = \"data\"\n[{section}]\nenabled = false"),
+            // Without data_dir, enabled services still need explicit absolute state paths.
+            format!("[{section}]\nenabled = true"),
+        ] {
+            let path = dir.write("node.toml", &contents);
+            let reader = open(&path).unwrap();
+            assert!(!reader.reader().contains_toml_parameter(*key), "{key:?}");
+            discard(reader);
+        }
+    }
+}
+
+#[test]
+fn data_dir_service_paths_respect_layered_enablement_and_explicit_paths() {
+    let dir = NodeDir::new("layered_service_paths");
+    for (key, relative) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let (leaf, parent) = key.split_last().unwrap();
+        let section = parent.join(".");
+        for (base_enabled, override_enabled, expected_enabled) in [
+            (false, Some(true), true),
+            (true, Some(false), false),
+            (true, None, true),
+        ] {
+            dir.write(
+                "base.toml",
+                &format!("[{section}]\nenabled = {base_enabled}"),
+            );
+            let mut node = "extends = \"base.toml\"\ndata_dir = \"data\"\n".to_owned();
+            if let Some(enabled) = override_enabled {
+                node.push_str(&format!("[{section}]\nenabled = {enabled}\n"));
+            }
+            let path = dir.write("node.toml", &node);
+            let reader = open(&path).unwrap();
+            assert_eq!(
+                reader.reader().contains_toml_parameter(*key),
+                expected_enabled
+            );
+            if expected_enabled {
+                assert_eq!(
+                    completed_value(&reader, key),
+                    dir.data_dir()
+                        .join("state")
+                        .join(relative)
+                        .to_string_lossy(),
+                );
+            }
+            discard(reader);
+
+            // An explicit path in an inherited source survives either enablement setting.
+            dir.write(
+                "base.toml",
+                &format!("[{section}]\nenabled = {base_enabled}\n{leaf} = \"/explicit/state\""),
+            );
+            let reader = open(&path).unwrap();
+            assert_eq!(completed_value(&reader, key), "/explicit/state");
+            discard(reader);
+        }
+    }
+}
+
+/// A flat `data_dir` node with an inline validator key, the given extra top-level keys and the
+/// given `[streaming]` keys.
+fn flat_identity_node(top: &str, streaming: &str) -> String {
+    format!(
+        "chain = \"0\"\n\
+         data_dir = \"data\"\n\
+         public_key = \"{VALIDATOR_PUBLIC}\"\n\
+         private_key = \"{VALIDATOR_PRIVATE}\"\n\
+         trusted_peers_pop = [{{ public_key = \"{VALIDATOR_PUBLIC}\", pop_hex = \"{VALIDATOR_POP}\" }}]\n\
+         {top}\n\
+         [network]\naddress = \"addr:127.0.0.1:1337#8F78\"\npublic_address = \"addr:127.0.0.1:1337#8F78\"\n\
+         [torii]\naddress = \"addr:127.0.0.1:8080#8942\"\n\
+         [genesis]\npublic_key = \"{GENESIS_PUBLIC}\"\nexpected_hash = \"{EXPECTED_HASH}\"\n\
+         [streaming]\n{streaming}\n"
+    )
+}
+
+#[test]
+fn local_identities_are_the_completed_unpinned_transport_and_streaming_keys() {
+    let dir = NodeDir::new("local_identities");
+    let both = [NodeSecretFile::Transport, NodeSecretFile::Streaming];
+    let cases: [(&str, &str, &[NodeSecretFile]); 7] = [
+        ("", "", &both),
+        // A configured public key pins the identity: its file must be supplied.
+        (
+            &format!("soranet_transport_public_key = \"{TRANSPORT_PUBLIC}\""),
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "",
+            &format!("identity_public_key = \"{STREAMING_PUBLIC}\""),
+            &[NodeSecretFile::Transport],
+        ),
+        // Inline keys and explicit key files are not completed.
+        (
+            &format!("soranet_transport_private_key = \"{TRANSPORT_PRIVATE}\""),
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "soranet_transport_private_key_file = \"data/secrets/transport.key\"",
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "",
+            &format!("identity_private_key = \"{STREAMING_PRIVATE}\""),
+            &[NodeSecretFile::Transport],
+        ),
+        (
+            "",
+            "identity_private_key_file = \"data/secrets/streaming.key\"",
+            &[NodeSecretFile::Transport],
+        ),
+    ];
+    for (index, (top, streaming, expected)) in cases.into_iter().enumerate() {
+        let path = dir.write(
+            &format!("identity{index}.toml"),
+            &flat_identity_node(top, streaming),
+        );
+        let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+        assert_eq!(reader.local_identities(), expected, "case {index}");
+        discard(reader);
+    }
+    // Without `data_dir` nothing is completed.
+    let path = dir.write(
+        "no_data_dir.toml",
+        &flat_identity_node("", "").replace("data_dir = \"data\"\n", ""),
+    );
+    let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+    assert!(reader.local_identities().is_empty());
+    discard(reader);
+    // A profile node file completes both, never the validator key.
+    let path = dir.write("profile.toml", &profile_node(&dir, "validator", ""));
+    let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+    assert_eq!(reader.local_identities(), both);
+    discard(reader);
+}
+
+#[test]
+fn local_identity_record_is_the_key_file_the_parser_reads() {
+    let dir = NodeDir::new("local_identity_record");
+    let transport = LocalIdentity::generate().unwrap();
+    let streaming = LocalIdentity::generate().unwrap();
+    assert_ne!(transport.public_key(), streaming.public_key());
+    for identity in [&transport, &streaming] {
+        let record = std::str::from_utf8(identity.record()).unwrap();
+        let literal = record.strip_suffix('\n').expect("one trailing newline");
+        assert!(!literal.contains('\n'));
+        let private = literal.parse::<ExposedPrivateKey>().unwrap();
+        assert_eq!(private.0.algorithm(), Algorithm::Ed25519);
+        assert_eq!(private.try_to_multihash_string().unwrap(), literal);
+    }
+    for (file, identity) in [
+        (NodeSecretFile::Transport, &transport),
+        (NodeSecretFile::Streaming, &streaming),
+    ] {
+        let record = std::str::from_utf8(identity.record()).unwrap();
+        dir.secret(file, record.trim_end_matches('\n'));
+    }
+    let path = dir.write("generated.toml", &flat_identity_node("", ""));
+    let (config, _) = parse(&path);
+    assert_eq!(
+        config.common.soranet_transport_key_pair.public_key(),
+        transport.public_key()
+    );
+    assert_eq!(
+        config.streaming.key_material.identity().public_key(),
+        streaming.public_key()
     );
 }
 

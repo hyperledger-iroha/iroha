@@ -95,7 +95,11 @@ fn assert_relation(statement: ShiftStepStatement) {
     );
     assert_eq!(
         statement.before_gas - statement.after_gas,
-        gas::cost_of(statement.word).unwrap() as u32
+        u32::from_le_bytes(
+            u64::to_le_bytes(gas::cost_of(statement.word).unwrap())[..4]
+                .try_into()
+                .expect("low-byte width")
+        )
     );
     assert_eq!(statement.after_cycles - statement.before_cycles, 1);
 }
@@ -159,8 +163,12 @@ fn shift_all_seven_opcodes_match_interpreter_boundaries_and_masked_amounts() {
                 i64::cast_unsigned(i64::MIN),
                 0xa55a_8001_f00f_1234,
             ] {
-                let word =
-                    ivm::encoding::wide::encode_ri(opcode, 3, 1, u8::cast_signed(amount as u8));
+                let word = ivm::encoding::wide::encode_ri(
+                    opcode,
+                    3,
+                    1,
+                    u8::cast_signed(u8::try_from(amount).expect("bounded fixture value")),
+                );
                 let statement = interpreter_statement(word, left, u64::MAX);
                 assert_eq!(statement.amount, amount);
                 assert_relation(statement);
@@ -199,7 +207,12 @@ fn shift_register_aliases_r0_and_immediate_register_nonreads_match_interpreter()
         for (rd, rs1) in [(3, 1), (1, 1), (0, 1), (3, 0), (0, 0), (255, 255)] {
             for amount in [0, 1, 255] {
                 assert_relation(interpreter_statement(
-                    ivm::encoding::wide::encode_ri(opcode, rd, rs1, u8::cast_signed(amount as u8)),
+                    ivm::encoding::wide::encode_ri(
+                        opcode,
+                        rd,
+                        rs1,
+                        u8::cast_signed(u8::try_from(amount).expect("bounded fixture value")),
+                    ),
                     0x8000_0000_0000_003f,
                     0xdead_beef,
                 ));

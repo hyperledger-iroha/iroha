@@ -1,7 +1,7 @@
 # Copyright 2026 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Luma/RGB buffers, bilinear sampling and homographies."""
+"""Luma/RGB buffers, bilinear sampling, homographies and camera poses."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import unittest
 
 import petal_test_support  # noqa: F401  (puts src on sys.path)
 
-from iroha_petal.image import Homography, Luma, Rgb
+from iroha_petal.image import Homography, Luma, Pose, Rgb
 
 
 class LumaTest(unittest.TestCase):
@@ -107,6 +107,66 @@ class HomographyTest(unittest.TestCase):
         x, y = horizon.apply(0.0, 1.0)
         self.assertTrue(math.isnan(x))
         self.assertEqual(y, math.inf)
+
+
+SRC = [(72.0, 72.0), (952.0, 72.0), (952.0, 952.0), (72.0, 952.0)]
+DST = [(380.0, 90.0), (900.0, 110.0), (880.0, 640.0), (360.0, 620.0)]
+
+
+class PoseTest(unittest.TestCase):
+    def test_a_fitted_pose_takes_its_source_points_onto_distorted_image_points(self) -> None:
+        for distortion in (0.0, -0.08, 0.03):
+            pose = Pose.fit(SRC, DST, distortion, 1280, 720)
+            self.assertIsNotNone(pose)
+            self.assertEqual(pose.distortion, distortion)
+            for (sx, sy), (dx, dy) in zip(SRC, DST):
+                x, y = pose.apply(sx, sy)
+                self.assertLess(abs(x - dx), 1e-3, distortion)
+                self.assertLess(abs(y - dy), 1e-3, distortion)
+        # barrel distortion pulls a mid-edge point toward the image centre
+        plain = Pose.fit(SRC, DST, 0.0, 1280, 720)
+        barrel = Pose.fit(SRC, DST, -0.08, 1280, 720)
+        px, _ = plain.apply(512.0, 72.0)
+        bx, _ = barrel.apply(512.0, 72.0)
+        self.assertLess(abs(px - bx), 5.0)
+        self.assertNotEqual(px, bx)
+        self.assertEqual(Pose.plain(Homography.IDENTITY).apply(3.0, 4.0), (3.0, 4.0))
+
+    def test_the_distortion_is_radial_about_the_image_centre(self) -> None:
+        pose = Pose.fit(SRC, DST, -0.08, 1280, 720)
+        self.assertEqual(pose.center, (640.0, 360.0))
+        self.assertEqual(pose.scale2, 1024.0 * 1024.0)
+        ux, uy = pose.homography.apply(512.0, 512.0)
+        dx, dy = ux - 640.0, uy - 360.0
+        factor = 1.0 + -0.08 * (dx * dx + dy * dy) / (1024.0 * 1024.0)
+        self.assertEqual(pose.apply(512.0, 512.0), (640.0 + dx * factor, 360.0 + dy * factor))
+
+    def test_a_plain_fit_maps_the_points_through_the_image_centre(self) -> None:
+        # the reference undistorts every point as `c + (p - c)` even without distortion,
+        # which is not always `p` in floating point
+        dst = [(380.1, 90.3), (900.7, 110.9), (880.3, 640.1), (360.9, 620.7)]
+        pose = Pose.fit(SRC, dst, 0.0, 1281, 721)
+        cx, cy = 1281 / 2.0, 721 / 2.0
+        through = [(cx + (x - cx), cy + (y - cy)) for x, y in dst]
+        self.assertEqual(pose.homography, Homography.from_points(SRC, through))
+        self.assertIsNone(Pose.fit([(1.0, 1.0)] * 4, [(1.0, 1.0)] * 4, -0.05, 640, 480))
+
+    def test_a_scaled_pose_maps_into_a_larger_image(self) -> None:
+        pose = Pose.fit(SRC, DST, -0.05, 1280, 720)
+        big = pose.scaled(2)
+        for x, y in ((512.0, 512.0), (72.0, 72.0), (900.0, 300.0)):
+            px, py = pose.apply(x, y)
+            bx, by = big.apply(x, y)
+            self.assertAlmostEqual(bx, 2.0 * px, places=6)
+            self.assertAlmostEqual(by, 2.0 * py, places=6)
+
+    def test_poses_compare_by_value(self) -> None:
+        a = Pose.fit(SRC, DST, -0.05, 1280, 720)
+        b = Pose.fit(SRC, DST, -0.05, 1280, 720)
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        self.assertNotEqual(a, Pose.fit(SRC, DST, -0.04, 1280, 720))
+        self.assertIn("distortion=-0.05", repr(a))
 
 
 if __name__ == "__main__":

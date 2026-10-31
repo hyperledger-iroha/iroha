@@ -29,6 +29,16 @@ have compatibility aliases or alternate decoders.
   including foreign binary magic under a `.to` name. It has no override or
   base-ref exemption and runs in pull-request CI. Upstream optional dependency
   metadata and security MIME classification are not execution support.
+- Historical JSON evidence keeps its original bytes. The reviewed identities in
+  `scripts/ivm_policy_evidence.json` distinguish registry-source digests, captured
+  Cargo metadata and compiler version output from executable build declarations.
+  Each entry binds an exact `docs/validation/` JSON path and SHA-256; changed or
+  new reports undergo the ordinary scan. This is not a directory exemption, and
+  binary magic is checked before these identities. Review report contents before
+  adding an identity; do not refresh hashes merely to clear a failure. The only
+  permitted target rejection assertion is the exact native-target validator test
+  in `crates/iroha_plonk/tests/source_identity.rs`; the rest of that file is checked.
+  Both single-line and multiline Rust `target_family` declarations are checked.
 
 ## Native owner corrections under verification
 
@@ -97,7 +107,9 @@ Wire-format and runtime-resource limits remain enforced.
 - JavaScript: 103 focused tests plus one packaging regression pass, zero skipped;
   distribution generation and targeted ESLint pass. Compiled byte sizes are informational.
 - Policy guard: `python3 -m pytest -q pytests/scripts/ivm_only_guard_test.py`
-  passes 47 cases; an independent root-agent replay and current-tree check pass.
+  passes 75 cases, including immutable-evidence mutation and target-declaration
+  controls. Current dependency-refresh results are in the
+  [dependency audit](dependency_audit.md).
 - The IVM-removal native Rust checkpoint passes 1,138 tests: 26 compute/schema, 881 config,
   33 IVM artifact admission, seven canonical SDK codec, 187 post-quantum unit
   tests and four post-quantum known-answer tests. One manual compute fixture

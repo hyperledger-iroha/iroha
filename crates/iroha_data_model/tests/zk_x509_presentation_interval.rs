@@ -1013,16 +1013,16 @@ fn window_publishes_private_bound_flags_exact_certificate_dates_only() {
     assert!(!short.window_publishes_private_bound(short_public, window(T, T + 199)));
 }
 
-/// Hand-written CRL registration freshness of
-/// `iroha_core::smartcontracts::isi::privacy::validate_zk_x509_crl_freshness_v1`,
-/// transcribed from the source lines pinned under `deferred` in
-/// `specs/zk_x509_presentation_interval_sites.json`.
-fn isi_crl_registration_freshness(
+/// Independent per-field temporal oracle for the canonical CRL bounds.
+/// Core publication calls the canonical API directly; native instruction
+/// tests cover that call and failure atomicity at the calendar boundary.
+fn independent_crl_time_predicates(
     record: PrivacyZkX509CrlUpdateIntervalV1,
     block_timestamp_ms: u64,
 ) -> bool {
     let block_unix_seconds = block_timestamp_ms / 1_000;
-    if block_unix_seconds < record.this_update_unix_seconds
+    if block_unix_seconds > ZK_X509_MAX_UNIX_SECONDS_V1
+        || block_unix_seconds < record.this_update_unix_seconds
         || block_unix_seconds >= record.next_update_unix_seconds
     {
         return false;
@@ -1041,11 +1041,9 @@ fn hand_written_deadline_exclusive_millis(presentation_not_after: u64) -> Option
         .and_then(|seconds| seconds.checked_mul(1_000))
 }
 
-/// The sites that do not call the definition yet compute exactly what it
-/// computes. X.6 migrates them; until then this grid and the source pins in
-/// the site inventory keep them from drifting apart.
+/// The signed per-field predicates and canonical bound intersection agree.
 #[test]
-fn deferred_sites_equal_the_canonical_definition_on_a_boundary_grid() {
+fn canonical_crl_bounds_match_independent_temporal_grid() {
     let max_second = u64::MAX / 1_000;
     let this_updates = [
         0,
@@ -1096,21 +1094,17 @@ fn deferred_sites_equal_the_canonical_definition_on_a_boundary_grid() {
                     let Some(block_timestamp_ms) = (second * 1_000).checked_add(millisecond) else {
                         continue;
                     };
-                    let hand_written = isi_crl_registration_freshness(record, block_timestamp_ms);
+                    let hand_written = independent_crl_time_predicates(record, block_timestamp_ms);
                     let canonical = bounds.is_ok_and(|bounds| {
                         bounds.contains_unix_seconds(block_timestamp_ms / 1_000)
                     });
-                    if second <= ZK_X509_MAX_UNIX_SECONDS_V1 {
-                        assert_eq!(
-                            hand_written, canonical,
-                            "CRL [{this_update}, {next_update}) at {block_timestamp_ms} ms"
-                        );
-                    } else {
-                        // The one difference: the definition never admits a
-                        // second after 9999-12-31T23:59:59Z, while the
-                        // hand-written predicate has no calendar ceiling.
+                    assert_eq!(
+                        hand_written, canonical,
+                        "CRL [{this_update}, {next_update}) at {block_timestamp_ms} ms"
+                    );
+                    if second > ZK_X509_MAX_UNIX_SECONDS_V1 {
                         assert!(!canonical, "block second {second} is past the calendar");
-                        beyond_calendar += u64::from(hand_written);
+                        beyond_calendar += 1;
                     }
                     compared += 1;
                     admitted += u64::from(canonical);
@@ -1122,8 +1116,14 @@ fn deferred_sites_equal_the_canonical_definition_on_a_boundary_grid() {
     assert!(admitted > 200, "admitted {admitted} grid points");
     assert!(
         beyond_calendar > 0,
-        "the grid must reach the calendar ceiling difference"
+        "the grid must exercise seconds beyond the calendar ceiling"
     );
+}
+
+/// Remaining hand-written submission deadline sites match the definition.
+#[test]
+fn deferred_sites_equal_the_canonical_definition_on_a_boundary_grid() {
+    let max_second = u64::MAX / 1_000;
     // The two pinned `(PA + 1) * 1000` sites and the canonical accessor agree,
     // including on both overflow edges.
     for presentation_not_after in [

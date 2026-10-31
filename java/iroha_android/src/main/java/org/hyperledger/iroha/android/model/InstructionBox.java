@@ -210,7 +210,7 @@ public final class InstructionBox {
     if (normalized.startsWith("iroha.log")) {
       return InstructionKind.LOG;
     }
-    if (normalized.startsWith("iroha.runtime_upgrade") || normalized.startsWith("iroha.upgrade")) {
+    if (normalized.startsWith("iroha.upgrade")) {
       return InstructionKind.UPGRADE;
     }
     return InstructionKind.CUSTOM;

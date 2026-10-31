@@ -3,7 +3,7 @@
 use iroha_crypto::{
     Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
 };
-use rand::{RngCore, SeedableRng as _};
+use rand::{Rng, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 fn checked_sm2_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("generate checked SM2 keypair")

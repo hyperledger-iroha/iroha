@@ -127,6 +127,66 @@ class KagemushaEnrollmentProbeContractDeviceTest {
         refused { files.publish(stage, byteArrayOf()) }
     }
 
+    @Test fun publicationTrialsRequireExactlyOneSelectedPhysicalMethod() {
+        val owner = "org.hyperledger.iroha.sdk.offline.wallet.KagemushaEnrollmentPhysicalDeviceTest"
+        val methods = listOf("retainedReceiveBeforePublicationDriverReconstruction", "retainedReceiveAfterPublicationDriverReconstruction")
+        for (method in methods) {
+            org.junit.Assert.assertTrue(enrollmentPublicationTrialSelected("$owner#$method", method))
+            for (selection in listOf(null, "", owner, "$owner#retainedNativeEnrollmentMailbox", "$owner#$method,another.Test",
+                " $owner#$method", "$owner#$method ", "$owner#${methods.first { it != method }}")) {
+                assertFalse(enrollmentPublicationTrialSelected(selection, method))
+            }
+        }
+        assertFalse(enrollmentPublicationTrialSelected("$owner#retainedNativeEnrollmentMailbox", "retainedNativeEnrollmentMailbox"))
+    }
+
+    @Test fun selectedPublicationCutsRetainExactBytesWithoutChangingUnselectedPublications() {
+        val parent = InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir.canonicalFile
+        for (selectedBoundary in EnrollmentProbePublicationBoundary.values()) {
+            val root = File(parent, "enrollment-selected-publication-${UUID.randomUUID()}")
+            Os.mkdir(root.path, 448)
+            val target = "private/selected"
+            val original = byteArrayOf(4, 5, 6)
+            val injected = EnrollmentProbeFailure("selected-publication-interruption")
+            var armed = true
+            var fired = 0
+            var captured: ByteArray? = null
+            val files = EnrollmentProbeFiles(root) { path, boundary, bytes ->
+                if (armed && path == target && boundary == selectedBoundary) {
+                    captured = bytes.copyOf()
+                    fired++
+                    armed = false
+                    // The fault caller can never modify the actual publication snapshot.
+                    bytes.fill(0)
+                    throw injected
+                }
+                bytes.fill(0)
+            }
+            files.mkdir("private")
+            files.publish("private/unselected", original)
+            assertArrayEquals(original, files.read("private/unselected", original.size))
+            assertEquals(0, fired)
+            var observed: Throwable? = null
+            try { files.publish(target, original) } catch (failure: Throwable) { observed = failure }
+            org.junit.Assert.assertSame(injected, observed)
+            assertEquals(1, fired)
+            assertArrayEquals(original, captured)
+            if (selectedBoundary == EnrollmentProbePublicationBoundary.BEFORE_PUBLICATION) {
+                assertFalse(files.exists(target))
+            } else {
+                assertArrayEquals(original, files.read(target, original.size))
+                assertEquals(1L, Os.lstat(files.file(target).path).st_nlink)
+            }
+            // Same helper and a new helper both retain the immutable actual original.
+            files.publish(target, original)
+            EnrollmentProbeFiles(root).publish(target, original)
+            assertArrayEquals(original, files.read(target, original.size))
+            assertEquals(1, fired)
+            refused { files.publish(target, byteArrayOf(8, 9, 10)) }
+            assertArrayEquals(original, files.read(target, original.size))
+        }
+    }
+
     @Test fun mergedConfirmationActivityIsPrivateAndDeclaresBiometricPermission() {
         val context = InstrumentationRegistry.getInstrumentation().context
         val name = android.content.ComponentName(context, KagemushaProbeConfirmationActivity::class.java)

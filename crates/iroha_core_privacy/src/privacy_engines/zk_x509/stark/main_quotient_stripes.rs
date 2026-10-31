@@ -181,7 +181,7 @@ mod tests {
         let full_log = 7;
         let full_root = goldilocks_primitive_root_v1(full_log).unwrap();
         let coefficients = (0..97)
-            .map(|i| F::reduce((i * i + 7) as u128))
+            .map(|i| F::reduce(u128::try_from(i * i + 7).expect("positive fixture coefficient")))
             .collect::<Vec<_>>();
         let full = goldilocks_evaluate_coset_v1(
             &coefficients,

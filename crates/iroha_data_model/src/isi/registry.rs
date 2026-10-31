@@ -1,4 +1,3 @@
-#[cfg(feature = "governance")]
 use crate::isi::governance;
 mod wire_ids;
 
@@ -32,10 +31,45 @@ pub(super) fn default_encoding_entry(
 ) -> Option<super::InstructionEncodingEntry> {
     wire_ids::encoding_entry(type_name)
 }
+/// Wire identity and declared payload schema of one built-in instruction.
+#[derive(Clone, Copy)]
+pub struct BuiltInInstructionSchema {
+    /// Canonical wire ID.
+    pub wire_id: &'static str,
+    /// Declared Norito nominal identity of the payload type.
+    pub payload: fn() -> std::borrow::Cow<'static, str>,
+    /// Registered tolerantly: an instruction this release adds after the frozen baseline, whose
+    /// envelopes decode as opaque rather than fail when their frame is not canonical
+    /// (`specs/live_runtime_upgrades.md` §5.2). Baseline instructions never are.
+    pub tolerant: bool,
+}
+
+impl core::fmt::Debug for BuiltInInstructionSchema {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BuiltInInstructionSchema")
+            .field("wire_id", &self.wire_id)
+            .field("payload", &(self.payload)())
+            .field("tolerant", &self.tolerant)
+            .finish()
+    }
+}
+
+/// Every built-in instruction of this release, in registry order. The live-upgrade baseline
+/// publishes one interface definition for each (`specs/live_runtime_upgrades.md` §3.1).
+pub fn built_in_instruction_schemas() -> impl Iterator<Item = BuiltInInstructionSchema> {
+    wire_ids::ALL.iter().map(|entry| BuiltInInstructionSchema {
+        wire_id: entry.wire_id,
+        payload: entry.payload,
+        tolerant: entry.tolerant,
+    })
+}
+
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
-/// Sponsor-program revision validation uses this fail-closed lookup before an
-/// immutable native-instruction selector can be staged.
+/// The answer depends on the release, so it must never decide whether a transaction, block or
+/// state change is valid: releases that differ in what they register would disagree
+/// (`specs/live_runtime_upgrades.md` §5.2). Validity follows the root's selection and the
+/// release-independent [`crate::isi::is_well_formed_wire_id`].
 #[must_use]
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
@@ -203,7 +237,7 @@ mod tests {
             "pair payload should decode back into the canonical boxed family"
         );
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn parliament_registry_contains_only_current_lifecycle_and_standalone_ballots() {
         let registry = default();
@@ -373,11 +407,8 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 398;
-        #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 398;
-        #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 380;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 410;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 410;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -403,12 +434,8 @@ mod tests {
         assert_eq!(
             EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
             inventory.matches("built_in_wire_id!(").count()
-                + if cfg!(feature = "governance") {
-                    inventory.matches("governance_wire_id!(").count()
-                } else {
-                    0
-                },
-            "source feature scope and enabled inventory length diverged"
+                + inventory.matches("governance_wire_id!(").count(),
+            "source inventory and complete compiled inventory length diverged"
         );
         for forbidden in ["register::<", "register_slice::<", "remap_wire_id"] {
             assert!(
@@ -425,11 +452,11 @@ mod tests {
     #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
-        #[cfg(feature = "governance")]
+
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "88dd49eeb628986a9bffa72295f7b93361f3a24d0e4cabac2c8c9a4c8aed81e2";
+            "0878c86dfd5911475d6eaa045713fc04f4292758cab6d36f9c43d5c12032e9ee";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "ce87d1ad585969a8eaef30032a316d6da5806bb99f9732f5c77a2290163e1a2d";
+            "e33ca2c42a90dbf12e39f5f769b87ae99b13cd3addb007f7e22cf8db9bcc5850";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -449,7 +476,7 @@ mod tests {
             without_governance, EXPECTED_WITHOUT_GOVERNANCE_SHA256,
             "non-governance V1 type-to-wire-ID assignments changed"
         );
-        #[cfg(feature = "governance")]
+
         {
             assert_eq!(
                 wire_ids::ALL
@@ -466,7 +493,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn governance_instruction_wire_ids_are_exact_and_manual_council_stays_retired() {
         const PERMITTED_GOVERNANCE_WIRE_IDS: &[&str] = &[
@@ -1588,7 +1615,7 @@ mod tests {
                 .expect_err("retired confidential JSON must not dispatch");
         }
     }
-    #[cfg(feature = "governance")]
+
     #[test]
     fn default_registry_registers_citizenship_instructions() {
         let registry = default();

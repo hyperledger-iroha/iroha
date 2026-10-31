@@ -1,7 +1,8 @@
 //! Original-entropy parity, work bounds and real-cell clearing for mask sampling.
 
 use super::*;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 fn native(column: usize, pattern: usize) -> ZeroizingMainTraceColumnV1 {
     ZeroizingMainTraceColumnV1(
@@ -19,7 +20,7 @@ fn native(column: usize, pattern: usize) -> ZeroizingMainTraceColumnV1 {
 fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
     for pattern in 0..3 {
         for width in [1, 7, 8, 9, 17] {
-            let mut scalar_rng = StdRng::from_seed([91; 32]);
+            let mut scalar_rng = ChaCha12Rng::from_seed([91; 32]);
             let mut batch_rng = scalar_rng.clone();
             let scalar = MainTraceMaskGroupV1::sample_v1(3, 13, width, &mut scalar_rng, |column| {
                 Ok(native(column, pattern))
@@ -48,7 +49,10 @@ fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
                     batch.replay_v1(column, &native(column, pattern)).unwrap(),
                 );
             }
-            assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+            assert_eq!(
+                scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+                batch_rng.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
     }
 }
@@ -56,7 +60,7 @@ fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
 #[test]
 fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
     for width in [0, usize::from(u16::MAX) + 1] {
-        let mut rng = StdRng::from_seed([13; 32]);
+        let mut rng = ChaCha12Rng::from_seed([13; 32]);
         let mut unchanged = rng.clone();
         let mut calls = 0;
         assert!(
@@ -67,10 +71,13 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
             .is_err()
         );
         assert_eq!(calls, 0);
-        assert_eq!(rng.next_u64(), unchanged.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged.try_next_u64().expect("test RNG draw succeeds")
+        );
     }
     for returned in [0, 7, 9] {
-        let mut rng = StdRng::from_seed([17; 32]);
+        let mut rng = ChaCha12Rng::from_seed([17; 32]);
         let mut unchanged = rng.clone();
         assert!(
             MainTraceMaskGroupV1::sample_batched_v1(3, 13, 8, &mut rng, |_| {
@@ -78,9 +85,12 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
             })
             .is_err()
         );
-        assert_eq!(rng.next_u64(), unchanged.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged.try_next_u64().expect("test RNG draw succeeds")
+        );
     }
-    let mut scalar_rng = StdRng::from_seed([19; 32]);
+    let mut scalar_rng = ChaCha12Rng::from_seed([19; 32]);
     let mut batch_rng = scalar_rng.clone();
     let column = |index| {
         let mut value = native(index, 2);
@@ -99,14 +109,17 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
         })
         .is_err()
     );
-    assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+    assert_eq!(
+        scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+        batch_rng.try_next_u64().expect("test RNG draw succeeds")
+    );
 }
 
 struct PartialEntropy {
     draws: usize,
     panic_on_failure: bool,
 }
-impl TryRngCore for PartialEntropy {
+impl TryRng for PartialEntropy {
     type Error = std::io::Error;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         unreachable!("mask sampler requests byte arrays")
@@ -149,7 +162,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
             3,
             13,
             17,
-            &mut StdRng::from_seed([23; 32]),
+            &mut ChaCha12Rng::from_seed([23; 32]),
             |range| Ok(range.map(|column| native(column, 2)).collect()),
         )
     });
@@ -167,10 +180,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                 })
             }))
         });
-        assert!(match result {
-            Ok(result) => result.is_err(),
-            Err(_) => panic_on_failure,
-        });
+        assert!(result.map_or(panic_on_failure, |result| result.is_err()));
         assert_cleared(observations, 8 * 8);
         assert_eq!(rng.draws, 2 * (MASK_DEGREE + 1) + 2);
     }
@@ -181,7 +191,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                     3,
                     13,
                     17,
-                    &mut StdRng::from_seed([29; 32]),
+                    &mut ChaCha12Rng::from_seed([29; 32]),
                     |range| {
                         let mut batch = Vec::with_capacity(range.len());
                         for column in range {
@@ -196,10 +206,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                 )
             })
         });
-        assert!(match result {
-            Ok(result) => result.is_err(),
-            Err(_) => unwind,
-        });
+        assert!(result.map_or(unwind, |result| result.is_err()));
         assert_cleared(observations, 11 * 8);
     }
 }
@@ -293,16 +300,22 @@ fn canonical_arithmetic_auxiliary_runs_stay_within_existing_native_batch() {
 #[test]
 #[ignore = "actual maximum bound sources, native dispatch and log22 commitment/opening parity; optimized qualification"]
 fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
-    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Arithmetic);
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Arithmetic, 5);
 }
 
 #[test]
 #[ignore = "actual maximum value auxiliary dispatch, seeded commitment/DEEP/opening parity"]
 fn actual_value_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
-    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256ValueBus);
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256ValueBus, 5);
 }
 
-fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
+#[test]
+#[ignore = "actual bound log16 sources and every adjacent registration boundary"]
+fn actual_log16_auxiliary_dispatch_preserves_every_registration_boundary() {
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Window, 3);
+}
+
+fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1, group: usize) {
     use crate::privacy_engines::zk_x509::{
         main_assembly::build_zk_x509_main_trace_assembly_v1,
         relation::{
@@ -329,7 +342,9 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x81; 32],
             assembly.verifier_profile.compiled_profile_digest,
-            core::array::from_fn(|index| digest(index as u8 + 1)),
+            core::array::from_fn(|index| {
+                digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+            }),
         ),
         digest(0x91),
         digest(0xa1),
@@ -340,7 +355,7 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -352,9 +367,9 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
     let mut io =
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     let sources = MainTraceReplaySourcesV1::Bound {
         log19: &bound,
         projection: &projection,
@@ -364,7 +379,7 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         .registered_segments
         .iter()
         .find(|registration| {
-            registration.segment.adapter == adapter && registration.trace_group == 5
+            registration.segment.adapter == adapter && registration.trace_group == group
         })
         .copied()
         .unwrap();
@@ -374,30 +389,67 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         .native_columns_v1(
             &layout,
             MainTraceColumnKindV1::Aux,
-            5,
+            group,
             boundary - 3..boundary + 5,
         )
         .unwrap();
     for (offset, actual) in crossed.iter().enumerate() {
         let (registration, local) = registered_main_group_column_v1(
             &layout,
-            5,
+            group,
             MainTraceColumnKindV1::Aux,
             boundary - 3 + offset,
         )
         .unwrap();
         assert_eq!(
             **actual,
-            *bound.native_aux_column_v1(registration, local).unwrap()
+            *sources
+                .native_column_v1(&layout, MainTraceColumnKindV1::Aux, registration, local)
+                .unwrap()
         );
     }
     drop(crossed);
     for range in [0..0, 0..9, usize::MAX..usize::MAX] {
         assert!(
             sources
-                .native_columns_v1(&layout, MainTraceColumnKindV1::Aux, 5, range)
+                .native_columns_v1(&layout, MainTraceColumnKindV1::Aux, group, range)
                 .is_err()
         );
+    }
+    if group == 3 {
+        let registrations = layout
+            .registered_segments
+            .iter()
+            .filter(|registration| registration.trace_group == group)
+            .collect::<Vec<_>>();
+        for registration in registrations.iter().take(registrations.len() - 1) {
+            let boundary = registration.aux_end().unwrap();
+            let columns = sources
+                .native_columns_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Aux,
+                    group,
+                    boundary - 3..boundary + 5,
+                )
+                .unwrap();
+            assert_eq!(columns.len(), 8);
+            for (offset, actual) in columns.iter().enumerate() {
+                let (registration, local) = registered_main_group_column_v1(
+                    &layout,
+                    group,
+                    MainTraceColumnKindV1::Aux,
+                    boundary - 3 + offset,
+                )
+                .unwrap();
+                assert_eq!(
+                    **actual,
+                    *sources
+                        .native_column_v1(&layout, MainTraceColumnKindV1::Aux, registration, local)
+                        .unwrap()
+                );
+            }
+        }
+        return;
     }
     // Use two adjacent real auxiliary columns on the unchanged native19/common22
     // domains. These exact seeded masks feed real Merkle roots and opening replay.
@@ -435,21 +487,23 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)
         }
     };
-    let mut scalar_rng = StdRng::from_seed([53; 32]);
+    let mut scalar_rng = ChaCha12Rng::from_seed([53; 32]);
     let mut batch_rng = scalar_rng.clone();
     let indices = [0, 1, (1 << layout.common_lde_log2) - 1];
     let commit =
-        |rng: &mut StdRng,
+        |rng: &mut ChaCha12Rng,
          source: &mut dyn FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>| {
             aggregate::commit_masked_trace_columns_v1(
                 ZK_X509_DIGEST_CONTEXT_V1,
                 AUX_LEAF_DOMAIN,
                 AUX_NODE_DOMAIN,
-                5,
-                first_registration.segment.trace_log2,
-                layout.common_lde_log2,
-                width,
-                MASK_DEGREE,
+                aggregate::MaskedTraceShapeV1 {
+                    group: 5,
+                    native_trace_log2: first_registration.segment.trace_log2,
+                    lde_log2: layout.common_lde_log2,
+                    width,
+                    mask_degree: MASK_DEGREE,
+                },
                 &indices,
                 rng,
                 source,
@@ -458,7 +512,10 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         };
     let (scalar_commitment, scalar_masks) = commit(&mut scalar_rng, &mut scalar);
     let (batch_commitment, batch_masks) = commit(&mut batch_rng, &mut batched());
-    assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+    assert_eq!(
+        scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+        batch_rng.try_next_u64().expect("test RNG draw succeeds")
+    );
     assert_eq!(scalar_commitment, batch_commitment);
     let point = E::from_coefficients([F(113), F(127), F(131), F(137)]).unwrap();
     assert_eq!(
@@ -672,7 +729,9 @@ fn maximum_rfc_base_batches_preserve_both_phases_and_registration_seams() {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x81; 32],
             assembly.verifier_profile.compiled_profile_digest,
-            core::array::from_fn(|index| digest(index as u8 + 1)),
+            core::array::from_fn(|index| {
+                digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+            }),
         ),
         digest(0x91),
         digest(0xa1),
@@ -680,13 +739,13 @@ fn maximum_rfc_base_batches_preserve_both_phases_and_registration_seams() {
     )
     .unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     projection
-        .bind_challenges_v1(binding.main_post_base())
+        .bind_challenges_v1(&binding.main_post_base())
         .unwrap();
-    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    io.bind_challenges_v1(&binding.main_post_base()).unwrap();
     let sources = MainTraceReplaySourcesV1::Bound {
         log19: &bound,
         projection: &projection,

@@ -37,8 +37,8 @@ fn original_layout_bytes(
                 + iroha_crypto::threshold_bls::DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1
                 + iroha_crypto::Algorithm::BlsNormal.signature_payload_len())
         + acceptances * iroha_crypto::Algorithm::BlsNormal.signature_payload_len();
-    outer::<Recipient>(rows)
-        + outer::<Dealer>(rows)
+    outer::<PreparedRecipient>(rows)
+        + outer::<PreparedDealer>(rows)
         + outer::<Edge>(edges)
         + outer::<Acceptance>(acceptances)
         + children

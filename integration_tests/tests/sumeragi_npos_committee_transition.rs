@@ -227,7 +227,7 @@ struct Operator {
 
 fn exact_quorum(seats: usize) -> Result<u32> {
     ensure!(
-        iroha::data_model::block::consensus::is_valid_committee_size(seats),
+        iroha_model_base::topology::is_valid_committee_size(seats),
         "not an exact 3f+1 roster within the supported 4..31 seats"
     );
     let faults = (seats - 1) / 3;
@@ -2559,11 +2559,6 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
     let seats = scenario.selected_seats();
     let supplementary = pool_size - 4;
     let registry_capacity = i64::try_from(pool_size.max(7))?;
-    let xor: AssetDefinitionId = defaults::nexus::staking::stake_asset_id().parse()?;
-    ensure!(
-        xor.to_string() == TAIRA_XOR,
-        "staking must use real genesis-pinned XOR"
-    );
     let npos = SumeragiNposParameters {
         epoch_length_blocks: NonZeroU64::new(EPOCH).expect("nonzero epoch"),
         max_validators: 7,
@@ -2572,6 +2567,11 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         slashing_delay_blocks: 1,
         ..SumeragiNposParameters::default()
     };
+    let xor: AssetDefinitionId = npos.xor_asset_definition_id.clone();
+    ensure!(
+        xor.to_string() == TAIRA_XOR,
+        "staking must use real genesis-pinned XOR"
+    );
     npos.validate().map_err(|error| eyre!(error))?;
     let builder = NetworkBuilder::new()
         .with_peers(4)

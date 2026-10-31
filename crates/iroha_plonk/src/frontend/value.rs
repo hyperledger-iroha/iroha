@@ -486,7 +486,7 @@ mod tests {
     use ff::Field;
     use iroha_pasta::Fp;
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
 

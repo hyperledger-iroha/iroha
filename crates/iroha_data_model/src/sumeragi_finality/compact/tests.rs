@@ -394,3 +394,182 @@ fn epoch_boundary_helper_never_advances_on_ordinary_or_forged_data() {
     );
     assert_eq!(reader.epochs, after);
 }
+
+#[test]
+fn full_proof_certificate_extraction_preserves_originals_and_rejects_malformed_wire() {
+    let fixture = NativeFinalityFixture::new();
+    assert_eq!(
+        SumeragiCommitCertificateV1::from_proof(fixture.latest()).unwrap(),
+        certificate(&fixture, fixture.latest())
+    );
+    assert!(SumeragiCommitCertificateV1::from_proof(fixture.genesis_proof()).is_err());
+    let mut malformed = fixture.latest().clone();
+    malformed.block_wire.push(0);
+    assert!(SumeragiCommitCertificateV1::from_proof(&malformed).is_err());
+}
+
+fn genesis_checkpoint(fixture: &NativeFinalityFixture) -> SumeragiFinalityCheckpoint {
+    let mut native = root(fixture);
+    native.verify(fixture.genesis_proof()).unwrap();
+    native.export_checkpoint(fixture.genesis_proof()).unwrap()
+}
+
+#[test]
+fn compact_checkpoint_bootstraps_recent_window_without_intermediate_history() {
+    let mut fixture = NativeFinalityFixture::start("compact-checkpoint-bootstrap");
+    let genesis = fixture.checkpoint();
+    let mut reader = SumeragiCommitVerifierV1::new(&root(&fixture)).unwrap();
+    let mut proofs = vec![fixture.genesis_proof().clone()];
+    for _ in 0..6 {
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        proofs.push(fixture.certify(block));
+        let window = &proofs[proofs.len().saturating_sub(3)..];
+        let checkpoint = reader.checkpoint_from_proofs(&genesis, window).unwrap();
+        assert_eq!(checkpoint, fixture.checkpoint());
+        let mut restored = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &fixture.network_id(),
+            fixture.chain_id(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored
+                .verify_retained_decision(window.last().unwrap())
+                .unwrap()
+                .height(),
+            fixture.latest().height()
+        );
+        // The exported source is accepted by the unchanged contiguous successor path.
+        let mut successor_fixture = fixture.clone();
+        let block = successor_fixture.block_with_submitted_work(successor_fixture.next_header());
+        let successor = successor_fixture.certify(block);
+        restored.verify(&successor).unwrap();
+    }
+}
+
+#[test]
+fn compact_checkpoint_preserves_epoch_transition_and_failed_update_atomicity() {
+    let (fixture, chain) = NativeFinalityFixture::short_npos_boundary_chain(4);
+    let genesis = genesis_checkpoint(&fixture);
+    let mut reader = SumeragiCommitVerifierV1::new(&root(&fixture)).unwrap();
+    let before = reader.epochs.clone();
+    let mut malformed = chain[1..].to_vec();
+    malformed[2].block_wire.push(0);
+    assert!(reader.checkpoint_from_proofs(&genesis, &malformed).is_err());
+    assert_eq!(
+        reader.epochs, before,
+        "failed tip must not install the boundary"
+    );
+    let checkpoint = reader
+        .checkpoint_from_proofs(&genesis, &chain[1..])
+        .unwrap();
+    assert_eq!(checkpoint, fixture.checkpoint());
+    assert_eq!(reader.epochs.len(), 2);
+    assert_eq!(
+        reader
+            .export_epoch_checkpoint(1)
+            .unwrap()
+            .selected_epoch()
+            .authorization
+            .epoch,
+        1
+    );
+}
+
+#[test]
+fn compact_checkpoint_rejects_changed_root_window_roster_and_body() {
+    let mut fixture = NativeFinalityFixture::start("compact-checkpoint-rejections");
+    let genesis = fixture.checkpoint();
+    let mut proofs = Vec::new();
+    for _ in 0..4 {
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        proofs.push(fixture.certify(block));
+    }
+    let window = &proofs[1..];
+    let mut reader = SumeragiCommitVerifierV1::new(&root(&fixture)).unwrap();
+    let before = reader.epochs.clone();
+    let foreign = NativeFinalityFixture::start("foreign-compact-checkpoint");
+    assert!(
+        reader
+            .checkpoint_from_proofs(&foreign.checkpoint(), window)
+            .is_err()
+    );
+    assert!(
+        reader
+            .checkpoint_from_proofs(&fixture.checkpoint(), window)
+            .is_err()
+    );
+    assert!(reader.checkpoint_from_proofs(&genesis, &[]).is_err());
+    assert!(
+        reader
+            .checkpoint_from_proofs(&genesis, &window[1..])
+            .is_err()
+    );
+    assert!(reader.checkpoint_from_proofs(&genesis, &proofs).is_err());
+    for mutation in 0..4 {
+        let mut changed = window.to_vec();
+        match mutation {
+            0 => changed.swap(0, 1),
+            1 => changed[0].committee[0].proof_of_possession[0] ^= 1,
+            2 => changed[0].block_wire.push(0),
+            _ => changed[1].block_header = changed[0].block_header,
+        }
+        assert!(reader.checkpoint_from_proofs(&genesis, &changed).is_err());
+        assert_eq!(reader.epochs, before);
+    }
+}
+
+#[test]
+fn compact_checkpoint_rejects_quorum_signed_wrong_parent_result() {
+    use crate::block::CommitCertificate;
+    use crate::sumeragi_finality::tests::author_payload;
+
+    let mut fixture = NativeFinalityFixture::start("compact-checkpoint-wrong-parent");
+    let genesis = fixture.checkpoint();
+    let mut proofs = Vec::new();
+    for _ in 0..4 {
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        proofs.push(fixture.certify(block));
+    }
+    let mut window = proofs[1..].to_vec();
+    let selected = root(&fixture);
+    let mut keys: Vec<_> = (1..=4)
+        .map(|seed| {
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal)
+        })
+        .collect();
+    keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+    let mut block = decode_framed_signed_block(&window[1].block_wire).unwrap();
+    let original = block.commit_certificate().unwrap();
+    let mut header: CoreHeader = norito::decode_canonical(original.consensus_header()).unwrap();
+    header.parent_result = Hash32([9; 32]);
+    let payload = block
+        .canonical_resultless_proposal()
+        .unwrap()
+        .encode_wire()
+        .unwrap();
+    let authored = author_payload(header, &payload, selected.initial_epoch(), &keys);
+    let header = authored.body.header();
+    let mut qc: Qc = norito::decode_canonical(original.commit_qc()).unwrap();
+    let (crypto, _) = ProofCrypto::new(&window[1].committee).unwrap();
+    qc.block_hash = header.hash(&crypto);
+    resign(&mut qc, &[0, 1, 2]);
+    let result = original.result_preimage().to_vec();
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        norito::encode_canonical(header).unwrap(),
+        norito::encode_canonical(&qc).unwrap(),
+        result,
+        norito::encode_canonical(authored.body.availability()).unwrap(),
+    )));
+    window[1].block_wire = block.encode_wire().unwrap();
+    let mut reader = SumeragiCommitVerifierV1::new(&selected).unwrap();
+    reader
+        .verify(&SumeragiCommitCertificateV1::from_proof(&window[1]).unwrap())
+        .unwrap();
+    let before = reader.epochs.clone();
+    let error = reader
+        .checkpoint_from_proofs(&genesis, &window)
+        .unwrap_err();
+    assert!(error.to_string().contains("parent/result"), "{error}");
+    assert_eq!(reader.epochs, before);
+}

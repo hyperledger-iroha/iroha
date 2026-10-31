@@ -36,8 +36,12 @@ use std::{
 
 #[path = "native_exchange/archive.rs"]
 mod archive;
+#[path = "native_exchange/automatic_maintenance.rs"]
+mod automatic_maintenance;
 #[path = "native_exchange/controls.rs"]
 mod controls;
+#[path = "native_exchange/enrollment_cohort.rs"]
+mod enrollment_cohort;
 #[path = "native_exchange/fee.rs"]
 mod fee;
 #[path = "native_exchange/fee_confirmation.rs"]
@@ -536,7 +540,7 @@ fn executable_hash() -> String {
     use std::io::Read as _;
     let mut file = fs::File::open(std::env::current_exe().unwrap()).unwrap();
     let mut hash = Sha256::new();
-    let mut bytes = [0_u8; 65536];
+    let mut bytes = vec![0_u8; 65_536];
     loop {
         let length = file.read(&mut bytes).unwrap();
         if length == 0 {
@@ -793,6 +797,12 @@ fn require_payment_bound(bytes: &[u8], scheme: &[u8; 32]) {
 #[test]
 #[ignore = "requires exported SAME A custody, genuine full22 grant and an independently pinned finalized Load for its exact target"]
 fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
+    run_exchange(false);
+}
+
+// A separate ignored producer may stop at the authentic pre-Archive handoff boundary.
+// No environment switch changes the existing complete exchange acceptance path.
+fn run_exchange(automatic_maintenance_handoff: bool) {
     let output = fresh_output("KAGEMUSHA_NATIVE_EXCHANGE_OUTPUT");
     let sources = Sources::requalify(&output.join("source-admission"));
     let setup = LedgerSetup::read(&sources);
@@ -958,11 +968,11 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
         (Completion::Pending, 0)
     );
     let payment_ab = complete(a.resume().unwrap().expect("selected Send remains pending"));
-    finish_exchange(
-        output,
-        sources,
-        setup,
-        target_bytes,
+    finish_exchange_to(
+        (&output, automatic_maintenance_handoff),
+        &sources,
+        &setup,
+        &target_bytes,
         [
             Participant {
                 wallet: a,
@@ -983,7 +993,7 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
                 frames: frames_c,
             },
         ],
-        send_ab,
+        &send_ab,
         payment_ab,
     );
 }
@@ -1002,12 +1012,32 @@ fn retain_frames(device: &HostDevice, frames: &[Vec<u8>; 4]) {
 }
 
 fn finish_exchange(
-    output: PathBuf,
-    sources: Sources,
-    setup: LedgerSetup,
-    target_bytes: Vec<u8>,
+    output: &Path,
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
     participants: [Participant; 3],
-    send_ab: OperationRequestV1,
+    send_ab: &OperationRequestV1,
+    payment_ab: Vec<u8>,
+) {
+    finish_exchange_to(
+        (output, false),
+        sources,
+        setup,
+        target_bytes,
+        participants,
+        send_ab,
+        payment_ab,
+    );
+}
+
+fn finish_exchange_to(
+    (output, automatic_maintenance_handoff): (&Path, bool),
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
+    participants: [Participant; 3],
+    send_ab: &OperationRequestV1,
     payment_ab: Vec<u8>,
 ) {
     let OperationActionV1::Send {
@@ -1147,7 +1177,7 @@ fn finish_exchange(
     let (payment_bc, derivations) = derived(|| complete(b.execute(send_bc.clone()).unwrap()));
     assert_eq!(derivations, 2, "Send after a refused attempt");
     require_payment_bound(&payment_bc, &f.config.scheme.scheme_id());
-    assert_eq!(complete(b.execute(send_bc).unwrap()), payment_bc);
+    assert_eq!(complete(b.execute(send_bc.clone()).unwrap()), payment_bc);
     require_completed_send(&mut b, &request_bc, &payment_bc);
     let companion_bc = companion(&mut b, &payment_bc);
     // A companion is only ever the wallet's own: another wallet's Payment is refused.
@@ -1158,13 +1188,13 @@ fn finish_exchange(
     let before_mismatch = c.snapshot().unwrap();
     assert!(c.execute(receive(&payment_bc, &companion_ab, 225)).is_err());
     assert_eq!(c.snapshot().unwrap(), before_mismatch);
-    let receive_bc = receive(&payment_bc, &companion_bc, 223);
-    let received_bc = complete(c.execute(receive_bc.clone()).unwrap());
+    let credit_operation = receive(&payment_bc, &companion_bc, 223);
+    let received_bc = complete(c.execute(credit_operation.clone()).unwrap());
     let signed = device_c.platform.with(|state| state.sign_calls);
     drop(c);
     let mut c = sources.open(&device_c, &f_c, &frames_c);
     assert_eq!(
-        complete(c.execute(receive_bc.clone()).unwrap()),
+        complete(c.execute(credit_operation.clone()).unwrap()),
         received_bc
     );
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
@@ -1177,10 +1207,10 @@ fn finish_exchange(
     let mut c = sources.open(&device_c, &f_c, &frames_c);
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(
-        complete(c.execute(receive_bc.clone()).unwrap()),
+        complete(c.execute(credit_operation.clone()).unwrap()),
         received_bc
     );
-    let mut duplicate_after_restart = receive_bc.clone();
+    let mut duplicate_after_restart = credit_operation.clone();
     duplicate_after_restart.request_id = [224; 32];
     assert!(matches!(
         c.execute(duplicate_after_restart),
@@ -1188,7 +1218,56 @@ fn finish_exchange(
     ));
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
-    assert_eq!(complete(c.execute(receive_bc).unwrap()), received_bc);
+    // A completed Receive binds every original even after its owner and folded head reopen.
+    // Canonically valid substitutions must reach the fixed binding, not pass by returning
+    // a prior completion or be counted as coverage merely because decoding failed.
+    let OperationActionV1::Receive {
+        payer_credential: other_payer,
+        ..
+    } = &incoming_ab.action
+    else {
+        unreachable!("A-to-B Receive originals");
+    };
+    let empty_certificates =
+        norito::encode_canonical(&KagemushaWalletCertificateSetV1::new(vec![]).unwrap()).unwrap();
+    for changed_original in 0..3 {
+        let mut conflicting = credit_operation.clone();
+        let OperationActionV1::Receive {
+            payment,
+            payer_credential,
+            certificates,
+        } = &mut conflicting.action
+        else {
+            unreachable!("retained C Receive");
+        };
+        match changed_original {
+            0 => *payment = payment_ab.clone(),
+            1 => *payer_credential = other_payer.clone(),
+            // An empty set is valid intake DATA, never substitute issuer authority.
+            2 => *certificates = empty_certificates.clone(),
+            _ => unreachable!(),
+        }
+        assert_eq!(conflicting.request_id, credit_operation.request_id);
+        assert_eq!(conflicting.kind(), credit_operation.kind());
+        assert_ne!(conflicting, credit_operation);
+        conflicting.validate(&f_c.config.scheme).unwrap();
+        let (result, derivations) = derived(|| c.execute(conflicting));
+        assert!(matches!(result, Err(state::Error::OperationConflict)));
+        assert_eq!(derivations, 0, "conflicting Receive must not derive");
+        assert_eq!(c.snapshot().unwrap(), folded_c);
+        assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
+        assert_eq!(
+            c.retry_request(&credit_operation.request_id).unwrap(),
+            state::RequestStatusV1::Outcome(Completion::Complete(received_bc.clone()))
+        );
+        assert_eq!(
+            derived(|| complete(c.execute(credit_operation.clone()).unwrap())),
+            (received_bc.clone(), 0)
+        );
+        assert_eq!(c.snapshot().unwrap(), folded_c);
+        assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
+    }
+    assert_eq!(complete(c.execute(credit_operation).unwrap()), received_bc);
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
     publish(
@@ -1237,11 +1316,62 @@ fn finish_exchange(
     let credited_bc =
         norito::encode_canonical(&KagemushaWalletCreditedV1::from_status(status_bc).unwrap())
             .unwrap();
-    let (reopened_a, archived_ab) =
-        archive::exercise(a, &device_a, &sources, &f, &frames_a, &credited_ab);
+    if automatic_maintenance_handoff {
+        let receive = automatic_maintenance::retain(
+            &output,
+            "receive",
+            automatic_maintenance::PendingReceipt {
+                wallet: &mut a,
+                device: &device_a,
+                frames: &frames_a,
+                send: &send_ab,
+                payment: &payment_ab,
+                original: &credited_ab,
+            },
+        );
+        let status = automatic_maintenance::retain(
+            &output,
+            "status",
+            automatic_maintenance::PendingReceipt {
+                wallet: &mut b,
+                device: &device_b,
+                frames: &frames_b,
+                send: &send_bc,
+                payment: &payment_bc,
+                original: &credited_bc,
+            },
+        );
+        drop(a);
+        drop(b);
+        drop(c);
+        automatic_maintenance::publish_handoff(
+            &output,
+            &sources,
+            &setup,
+            &target_bytes,
+            [receive, status],
+        );
+        return;
+    }
+    let (reopened_a, archived_ab) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &send_ab.request_id,
+        &credited_ab,
+    );
     a = reopened_a;
-    let (reopened_b, archived_bc) =
-        archive::exercise(b, &device_b, &sources, &f_b, &frames_b, &credited_bc);
+    let (reopened_b, archived_bc) = archive::exercise(
+        b,
+        &device_b,
+        &sources,
+        &f_b,
+        &frames_b,
+        &send_bc.request_id,
+        &credited_bc,
+    );
     b = reopened_b;
     finish_unload(
         output,
@@ -1297,10 +1427,10 @@ struct ExchangeOriginals {
 // Shared unchanged Unload/proof/conservation/export assertions. Entry requires both
 // independently verified Archive branches and their exact retained originals.
 fn finish_unload(
-    output: PathBuf,
-    sources: Sources,
-    setup: LedgerSetup,
-    target_bytes: Vec<u8>,
+    output: &Path,
+    sources: &Sources,
+    setup: &LedgerSetup,
+    target_bytes: &[u8],
     participants: [Participant; 3],
     originals: ExchangeOriginals,
 ) {
@@ -1362,9 +1492,9 @@ fn finish_unload(
         "this campaign has no burned credit"
     );
     let b_final_credit_status = message_census::retain_credit_status(
-        &output,
+        output,
         "b-final-credit-status",
-        &sources,
+        sources,
         &b_status,
         &request_ab,
         &payment_ab,
@@ -1390,8 +1520,60 @@ fn finish_unload(
         },
     );
     let unload_id = unload.request_id;
-    let (unloaded, derivations) = derived(|| complete(c.execute(unload.clone()).unwrap()));
+    let before_review = c.snapshot().unwrap();
+    let signatures_before_review = device_c.platform.with(|state| state.sign_calls);
+    let state::ReviewDecisionV1::Ready(review) = c
+        .review_unload(
+            unload_id,
+            LOAD_AMOUNT,
+            None,
+            None,
+            state::ReviewExpectationV1::Fresh,
+        )
+        .unwrap()
+    else {
+        panic!("fresh Unload review");
+    };
+    let original_projection = review.projection().clone();
+    drop(review);
+    assert_eq!(
+        c.retry_request(&unload_id).unwrap(),
+        state::RequestStatusV1::Unknown
+    );
+    assert_eq!(c.snapshot().unwrap(), before_review);
+    assert_eq!(
+        device_c.platform.with(|state| state.sign_calls),
+        signatures_before_review
+    );
+    drop(c);
+    let mut c = sources.open(&device_c, &f_c, &frames_c);
+    let state::ReviewDecisionV1::Ready(review) = c
+        .review_unload(
+            unload_id,
+            LOAD_AMOUNT,
+            None,
+            None,
+            state::ReviewExpectationV1::OriginalUnstarted(original_projection.clone()),
+        )
+        .unwrap()
+    else {
+        panic!("same unstarted Unload after restart");
+    };
+    assert_eq!(review.projection(), &original_projection);
+    // This actual renewed review represents a new explicit test approval, not restoration
+    // of the dropped capability. Only its privately retained ID reaches the sole dispatcher.
+    let (unloaded, derivations) = derived(|| match c.execute_reviewed(review).unwrap() {
+        state::ReviewedExecutionV1::Executed(completion) => complete(completion),
+        other => panic!("fresh reviewed Unload: {other:?}"),
+    });
     assert_eq!(derivations, 2, "fresh Unload");
+    assert_eq!(
+        device_c.platform.with(|state| state.sign_calls),
+        signatures_before_review + 1
+    );
+    assert!(matches!(c.review_unload(unload_id, LOAD_AMOUNT, None, None,
+        state::ReviewExpectationV1::OriginalUnstarted(original_projection)).unwrap(),
+        state::ReviewDecisionV1::Existing(state::BoundRequestStatusV1::Outcome(state::Completion::Complete(ref bytes))) if bytes == &unloaded));
     assert_eq!(
         derived(|| complete(c.execute(unload).unwrap())),
         (unloaded.clone(), 0)
@@ -1472,7 +1654,7 @@ fn finish_unload(
     // It never replaces the genuine released claim or performs another monetary operation.
     let c_before_negative = c.snapshot().unwrap();
     let c_sign_calls = device_c.platform.with(|state| state.sign_calls);
-    let bad_sigma_claim = proof_negative::claim(&sources, &device_c, &claim);
+    let bad_sigma_claim = proof_negative::claim(sources, &device_c, &claim);
     assert_eq!(c.snapshot().unwrap(), c_before_negative);
     assert_eq!(
         device_c.platform.with(|state| state.sign_calls),
@@ -1492,7 +1674,7 @@ fn finish_unload(
         &output.join("c-unload-bad-sigma-claim.norito"),
         &bad_sigma_claim,
     );
-    let message_envelopes = message_census::retain(
+    let (message_envelopes, payer_companions) = message_census::retain(
         &output,
         &sources,
         [(&request_ab, &companion_ab), (&request_bc, &companion_bc)],
@@ -1542,7 +1724,7 @@ fn finish_unload(
         .collect::<Vec<_>>();
     let result = norito::json!({ "schema": "iroha.kagemusha.native-abc-result.v1",
         "source_pins": (source_pins()), "binary_sha256": (executable_hash()),
-        "target_sha256": (sha(&target_bytes)), "native_unload_payout": "100",
+        "target_sha256": (sha(target_bytes)), "native_unload_payout": "100",
         "executed_ledger_setup_sha256": (setup.manifest_sha256),
         "a_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f.account).unwrap())),
         "b_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f_b.account).unwrap())),
@@ -1556,6 +1738,7 @@ fn finish_unload(
         "archive_receive_folded": true, "archive_status_folded": true,
         "archive_exact_replay_after_restart": true, "archive_originals": archive_originals,
         "message_envelopes": message_envelopes,
+        "payer_companions": payer_companions,
         "b_final_credit_status": b_final_credit_status,
         "ledger_settlement_executed": false, "physical_device_qualified": false,
         "scope": "Real installed proof source, finalized receipt proof, native host custody, exact replay and local folds; simulated hardware. Exported Unload claim still requires actual ledger execution and replay qualification." });

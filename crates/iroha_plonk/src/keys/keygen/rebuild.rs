@@ -319,7 +319,7 @@ pub fn keygen_pk_from_vk_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>
         params,
         synthesized,
         verifier,
-        profile,
+        &profile,
         coset_cache,
         cancellation,
     )
@@ -327,7 +327,7 @@ pub fn keygen_pk_from_vk_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>
 
 /// Check immutable seal, verifier and parameter identities before any witness allocation.
 /// The returned profile carries no new source authority; source tables are still checked.
-pub(crate) fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
+pub fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
     params: &PinnedParams<C>,
     verifier: &SourceBoundViewV2<'_, C>,
     coset_cache: CosetCachePolicy,
@@ -367,7 +367,7 @@ pub(crate) fn validate_rebuild_profile_v2_cancellable<C: PastaCurve>(
 /// Reconstruct from one completed synthesis after its advice moved to a wiping owner.
 /// This repeats immutable preflight rather than trusting the caller's earlier check.
 /// Exact descriptor, fixed/selector/copy/sigma and opaque seal checks are unchanged.
-pub(crate) fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
+pub fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
     params: &PinnedParams<C>,
     synthesized: crate::frontend::Synthesized<C::ScalarExt>,
     verifier: &SourceBoundViewV2<'_, C>,
@@ -381,20 +381,52 @@ pub(crate) fn keygen_pk_from_synthesized_v2_cancellable<C: PastaCurve>(
         params,
         synthesized,
         verifier,
-        profile,
+        &profile,
         coset_cache,
         cancellation,
     )
 }
 
-fn rebuild_checked_synthesis<C: PastaCurve>(
+/// Check a circuit's complete witnessless source against an admitted seal.
+///
+/// This is the comparison every proof-time rebuild makes, without its FFTs or
+/// proving buffers and with no commitment MSMs. An installation can therefore
+/// refuse a circuit that differs from its installed key when admitting it,
+/// instead of at that circuit's first proof.
+///
+/// # Errors
+/// Another source ([`RebuildError::Source`]), parameter, descriptor or verifier
+/// identity ([`RebuildError::Profile`]), native preparation errors, or cancellation.
+pub fn check_source_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    verifier: &SourceBoundViewV2<'_, C>,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), RebuildError> {
+    let profile = validate_rebuild_profile_v2_cancellable(
+        params,
+        verifier,
+        CosetCachePolicy::OnDemand,
+        cancellation,
+    )?;
+    let synthesized = crate::frontend::synthesize_cancellable(
+        &circuit.without_witnesses(),
+        params.k(),
+        None,
+        cancellation,
+    )
+    .map_err(KeyError::from)?;
+    prepare_checked_source(params, synthesized, verifier, &profile, cancellation).map(drop)
+}
+
+// The one source comparison shared by proof-time rebuilds and admission checks.
+fn prepare_checked_source<C: PastaCurve>(
     params: &PinnedParams<C>,
     synthesized: crate::frontend::Synthesized<C::ScalarExt>,
     verifier: &SourceBoundViewV2<'_, C>,
-    profile: KeygenConfigV2,
-    coset_cache: CosetCachePolicy,
+    profile: &KeygenConfigV2,
     cancellation: Option<&CancellationToken>,
-) -> Result<ProvingKey<C>, RebuildError> {
+) -> Result<Prepared<C::ScalarExt>, RebuildError> {
     CancellationToken::checkpoint(cancellation)?;
     if synthesized.tables.k() != params.k() {
         return Err(RebuildError::Profile);
@@ -407,7 +439,7 @@ fn rebuild_checked_synthesis<C: PastaCurve>(
         selectors,
         &permutation,
         &profile.layout_options(),
-        Some(&profile),
+        Some(profile),
         cancellation,
     )?;
     drop(permutation);
@@ -429,6 +461,18 @@ fn rebuild_checked_synthesis<C: PastaCurve>(
     {
         return Err(RebuildError::Source);
     }
+    Ok(prepared)
+}
+
+fn rebuild_checked_synthesis<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    synthesized: crate::frontend::Synthesized<C::ScalarExt>,
+    verifier: &SourceBoundViewV2<'_, C>,
+    profile: &KeygenConfigV2,
+    coset_cache: CosetCachePolicy,
+    cancellation: Option<&CancellationToken>,
+) -> Result<ProvingKey<C>, RebuildError> {
+    let prepared = prepare_checked_source(params, synthesized, verifier, profile, cancellation)?;
     CancellationToken::checkpoint(cancellation)?;
     ProvingKey::new_cancellable(
         (*verifier.key).clone(),

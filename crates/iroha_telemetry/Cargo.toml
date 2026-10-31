@@ -74,7 +74,7 @@ tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls
 url = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 prometheus = { workspace = true }
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
+reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }

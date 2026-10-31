@@ -80,7 +80,7 @@ impl Drop for ChangedHistory {
 
 #[test]
 fn native_pin_outbox_history_failure_has_no_output_gas_fee_or_applied_overlay() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     for kind in ["missing", "corrupt"] {
         physical_failure_and_retry(kind);
     }
@@ -89,7 +89,7 @@ fn native_pin_outbox_history_failure_has_no_output_gas_fee_or_applied_overlay() 
 #[cfg(unix)]
 #[test]
 fn native_pin_outbox_fifo_history_defers_without_reading_or_charging() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     physical_failure_and_retry("fifo");
 }
 
@@ -150,7 +150,7 @@ fn physical_failure_and_retry(kind: &str) {
 
 #[test]
 fn signed_wrong_floor_hash_is_rejected_before_unavailable_history_and_charged_normally() {
-    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    let _fee_guard = crate::status::operator_status_test_guard();
     let (state, asset) = priced_fixture(None);
     let mut wrong = check(&state);
     wrong.floor.block_hash = [0xe1; 32];

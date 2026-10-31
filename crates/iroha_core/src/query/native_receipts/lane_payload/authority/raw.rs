@@ -106,9 +106,7 @@ impl<'a> RawAuthority<'a> {
         // Clock- and key-policy fields remain authenticated original bytes; no allocation is
         // necessary to hash their exact canonical representation into the pinned context.
         let (count, members) = sequence(values[5])?;
-        if !iroha_data_model::block::consensus::is_valid_committee_size(count)
-            || count > members.len()
-        {
+        if !iroha_model_base::topology::is_valid_committee_size(count) || count > members.len() {
             return Err(LanePayloadError::Source);
         }
         let result = Self {

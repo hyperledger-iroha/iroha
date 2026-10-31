@@ -136,7 +136,7 @@ macro_rules! mount_authenticated_asset_holder_routes {
 #[cfg(feature = "app_api")]
 fn add_authenticated_application_compute_routes(
     builder: &mut RouterBuilder,
-    app_state: SharedAppState,
+    app_state: &SharedAppState,
     max_body_bytes: usize,
 ) {
     builder.route(
@@ -225,7 +225,7 @@ mod application_account_auth_tests {
             "owner PRF route authentication regression",
         );
         let account = iroha_data_model::account::AccountId::new(key.public_key().clone());
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
         let router_for_body_limit = |max_body_bytes| {
@@ -242,7 +242,7 @@ mod application_account_auth_tests {
                 EnabledFeatures::new(&["app_api"]),
             )
             .expect("owner PRF route catalog");
-            add_authenticated_application_compute_routes(&mut builder, app.clone(), max_body_bytes);
+            add_authenticated_application_compute_routes(&mut builder, &(app), max_body_bytes);
             let (router, _) = builder
                 .finish()
                 .expect("exact production authentication policies");
@@ -422,3 +422,18 @@ define_optional_dataspace_application_query_mount!(
     ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST,
     handler_account_history_query
 );
+#[cfg(feature = "app_api")]
+fn mount_asset_movements_query(
+    builder: &mut RouterBuilder,
+    app_state: SharedAppState,
+    max_body_bytes: usize,
+) {
+    builder.route(
+        &route_catalog::application_api::ASSETS_BY_DEFINITION_ID_MOVEMENTS_QUERY_POST,
+        optional_dataspace_application_query!(
+            routing::asset_movements::handler_query,
+            app_state,
+            max_body_bytes
+        ),
+    );
+}

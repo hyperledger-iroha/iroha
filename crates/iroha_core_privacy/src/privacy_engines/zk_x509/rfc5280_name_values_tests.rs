@@ -28,7 +28,7 @@ fn name_values_transition_matches_independent_unicode_and_printable_policy() {
     for first in 0..=255u8 {
         for bytes in [&[first][..], &[first, 0][..]] {
             for last in 0..if bytes.len() == 1 { 1 } else { 256 } {
-                let pair = [first, last as u8];
+                let pair = [first, u8::try_from(last).expect("fixture value fits u8")];
                 let input = &pair[..bytes.len()];
                 let expected = core::str::from_utf8(input).is_ok_and(|s| {
                     !s.chars()
@@ -120,10 +120,11 @@ fn name_values_actual_complete_census_binds_bytes_nodes_oid_and_profile_at_both_
                 ),
                 [E::ZERO; name_values::RESIDUES]
             );
-            let source = trace.documents[row[BASE_DOCUMENT].0 as usize].bytes
-                [row[BASE_ADDRESS].0 as usize]
-                .value
-                .value;
+            let source = trace.documents
+                [usize::try_from(row[BASE_DOCUMENT].0).expect("fixture value fits usize")]
+            .bytes[usize::try_from(row[BASE_ADDRESS].0).expect("fixture value fits usize")]
+            .value
+            .value;
             assert_eq!(row[BASE_VALUE], source);
             // Independently retain the old mathematical zero/inverse values at
             // the actual private country, first-byte and last-byte boundaries.
@@ -137,8 +138,8 @@ fn name_values_actual_complete_census_binds_bytes_nodes_oid_and_profile_at_both_
             assert_eq!(
                 name_values::byte_multiplicity(
                     &trace,
-                    row[BASE_DOCUMENT].0 as usize,
-                    row[BASE_ADDRESS].0 as usize
+                    usize::try_from(row[BASE_DOCUMENT].0).expect("fixture value fits usize"),
+                    usize::try_from(row[BASE_ADDRESS].0).expect("fixture value fits usize")
                 ),
                 1
             );
@@ -148,17 +149,23 @@ fn name_values_actual_complete_census_binds_bytes_nodes_oid_and_profile_at_both_
                     .profile_byte_table
                     .iter()
                     .any(|e| e.purpose == name_values::PURPOSE
-                        && e.variant == row[BASE_ENDPOINT_ROLE].0 as u16
-                        && e.offset == row[BASE_OFFSET].0 as u16
-                        && e.length == row[BASE_B].0 as u16
-                        && e.expected == row[BASE_VALUE].0 as u8)
+                        && e.variant
+                            == u16::try_from(row[BASE_ENDPOINT_ROLE].0)
+                                .expect("fixture value fits u16")
+                        && e.offset
+                            == u16::try_from(row[BASE_OFFSET].0).expect("fixture value fits u16")
+                        && e.length
+                            == u16::try_from(row[BASE_B].0).expect("fixture value fits u16")
+                        && e.expected
+                            == u8::try_from(row[BASE_VALUE].0).expect("fixture value fits u8"))
             );
             if row[BASE_IS_WRITE] == F::ONE {
                 first_count += 1;
                 let node_position = material.schedule.starts
                     [ZkX509Rfc5280StarkFamilyV1::SourceNode as usize]
-                    + row[BASE_DOCUMENT].0 as usize * 2048
-                    + row[BASE_NODE].0 as usize;
+                    + usize::try_from(row[BASE_DOCUMENT].0).expect("fixture value fits usize")
+                        * 2048
+                    + usize::try_from(row[BASE_NODE].0).expect("fixture value fits usize");
                 let node = material.base_row(node_position).unwrap();
                 assert_eq!(node[BASE_INVERSE], F::ONE);
                 let oid = (0..material.family_rows[ZkX509Rfc5280StarkFamilyV1::FixedByte as usize]
@@ -210,8 +217,8 @@ fn name_values_constructor_rejects_original_country_control_tag_length_and_oid_c
         })
         .find(|r| r[BASE_IS_WRITE] == F::ONE && r[BASE_G] == F::ZERO)
         .unwrap();
-    let document = first[BASE_DOCUMENT].0 as usize;
-    let node_id = first[BASE_NODE].0 as u16;
+    let document = usize::try_from(first[BASE_DOCUMENT].0).expect("fixture value fits usize");
+    let node_id = u16::try_from(first[BASE_NODE].0).expect("fixture value fits u16");
     for mutation in 0..7 {
         let mut changed = trace.clone();
         let node = changed.semantic_provenance[document]
@@ -310,7 +317,7 @@ fn name_values_boundaries_metadata_and_coherent_byte_node_oid_shadows_are_reject
     } else {
         F(u64::from(b'X'))
     };
-    let shadow_byte = shadow[BASE_VALUE].0 as u8;
+    let shadow_byte = u8::try_from(shadow[BASE_VALUE].0).expect("fixture value fits u8");
     write_u8_bits_v1(&mut shadow, BASE_BYTE_BITS, shadow_byte);
     populate_degree_normalization_helpers_v1(&mut shadow, &fixed);
     assert_eq!(

@@ -53,6 +53,8 @@ pub enum CallTypeNodeV1 {
     SecretNumeric(u16),
     /// Exact ordinary enum identity and permitted enum-local codes.
     Enum(ContractEnumTypeDescriptorV1),
+    /// Invocation-local signed action ordinal; carries no authorization or result authority.
+    PendingAction,
 }
 impl CallTypeNodeV1 {
     /// Number of inline child subtrees immediately following this node.
@@ -106,6 +108,7 @@ impl FlatTypeNodeV1 for CallTypeNodeV1 {
             | Self::Error(_)
             | Self::Enum(_)
             | Self::StateRoot
+            | Self::PendingAction
             | Self::Pointer(_)
             | Self::SecretNumeric(_) => TypeNodeViewV1::Other,
         }

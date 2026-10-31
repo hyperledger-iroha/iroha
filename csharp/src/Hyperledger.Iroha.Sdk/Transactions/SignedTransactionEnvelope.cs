@@ -62,6 +62,21 @@ public sealed class SignedTransactionEnvelope
         }
     }
 
+    // Only a verified native producer calls this. The constructor rechecks the public wire projections.
+    internal static SignedTransactionEnvelope FromNativeSignedBytes(byte[] wire)
+    {
+        ArgumentNullException.ThrowIfNull(wire);
+        if (wire.Length is < 2 or > 10 * 1024 * 1024 || wire[0] != SupportedSignedTransactionVersion)
+            throw new ArgumentException("Invalid current native signed transaction.", nameof(wire));
+        var signed = wire.AsSpan(1).ToArray();
+        var reader = new CanonicalNoritoReader(signed, "Native signed transaction", nameof(wire));
+        _ = reader.ReadField("signature");
+        var payload = reader.ReadField("payload").ToArray();
+        _ = reader.ReadField("multisig_signatures");
+        reader.RequireEnd();
+        return new SignedTransactionEnvelope(wire, signed, payload, ComputeTransactionHash(payload));
+    }
+
     public byte[] VersionedNoritoBytes => versionedNoritoBytes.ToArray();
 
     public byte[] SignedTransactionBytes => signedTransactionBytes.ToArray();

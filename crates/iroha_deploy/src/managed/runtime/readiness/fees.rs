@@ -101,8 +101,9 @@ pub(super) fn select(
         if table.contains_key("extends") {
             return Err(invalid());
         }
-        let mut config = crate::localnet::parse_localnet_peer_config(text, Some(&peer.config_path))
-            .map_err(|_| invalid())?;
+        let mut config =
+            crate::sora_network::parse_localnet_peer_config(text, Some(&peer.config_path))
+                .map_err(|_| invalid())?;
         if private {
             // Match native --sora source selection, preserving explicit even-default geometry.
             iroha_config::sora_profile::SoraProfileSelection::from_table(&table).apply(&mut config);

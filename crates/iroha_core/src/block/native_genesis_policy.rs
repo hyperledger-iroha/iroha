@@ -1,5 +1,9 @@
 // The sole native genesis execution must reproduce every signed deterministic policy.
 impl ValidBlock {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn validate_native_genesis_policy(
         block: &SignedBlock,
         state: &StateBlock<'_>,
@@ -77,7 +81,10 @@ impl ValidBlock {
         }
         let actual_execution = crate::sumeragi::staged_genesis_execution_policy_hash(state)
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
-        let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);
+        // Retain the exact derived context: a refusal then carries the fields it differs in.
+        let actual_nexus = iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+            crate::sumeragi::staged_genesis_nexus_amx_context_preimage(state),
+        );
         Self::require_native_genesis_policy(
             Hash::prehashed(metadata.sumeragi_context.execution_policy_hash),
             actual_execution,
@@ -109,18 +116,24 @@ impl ValidBlock {
         Ok(())
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     fn require_native_genesis_policy(
         expected_execution: Hash,
         actual_execution: Hash,
         expected_nexus: Hash,
-        actual_nexus: Hash,
+        actual_nexus_preimage: iroha_data_model::nexus::NexusAmxContextPreimageV1,
     ) -> Result<(), BlockValidationError> {
+        let actual_nexus = actual_nexus_preimage.hash();
         if expected_execution != actual_execution || expected_nexus != actual_nexus {
             return Err(BlockValidationError::GenesisPolicyMismatch {
                 expected_execution,
                 actual_execution,
                 expected_nexus,
                 actual_nexus,
+                actual_nexus_preimage,
             });
         }
         Ok(())
@@ -131,43 +144,86 @@ impl ValidBlock {
 mod native_genesis_policy_tests {
     use super::*;
 
+    fn explicit_staking_config() -> crate::sumeragi::test_chain::TestChainConfig {
+        use iroha_data_model::{
+            asset::AssetDefinitionId, block::consensus::PublicLaneStakingPolicy,
+            parameter::Parameter,
+        };
+        let mut config =
+            crate::sumeragi::test_chain::TestChainConfig::new(crate::state::World::new(), 1_000);
+        // Author the monetary policy in the signed original parameter vector; these
+        // policy references do not assert that any account or stake is funded.
+        let staking = PublicLaneStakingPolicy {
+            min_validator_stake: 1_000_u64.into(),
+            max_stake_shares_per_validator: std::num::NonZeroU32::new(7).unwrap(),
+            max_pending_unbonds_per_share: std::num::NonZeroU32::new(3).unwrap(),
+            unbonding_delay_ms: 43_210,
+            max_slash_bps: 1_001,
+            stake_asset_id: AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("app.acme").unwrap(),
+                "stake".parse().unwrap(),
+            ),
+            stake_escrow_account_id: iroha_test_samples::ALICE_ID.clone(),
+            slash_sink_account_id: iroha_test_samples::BOB_ID.clone(),
+        };
+        let mut original_slots = config.genesis_parameters.iter_mut().filter(|parameter| {
+            matches!(parameter, Parameter::Custom(custom)
+                if custom.id() == &PublicLaneStakingPolicy::parameter_id())
+        });
+        let slot = original_slots
+            .next()
+            .expect("the fixture authors one staking policy");
+        *slot = Parameter::Custom(staking.into_custom_parameter().unwrap());
+        assert!(
+            original_slots.next().is_none(),
+            "one canonical staking authority"
+        );
+        config
+    }
+
     #[test]
     fn signed_genesis_requires_both_exact_policy_commitments() {
+        use iroha_data_model::nexus::NexusAmxContextPreimageV1;
         let execution = Hash::new(b"original execution policy");
-        let nexus = Hash::new(b"original Nexus policy");
+        let nexus = NexusAmxContextPreimageV1::new(b"original Nexus policy".to_vec());
         assert!(
-            ValidBlock::require_native_genesis_policy(execution, execution, nexus, nexus).is_ok()
+            ValidBlock::require_native_genesis_policy(
+                execution,
+                execution,
+                nexus.hash(),
+                nexus.clone()
+            )
+            .is_ok()
         );
-        let foreign = Hash::new(b"substituted policy");
-        for (actual_execution, actual_nexus) in
-            [(foreign, nexus), (execution, foreign), (foreign, foreign)]
-        {
+        let foreign_execution = Hash::new(b"substituted policy");
+        let foreign_nexus = NexusAmxContextPreimageV1::new(b"substituted policy".to_vec());
+        for (actual_execution, actual_nexus) in [
+            (foreign_execution, nexus.clone()),
+            (execution, foreign_nexus.clone()),
+            (foreign_execution, foreign_nexus),
+        ] {
             let error = ValidBlock::require_native_genesis_policy(
                 execution,
                 actual_execution,
-                nexus,
-                actual_nexus,
+                nexus.hash(),
+                actual_nexus.clone(),
             )
             .unwrap_err();
+            // The refusal retains the derived context whose hash it reports.
             assert!(
                 matches!(error, BlockValidationError::GenesisPolicyMismatch {
                 expected_execution, actual_execution: retained_execution,
-                expected_nexus, actual_nexus: retained_nexus,
-            } if expected_execution == execution && expected_nexus == nexus
-                && retained_execution == actual_execution && retained_nexus == actual_nexus)
+                expected_nexus, actual_nexus: retained_nexus, ref actual_nexus_preimage,
+            } if expected_execution == execution && expected_nexus == nexus.hash()
+                && retained_execution == actual_execution && retained_nexus == actual_nexus.hash()
+                && *actual_nexus_preimage == actual_nexus)
             );
         }
     }
 
     #[test]
     fn native_signed_genesis_ignores_local_fraud_policy_and_transport() {
-        use crate::{
-            state::World,
-            sumeragi::{
-                network_topology::Topology,
-                test_chain::{CertifiedTestChain, TestChainConfig},
-            },
-        };
+        use crate::sumeragi::{network_topology::Topology, test_chain::CertifiedTestChain};
         use iroha_config::parameters::actual::FraudMonitoring;
         use iroha_data_model::fraud::FraudRiskBandV1;
         use iroha_primitives::time::TimeSource;
@@ -182,7 +238,7 @@ mod native_genesis_policy_tests {
             },
             ..FraudMonitoring::default()
         };
-        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let mut config = explicit_staking_config();
         config.fraud_monitoring = fraud.clone();
         let authority = AccountId::new(config.genesis_key.public_key().clone());
         let mut prepared =
@@ -240,15 +296,12 @@ mod native_genesis_policy_tests {
     #[test]
     fn native_final_genesis_policy_requires_exact_executed_cadence_before_publication() {
         use crate::{
-            state::{World, WorldReadOnly as _},
-            sumeragi::{
-                network_topology::Topology,
-                test_chain::{CertifiedTestChain, TestChainConfig},
-            },
+            state::WorldReadOnly as _,
+            sumeragi::{network_topology::Topology, test_chain::CertifiedTestChain},
         };
         use iroha_primitives::time::TimeSource;
 
-        let config = TestChainConfig::new(World::new(), 1_000);
+        let config = explicit_staking_config();
         let authority = AccountId::new(config.genesis_key.public_key().clone());
         let prepared =
             CertifiedTestChain::prepare(config).expect("original signed genesis fixture");
@@ -294,12 +347,28 @@ mod native_genesis_policy_tests {
             staking: crate::sumeragi::evidence::prepare(&prepared.state, genesis, generation)
                 .expect("the original authenticated genesis staking inputs"),
         };
-        let (mut staged, _recording) =
-            ValidBlock::state_block_for_execution(genesis, &prepared.state, source, &profile)
-                .expect("the original pristine genesis execution owner");
-        staged.request_sumeragi_lanes(profile.take_sumeragi_lanes().unwrap());
         let authenticated = authenticate_genesis_block_intents(genesis, &authority)
             .expect("the same original signed genesis inputs");
+        let mut genesis_policies = Some(
+            authenticated
+                .initial_policies(genesis)
+                .expect("both original signed genesis policies"),
+        );
+        let (mut staged, _recording) = ValidBlock::state_block_for_execution(
+            genesis,
+            &prepared.state,
+            source,
+            &profile,
+            &mut genesis_policies,
+            None,
+            None,
+        )
+        .expect("the original pristine genesis execution owner");
+        assert!(
+            genesis_policies.is_none(),
+            "installation moves both original policy owners"
+        );
+        staged.request_sumeragi_lanes(profile.take_sumeragi_lanes());
         staged.reserve_ordinary_execution_outputs(genesis).unwrap();
         staged
             .execute_ordinary_output_plan(genesis, Some(&authenticated))
@@ -318,10 +387,12 @@ mod native_genesis_policy_tests {
         let changed =
             std::num::NonZeroU64::new(original_cadence.get().checked_add(1).unwrap()).unwrap();
         {
-            let parameters = staged.world.parameters.get_mut();
-            let mut consensus = parameters.sumeragi().clone();
+            let mut consensus = staged.world.parameters.get().sumeragi().clone();
             consensus.block_cadence_ms = changed;
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         let error = ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect_err("signed metadata cannot bless a different final executed H1 cadence");
@@ -337,10 +408,12 @@ mod native_genesis_policy_tests {
         assert_eq!(prepared.state.committed_height(), 0);
         assert_eq!(prepared.kura.exact_durable_blocks_count().unwrap(), 0);
         {
-            let parameters = staged.world.parameters.get_mut();
-            let mut consensus = parameters.sumeragi().clone();
+            let mut consensus = staged.world.parameters.get().sumeragi().clone();
             consensus.block_cadence_ms = original_cadence;
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("restoring the exact original staged cadence restores acceptance");
@@ -359,19 +432,23 @@ mod native_genesis_policy_tests {
             })
             .expect("the original signed CT5 margin fits");
         {
-            let parameters = staged.world.parameters.get_mut();
             let mut consensus = original_clock.clone();
             consensus.due_work_max_lag_ms = std::num::NonZeroU64::new(minimum_lag).unwrap();
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("the exact combined CT5 margin is valid before publication");
         let below_minimum = minimum_lag.checked_sub(1).unwrap();
         {
-            let parameters = staged.world.parameters.get_mut();
             let mut consensus = original_clock.clone();
             consensus.due_work_max_lag_ms = std::num::NonZeroU64::new(below_minimum).unwrap();
-            parameters.set_sumeragi(consensus);
+            staged
+                .world
+                .set_sumeragi_for_testing(consensus)
+                .expect("retain the explicitly staged consensus fixture");
         }
         let error = ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect_err("the final executed policy must preserve the combined CT5 margin");
@@ -390,9 +467,8 @@ mod native_genesis_policy_tests {
         assert_eq!(prepared.kura.exact_durable_blocks_count().unwrap(), 0);
         staged
             .world
-            .parameters
-            .get_mut()
-            .set_sumeragi(original_clock);
+            .set_sumeragi_for_testing(original_clock)
+            .expect("restore the original staged consensus fixture");
         ValidBlock::validate_native_genesis_policy(genesis, &staged)
             .expect("the exact original signed execution remains valid after the negative probe");
         assert_eq!(prepared.state.committed_height(), 0);
@@ -400,13 +476,7 @@ mod native_genesis_policy_tests {
     }
     #[test]
     fn native_h1_rejects_missing_or_duplicate_original_root_fee_slots() {
-        use crate::{
-            state::World,
-            sumeragi::{
-                network_topology::Topology,
-                test_chain::{CertifiedTestChain, TestChainConfig},
-            },
-        };
+        use crate::sumeragi::{network_topology::Topology, test_chain::CertifiedTestChain};
         use iroha_data_model::{
             block::consensus::{RootFeePolicy, SumeragiRootScope},
             isi::SetParameter,
@@ -417,7 +487,7 @@ mod native_genesis_policy_tests {
         use std::sync::Arc;
 
         for copies in [0_usize, 2] {
-            let config = TestChainConfig::new(World::new(), 1_000);
+            let config = explicit_staking_config();
             let key = config.genesis_key.clone();
             let authority = AccountId::new(key.public_key().clone());
             let mut prepared = CertifiedTestChain::prepare(config).unwrap();
@@ -491,7 +561,9 @@ mod native_genesis_policy_tests {
                 Err((_, error)) => error,
             };
             let expected = if copies == 0 {
-                "signed genesis omits its root fee policy"
+                // Schedule finalization validates the executed policy before the
+                // later original-instruction cardinality check can run.
+                "invalid native epoch: executed genesis fee policy is invalid: committed root fee policy is absent"
             } else {
                 "signed genesis must execute exactly one original root fee policy"
             };

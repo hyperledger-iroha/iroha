@@ -28,7 +28,9 @@ impl Census {
         Self
     }
     fn finish(self) -> Vec<usize> {
-        CLEARS.with(|slot| slot.borrow_mut().take().unwrap())
+        let cleared = CLEARS.with(|slot| slot.borrow_mut().take().unwrap());
+        drop(self);
+        cleared
     }
 }
 impl Drop for Census {
@@ -143,6 +145,44 @@ fn malformed_alignment_missing_duplicate_and_trailing_frontiers_fail_closed() {
 }
 
 #[test]
+fn retained_subtree_tiles_preserve_nonzero_tree_levels_and_reject_bad_spans() {
+    let values = leaves(2 * TILE_ROWS);
+    let tree = PrivacyOuterMerkleTreeV1::from_leaves(values.clone(), context(), NODE).unwrap();
+    for level in [0, 1, 2, 4] {
+        let mut acc = accumulator(values.len(), &[]);
+        let mut roots = Vec::new();
+        for (index, chunk) in values.chunks(1 << level).enumerate() {
+            let mut nodes = chunk.to_vec();
+            assert_eq!(
+                reduce_tile_at_level_v1(&mut acc, &mut nodes, index << level, 0, None).unwrap(),
+                level
+            );
+            roots.push(nodes[0]);
+        }
+        append_retained_subtrees_v1(&mut acc, &roots, level).unwrap();
+        assert_eq!(acc.finish().unwrap().root, tree.root());
+    }
+    for (first, level, count) in [
+        (1, 1, 2),
+        (0, usize::BITS as usize, 1),
+        (8, 1, 1),
+        (0, 1, 3),
+    ] {
+        let mut acc = accumulator(8, &[]);
+        let mut nodes = values[..count].to_vec();
+        let before = nodes.clone();
+        assert!(reduce_tile_at_level_v1(&mut acc, &mut nodes, first, level, None).is_err());
+        assert_eq!(nodes, before);
+        assert_eq!(acc.next_leaf, 0);
+    }
+    for count in [0, 3] {
+        assert!(
+            append_retained_subtrees_v1(&mut accumulator(8, &[]), &values[..count], 1).is_err()
+        );
+    }
+}
+
+#[test]
 fn digest_tile_clears_success_early_error_and_unwind_and_rejects_nested_census() {
     let census = Census::begin();
     {
@@ -191,7 +231,9 @@ fn worker_errors_choose_lowest_position_and_failed_rows_release_no_commitment() 
                     .reduce(|| None, first_error_v1)
             });
         assert_eq!(actual, Some((3, AggregateStarkErrorV1::NonCanonicalField)));
-        let catalog = context().catalog_v1();
+        let catalog =
+            crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1(
+            );
         let domain = context()
             .domain_v1(&catalog, b"leaf", b"vector-row-leaf", 0, 0, 0)
             .unwrap();
@@ -228,7 +270,7 @@ fn parallel_partial_finalization_clears_tile_on_worker_error_and_worker_panic() 
                 .build()
                 .unwrap()
                 .install(|| {
-                    let catalog = context().catalog_v1();
+                    let catalog = crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::catalog_v1();
                     let domain = context()
                         .domain_v1(&catalog, b"leaf", b"rows", 0, 0, 0)
                         .unwrap();
@@ -238,7 +280,7 @@ fn parallel_partial_finalization_clears_tile_on_worker_error_and_worker_panic() 
                             let mut stream = prefix
                                 .last_field_stream_at_with_counter(i, 0, &[], 8)
                                 .unwrap();
-                            stream.update(&[i as u8; 8]).unwrap();
+                            stream.update(&[i.to_le_bytes()[0]; 8]).unwrap();
                             stream
                         })
                         .collect::<Vec<_>>();
@@ -307,9 +349,10 @@ fn bounded_workspace_shape_and_released_replay_reservation_are_explicit() {
 #[test]
 #[ignore = "native22 byte-exact scalar/tree frontier and row-finalize stage diagnostic; run --release"]
 fn native22_streamed_hash_prefix_and_tile_match_scalar_tree_with_stage_timings() {
-    crate::test_support::require_no_debug_assertions("run with --release");
     const ROWS: usize = 1 << 22;
     const WIDTH: usize = 8;
+
+    crate::test_support::require_no_debug_assertions("run with --release");
     let columns = (0..WIDTH)
         .map(|c| {
             (0..ROWS)

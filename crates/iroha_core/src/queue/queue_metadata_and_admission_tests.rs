@@ -49,7 +49,12 @@ fn queue_reuses_gossip_payload_without_side_cache() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+    let admission_policy =
+        iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("explicit stateless queue fixture policy");
     let tx = AcceptedTransaction::accept_gossip_entrypoint_with_payload_and_prepared_metadata(
         entrypoint,
         Arc::clone(&payload),
@@ -57,7 +62,7 @@ fn queue_reuses_gossip_payload_without_side_cache() {
         &queue_test_network_id(),
         Duration::from_millis(10),
         tx_limits,
-        &crypto_cfg,
+        &admission_policy,
         None,
         false,
     )
@@ -456,7 +461,9 @@ async fn push_rejects_without_governance_manifest() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     let result = queue.push(accepted_tx_by_someone(&time_source), state.view());
     assert!(matches!(
         result,
@@ -488,7 +495,7 @@ fn accepted_uaid_dataspace_tx(
         .by_id(dataspace)
         .expect("fixture target dataspace exists")
         .alias;
-    let target = DomainId::try_new(&unique_test_domain_name("uaid"), alias)
+    let target = DomainId::try_new(unique_test_domain_name("uaid"), alias)
         .expect("domain in the actual configured target dataspace");
     let tx = accepted_tx_with(
         account.clone(),
@@ -517,6 +524,7 @@ async fn uaid_without_dataspace_binding_is_rejected() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
     let dataspace = DataSpaceId::new(7);
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
+    let world = world_with_explicit_queue_fees(world, zero_rate_routing_fees());
     let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -566,7 +574,9 @@ async fn uaid_without_dataspace_binding_is_rejected() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     let result = queue.push(
         accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
@@ -627,6 +637,7 @@ async fn uaid_binding_allows_lane_identity_extraction() {
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::bound"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
+    let world = world_with_explicit_queue_fees(world, zero_rate_routing_fees());
     let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -676,7 +687,9 @@ async fn uaid_binding_allows_lane_identity_extraction() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests_for_testing(&manifests);
+    queue
+        .install_lane_manifests_for_testing(&manifests, &state.ivm_execution_budget())
+        .expect("original fixture pool admits privacy projection");
     queue
         .push(
             accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
@@ -723,7 +736,7 @@ async fn uaid_binding_allows_matching_dataspace() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::aligned"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
     let state = Arc::new(State::new_with_nexus_for_testing(
-        world,
+        world_with_explicit_queue_fees(world, zero_rate_routing_fees()),
         test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
         LiveQueryStore::start_test(),
     ));
@@ -764,7 +777,7 @@ async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
     set.upsert(inactive);
     world.space_directory_manifests.insert(uaid, set);
     let state = Arc::new(State::new_with_nexus_for_testing(
-        world,
+        world_with_explicit_queue_fees(world, zero_rate_routing_fees()),
         test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
         LiveQueryStore::start_test(),
     ));

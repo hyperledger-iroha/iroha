@@ -24,7 +24,7 @@ use super::*;
 const MAX_CHECKPOINTS: usize = 256;
 
 /// One original completed native prefix with independent persistent custody.
-pub(crate) struct PrefixCheckpoint {
+pub struct PrefixCheckpoint {
     height: u64,
     block_hash: HashOf<IrohaHeader>,
     wire: (u64, Hash),
@@ -57,7 +57,7 @@ impl PrefixCheckpoint {
 
 /// Bounded sorted storage; exact fixed capacity and every shared entry are prepaid.
 #[derive(Default)]
-pub(crate) struct FinalityPrefixCheckpoints {
+pub struct FinalityPrefixCheckpoints {
     entries: parking_lot::Mutex<Option<ChargedBuffer<ChargedShared<PrefixCheckpoint>>>>,
 }
 impl FinalityPrefixCheckpoints {
@@ -197,7 +197,7 @@ fn admit_schedule_clone(
     Ok(())
 }
 
-impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
+impl QueryCertifiedChain<'_> {
     pub(crate) fn configure_query_cache(&self, owner: QueryCacheOwner) {
         *self.query_cache.lock() = Some(owner);
     }
@@ -217,7 +217,6 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
         checkpoint: &ChargedShared<PrefixCheckpoint>,
     ) -> Result<bool, ExecutionAttemptError<ChainReadError>> {
         if self.proof_source_genesis.is_none()
-            || self.terminal.is_some()
             || checkpoint.height <= GENESIS_HEIGHT
             || checkpoint.instance != self.instance
             || checkpoint.root_scope != self.root_scope
@@ -249,8 +248,9 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
         let tip =
             read_frame_with_validation(block, checkpoint.height, self.root_scope, &mut validation)?;
         admit_schedule_clone(checkpoint.schedule.canonical(), checkpoint.height)?;
-        *cursor = Some(VerifiedPrefix {
-            tip,
+        *cursor = Some(query_reader::QueryPrefix {
+            tip: ParentProjection::from_original(&tip),
+            wire: checkpoint.wire,
             schedule: checkpoint.schedule.canonical().clone(),
             authority: PrefixAuthority::Retained(checkpoint.authority.clone()),
             validation,
@@ -262,7 +262,7 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
         &self,
         parent_source: Hash,
     ) -> Result<Option<ChargedShared<PrefixCheckpoint>>, ExecutionDeferred> {
-        if self.proof_source_genesis.is_none() || self.terminal.is_some() {
+        if self.proof_source_genesis.is_none() {
             return Ok(None);
         }
         let budget = {
@@ -280,9 +280,7 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
         let Some(proof_source) = prefix.proof_source else {
             return Ok(None);
         };
-        let Some(wire) = prefix.tip.block().canonical_wire_identity().ok() else {
-            return Ok(None);
-        };
+        let wire = prefix.wire;
         if height <= GENESIS_HEIGHT
             || proof_source_append(parent_source, height, wire.0, wire.1) != proof_source
         {
@@ -303,7 +301,7 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
             .map_err(schedule_refusal)?;
         let value = PrefixCheckpoint {
             height,
-            block_hash: prefix.tip.block_hash(),
+            block_hash: prefix.tip.iroha_hash,
             wire,
             schedule,
             authority,

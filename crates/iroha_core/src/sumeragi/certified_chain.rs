@@ -107,6 +107,8 @@ const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
 mod amx_initialization;
 pub(in crate::sumeragi) mod artifacts;
 mod native_acquisition;
+mod successor_context;
+pub(crate) use successor_context::SuccessorContextPreparation;
 mod prefix_checkpoints;
 mod retained_query_authority;
 pub(crate) use retained_query_authority::QueryCacheOwner;
@@ -116,9 +118,14 @@ pub(crate) use retained_query_authority::{
     query_authority_shell_layout, with_refused_query_authority_shell,
 };
 mod query_reader;
+pub(crate) use query_reader::{
+    QueryCertifiedChain, native_finality_authority_bytes, native_finality_source_control_bytes,
+};
+mod query_projection;
 pub(crate) use amx_initialization::AmxChainInitialization;
 pub(crate) use native_acquisition::NativeCarrierAcquisition;
 pub(crate) use prefix_checkpoints::{FinalityPrefixCheckpoints, PrefixCheckpoint};
+use query_projection::{CertificateSource, CheckedFrameRef, ParentProjection, PrefixRef};
 mod terminal_selection;
 pub(crate) use artifacts::PrefixArtifacts;
 pub(super) use artifacts::{PrefixArtifactsError, PrefixArtifactsRead};
@@ -235,6 +242,10 @@ impl From<ChainReadError> for iroha_data_model::sumeragi_finality::ScheduleError
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum PrefixHeader {
     Decoded(BlockHeader),
     Funded(artifacts::metadata::FundedMetadata<BlockHeader>),
@@ -508,7 +519,26 @@ fn read_prepared_frame(
     validation: &mut EpochValidationScope,
     prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
 ) -> Result<CommittedBlock, ExecutionAttemptError<ChainReadError>> {
-    let (header, core_hash) = checked_frame_header(&block, height, prepared)?;
+    read_frame_capturing_payload(block, height, root_scope, validation, prepared, None)
+        .map(|(original, _)| original)
+}
+
+fn read_frame_capturing_payload(
+    block: iroha_data_model::block::SharedSignedBlock,
+    height: u64,
+    root_scope: SumeragiRootScope,
+    validation: &mut EpochValidationScope,
+    prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
+    capture: Option<(&iroha_allocation::AllocationBudget, usize)>,
+) -> Result<
+    (
+        CommittedBlock,
+        Option<iroha_sumeragi::availability::PayloadBytes>,
+    ),
+    ExecutionAttemptError<ChainReadError>,
+> {
+    let (header, core_hash, payload) =
+        checked_frame_header_with_payload(&block, height, prepared, capture)?;
     let certificate = block
         .commit_certificate()
         .ok_or(ChainReadError::MissingCertificate { height })?;
@@ -521,15 +551,18 @@ fn read_prepared_frame(
     )
     .map_err(|error| frame_result_error(height, error))?;
     validate_frame_result(&block, height, header.as_deref(), &commitment, validation)?;
-    Ok(CommittedBlock {
-        height,
-        block,
-        header,
-        core_hash,
-        result,
-        certified_result: commitment,
-        root_scope,
-    })
+    Ok((
+        CommittedBlock {
+            height,
+            block,
+            header,
+            core_hash,
+            result,
+            certified_result: commitment,
+            root_scope,
+        },
+        payload,
+    ))
 }
 
 // These three stages retain the original predicate order for both value and placed owners.
@@ -538,6 +571,23 @@ fn checked_frame_header(
     height: u64,
     prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
 ) -> Result<(Option<PrefixHeader>, Hash32), ExecutionAttemptError<ChainReadError>> {
+    checked_frame_header_with_payload(block, height, prepared, None)
+        .map(|(header, hash, _)| (header, hash))
+}
+
+fn checked_frame_header_with_payload(
+    block: &SignedBlock,
+    height: u64,
+    prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
+    capture: Option<(&iroha_allocation::AllocationBudget, usize)>,
+) -> Result<
+    (
+        Option<PrefixHeader>,
+        Hash32,
+        Option<iroha_sumeragi::availability::PayloadBytes>,
+    ),
+    ExecutionAttemptError<ChainReadError>,
+> {
     #[cfg(test)]
     relation_counts::frame(height);
     let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -554,38 +604,34 @@ fn checked_frame_header(
         {
             return Err(malformed("genesis carries a result-only certificate".into()).into());
         }
-        Ok((None, core_hash_of(block)))
+        Ok((None, core_hash_of(block), None))
     } else {
         let header = if let Some(header) = prepared {
             PrefixHeader::Funded(header)
         } else {
-            let header: BlockHeader = norito::core::classify_decode_attempt(|| {
-                norito::decode_canonical(certificate.consensus_header())
-            })
-            .map_err(|error| {
-                if cfg!(all(test, sumeragi_core_mutation = "HC43")) {
-                    return ExecutionAttemptError::Rejected(ChainReadError::Malformed {
-                        height,
-                        reason: error.to_string(),
-                    });
-                }
-                crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
-                    ChainReadError::Malformed {
-                        height,
-                        reason: error.to_string(),
-                    }
-                })
-            })?;
-            PrefixHeader::Decoded(header)
+            decode_original_header(certificate, height)?
         };
         let payload_len = block
             .resultless_proposal_wire_len()
             .map_err(|error| malformed(error.to_string()))?;
+        let payload = match capture {
+            Some((budget, maximum)) => Some(query_reader::capture_payload(
+                block,
+                payload_len,
+                maximum,
+                budget,
+                height,
+            )?),
+            None => None,
+        };
         let payload_hash = Hash::new_from_writer(|writer| {
             writer.write_all(TAG_PAY)?;
-            block
-                .write_resultless_proposal_wire(writer)
-                .map_err(std::io::Error::other)
+            match payload.as_ref() {
+                Some(original) => writer.write_all(original.as_slice()),
+                None => block
+                    .write_resultless_proposal_wire(writer)
+                    .map_err(std::io::Error::other),
+            }
         })
         .map_err(|error| malformed(error.to_string()))?;
         if certificate.availability().is_empty()
@@ -597,8 +643,32 @@ fn checked_frame_header(
             return Err(ChainReadError::HeaderMismatch { height }.into());
         }
         let core_hash = header.hash(&hasher);
-        Ok((Some(header), core_hash))
+        Ok((Some(header), core_hash, payload))
     }
+}
+
+fn decode_original_header(
+    certificate: &CommitCertificate,
+    height: u64,
+) -> Result<PrefixHeader, ExecutionAttemptError<ChainReadError>> {
+    let header: BlockHeader = norito::core::classify_decode_attempt(|| {
+        norito::decode_canonical(certificate.consensus_header())
+    })
+    .map_err(|error| {
+        if cfg!(all(test, sumeragi_core_mutation = "HC43")) {
+            return ExecutionAttemptError::Rejected(ChainReadError::Malformed {
+                height,
+                reason: error.to_string(),
+            });
+        }
+        crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+            ChainReadError::Malformed {
+                height,
+                reason: error.to_string(),
+            }
+        })
+    })?;
+    Ok(PrefixHeader::Decoded(header))
 }
 
 fn frame_result_error(
@@ -879,12 +949,12 @@ fn initialize_frame_admitted(
     original: &mut iroha_allocation::ChargedBuffer<CommittedBlock>,
     result_slot: &mut Option<iroha_allocation::ChargedBuffer<CertifiedResultV1>>,
     block: iroha_data_model::block::SharedSignedBlock,
-    height: u64,
-    root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    coordinates: (u64, iroha_data_model::block::consensus::SumeragiRootScope),
     validation: &mut EpochValidationScope,
     budget: &iroha_allocation::AllocationBudget,
     prepared: Option<artifacts::metadata::FundedMetadata<BlockHeader>>,
 ) -> Result<(), ExecutionAttemptError<ChainReadError>> {
+    let (height, root_scope) = coordinates;
     if !original.as_slice().is_empty() {
         return Ok(());
     }
@@ -1010,8 +1080,7 @@ impl AdmittedFrameRead {
                 .expect("original frame slot retained"),
             &mut self.result,
             block,
-            height,
-            root_scope,
+            (height, root_scope),
             validation,
             budget,
             prepared,
@@ -1145,6 +1214,10 @@ pub enum QcVerification {
 // The funded metadata owner cannot shed charges through receipt sharing. Ordinary
 // portable callers retain their existing decoded value; no funded value enters it.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Variants retain their original paid owners across suspension and retry without new unbudgeted allocations."
+)]
 enum PrefixQc {
     Decoded(Qc),
     Funded(artifacts::metadata::FundedMetadata<Qc>),
@@ -1392,10 +1465,16 @@ fn check_result_scope(
     committed: &CommittedBlock,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
-    if root_scope != SumeragiRootScope::Global && committed.certified_result().header().is_active()
-    {
+    check_projected_result_scope(CheckedFrameRef::from_original(committed), root_scope)
+}
+
+fn check_projected_result_scope(
+    frame: CheckedFrameRef<'_>,
+    root_scope: SumeragiRootScope,
+) -> Result<(), ChainReadError> {
+    if root_scope != SumeragiRootScope::Global && frame.active_result {
         return Err(ChainReadError::Malformed {
-            height: committed.height,
+            height: frame.parent.height,
             reason: CertifiedResultError::ActiveOutsideGlobal.to_string(),
         });
     }
@@ -1403,6 +1482,7 @@ fn check_result_scope(
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
+#[derive(Clone, Copy)]
 struct PrefixVerifierContext {
     instance: Hash32,
     root_scope: SumeragiRootScope,
@@ -1444,17 +1524,7 @@ impl PrefixVerifierContext {
         committed: &CommittedBlock,
         artifacts: Option<PrefixArtifacts>,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
-        self.prepare_advance_with_funding(prefix, committed, artifacts, false, None, None, None)
-    }
-
-    fn prepare_advance_query(
-        &self,
-        prefix: &mut VerifiedPrefix,
-        committed: &CommittedBlock,
-        artifacts: Option<PrefixArtifacts>,
-        cache: Option<&mut QueryCacheOwner>,
-    ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
-        self.prepare_advance_with_funding(prefix, committed, artifacts, true, cache, None, None)
+        self.prepare_advance_with_funding(prefix, committed, artifacts, (false, None), None, None)
     }
 
     fn prepare_advance_with_funding(
@@ -1462,15 +1532,37 @@ impl PrefixVerifierContext {
         prefix: &mut VerifiedPrefix,
         committed: &CommittedBlock,
         artifacts: Option<PrefixArtifacts>,
-        query: bool,
-        cache: Option<&mut QueryCacheOwner>,
+        query_cache: (bool, Option<&mut QueryCacheOwner>),
         budget: Option<&iroha_allocation::AllocationBudget>,
         pending_authority: Option<
             &mut Option<iroha_allocation::ChargedShared<funded_authority::FundedPrefixAuthority>>,
         >,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
-        let height = committed.height;
-        if committed.root_scope != prefix.tip.root_scope || !committed.extends(&prefix.tip) {
+        self.prepare_advance_source(
+            PrefixRef::from_original(prefix),
+            CertificateSource::Original(committed),
+            artifacts,
+            query_cache,
+            budget,
+            pending_authority,
+        )
+    }
+
+    fn prepare_advance_source(
+        &self,
+        prefix: PrefixRef<'_>,
+        source: CertificateSource<'_>,
+        artifacts: Option<PrefixArtifacts>,
+        query_cache: (bool, Option<&mut QueryCacheOwner>),
+        budget: Option<&iroha_allocation::AllocationBudget>,
+        pending_authority: Option<
+            &mut Option<iroha_allocation::ChargedShared<funded_authority::FundedPrefixAuthority>>,
+        >,
+    ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
+        let (query, cache) = query_cache;
+        let frame = source.frame();
+        let height = frame.parent.height;
+        if frame.parent.root_scope != prefix.tip.root_scope || !frame.extends(prefix.tip) {
             return Err(ChainReadError::Discontinuous { height }.into());
         }
         let malformed = |reason: String| ChainReadError::Committee { height, reason };
@@ -1486,7 +1578,7 @@ impl PrefixVerifierContext {
             .funded_config()
             .is_none_or(|config| config.params == scheduled.params.to_core());
         let authority = if &scheduled.epoch == prefix.authority.material() && same_parameters {
-            Clone::clone(&prefix.authority)
+            Clone::clone(prefix.authority)
         } else if let Some(budget) = budget {
             let retained = if let Some(pending) = pending_authority {
                 if let Some(original) = pending.as_ref() {
@@ -1504,7 +1596,7 @@ impl PrefixVerifierContext {
                     let original = funded_authority::FundedPrefixAuthority::admit(
                         scheduled,
                         height,
-                        &mut prefix.validation,
+                        prefix.validation,
                         budget,
                     )?;
                     // Retain the completed graph before any later scratch refusal can
@@ -1521,7 +1613,7 @@ impl PrefixVerifierContext {
                 funded_authority::FundedPrefixAuthority::admit(
                     scheduled,
                     height,
-                    &mut prefix.validation,
+                    prefix.validation,
                     budget,
                 )?
             };
@@ -1534,11 +1626,8 @@ impl PrefixVerifierContext {
             let reservation = cache
                 .as_mut()
                 .and_then(|owner| owner.reserve_authority(&scheduled.epoch));
-            let original = VerifiedAuthority::new_query(
-                scheduled.epoch.clone(),
-                height,
-                &mut prefix.validation,
-            )?;
+            let original =
+                VerifiedAuthority::new_query(scheduled.epoch.clone(), height, prefix.validation)?;
             match cache {
                 Some(owner) => owner.retain_authority(original, reservation),
                 None => PrefixAuthority::Transient(Arc::new(original)),
@@ -1547,10 +1636,10 @@ impl PrefixVerifierContext {
             PrefixAuthority::Transient(Arc::new(VerifiedAuthority::new(
                 scheduled.epoch.clone(),
                 height,
-                &mut prefix.validation,
+                prefix.validation,
             )?))
         };
-        if &committed.commitment().schedule.current != authority.material() {
+        if &frame.schedule.current != authority.material() {
             return Err(
                 malformed("result changes its authenticated incumbent context".into()).into(),
             );
@@ -1563,29 +1652,27 @@ impl PrefixVerifierContext {
             config
         } else {
             transient_config = scheduled
-                .height_config_with_validation(&mut prefix.validation)
+                .height_config_with_validation(prefix.validation)
                 .map_err(|error| malformed(error.to_string()))?;
             &transient_config
         };
         let certificate =
-            self.prepare_certificate(committed, &authority, Some(config), artifacts, budget)?;
-        verify_boundary_source(committed, &prefix.tip, authority.projection())?;
+            self.prepare_certificate_source(source, &authority, Some(config), artifacts, budget)?;
+        verify_projected_boundary_source(frame, prefix.tip, authority.projection())?;
         if query {
-            query_reader::admit_schedule(&committed.commitment().schedule, height)?;
-            query_reader::admit_height_config(&prefix.tip.commitment().schedule.current, height)?;
-            query_reader::admit_height_config(&committed.commitment().schedule.current, height)?;
+            query_reader::admit_schedule(frame.schedule, height)?;
+            query_reader::admit_height_config(prefix.authority.material(), height)?;
+            query_reader::admit_height_config(&frame.schedule.current, height)?;
         }
         let schedule = prefix
             .schedule
-            .advanced_with_validation(&committed.commitment().schedule, &mut prefix.validation)
+            .advanced_with_validation(frame.schedule, prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
         // A local byte fence is folded only after complete native authentication; it never
         // supplies finality, and failure of this pure projection merely disables reuse.
         let proof_source = prefix.proof_source.and_then(|previous| {
-            committed
-                .block()
-                .canonical_wire_identity()
-                .ok()
+            source
+                .wire_identity()
                 .map(|(length, wire)| proof_source_append(previous, height, length, wire))
         });
         Ok(PreparedAdvance {
@@ -1616,12 +1703,25 @@ impl PrefixVerifierContext {
         artifacts: Option<PrefixArtifacts>,
         budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<CertificateVerdict, ExecutionAttemptError<ChainReadError>> {
-        // Reuse the original active caller allowance before proposal and RS16 scratch
-        // allocation, as the State-tip verifier does. No scope or pool is installed here.
-        // TODO(S6): this cumulative callback does not fund the nested authority/crypto
-        // graph or provide an independent physical scratch owner for AMX relaying.
-        self.prepare_certificate_with_original_pool(
-            committed,
+        self.prepare_certificate_source(
+            CertificateSource::Original(committed),
+            authority,
+            config,
+            artifacts,
+            budget,
+        )
+    }
+
+    fn prepare_certificate_source(
+        &self,
+        source: CertificateSource<'_>,
+        authority: &PrefixAuthority,
+        config: Option<&iroha_sumeragi::types::HeightConfig>,
+        artifacts: Option<PrefixArtifacts>,
+        budget: Option<&iroha_allocation::AllocationBudget>,
+    ) -> Result<CertificateVerdict, ExecutionAttemptError<ChainReadError>> {
+        self.prepare_certificate_source_with_admission(
+            source,
             authority.projection(),
             config,
             artifacts,
@@ -1644,26 +1744,36 @@ impl PrefixVerifierContext {
         authority: AuthorityRef<'_>,
         commit_qc: &Qc,
     ) -> Result<(), ChainReadError> {
-        check_result_scope(committed, self.root_scope)?;
-        let height = committed.height;
-        let header = committed
-            .header
-            .as_ref()
-            .ok_or_else(|| ChainReadError::Malformed {
-                height,
-                reason: "genesis alone has no parent service CommitQC".into(),
-            })?;
+        self.verify_commit_qc_source(
+            CheckedFrameRef::from_original(committed),
+            authority,
+            commit_qc,
+        )
+    }
+
+    fn verify_commit_qc_source(
+        &self,
+        frame: CheckedFrameRef<'_>,
+        authority: AuthorityRef<'_>,
+        commit_qc: &Qc,
+    ) -> Result<(), ChainReadError> {
+        check_projected_result_scope(frame, self.root_scope)?;
+        let height = frame.parent.height;
+        let header = frame.header.ok_or_else(|| ChainReadError::Malformed {
+            height,
+            reason: "genesis alone has no parent service CommitQC".into(),
+        })?;
         if header.epoch != authority.epoch
             || commit_qc.epoch != authority.epoch
             || height < authority.material.authorization.first_height
             || height > authority.material.authorization.last_height
             || commit_qc.kind != VoteKind::Commit
             || commit_qc.height != height
-            || commit_qc.block_hash != committed.core_hash
+            || commit_qc.block_hash != frame.parent.core_hash
         {
             return Err(ChainReadError::HeaderMismatch { height });
         }
-        if commit_qc.result != committed.result {
+        if commit_qc.result != frame.parent.result {
             return Err(ChainReadError::ResultMismatch { height });
         }
         if header.instance != self.instance || commit_qc.instance != self.instance {
@@ -1728,17 +1838,36 @@ impl PrefixVerifierContext {
         admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
         budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<CertificateVerdict, VerificationReadError> {
-        check_result_scope(committed, self.root_scope)?;
-        let height = committed.height;
+        self.prepare_certificate_source_with_admission(
+            CertificateSource::Original(committed),
+            authority,
+            config,
+            artifacts,
+            admit_scratch,
+            budget,
+        )
+    }
+
+    fn prepare_certificate_source_with_admission(
+        &self,
+        source: CertificateSource<'_>,
+        authority: AuthorityRef<'_>,
+        config: Option<&iroha_sumeragi::types::HeightConfig>,
+        artifacts: Option<PrefixArtifacts>,
+        admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
+        budget: Option<&iroha_allocation::AllocationBudget>,
+    ) -> Result<CertificateVerdict, VerificationReadError> {
+        let frame = source.frame();
+        check_projected_result_scope(frame, self.root_scope)?;
+        let height = frame.parent.height;
         let malformed = |reason: String| ChainReadError::Malformed { height, reason };
-        let certificate = committed
-            .block
-            .commit_certificate()
+        let certificate = frame
+            .certificate
             .ok_or(ChainReadError::MissingCertificate { height })?;
         let certificate_len =
             norito::core::classify_decode_attempt(|| norito::canonical_frame_len(certificate))
                 .map_err(|error| verification_codec_error(height, error))?;
-        let Some(header) = committed.header.as_ref() else {
+        let Some(header) = frame.header else {
             return Ok(CertificateVerdict {
                 commit_qc: None,
                 verification: QcVerification::Genesis,
@@ -1746,6 +1875,11 @@ impl PrefixVerifierContext {
             });
         };
         let (commit_qc, availability) = if let Some(artifacts) = artifacts {
+            let CertificateSource::Original(committed) = source else {
+                return Err(VerificationReadError::Deferred(
+                    retained_query_authority::invariant(),
+                ));
+            };
             let (qc, table, payload) = artifacts.into_parts(&committed.block, header)?;
             (PrefixQc::Funded(qc), Some((table, payload)))
         } else {
@@ -1755,14 +1889,14 @@ impl PrefixVerifierContext {
             .map_err(|error| verification_codec_error(height, error))?;
             (PrefixQc::Decoded(qc), None)
         };
-        self.verify_commit_qc_original(committed, authority, &commit_qc)?;
+        self.verify_commit_qc_source(frame, authority, &commit_qc)?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
         let config = config.ok_or_else(|| {
             malformed("non-genesis certificate lacks parent-authenticated configuration".into())
         })?;
-        verify_availability(
-            committed,
+        verify_availability_source(
+            source,
             config,
             authority.crypto,
             availability,
@@ -1782,15 +1916,27 @@ fn verify_boundary_source(
     parent: &CommittedBlock,
     authority: AuthorityRef<'_>,
 ) -> Result<(), ChainReadError> {
-    let height = certified.height();
+    verify_projected_boundary_source(
+        CheckedFrameRef::from_original(certified),
+        ParentProjection::from_original(parent),
+        authority,
+    )
+}
+
+fn verify_projected_boundary_source(
+    certified: CheckedFrameRef<'_>,
+    parent: ParentProjection,
+    authority: AuthorityRef<'_>,
+) -> Result<(), ChainReadError> {
+    let height = certified.parent.height;
     let malformed = |reason: String| ChainReadError::Committee { height, reason };
-    if let Some(boundary) = &certified.commitment().schedule.boundary {
-        if boundary.selection_anchor != parent.block_hash() {
+    if let Some(boundary) = &certified.schedule.boundary {
+        if boundary.selection_anchor != parent.iroha_hash {
             return Err(malformed(
                 "boundary selection anchor differs from certified parent".into(),
             ));
         }
-        let pulse = parent.commitment().beacon.as_ref().ok_or_else(|| {
+        let pulse = parent.beacon.as_ref().ok_or_else(|| {
             malformed("boundary predecessor omits its certified selection pulse".into())
         })?;
         let expected_seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
@@ -1831,18 +1977,38 @@ fn verify_availability(
     admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
     budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<(), VerificationReadError> {
+    verify_availability_source(
+        CertificateSource::Original(committed),
+        config,
+        crypto,
+        prepared,
+        admit_scratch,
+        budget,
+    )
+}
+
+fn verify_availability_source(
+    source: CertificateSource<'_>,
+    config: &iroha_sumeragi::types::HeightConfig,
+    crypto: &dyn iroha_sumeragi::crypto::Crypto,
+    prepared: Option<(
+        iroha_sumeragi::availability::AvailabilityFrame,
+        iroha_sumeragi::availability::PayloadBytes,
+    )>,
+    admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
+    budget: Option<&iroha_allocation::AllocationBudget>,
+) -> Result<(), VerificationReadError> {
     use iroha_sumeragi::availability::{AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES};
-    let height = committed.height;
+    let frame = source.frame();
+    let height = frame.parent.height;
     let malformed = |reason: String| {
         VerificationReadError::Source(ChainReadError::Malformed { height, reason })
     };
-    let header = committed
+    let header = frame
         .header
-        .as_ref()
         .ok_or_else(|| malformed("availability requires a non-genesis header".into()))?;
-    let certificate = committed
-        .block
-        .commit_certificate()
+    let certificate = frame
+        .certificate
         .ok_or(ChainReadError::MissingCertificate { height })?;
     // Both preparation paths enforce the same independent portable-reader bounds.
     // RS16 scratch is charged separately to the inherited cumulative decode allowance;
@@ -1871,8 +2037,7 @@ fn verify_availability(
     if let Some((table, payload)) = prepared {
         if let Some(budget) = budget {
             return funded_availability::verify(
-                header.instance,
-                config,
+                (header.instance, config),
                 header,
                 &table,
                 payload.as_slice(),
@@ -1896,6 +2061,23 @@ fn verify_availability(
         norito::decode_canonical(certificate.availability())
     })
     .map_err(|error| verification_codec_error(height, error))?;
+    if let CertificateSource::Projected { payload, .. } = source {
+        let payload = payload
+            .ok_or_else(|| malformed("projected source omits its original payload".into()))?;
+        return iroha_data_model::sumeragi_finality::verify_payload_availability_with_admission(
+            header.instance,
+            config,
+            header,
+            &table,
+            payload.as_slice(),
+            crypto,
+            admit_scratch,
+        )
+        .map_err(availability_error);
+    }
+    let CertificateSource::Original(committed) = source else {
+        unreachable!()
+    };
     let payload_len = header.payload_len as usize;
     admit_scratch(payload_len).map_err(VerificationReadError::Deferred)?;
     let layout = std::alloc::Layout::array::<u8>(payload_len)
@@ -2231,8 +2413,7 @@ impl AdmittedPrefixPush {
             &mut prefix.prefix,
             self.frame.committed(),
             artifacts.cloned(),
-            false,
-            None,
+            (false, None),
             prefix.original_budget.as_ref(),
             Some(&mut self.pending_authority),
         )?;
@@ -2290,7 +2471,7 @@ impl CertifiedPrefix {
     /// Construct directly in one exact original-pool slot without a complete prefix on the stack.
     /// All authentication is shared with `new`; admission itself confers no source authority.
     /// The immutable authority owns its exact epoch material, native configuration,
-    /// PoP credentials and fallible pairing backing in this original pool.
+    /// `PoP` credentials and fallible pairing backing in this original pool.
     /// TODO(S8): decoded result/genesis graphs, schedule validation/advance and shared
     /// validation error diagnostics still need physical custody. The cache is inline;
     /// prepared SCCP metadata and RS16 scratch have original-pool owners. One-shot AMX
@@ -2579,8 +2760,7 @@ impl CertifiedPrefix {
             &mut self.prefix,
             &committed,
             artifacts,
-            false,
-            None,
+            (false, None),
             budget,
             None,
         )?;
@@ -2882,8 +3062,6 @@ pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
     terminal_probe: parking_lot::Mutex<Option<TerminalProbe<'v>>>,
     // Only the scoped portable producer enables original canonical-byte capture.
     proof_source_genesis: Option<(u64, Hash)>,
-    // Optional persistent cache custody never contributes authority or a proof verdict.
-    query_cache: parking_lot::Mutex<Option<QueryCacheOwner>>,
     // Only AMX transfers its actual constructor acquisition into this same reader. The
     // genesis body/control lives above; raw bytes and original source retire here after
     // the prefix/terminal graphs at the caller's existing scoped chain drop.
@@ -2950,7 +3128,6 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             #[cfg(test)]
             terminal_probe: parking_lot::Mutex::new(None),
             proof_source_genesis: None,
-            query_cache: parking_lot::Mutex::new(None),
             amx_genesis_authentication: None,
             amx_genesis_source: None,
         }
@@ -3299,7 +3476,7 @@ impl<'v> CertifiedChain<'v, StateView<'v>> {
 
     /// Verify an exact pinned history cut before a restored State exists.
     ///
-    /// No StateView is constructed: that concrete generic type only selects this constructor.
+    /// No `StateView` is constructed: that concrete generic type only selects this constructor.
     /// Every body must match the supplied one-based hash cut. Authority comes from verified
     /// signed genesis and the same exact-quorum prefix walk as State-backed offchain reads.
     /// The configured chain ID enters the signature instance checked by every successor QC.

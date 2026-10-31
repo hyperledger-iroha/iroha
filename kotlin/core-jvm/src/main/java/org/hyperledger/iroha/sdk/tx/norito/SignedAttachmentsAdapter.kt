@@ -111,7 +111,16 @@ internal class SignedAttachmentsAdapter(private val account: TypeAdapter<String>
         requireCanonicalSize(SignedAttachmentsV1(actions, occurrences), NoritoCodec.DEFAULT_FLAGS, false, true)
     }
 
-    internal fun statementDigest(action: ActionIntentV1, intent: OrderedIntentDigestV1): ActionStatementDigestV1 {
+    /** Canonical original ActionIntentV1 frame for native request materialization. */
+    internal fun actionFrame(action: ActionIntentV1): ByteArray = NoritoCodec.encode(
+        action, "iroha_data_model::transaction::signed_attachments::ActionIntentV1",
+        object : TypeAdapter<ActionIntentV1> {
+            override fun encode(encoder: NoritoEncoder, value: ActionIntentV1) = encodeAction(encoder, value, false)
+            override fun decode(decoder: NoritoDecoder): ActionIntentV1 = decodeAction(decoder)
+        },
+    )
+
+    internal fun statementProjection(action: ActionIntentV1, intent: OrderedIntentDigestV1): ByteArray {
         val adapter = object : TypeAdapter<ActionIntentV1> {
             override fun encode(encoder: NoritoEncoder, value: ActionIntentV1) {
                 digestField(encoder, intent.bytes)
@@ -125,7 +134,11 @@ internal class SignedAttachmentsAdapter(private val account: TypeAdapter<String>
             override fun decode(decoder: NoritoDecoder): ActionIntentV1 =
                 throw UnsupportedOperationException("statement hashing does not decode action intents")
         }
-        return ActionStatementDigestV1(domainDigest(STATEMENT_DOMAIN, NoritoCodec.encode(action, STATEMENT_SCHEMA, adapter)))
+        return NoritoCodec.encode(action, STATEMENT_SCHEMA, adapter)
+    }
+
+    internal fun statementDigest(action: ActionIntentV1, intent: OrderedIntentDigestV1): ActionStatementDigestV1 {
+        return ActionStatementDigestV1(domainDigest(STATEMENT_DOMAIN, statementProjection(action, intent)))
     }
 
     private fun encodeAction(encoder: NoritoEncoder, action: ActionIntentV1, normalized: Boolean) {

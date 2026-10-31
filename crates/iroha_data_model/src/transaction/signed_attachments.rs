@@ -77,6 +77,35 @@ pub const ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1: usize = 32;
 /// Largest byte length of an instruction wire identifier named by an action.
 pub const ACTION_OPERATION_MAX_WIRE_ID_BYTES_V1: usize = 128;
 
+/// An untrusted selector of one slot of one signed attachment-backed action.
+///
+/// This is the canonical request layout, never an authorization or host handle.
+/// The runtime must bind it to the original signed owner and actual invocation,
+/// check the operation/role/inputs, and consume the selected occurrence once.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(decode_from_slice, deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::transaction::signed_attachments::ActionAttachmentRefV1")]
+pub struct ActionAttachmentRefV1 {
+    /// Exact zero-based ordinal in the signed action list.
+    pub action_index: u32,
+    /// Exact zero-based slot in that action's reference list.
+    pub slot_index: u32,
+}
+
 /// Domain separator of the public-input digest of a wrapped proof carrier.
 pub const PROOF_CARRIER_PUBLIC_INPUTS_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.transaction.proof-carrier-public-inputs-digest.v1";
@@ -455,12 +484,17 @@ pub enum ActionRuleViolationV1 {
     AttachmentRole,
 }
 
-/// Violation of the ordered intent and signed attachment schema.
+/// A signed-attachment schema violation or its original local codec refusal.
 ///
 /// Decoding, the validated constructors and transaction admission report the
-/// same typed value.
+/// same typed value. A local refusal leaves validation unfinished and is not a
+/// semantic verdict about the signed source.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SignedAttachmentErrorV1 {
+    /// The actual codec operation could not complete under its enclosing local resources.
+    /// This retains the original observer and must not become a semantic rejection.
+    #[error(transparent)]
+    LocalResource(ncore::DecodeLocalRefusal),
     /// The attachment field is present without any declared action.
     #[error("signed attachments declare no action")]
     NoActions,
@@ -674,9 +708,12 @@ pub enum SignedAttachmentErrorV1 {
         /// Violated rule.
         rule: ActionRuleViolationV1,
     },
-    /// An action names an instruction wire identifier that is not registered.
-    #[error("action {action_index} names an unregistered instruction wire identifier")]
-    UnregisteredOperation {
+    /// An action names an instruction wire identifier that is not well formed.
+    ///
+    /// Whether the release registers the wire identifier is never checked here, so the same
+    /// payload decodes on every release (`specs/live_runtime_upgrades.md` §5.2).
+    #[error("action {action_index} names a malformed instruction wire identifier")]
+    MalformedOperationWireId {
         /// Action ordinal.
         action_index: u32,
     },
@@ -750,6 +787,35 @@ pub enum SignedAttachmentErrorV1 {
         /// Digest the action declares.
         actual: ActionStatementDigestV1,
     },
+}
+
+impl SignedAttachmentErrorV1 {
+    /// Consume an original local refusal without reconstructing its scope identity.
+    ///
+    /// # Errors
+    /// Returns the unchanged semantic error when this is not a local refusal.
+    pub fn into_local_refusal(self) -> Result<ncore::DecodeLocalRefusal, Self> {
+        match self {
+            Self::LocalResource(original) => Ok(original),
+            error => Err(error),
+        }
+    }
+
+    /// Return the canonical decoder error while preserving an original local cause.
+    #[must_use]
+    pub fn into_norito_error(self) -> ncore::Error {
+        match self {
+            Self::LocalResource(original) => original.into_error(),
+            error => ncore::Error::Message(error.to_string()),
+        }
+    }
+
+    /// Preserve the observed original encoding cause for same-crate typed consumers.
+    pub(crate) fn from_encoding_attempt(original: ncore::DecodeAttemptError) -> Self {
+        original
+            .into_local_refusal()
+            .map_or_else(|_| Self::CanonicalEncodingFailed, Self::LocalResource)
+    }
 }
 
 /// Convert a position to the `u32` ordinal the wire carries.
@@ -829,8 +895,8 @@ impl ActionStatementV1 {
     ///
     /// Returns an error when canonical encoding fails.
     pub fn digest(&self) -> Result<ActionStatementDigestV1, SignedAttachmentErrorV1> {
-        let encoded = norito::encode_canonical(self)
-            .map_err(|_| SignedAttachmentErrorV1::CanonicalEncodingFailed)?;
+        let encoded = ncore::classify_decode_attempt(|| norito::encode_canonical(self))
+            .map_err(SignedAttachmentErrorV1::from_encoding_attempt)?;
         Ok(ActionStatementDigestV1(domain_separated_digest(
             ACTION_STATEMENT_DIGEST_DOMAIN_V1,
             &encoded,
@@ -994,8 +1060,8 @@ pub fn proof_carrier_public_inputs_digest_v1(
     let mut proof_free = attachment.clone();
     proof_free.proof.bytes.clear();
     proof_free.envelope_hash = None;
-    let encoded = norito::encode_canonical(&proof_free)
-        .map_err(|_| SignedAttachmentErrorV1::CanonicalEncodingFailed)?;
+    let encoded = ncore::classify_decode_attempt(|| norito::encode_canonical(&proof_free))
+        .map_err(SignedAttachmentErrorV1::from_encoding_attempt)?;
     Ok(ActionPublicInputsDigestV1(domain_separated_digest(
         PROOF_CARRIER_PUBLIC_INPUTS_DIGEST_DOMAIN_V1,
         &encoded,
@@ -1123,8 +1189,8 @@ impl PlannedActionV1 {
         attachment_role: AttachmentRoleV1,
         attachment: &ProofAttachment,
     ) -> Result<Self, SignedAttachmentErrorV1> {
-        let bytes = norito::encode_canonical(attachment)
-            .map_err(|_| SignedAttachmentErrorV1::CanonicalEncodingFailed)?;
+        let bytes = ncore::classify_decode_attempt(|| norito::encode_canonical(attachment))
+            .map_err(SignedAttachmentErrorV1::from_encoding_attempt)?;
         Ok(Self {
             operation,
             role,
@@ -1448,13 +1514,16 @@ impl SignedAttachmentsV1 {
                     action_index: action.action_index,
                     index: reference.index,
                 })?;
-        let attachment =
-            norito::decode_canonical::<ProofAttachment>(&occurrence.bytes).map_err(|error| {
-                SignedAttachmentErrorV1::MalformedProofCarrier {
-                    index: occurrence.index,
-                    reason: error.to_string(),
-                }
-            })?;
+        let attachment = ncore::classify_decode_attempt(|| {
+            norito::decode_canonical::<ProofAttachment>(&occurrence.bytes)
+        })
+        .map_err(|original| match original.into_local_refusal() {
+            Ok(original) => SignedAttachmentErrorV1::LocalResource(original),
+            Err(original) => SignedAttachmentErrorV1::MalformedProofCarrier {
+                index: occurrence.index,
+                reason: original.error().to_string(),
+            },
+        })?;
         if let Some((field, message)) = attachment.structural_error() {
             return Err(SignedAttachmentErrorV1::MalformedProofCarrier {
                 index: occurrence.index,
@@ -1531,7 +1600,8 @@ impl SignedAttachmentsV1 {
     /// Returns an error when the counting serialization pass fails.
     pub fn canonical_frame_len_v1(&self) -> Result<usize, SignedAttachmentErrorV1> {
         let _canonical_flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
-        ncore::encoded_frame_len(self).map_err(|_| SignedAttachmentErrorV1::CanonicalEncodingFailed)
+        ncore::classify_decode_attempt(|| ncore::encoded_frame_len(self))
+            .map_err(SignedAttachmentErrorV1::from_encoding_attempt)
     }
 
     /// Validate everything that does not depend on the rest of the transaction.
@@ -1750,7 +1820,10 @@ fn decode_exact_field<'a, T: ncore::DecodeFromSlice<'a>>(
 }
 
 fn schema_error(error: &SignedAttachmentErrorV1) -> ncore::Error {
-    ncore::Error::Message(error.to_string())
+    match error {
+        SignedAttachmentErrorV1::LocalResource(original) => original.clone().into_error(),
+        error => ncore::Error::Message(error.to_string()),
+    }
 }
 
 /// Inspect variable action fields before their string or vector decoders allocate.
@@ -1979,8 +2052,8 @@ fn decode_canonical_base64_frame(
             "decoded frame exceeds the first-release byte limit",
         ));
     }
-    norito::decode_canonical::<SignedAttachmentsV1>(&bytes)
-        .map_err(|error| norito::json::Error::Message(error.to_string()))
+    ncore::classify_decode_attempt(|| norito::decode_canonical::<SignedAttachmentsV1>(&bytes))
+        .map_err(|original| norito::json::Error::from_decode_resource(original.into_error()))
 }
 
 impl norito::json::JsonSerialize for SignedAttachmentsV1 {

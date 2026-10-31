@@ -17,12 +17,7 @@ use crate::{
 
 /// Dispatch definition commands before the general CLI considers `client.toml`.
 #[cfg(any(unix, windows))]
-pub(crate) fn run(
-    args: &Args,
-    output: impl Write,
-    errors: impl Write,
-    i18n: Localizer,
-) -> Result<()> {
+pub fn run(args: &Args, output: impl Write, errors: impl Write, i18n: Localizer) -> Result<()> {
     use taira_dataspace_deploy::{Command as DataspaceCommand, PublicInput};
 
     reject_runtime_globals(args)?;
@@ -103,7 +98,7 @@ pub(crate) fn run(
 
 /// Fail closed on platforms without the required direct-file custody primitives.
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn run(_: &Args, _: impl Write, _: impl Write, _: Localizer) -> Result<()> {
+pub fn run(_: &Args, _: impl Write, _: impl Write, _: Localizer) -> Result<()> {
     bail!("dataspace definition commands require Unix filesystem custody")
 }
 

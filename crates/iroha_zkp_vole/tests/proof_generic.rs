@@ -21,10 +21,8 @@ use iroha_zkp_vole::{
     randomness::Tape,
     transcript::message_digest,
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use zeroize::Zeroizing;
 
 /// Witness bits of [`Toy`].

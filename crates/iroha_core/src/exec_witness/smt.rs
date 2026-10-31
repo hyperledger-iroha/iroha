@@ -99,13 +99,6 @@ pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
         acc
     }
 }
-/// Compute the consensus post-state root from the canonical witness.
-pub fn compute_consensus_post_state_root(
-    reads: &[KvPair],
-    writes: &[KvPair],
-) -> Result<Hash, &'static str> {
-    Ok(compute_post_state_root(reads, writes))
-}
 fn hash_bytes(b: &[u8]) -> [u8; 32] {
     let h = Hash::new(b);
     <[u8; 32]>::from(h)

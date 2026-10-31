@@ -1,0 +1,31 @@
+<node>
+  <interface name="org.example.Node">
+    <signal name="AddNode">
+      <arg name="nodeAdded" type="(so)"/>
+    </signal>
+
+    <signal name="Alert">
+      <arg name="urgent" type="b"/>
+      <arg name="color" type="s"/>
+      <arg name="volume" type="d"/>
+    </signal>
+
+    <signal name="RemoveNode">
+      <arg name="nodeRemoved" type="(so)"/>
+    </signal>
+
+    <signal name="U32AsEnum">
+        <arg name="my_type" type="u"/>
+    </signal>
+
+    <method name="RequestName">
+      <arg direction="in" name="apple" type="s"/>
+      <arg direction="in" name="orange" type="u"/>
+      <arg direction="out" name="grape" type="u"/>
+    </method>
+
+    <property name="Features" type="as" access="read">
+    </property>
+
+  </interface>
+</node>

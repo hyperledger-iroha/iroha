@@ -107,6 +107,7 @@ async fn incoming_signed_query_active_restricted_hint_retains_permission_refusal
 }
 
 #[cfg(feature = "connect")]
+#[derive(Clone, Copy)]
 enum AuthoritativeLaneFixtureMode {
     OnlineWithFallback,
     Offline,
@@ -568,7 +569,7 @@ fn authoritative_lane_peer_statuses_decorate_only_canonical_peer_ids() {
     );
     let statuses = super::authoritative_lane_peer_statuses_with_manifest_urls(
         vec![canonical_with_url.clone(), canonical_without_url.clone()],
-        std::collections::BTreeMap::from([
+        &(std::collections::BTreeMap::from([
             (
                 canonical_with_url.clone(),
                 "http://127.0.0.1:19100".to_owned(),
@@ -577,7 +578,7 @@ fn authoritative_lane_peer_statuses_decorate_only_canonical_peer_ids() {
                 non_authoritative.clone(),
                 "http://127.0.0.1:19101".to_owned(),
             ),
-        ]),
+        ])),
     );
     assert_eq!(
         statuses
@@ -973,9 +974,7 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     let mut block = app.state.block(header);
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+        .set_parameter_for_testing(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .expect("install the committed NPoS fixture parameters");
@@ -1503,7 +1502,7 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
 async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use tower::ServiceExt as _;
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let signer = app.da_receipt_signer.clone();
     let operator_layer = axum::middleware::from_fn_with_state::<
         _,
@@ -1724,7 +1723,7 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     let expected_visited = vec![sender_peer_id.clone(), local_peer_id.clone()];
     let app_for_response = app.clone();
     let authoritative_peer_for_response = authoritative_peer_id.clone();
-    let request_id_for_response = request_id.clone();
+    let request_id_for_response = request_id;
     let response_task = tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {

@@ -19,3 +19,19 @@ enum KagemushaWalletReviewedExecutionV1 {
     }
   }
 }
+
+/// Cleanup after the managed one-use capability was consumed. Native may refuse before
+/// removing its table entry, so an uncertain cleanup must retire the exact wallet.
+/// This helper never restores a token or runs for a local origin/bounds refusal.
+enum KagemushaWalletConsumedCleanupV1 {
+  static func run<Value>(cleanup: () throws -> Value, close: () throws -> Void,
+    retain: (Error, Error) -> Error) throws -> Value {
+    do { return try cleanup() }
+    catch {
+      let primary = error
+      do { try close() }
+      catch { throw retain(primary, error) }
+      throw primary
+    }
+  }
+}

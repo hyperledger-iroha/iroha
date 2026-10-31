@@ -330,14 +330,14 @@ fn summarizes_errors_with_kind_and_detail() {
         "Failed to decode Norito payload from Torii"
     );
     let summary = ToriiError::ResponseResourceLimit {
-        context: "Explorer JSON",
+        context: "JSON API",
         maximum: 1024,
     }
     .summarize();
     assert_eq!(summary.kind, ToriiErrorKind::ResponseResourceLimit);
     assert_eq!(
         summary.detail.as_deref(),
-        Some("Explorer JSON response limit: 1024 bytes")
+        Some("JSON API response limit: 1024 bytes")
     );
 }
 #[tokio::test(flavor = "current_thread")]
@@ -1446,7 +1446,11 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
     let rejection = TransactionRejectionReason::LimitCheck(TransactionLimitError {
         reason: "limit".to_owned(),
     });
-    let expected_reason = format!("{rejection:?}");
+    let expected_reason = rejection_message(&rejection);
+    assert!(
+        expected_reason.ends_with(": limit"),
+        "reasons read as text with their causes: {expected_reason}"
+    );
     let block = sample_block_with_result(Err(rejection));
     let summary = BlockSummary::from_block(&block);
     assert_eq!(summary.transaction_count, 1);
@@ -1804,11 +1808,10 @@ async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives(
         .expect("join smoke wait task")
         .expect_err("expired event should reject the smoke transaction");
     match err {
-        ToriiError::SmokeRejected { hash, reason } => {
+        ToriiError::SmokeExpired { hash } => {
             assert!(hash.contains(&tx_hash.to_string()));
-            assert_eq!(reason, "expired");
         }
-        other => panic!("expected SmokeRejected error, got {other:?}"),
+        other => panic!("expected SmokeExpired error, got {other:?}"),
     }
 }
 #[tokio::test(flavor = "current_thread")]
@@ -1842,7 +1845,7 @@ async fn submit_and_wait_for_commit_reports_rejected_when_pipeline_event_rejects
             reason: "limit".to_owned(),
         },
     ));
-    let expected_reason = format!("{rejection:?}");
+    let expected_reason = rejection_message(&rejection);
     let event_box = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
         hash: tx_hash,
         block_height: None,

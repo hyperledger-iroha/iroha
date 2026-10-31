@@ -643,6 +643,8 @@ def minter_initial_data(
 
     if generation < 1 or start_height < 1:
         raise TonBuilderError("the pinned generation and start height are at least 1")
+    if not 0 < max_supply < 1 << 96:
+        raise TonBuilderError("the supply cap is a TON amount, 1 ..< 2^96, as sccp_init requires")
     root_word = committee_root(keys)
     pin = (
         Builder().uint(generation, 64).uint(root_word, 256).uint(start_height, 64)

@@ -20,16 +20,17 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
   struct Selection {
     let role: IrohaPeerNearbyRoleV1
     let recovery: Bool
+    let continuation: Bool
     let requestID: Data
     let sessionID: Data
     let requestHash: Data
     let peerIdentity: Data
-    /// Receiver-only exact Native-generated IPM1 Request and preflight Offer original.
+    /// Receiver-only exact Native-generated IPM1 Request, retained before discovery.
     let requestMessage: Data?
-    let offer: Data?
   }
   private let selection: Selection
   private let wallet: KagemushaWalletV1
+  private let call: KagemushaWalletExchangeCallV1
   private let identity: KagemushaNearbyDiagnosticIdentity
   private let files: EnrollmentProbeFiles
   private let actorPath: String
@@ -45,18 +46,20 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
   private var verificationPeer: String?
   private var backgroundObserver: NSObjectProtocol?
   private var pendingReview: KagemushaWalletReviewV1?
+  private var reviewApproval = KagemushaProbeReviewApproval()
   private var traceSequence = 0
   private var started = false
   private var completion: ((Result<Void, Error>) -> Void)?
 
-  init(selection: Selection, wallet: KagemushaWalletV1,
+  init(selection: Selection, wallet: KagemushaWalletV1, call: KagemushaWalletExchangeCallV1,
        identity: KagemushaNearbyDiagnosticIdentity, files: EnrollmentProbeFiles,
        actorPath: String, attemptPath: String, prompt: KagemushaNearbyPrompt) throws {
-    guard selection.requestID.count == 32, selection.requestID.contains(where: { $0 != 0 }),
+    guard !selection.continuation || (selection.role == .sender && !selection.recovery),
+      selection.requestID.count == 32, selection.requestID.contains(where: { $0 != 0 }),
       selection.peerIdentity.count == 32, selection.peerIdentity != identity.publicBytes,
       selection.role == .receiver
-        ? (selection.requestMessage != nil && selection.offer != nil)
-        : (selection.requestMessage == nil && selection.offer == nil)
+        ? selection.requestMessage != nil
+        : selection.requestMessage == nil
     else { throw EnrollmentProbeFailure.input }
     if let raw = selection.requestMessage {
       let message = try IrohaPeerWireMessageV1.decode(raw,
@@ -65,9 +68,9 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
         try IrohaPeerKagemushaWalletAdapterV1.destinationAccountOriginal(message) == wallet.metadata().accountOriginal
       else { throw EnrollmentProbeFailure.input }
     }
-    self.selection = selection; self.wallet = wallet; self.identity = identity
+    self.selection = selection; self.wallet = wallet; self.call = call; self.identity = identity
     self.files = files; self.actorPath = actorPath; self.attemptPath = attemptPath; self.prompt = prompt
-    gate = .init(role: selection.role == .sender ? .sender : .receiver, recovery: selection.recovery)
+    gate = .init(role: selection.role == .sender ? .sender : .receiver, recovery: selection.recovery, continuation: selection.continuation)
     session = try IrohaPeerNearbySessionV1(profile: .kagemushaWalletV1,
       localRole: selection.role, sessionID: selection.sessionID,
       requestCanonicalHash: selection.requestHash, deviceCertificate: identity.publicBytes)
@@ -77,9 +80,9 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
   }
 
   /// Prepare before sharing discovery metadata. This copy is setup DATA, not radio evidence.
-  static func prepare(wallet: KagemushaWalletV1, setupID: Data, offer: Data,
+  static func prepare(wallet: KagemushaWalletV1, call: KagemushaWalletExchangeCallV1, setupID: Data, amount: KagemushaWalletUInt128V1,
                       feeSchedule: Data? = nil, feeCertificate: Data? = nil) throws -> Data {
-    let issued = try wallet.request(setupId: setupID, offer: offer,
+    let issued = try call.request(setupId: setupID, amount: amount,
       feeSchedule: feeSchedule, feeCertificate: feeCertificate)
     guard issued.status == 12 else { throw EnrollmentProbeFailure.lifecycle }
     let envelope = try wallet.envelope(.request, original: issued.bytes)
@@ -125,6 +128,7 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
     row["requestID"] = hex(selection.requestID); row["sessionID"] = hex(selection.sessionID)
     row["requestCanonicalHash"] = hex(selection.requestHash)
     row["role"] = selection.role == .sender ? "SENDER" : "RECEIVER"
+    row["conditionalContinuation"] = String(selection.continuation)
     row["recovery"] = String(selection.recovery)
     row["clock"] = KagemushaNearbyClock.identity
     row["schema"] = "iroha.kagemusha.physical-nearby-trace.v1"
@@ -138,7 +142,7 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
   private func fail(_ error: Error) {
     guard !gate.terminal else { return }
     gate.fail()
-    if let review = pendingReview { try? wallet.discardReview(review); pendingReview = nil }
+    if let review = pendingReview { try? call.exchange.discardReview(review); pendingReview = nil }
     // Preserve the typed failure without exporting underlying secret-bearing descriptions.
     let native = (error as? KagemushaWalletErrorV1).map { value -> String in
       if case .native(let status, _, _) = value { return String(status) }; return "unavailable"
@@ -174,23 +178,27 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
   private var fencePath: String {
     actorPath + "/private/intents/executed-" + EnrollmentProbeFiles.digest(selection.requestID)
   }
+  private var reviewFencePath: String { selection.continuation ? attemptPath + "/review-dispatch.norito" : fencePath }
   private func bind(_ family: String, _ originals: [String: Data]) throws {
     try files.mkdir(actorPath + "/private/intents")
     var inputs = originals
     inputs["family"] = Data(family.utf8); inputs["request-id"] = selection.requestID
     let path = actorPath + "/private/intents/operation-" + EnrollmentProbeFiles.digest(selection.requestID)
-    if selection.recovery { guard try files.exists(path) else { throw EnrollmentProbeFailure.lifecycle } }
+    if selection.recovery || selection.continuation { guard try files.exists(path) else { throw EnrollmentProbeFailure.lifecycle } }
     try files.publish(path,
       bytes: KagemushaMonetaryProbeManifest.binding("operation", inputs: inputs))
   }
-  private func released(_ call: KagemushaWalletCallV1, kind: KagemushaWalletReleasedOutputV1.Kind,
-                        peer: KagemushaWalletTransportKindV1) throws -> Data {
+  private func sendPayment(_ call: KagemushaWalletCallV1) throws {
     try trace("native-return", ["nativeStatus": String(call.status),
       "outputSHA256": EnrollmentProbeFiles.digest(call.bytes)])
     try KagemushaNearbyAttemptGate.requireComplete(call.status)
-    let original = try retainedOriginal(requestID: selection.requestID, kind: kind, peer: peer)
-    if kind == .send { try gate.sentPayment() }
-    return try wallet.envelope(peer, original: original)
+    let original = try retainedOriginal(requestID: selection.requestID, kind: .send, peer: .payment)
+    let companion = try wallet.paymentCompanion(payment: original)
+    try files.publish(attemptPath + String(format: "/%04d-payer-companion.norito", traceSequence), bytes: companion)
+    let envelope = try wallet.envelope(.payment, original: original)
+    let wire = try IrohaPeerKagemushaWalletAdapterV1.wrap(envelope, payerCompanion: companion)
+    try gate.sentPayment()
+    try send(session.seal(wire.encoded).encode())
   }
   /// Capture the actual retained release only while Native still owns that output.
   private func retainedOriginal(requestID: Data, kind: KagemushaWalletReleasedOutputV1.Kind,
@@ -212,37 +220,84 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
     try bind("review-send", ["request": original, "destination": account])
     if selection.recovery {
       guard try files.exists(fencePath) else { throw EnrollmentProbeFailure.lifecycle }
-      try sendMessage(released(wallet.requestStatus(requestId: selection.requestID), kind: .send, peer: .payment))
+      try sendPayment(wallet.requestStatus(requestId: selection.requestID))
       return
     }
-    guard try !files.exists(fencePath) else { throw EnrollmentProbeFailure.lifecycle }
-    let review = try wallet.reviewSend(request: original, destinationAccountOriginal: account)
-    pendingReview = review
-    try trace("native-review", ["outputSHA256": EnrollmentProbeFiles.digest(review.projection.bytes)])
+    let expectation = try KagemushaProbeReviewCustody.expectation(files: files, actorPath: actorPath,
+      requestID: selection.requestID, family: "review-send", originals: ["request": original, "destination": account],
+      continuation: selection.continuation)
+    let decision = try call.reviewSend(requestId: selection.requestID, request: original,
+      destinationAccountOriginal: account, expectation: expectation)
+    let review: KagemushaWalletReviewV1
+    switch decision {
+    case .ready(let value): review = value
+    case .existing(let value): try sendExisting(value); return
+    case .waiting(let wait):
+      try trace("native-review-waiting", ["reason": String(wait.rawValue), "capabilityIssued": "false"])
+      throw EnrollmentProbeFailure.lifecycle
+    }
+    pendingReview = review; reviewApproval = .init()
+    if selection.continuation { try gate.renewed() }
+    try files.publish(attemptPath + "/native-review.bin", bytes: review.projection.bytes)
+    try trace("native-review", ["outputSHA256": EnrollmentProbeFiles.digest(review.projection.bytes),
+      "originalFence": fencePath, "dispatchFence": reviewFencePath])
     Task { @MainActor in self.prompt.review(review.projection) { decision in
       self.worker.async { self.perform {
         let confirmedAt = try decision.get()
-        guard self.pendingReview === review else { throw EnrollmentProbeFailure.lifecycle }
+        guard self.pendingReview === review, review.requestID == self.selection.requestID else {
+          throw EnrollmentProbeFailure.lifecycle
+        }
         try self.gate.confirmed(at: confirmedAt)
         try self.trace("user-authenticated", ["reviewSHA256": EnrollmentProbeFiles.digest(review.projection.bytes)], at: confirmedAt)
-        try self.files.publishDispatchFence(self.fencePath, bytes: Data(EnrollmentProbeFiles.digest(review.projection.bytes).utf8))
-        self.pendingReview = nil
-        let call = try self.wallet.executeReviewed(review, requestId: self.selection.requestID)
-        try self.sendMessage(self.released(call, kind: .send, peer: .payment))
+        try self.files.publishDispatchFence(self.reviewFencePath, bytes: review.projection.bytes)
+        try self.reviewApproval.acknowledgedFence()
+        try self.executeReview(review, retry: false)
       }}
     }}
   }
+  private func sendExisting(_ value: KagemushaWalletBoundRequestV1) throws {
+    try trace("native-existing-request", ["latencyQualified": "false", "newDispatch": "false"])
+    guard case .outcome(let outcome) = value else { throw EnrollmentProbeFailure.lifecycle }
+    try gate.observedExisting(); try sendPayment(outcome)
+  }
+  private func executeReview(_ review: KagemushaWalletReviewV1, retry: Bool) throws {
+    guard pendingReview === review, review.requestID == selection.requestID,
+      try files.read(reviewFencePath, maximum: 4591) == review.projection.bytes else {
+      throw EnrollmentProbeFailure.lifecycle
+    }
+    try reviewApproval.dispatch(retry: retry); pendingReview = nil
+    switch try call.executeReviewed(review) {
+    case .executed(let value): reviewApproval.finish(); try sendPayment(value)
+    case .existing(let value): reviewApproval.finish(); try sendExisting(value)
+    case .retainedReview(let wait):
+      try reviewApproval.retained(); pendingReview = review; try gate.retainedReview()
+      try trace("native-review-retained", ["reason": String(wait.rawValue),
+        "dispatchFenceRetained": "true", "latencyQualified": "false"])
+      Task { @MainActor in self.prompt.retryApproved { accepted in
+        self.worker.async { self.perform {
+          guard accepted else { throw EnrollmentProbeFailure.lifecycle }
+          try self.executeReview(review, retry: true)
+        }}
+      }}
+    }
+  }
   private func payment(_ message: IrohaPeerWireMessageV1) throws {
-    guard let offer = selection.offer else { throw EnrollmentProbeFailure.input }
-    let original = try wallet.original(.payment, envelope: IrohaPeerKagemushaWalletAdapterV1.decode(message))
-    try bind("receive", ["payment": original, "offer": offer])
+    guard let rawRequest = selection.requestMessage else { throw EnrollmentProbeFailure.input }
+    let request = try IrohaPeerWireMessageV1.decode(rawRequest,
+      expectedProfile: .kagemushaWalletV1, expectedKind: .request)
+    let requestEnvelope = try IrohaPeerKagemushaWalletAdapterV1.decode(request)
+    let paymentEnvelope = try IrohaPeerKagemushaWalletAdapterV1.decode(message)
+    try KagemushaWalletWireV1.requireExchangeBinding(request: requestEnvelope, payment: paymentEnvelope)
+    let original = try wallet.original(.payment, envelope: paymentEnvelope)
+    let companion = try IrohaPeerKagemushaWalletAdapterV1.payerCompanion(message)
+    try bind("receive", ["payment": original, "payer-companion": companion])
     let call: KagemushaWalletCallV1
     if selection.recovery {
       guard try files.exists(fencePath) else { throw EnrollmentProbeFailure.lifecycle }
       call = try wallet.requestStatus(requestId: selection.requestID)
     } else {
       try files.publishDispatchFence(fencePath, bytes: Data(EnrollmentProbeFiles.digest(original).utf8))
-      call = try wallet.receiveFromOffer(requestId: selection.requestID, payment: original, offer: offer)
+      call = try self.call.receiveWithCompanion(requestId: selection.requestID, payment: original, companion: companion)
     }
     try trace("native-return", ["nativeStatus": String(call.status),
       "outputSHA256": EnrollmentProbeFiles.digest(call.bytes)])
@@ -270,22 +325,29 @@ final class KagemushaNearbyDiagnostic: NSObject, IrohaPeerNearbyConnectionsTrans
     let original = try wallet.original(.credited, envelope: IrohaPeerKagemushaWalletAdapterV1.decode(message))
     try files.publish(attemptPath + String(format: "/%04d-credited-original.norito", traceSequence), bytes: original)
     try trace("credited-arrival", ["creditedSHA256": EnrollmentProbeFiles.digest(original)], at: arrival)
-    let call = try wallet.acceptCreditedForSend(sendRequestId: selection.requestID, original: original)
-    let admittedAt = KagemushaNearbyClock.nowNanoseconds()
-    try trace("native-credited-admission", ["nativeStatus": String(call.status),
-      "inputSHA256": EnrollmentProbeFiles.digest(original)], at: admittedAt)
-    // Gate marks terminal only after Native's exact Send-bound Archive returns COMPLETE.
-    let elapsed = try gate.credited(status: call.status, arrival: arrival, admitted: admittedAt)
+    let delivery = try call.observeCredited(sendRequestId: selection.requestID, credited: original)
+    let verifiedAt = KagemushaNearbyClock.nowNanoseconds()
+    let hex = { (bytes: Data) in bytes.map { String(format: "%02x", $0) }.joined() }
+    try trace("native-verified-delivery", [
+      "evidence": String(delivery.evidence.rawValue), "archive": String(delivery.archive.rawValue),
+      "corePending": String(delivery.corePending), "creditID": hex(delivery.creditId),
+      "paymentDigest": hex(delivery.paymentDigest), "amountLow": String(delivery.amount.low),
+      "amountHigh": String(delivery.amount.high), "creditedSHA256": EnrollmentProbeFiles.digest(original),
+      "archiveDispatched": "false"], at: verifiedAt)
+    // Delivery verification does not Advance; Native maintenance admits ArchiveSent after
+    // the exchange ends, subject to the current source, fold and idle conditions.
+    let elapsed = try gate.credited(evidence: delivery.evidence, archive: delivery.archive,
+      corePending: delivery.corePending, arrival: arrival, verified: verifiedAt)
     do {
       try trace("payer-complete", ["latencyQualified": String(elapsed != nil),
         "rawArrivalElapsedNs": elapsed.map { String($0.0) } ?? "unknown",
         "elapsedNs": elapsed.map { String($0.1) } ?? "unknown",
         "rawArrivalScope": "receiver-durable-completion-upper-bound",
-        "elapsedScope": "payer-confirmation-to-credited-admission",
+        "elapsedScope": "payer-confirmation-to-verified-delivery",
         "creditedSHA256": EnrollmentProbeFiles.digest(original), "physicalCarrierObserved": "true",
-        "timingAnchor": elapsed == nil ? "unknown-original-process" : "payer-authentication-success"], at: admittedAt)
+        "timingAnchor": elapsed == nil ? "unknown-original-process" : "payer-authentication-success"], at: verifiedAt)
     } catch {
-      // Terminal Native completion without durable evidence is still a failed diagnostic.
+      // Verified delivery without a durable diagnostic trace is still a failed diagnostic.
       teardown(); let done = completion; completion = nil
       done?(.failure(error)); return
     }

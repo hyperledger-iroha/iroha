@@ -7,14 +7,22 @@
 
 use super::*;
 
+pub(crate) mod finality_custody;
 mod operation;
 mod verified;
+mod verified_abort;
+mod verified_outcome;
+pub use finality_custody::{
+    FilePrivateSettlementFinality, MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES,
+    PrivateSettlementFinalityStorageError,
+};
 pub use operation::{
     PrivateSettlementError, PrivateSettlementOperation, PrivateSettlementRecovery,
     PrivateSettlementRequest, PrivateSettlementResult, PrivateSettlementRunOptions,
-    run_private_settlement_worker,
 };
 pub use verified::{PrivateSettlementReceiptError, VerifiedPrivateSettlementReceipt};
+pub use verified_abort::VerifiedPrivateSettlementAbort;
+pub use verified_outcome::VerifiedPrivateSettlementOutcome;
 
 use iroha_data_model::{
     isi::private_settlement::{

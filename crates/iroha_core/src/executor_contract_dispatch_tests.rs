@@ -657,7 +657,12 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
     state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = IvmCache::new();
     let error = super::Executor::Initial
-        .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
+        .execute_transaction(
+            &mut state_transaction,
+            &BOB_ID,
+            &transaction,
+            &mut ivm_cache,
+        )
         .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("the call-site authority must match the signed transaction");
     assert!(matches!(error, ValidationFail::InternalError(message) if
@@ -718,7 +723,7 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let executor = state_tx.world.executor.clone();
         executor
-            .execute_transaction(&mut state_tx, &ALICE_ID, tx, &mut ivm_cache)
+            .execute_transaction(&mut state_tx, &ALICE_ID, &tx, &mut ivm_cache)
             .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("ordinary metadata must not reject execution");
         assert_eq!(
@@ -1154,7 +1159,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(latest_block.clone());
+    let mut block = state.block(latest_block);
     let mut state_transaction = block.transaction();
     let executor = super::Executor::Initial;
     let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
@@ -1488,7 +1493,7 @@ fn migrate_applies_data_model_from_entrypoint() {
                 .map(|permission| permission.name().to_owned()),
         )
         .collect();
-    let custom_parameters: BTreeMap<CustomParameterId, CustomParameter> = BTreeMap::new();
+    let custom_parameters = iroha_data_model::parameter::CustomParameters::new();
     let data_model = ExecutorDataModel::new(
         custom_parameters,
         BTreeSet::new(),
@@ -1690,7 +1695,7 @@ fn native_exact_transaction_read_requires_source_account_grant_and_revalidates_r
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
         .expect_err("role revocation is effective");
 }
-/// Every authoritative SoraFS orderbook and reserve query is gated by its operator permission,
+/// Every authoritative `SoraFS` orderbook and reserve query is gated by its operator permission,
 /// while PoP-registry, moderation and reputation transparency reads stay public.
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1716,7 +1721,7 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(latest_block.clone());
+    let mut block = state.block(latest_block);
     let mut state_transaction = block.transaction();
     let executor = super::Executor::Initial;
     let singular = |query: SingularQueryBox| QueryRequest::Singular(query);

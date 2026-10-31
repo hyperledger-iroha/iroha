@@ -68,7 +68,7 @@ mod tests {
             default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
                 lane: LaneId::new(3),
-                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                dataspace: Some(DataSpaceId::new(6_647_857_470_246_403_404)),
                 matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
                     account: None,
                     instruction: Some("smartcontract::deploy".into()),
@@ -77,7 +77,7 @@ mod tests {
             }],
         };
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        let private_id = DataSpaceId::new(6647857470246403404);
+        let private_id = DataSpaceId::new(6_647_857_470_246_403_404);
         nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
@@ -147,7 +147,7 @@ mod tests {
             rules[0]
                 .get("dataspace_id")
                 .and_then(norito::json::Value::as_u64),
-            Some(6647857470246403404)
+            Some(6_647_857_470_246_403_404)
         );
         assert_eq!(
             rules[0]
@@ -385,7 +385,11 @@ mod tests {
             state.network_id_ref(),
             Duration::from_secs(5),
             iroha_data_model::parameter::TransactionParameters::default(),
-            state.crypto().as_ref(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("explicit fixture admission policy"),
         )
         .expect("original signed transaction passes envelope admission");
         queue
@@ -483,9 +487,7 @@ mod tests {
         for invalid in [zero_seed, invalid_windows] {
             let mut tx = block.transaction();
             tx.world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(invalid.into_custom_parameter()))
+                .set_parameter_for_testing(Parameter::Custom(invalid.into_custom_parameter()))
                 .expect("valid fixture parameters");
             let error = super::sumeragi_npos_diagnostics(&tx.world)
                 .expect_err("malformed original NPoS policy must remain terminal");
@@ -739,7 +741,7 @@ mod tests {
             max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
             cursor: None,
         };
-        let status_page = super::handle_get_sorafs_por_status(coordinator.clone(), status_query)
+        let status_page = super::handle_get_sorafs_por_status(&(coordinator), &(status_query))
             .expect("status handler responds");
         assert_eq!(status_page.statuses.len(), 1);
         assert_eq!(
@@ -756,18 +758,17 @@ mod tests {
             cursor: None,
         };
         assert!(
-            super::handle_get_sorafs_por_status(coordinator.clone(), oversized_status_query)
-                .is_err()
+            super::handle_get_sorafs_por_status(&(coordinator), &(oversized_status_query)).is_err()
         );
         let export = super::handle_get_sorafs_por_export(
-            coordinator.clone(),
-            PorExportQueryDto {
+            &(coordinator),
+            &(PorExportQueryDto {
                 start_epoch: Some(challenge_a.epoch_id),
                 end_epoch: Some(challenge_a.epoch_id),
                 limit: 5,
                 max_bytes: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
                 cursor: None,
-            },
+            }),
         )
         .expect("export handler responds");
         assert_eq!(export.page.statuses.len(), 1);
@@ -776,7 +777,7 @@ mod tests {
             challenge_a.challenge_id
         );
         let invalid_report_response = super::handle_get_sorafs_por_report(
-            coordinator.clone(),
+            &(coordinator),
             PorReportIsoWeek {
                 year: 9999,
                 week: 52,
@@ -789,7 +790,7 @@ mod tests {
             axum::http::StatusCode::BAD_REQUEST
         );
         let report = super::handle_get_sorafs_por_report(
-            coordinator.clone(),
+            &(coordinator),
             PorReportIsoWeek {
                 year: 2023,
                 week: 1,
@@ -1160,7 +1161,7 @@ mod tests {
 
         #[tokio::test]
         async fn finality_attestation_handler_distinguishes_absent_driver_and_foreign_signer() {
-            let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+            let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
             assert_failure(&app, 1, [0x41; 32], Reason::ConsensusUninitialized).await;
             let mut fixture = ReadinessNode::start();
             Arc::get_mut(&mut fixture.app)
@@ -1173,13 +1174,12 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_handler_rejects_missing_and_corrupt_embedded_certificate() {
             use iroha_core::{
-                kura::Kura,
-                query::store::LiveQueryStore,
-                state::{State, StateReadOnly, World},
+                state::{StateReadOnly, World},
+                sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
             };
             use iroha_data_model::block::CommitCertificate;
             for corrupt in [false, true] {
-                let mut fixture = ReadinessNode::start();
+                let mut fixture = ReadinessNode::start_at_tip(true);
                 let view = fixture.app.state.view();
                 let block = view
                     .latest_block()
@@ -1198,16 +1198,21 @@ mod tests {
                 let header = block.header();
                 let hash = block.hash();
                 drop(view);
-                let kura = Kura::blank_kura_for_testing();
-                let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-                    World::default(),
-                    Arc::clone(&kura),
-                    LiveQueryStore::start_test(),
-                    fixture.app.state.chain_id_ref().clone(),
-                    *fixture.app.state.network_id_ref(),
-                ));
-                // Provision authenticated primary storage while it is empty,
-                // then inject only the deliberate certificate defect.
+                assert_eq!(header.height().get(), 2);
+                let chain =
+                    CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+                        .expect(
+                            "execute the original signed genesis before injecting the H2 defect",
+                        );
+                let state = Arc::clone(chain.state());
+                let kura = Arc::clone(chain.kura());
+                assert_eq!(state.network_id_ref(), fixture.app.state.network_id_ref());
+                assert_eq!(chain.genesis().hash(), header.prev_block_hash().unwrap());
+                let original_scope = state
+                    .authenticated_root_scope()
+                    .expect("genuine executed genesis scope");
+                // Keep genuine H1 and its native authority. Only H2's source certificate
+                // and corresponding visible history are damaged; no native execution is claimed.
                 kura.store_block(
                     iroha_data_model::block::SharedSignedBlock::try_new(
                         block,
@@ -1220,12 +1225,14 @@ mod tests {
                 hashes.push_for_tests(hash);
                 hashes.commit_for_tests();
                 state.update_latest_block_header_cache_for_tests(header);
+                assert_eq!(state.authenticated_root_scope(), Some(original_scope));
+                assert_eq!(state.view().height(), 2);
                 let app = Arc::get_mut(&mut fixture.app).unwrap();
                 app.state = state;
                 app.kura = kura;
                 assert_failure(
                     &fixture.app,
-                    1,
+                    2,
                     [0x51; 32],
                     if corrupt {
                         Reason::ConflictingState
@@ -1241,7 +1248,7 @@ mod tests {
         async fn finality_attestation_handler_rejects_auth_challenge_and_admission_before_startup()
         {
             for case in 0..3 {
-                let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+                let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
                 let app_mut = Arc::get_mut(&mut app).unwrap();
                 if case == 0 {
                     app_mut.require_api_token = true;
@@ -1584,7 +1591,7 @@ mod event_stream_tests {
             status: TransactionStatus::Queued,
         }));
         let wanted_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash: wanted_hash.clone(),
+            hash: wanted_hash,
             block_height: None,
             lane_id: LaneId::new(0),
             dataspace_id: DataSpaceId::new(0),
@@ -1641,7 +1648,7 @@ mod event_stream_tests {
             };
         let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default()
-                .for_hash(wanted_hash.clone())
+                .for_hash(wanted_hash)
                 .into(),
         )]);
         let sub_bytes = to_bytes(&sub).expect("encode subscription");

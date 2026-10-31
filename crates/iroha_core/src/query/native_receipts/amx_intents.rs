@@ -9,7 +9,7 @@
 //! the existing exact-transaction workflow journal.
 //! Boundary delivery shares this owner and the existing exact-identity journal.
 //! TODO(S6): qualify complete autonomous
-//! PvP and idle-obligation progress on independent real roots.
+//! `PvP` and idle-obligation progress on independent real roots.
 
 use super::{
     NativeAmxRecordProofErrorV1, NativeAmxRecordProofPollV1, NativeAmxRecordProofReadV1,
@@ -178,6 +178,10 @@ pub enum NativeAmxPreparedRelayErrorV1 {
 
 /// Bounded acquisition, one move-only instruction, or exhaustion of the selected original frame.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The completed variant transfers the original funded relay or proof graph without an additional uncharged allocation"
+)]
 pub enum NativeAmxPreparedRelayPollV1 {
     /// The same source/proof job made bounded progress; no row was delivered.
     Pending,

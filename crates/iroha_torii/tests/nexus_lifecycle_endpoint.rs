@@ -73,7 +73,9 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     ));
     {
         let view = state.view();
-        queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
+        queue
+            .reconfigure_nexus(&state.nexus_snapshot(), &view, None)
+            .expect("original State pool admits Queue privacy projection");
     }
     let torii =
         fixtures::ToriiHarness::new_without_telemetry(&cfg, &kura, &state, &queue, events_sender);
@@ -196,9 +198,7 @@ async fn lifecycle_get_returns_exact_present_runtime_root_in_both_formats() {
     let expected = runtime.canonical_hash().unwrap();
     let mut world = harness.state.world.block();
     world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(runtime.into_custom_parameter().unwrap()))
+        .set_parameter_for_testing(Parameter::Custom(runtime.into_custom_parameter().unwrap()))
         .expect("install the committed runtime catalog fixture");
     world.commit();
     for accept in ["application/json", "application/x-norito"] {

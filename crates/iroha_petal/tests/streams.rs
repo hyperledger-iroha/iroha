@@ -8,14 +8,9 @@ use iroha_petal::stream::{
 };
 
 fn feed(assembler: &mut StreamAssembler, encoder: &StreamEncoder, frame: u16, lanes: &[Lane]) {
-    let (p, k, d) = encoder.words(frame);
+    let words = encoder.words(frame);
     for lane in lanes {
-        let word = match lane {
-            Lane::P => &p,
-            Lane::K => &k,
-            Lane::D => &d,
-        };
-        let data = decode_lane(*lane, word, &[]).expect("clean lane decodes");
+        let data = decode_lane(*lane, words.lane(*lane), &[]).expect("clean lane decodes");
         match lane {
             Lane::D => assembler.push_d_lane(&parse_d_lane(&data).expect("d lane")),
             _ => assembler.push_atoms(&parse_atom_lane(*lane, &data).expect("atoms")),
@@ -38,10 +33,10 @@ fn random_streams_always_complete_and_never_deliver_wrong_data() {
         let encoder = StreamEncoder::new(&payload, kind).expect("encoder");
         let loss_percent = rng.next_u32() % 70;
         let lanes: &[Lane] = match rng.next_u32() % 5 {
-            0 => &[Lane::P],
-            1 => &[Lane::D, Lane::P],
-            2 => &[Lane::K, Lane::D],
-            _ => &[Lane::P, Lane::K, Lane::D],
+            0 => &[Lane::Field(2)],
+            1 => &[Lane::D, Lane::Field(0)],
+            2 => &[Lane::Field(1), Lane::Field(3), Lane::D],
+            _ => &Lane::ALL,
         };
         let mut assembler = StreamAssembler::new(AssemblerLimits::default());
         let mut frame = (rng.next_u32() & 0xFFFF) as u16;
@@ -78,12 +73,7 @@ fn counter_wraparound_keeps_atom_ids_consistent() {
     // start a few frames before the 16-bit counter wraps and run across it
     let mut frame = 65_530u16;
     for _ in 0..200 {
-        feed(
-            &mut assembler,
-            &encoder,
-            frame,
-            &[Lane::P, Lane::K, Lane::D],
-        );
+        feed(&mut assembler, &encoder, frame, &Lane::ALL);
         frame = frame.wrapping_add(1);
         if assembler.progress().complete {
             break;

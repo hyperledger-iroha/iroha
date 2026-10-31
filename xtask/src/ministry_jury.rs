@@ -12,8 +12,8 @@ use rand::{
     SeedableRng,
     distr::{Distribution, weighted::WeightedIndex},
 };
+use rand::{TryRng as _, rngs::SysRng};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{OsRng as SecureOsRng, RngCore as SecureRngCore};
 use std::{
     error::Error,
     fs,
@@ -418,8 +418,8 @@ pub fn parse_nonce_hex_or_random(value: Option<&str>) -> Result<Vec<u8>, Box<dyn
         return Ok(bytes);
     }
     let mut nonce = vec![0u8; 32];
-    let mut rng = SecureOsRng;
-    SecureRngCore::fill_bytes(&mut rng, &mut nonce);
+    let mut rng = SysRng;
+    rng.try_fill_bytes(&mut nonce)?;
     Ok(nonce)
 }
 fn ensure_nonce_len(bytes: &[u8]) -> Result<(), Box<dyn Error>> {

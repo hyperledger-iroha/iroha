@@ -14,7 +14,7 @@ use manifest::signer::{
 include!("statement_fixture_support.rs");
 
 /// Deterministically signed synthetic custody and receipt for cryptographic regression tests.
-pub(crate) struct ReceiptFixture {
+pub struct ReceiptFixture {
     /// Synthetic test input; never deployment evidence or runtime credentials.
     pub(crate) signer: KeyPair,
     /// Synthetic test input; never deployment evidence or runtime credentials.
@@ -48,7 +48,7 @@ fn sign(
     }
 }
 /// Build or verify a deterministic synthetic receipt through the public contract.
-pub(crate) fn receipt_fixture() -> ReceiptFixture {
+pub fn receipt_fixture() -> ReceiptFixture {
     let signer = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519).unwrap();
     let attester = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).unwrap();
     let binding = SignerCustodyBindingV1 {
@@ -246,7 +246,7 @@ pub(crate) fn receipt_fixture() -> ReceiptFixture {
     fixture
 }
 /// Build or verify a deterministic synthetic receipt through the public contract.
-pub(crate) fn verify_receipt(
+pub fn verify_receipt(
     fixture: &ReceiptFixture,
 ) -> Result<VerifiedFinalPromotionSignerReceiptV1, SignerFinalPromotionReceiptErrorV1> {
     verify_final_promotion_signer_receipt_v1(
@@ -262,7 +262,7 @@ pub(crate) fn verify_receipt(
 }
 
 /// Synthetic receipt plus independently signed observer inputs for full consumer verification.
-pub(crate) struct EvidenceFixture {
+pub struct EvidenceFixture {
     /// Synthetic independently pinned test input.
     pub(crate) receipt: ReceiptFixture,
     /// Synthetic independently pinned test input.

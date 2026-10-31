@@ -1,12 +1,10 @@
-import { ed25519 } from "@noble/curves/ed25519";
-import { sha512 } from "@noble/hashes/sha512";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { sha512 } from "@noble/hashes/sha2.js";
 
 const ED25519_POINT_BYTES = 32;
 const ED25519_SIGNATURE_BYTES = 64;
-// ExtendedPoint/fromHex/toRawBytes/multiplyUnsafe are available throughout the
-// package's declared @noble/curves ^1.4.0 range. Newer noble releases also
-// expose the same constructor as `Point`.
-const Ed25519Point = ed25519.ExtendedPoint;
+// Noble v2 separates byte decoding from hexadecimal text decoding.
+const Ed25519Point = ed25519.Point;
 
 export class StrictEd25519Error extends Error {
   constructor(code, message) {
@@ -46,14 +44,14 @@ function numberFromLittleEndian(bytes) {
 function parseStrictPoint(bytes, context) {
   let point;
   try {
-    point = Ed25519Point.fromHex(bytes, false);
+    point = Ed25519Point.fromBytes(bytes, false);
   } catch (error) {
     throw new StrictEd25519Error(
       "invalid_encoding",
       `${context} is not a canonical compressed Ed25519 point: ${error.message}`,
     );
   }
-  if (!equalBytes(point.toRawBytes(), bytes)) {
+  if (!equalBytes(point.toBytes(), bytes)) {
     throw new StrictEd25519Error(
       "invalid_encoding",
       `${context} is not the canonical compressed Ed25519 encoding`,
@@ -101,7 +99,7 @@ export function verifyEd25519Strict(message, signature, publicKey) {
     const scalarS = numberFromLittleEndian(
       signatureBytes.subarray(ED25519_POINT_BYTES),
     );
-    if (scalarS >= ed25519.CURVE.n) return false;
+    if (scalarS >= Ed25519Point.Fn.ORDER) return false;
 
     const messageSnapshot = Uint8Array.from(message);
     const challenge =
@@ -112,7 +110,7 @@ export function verifyEd25519Strict(message, signature, publicKey) {
           .update(publicKeyBytes)
           .update(messageSnapshot)
           .digest(),
-      ) % ed25519.CURVE.n;
+      ) % Ed25519Point.Fn.ORDER;
     const left = Ed25519Point.BASE.multiplyUnsafe(scalarS);
     const right = rPoint.add(publicPoint.multiplyUnsafe(challenge));
     return left.equals(right);

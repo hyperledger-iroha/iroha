@@ -883,7 +883,7 @@ impl RetainedBenchmarkNetwork {
         verify_controller_readiness(&network, &runtime)?;
         let coordinator = CoordinatorProcessV1::start(&network.client())?;
         prepare_participant_assets(&network, shape)?;
-        let activated_height = require_genesis_private_note_active(&network.client())?;
+        let activated_height = require_genesis_private_note_profile(&network.client())?;
         let initial_inventory =
             collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
         Ok(Self {

@@ -247,21 +247,21 @@ impl<'a> Parser<'a> {
             }
             25 => {
                 let value = u64::from(u16::from_be_bytes(self.take_array()?));
-                if value <= u64::from(u8::MAX) {
+                if u8::try_from(value).is_ok() {
                     return Err(CborError::NonMinimalArgument);
                 }
                 Ok(value)
             }
             26 => {
                 let value = u64::from(u32::from_be_bytes(self.take_array()?));
-                if value <= u64::from(u16::MAX) {
+                if u16::try_from(value).is_ok() {
                     return Err(CborError::NonMinimalArgument);
                 }
                 Ok(value)
             }
             27 => {
                 let value = u64::from_be_bytes(self.take_array()?);
-                if value <= u64::from(u32::MAX) {
+                if u32::try_from(value).is_ok() {
                     return Err(CborError::NonMinimalArgument);
                 }
                 Ok(value)

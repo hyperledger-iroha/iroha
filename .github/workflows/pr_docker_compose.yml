@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Validate digest-pinned Docker base images
         run: |
           python3 scripts/validate_release_image_bases.py \
@@ -29,12 +29,11 @@ jobs:
             --runtime "$IROHA_RUNTIME_IMAGE"
       - name: Set up Docker buildx
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           version: v0.34.1
-          install: true
       - name: Build and tag Docker images
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         if: always()
         with:
           context: .
@@ -57,8 +56,8 @@ jobs:
             --mount "type=bind,src=$bundle_root,dst=/bundle" \
             --entrypoint kagami \
             hyperledger/iroha:local \
-            localnet --seed Iroha --peers 4 --sora-profile nexus \
-              --consensus-mode npos --out-dir /bundle > /dev/null
+            sora-network generate --seed Iroha --peers 4 --profile nexus \
+              --out-dir /bundle > /dev/null
           test -s "$bundle_root/genesis.signed.nrt"
           test -s "$bundle_root/genesis.public_key"
           test -s "$bundle_root/genesis.expected_hash"

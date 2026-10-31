@@ -63,7 +63,8 @@ impl MemoryAccesses {
             let base = Fields::native(&native.packets()[first + 4]);
             let pc = &native.packets()[first];
             let address = if enabled {
-                let pc = u64::from_le_bytes(pc.before()[..8].try_into().unwrap()) as usize;
+                let pc = usize::try_from(u64::from_le_bytes(pc.before()[..8].try_into().unwrap()))
+                    .expect("admitted native program counter fits usize");
                 let offset = pc + native.artifact().header_len();
                 let word = u32::from_le_bytes(
                     native.artifact().artifact()[offset..offset + 4]
@@ -79,7 +80,11 @@ impl MemoryAccesses {
                 bounds,
                 enabled,
                 address,
-                initialized.0[packet::BEFORE].0 as u16,
+                u16::from_le_bytes(
+                    u64::to_le_bytes(initialized.0[packet::BEFORE].0)[..2]
+                        .try_into()
+                        .expect("low-byte width"),
+                ),
             );
             rows.push_reserved(row);
         }
@@ -101,14 +106,14 @@ impl MemoryAccesses {
             self.bounds,
             first,
             &self.rows.as_slice()[window].0,
-            decoded.store,
-            decoded.load,
-            decoded.load_destination,
+            (decoded.store, decoded.load, decoded.load_destination),
             &decoded.memory_address,
-            decoded.store_value,
-            decoded.destination,
-            &memory.0,
-            &initialized.0,
+            (
+                decoded.store_value,
+                decoded.destination,
+                &memory.0,
+                &initialized.0,
+            ),
         );
         for offset in GAPS {
             let gap = Fields::native(&native.packets()[first + offset]);
@@ -175,14 +180,14 @@ fn append(
     bounds: [[u64; 2]; 2],
     first: usize,
     row: &[F; WIDTH],
-    store: F,
-    load: F,
-    load_destination: F,
+    (store, load, load_destination): (F, F, F),
     address: &[F; 4],
-    source: &[F; packet::WIDTH],
-    destination: &[F; packet::WIDTH],
-    memory: &[F; packet::WIDTH],
-    initialized: &[F; packet::WIDTH],
+    (source, destination, memory, initialized): (
+        &[F; packet::WIDTH],
+        &[F; packet::WIDTH],
+        &[F; packet::WIDTH],
+        &[F; packet::WIDTH],
+    ),
 ) {
     use packet::*;
     let start = out.len();
@@ -246,9 +251,7 @@ fn append(
     header(
         out,
         memory,
-        Space::Memory,
-        0,
-        first + 6,
+        (Space::Memory, 0, first + 6),
         selected,
         store,
         index,
@@ -275,9 +278,7 @@ fn append(
     header(
         out,
         initialized,
-        Space::Initialization,
-        1,
-        first + 7,
+        (Space::Initialization, 1, first + 7),
         selected,
         store,
         index,
@@ -323,12 +324,14 @@ fn append(
 }
 fn header(
     out: &mut impl Sink,
+
     fields: &[F; packet::WIDTH],
-    space: packet::Space,
-    generation: u64,
-    clock: usize,
+    (space, generation, clock): (packet::Space, u64, usize),
+
     selected: F,
+
     write: F,
+
     index: F,
 ) {
     use packet::*;

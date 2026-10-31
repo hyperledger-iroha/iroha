@@ -20,7 +20,7 @@ async fn push_records_teu_using_router_assignment() {
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
     let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
         nexus,
         LiveQueryStore::start_test(),
     );
@@ -57,13 +57,16 @@ async fn push_records_teu_using_router_assignment() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         state.network_id_ref(),
         Duration::from_secs(60),
         tx_limits,
-        &crypto_cfg,
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
         &time_source,
     )
     .expect("Failed to accept transaction.");
@@ -117,7 +120,7 @@ fn expired_event_uses_the_authoritative_full_plan() {
     nexus.routing_policy.default_lane = expected.lane_id;
     nexus.routing_policy.default_dataspace = expected.dataspace_id;
     let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
         nexus,
         LiveQueryStore::start_test(),
     );

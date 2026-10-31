@@ -17,7 +17,7 @@ use crate::secret::SecretPolynomial;
 use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 
 use super::{ProverError, random_values, write_point};
 use crate::{
@@ -87,7 +87,7 @@ pub(super) fn commit_random<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let coeffs = SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.n));
     let blind = C::ScalarExt::random(&mut *rng);
@@ -130,7 +130,7 @@ pub(super) fn commit_quotient<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let h = SecretPolynomial::new(h);
     let expected = shape
@@ -148,19 +148,17 @@ where
     }
     let blinds =
         SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.quotient_pieces));
-    let tables = pk.commitment_tables();
-    for (piece, blind) in h.chunks_exact(shape.n).zip(blinds.iter()) {
-        let commitment = tables
-            .commit_cancellable(
-                params.params(),
-                piece,
-                blind,
-                Secrecy::Secret,
-                budget,
-                cancellation,
-            )?
-            .to_affine();
-        write_point(transcript, &commitment)?;
+    // The pieces are independent MSMs over the same bases: one bounded batch.
+    let pieces: Vec<&[C::ScalarExt]> = h.chunks_exact(shape.n).collect();
+    let commitments = pk.commitment_tables().commit_secret_columns_cancellable(
+        params.params(),
+        &pieces,
+        &blinds,
+        budget,
+        cancellation,
+    )?;
+    for commitment in &commitments {
+        write_point(transcript, &commitment.to_affine())?;
     }
     Ok(QuotientPieces {
         coefficients: h.into_vec(),

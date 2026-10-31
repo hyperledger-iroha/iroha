@@ -278,9 +278,9 @@ macro_rules! clearing_secret_type {
             /// Returns [`RamLfeError::RandomnessUnavailable`] when the source fails.
             #[cfg(feature = "rand")]
             pub fn generate() -> Result<Self, RamLfeError> {
-                use rand_core::TryRngCore as _;
+                use rand_core::TryRng as _;
                 let mut bytes = ClearingArray::zeroed();
-                rand_core::OsRng
+                rand::rngs::SysRng
                     .try_fill_bytes(bytes.as_mut_slice())
                     .map_err(|_| RamLfeError::RandomnessUnavailable)?;
                 Self::checked(bytes)

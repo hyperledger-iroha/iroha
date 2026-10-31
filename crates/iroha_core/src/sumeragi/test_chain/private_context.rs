@@ -1,6 +1,6 @@
 //! Real paid H2 private-context source for downstream authorization-race controls.
 //!
-//! Reuses the canonical governed-pool bootstrap planner and CertifiedTestChain's actual native
+//! Reuses the canonical governed-pool bootstrap planner and `CertifiedTestChain`'s actual native
 //! execution/publication. The fixture signs genuine four-seat certificates itself; it does
 //! not run a consensus network or grant a production proof-authority constructor.
 
@@ -190,7 +190,7 @@ pub fn native_private_context_route_fixture()
         // The genuine genesis lane step closes assignments absent from policy.
         // Commit this exact fixed committee so the selected H2 route stays live.
         let mut policy = SumeragiLanePolicy::for_chain(
-            Default::default(),
+            iroha_data_model::parameter::system::SumeragiParameters::default(),
             iroha_sumeragi::availability::recommended_data_availability_layout(),
         );
         policy.fixed.push(SumeragiFixedLane {
@@ -212,7 +212,7 @@ pub fn native_private_context_route_fixture()
             lane: key.route.lane_id,
             dataspace: key.route.dataspace_id,
             incarnation: *key.route.lane_incarnation.as_ref(),
-            params: Default::default(),
+            params: iroha_data_model::parameter::system::SumeragiParameters::default(),
             committee: members,
             created_at: 0,
             active_from: 1,
@@ -267,14 +267,14 @@ pub fn native_private_context_route_fixture()
     let owner = account(&signer);
     let recipient = account(&KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519));
     let source = AssetId::with_scope(fee_asset(), owner.clone(), AssetBalanceScope::Global);
-    let signed = paid_global_sign(
+    let transaction = paid_global_sign(
         &chain,
         &signer,
         [Transfer::asset_quantity(source.clone(), 1_u32, recipient.clone()).into()],
         1_999,
     );
-    let original_input = signed.hash_as_entrypoint();
-    assert_eq!(chain.commit_at(2_000, vec![signed]), vec![true]);
+    let original_input = transaction.hash_as_entrypoint();
+    assert_eq!(chain.commit_at(2_000, vec![transaction]), vec![true]);
     let committed = chain.committed(2);
     let input = committed.block().network_entrypoint_at(0).unwrap();
     assert_eq!(input.hash(), original_input);

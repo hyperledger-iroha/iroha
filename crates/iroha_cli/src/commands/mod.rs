@@ -1,7 +1,7 @@
 pub mod alias;
 pub mod connect;
 pub mod da;
-pub(super) mod da_common;
+pub mod da_common;
 pub mod kaigi;
 pub mod sns;
 pub mod social;

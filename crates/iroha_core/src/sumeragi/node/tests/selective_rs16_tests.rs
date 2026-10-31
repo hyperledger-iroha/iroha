@@ -357,6 +357,11 @@ struct SocketNodes {
 impl SocketNodes {
     fn new(root: &DataspaceChain) -> Self {
         let runtime = super::super::p2p_owner_tests::runtime();
+        // This scenario owns an isolated logger. Formatting every socket frame at
+        // DEBUG can starve the real workers past their unchanged progress bounds.
+        runtime
+            .block_on(iroha_logger::test_logger().reload_level("error".parse().unwrap()))
+            .expect("configure only this isolated socket scenario's logger");
         let mut keys = root.chain.keys.clone();
         keys.push(KeyPair::from_seed(vec![0xE9; 32], Algorithm::BlsNormal));
         let ids = keys
@@ -647,6 +652,12 @@ fn assert_observer_waiting(
 
 #[test]
 fn native_socket_selective_signed_rows_preserve_partial_delivery_and_original_paid_recovery() {
+    let _scenario = real_node_scenario_guard();
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::node::tests::dataspace_roots::selective_rs16_tests::native_socket_selective_signed_rows_preserve_partial_delivery_and_original_paid_recovery",
+    ) {
+        return;
+    }
     let parent = chain(4, 200);
     let root = DataspaceChain::new(
         NetworkId::from_genesis_hash(parent.genesis.hash()),
@@ -671,7 +682,13 @@ fn native_socket_selective_signed_rows_preserve_partial_delivery_and_original_pa
         &network,
         Duration::from_secs(10),
         TransactionParameters::default(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        fixture.nodes[0]
+            .state
+            .view()
+            .world()
+            .parameters()
+            .crypto_policy()
+            .expect("original committed admission policy"),
     )
     .unwrap();
     let hash = accepted.hash_as_entrypoint();

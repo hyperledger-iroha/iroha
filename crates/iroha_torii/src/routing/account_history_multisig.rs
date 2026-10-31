@@ -87,21 +87,25 @@ where
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
     budget.charge_original(bytes)?;
-    let value: T =
-        norito::with_decode_limits_scope(norito::canonical_decode_limits(bytes.len()), || {
-            norito::decode_from_bytes(bytes)
-        })
-        .map_err(|error| {
-            conversion_error(format!("invalid native multisig history original: {error}"))
-        })?;
-    // The native writers use to_bytes. Stream that exact re-encoding over the
-    // retained frame instead of allocating a second original-sized buffer.
-    norito::verify_exact_frame(&value, bytes).map_err(|error| {
-        conversion_error(format!(
-            "noncanonical native multisig history original: {error}"
-        ))
-    })?;
-    Ok(value)
+    // Classify outside the canonical frame's own scope, while the request's original
+    // cumulative owner is still active. Its refusal is not evidence of corrupt State.
+    norito::core::classify_decode_attempt(|| {
+        let value: T =
+            norito::with_decode_limits_scope(norito::canonical_decode_limits(bytes.len()), || {
+                norito::decode_from_bytes(bytes)
+            })?;
+        norito::verify_exact_frame(&value, bytes)?;
+        Ok(value)
+    })
+    .map_err(|error| match error.into_local_refusal() {
+        Ok(original) => crate::canonical_history::query_attempt_error(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original.into()),
+        ),
+        Err(error) => conversion_error(format!(
+            "invalid native multisig history original: {}",
+            error.into_error()
+        )),
+    })
 }
 
 fn validate_execution(
@@ -166,7 +170,7 @@ fn validate_executed_outcome(
 
 /// Bound the existing pure movement projector before it allocates its output.
 ///
-/// Never feed it CustomInstruction: a nested proposal is intent, and a nested
+/// Never feed it `CustomInstruction`: a nested proposal is intent, and a nested
 /// approval's actual effects are represented by its own immutable execution
 /// record in the same entrypoint prefix. This also prevents double projection.
 fn direct_movement_bound(instruction: &InstructionBox) -> usize {
@@ -387,7 +391,7 @@ mod tests {
                 instructions,
                 proposed_at_ms: 100,
                 expires_at_ms: 200,
-                approvals: Default::default(),
+                approvals: std::collections::BTreeSet::default(),
             },
             status: MultisigProposalTerminalStatus::Finalized,
             terminal_at_ms: 150,
@@ -435,7 +439,7 @@ mod tests {
     #[test]
     fn execution_is_bound_to_exact_key_network_height_and_occurrence() {
         let (key, execution) = execution_fixture();
-        let network = execution.terminal.proposal.network_id.clone();
+        let network = execution.terminal.proposal.network_id;
         validate_execution(&key, &execution, [0x33; 32], 65, &network).unwrap();
         assert!(validate_execution(&key, &execution, [0x34; 32], 65, &network).is_err());
         assert!(validate_execution(&key, &execution, [0x33; 32], 66, &network).is_err());
@@ -579,5 +583,57 @@ mod tests {
         let independent: InstructionBox = TransferAssetBatch::independent(Vec::new()).into();
         assert_eq!(direct_movement_bound(&atomic), 0);
         assert_eq!(direct_movement_bound(&independent), 0);
+    }
+}
+
+#[cfg(test)]
+mod original_decode_tests {
+    use super::*;
+    use axum::response::IntoResponse as _;
+
+    #[test]
+    fn valid_original_decode_capacity_is_retryable_but_corruption_is_terminal() {
+        let original = vec![0x5a_u8; 4_096];
+        let bytes = norito::to_bytes(&original).unwrap();
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let spent = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            64 * 1024,
+            64 * 1024,
+            64 * 1024,
+            8_192,
+            64,
+        ));
+        spent
+            .with(|| norito::core::reserve_decode_allocation(8_192))
+            .unwrap();
+        let response = owner
+            .scope(|| {
+                spent.with(|| {
+                    decode_original::<Vec<u8>>(
+                        &bytes,
+                        &mut MultisigHistoryBudget::new(100, 64 * 1024),
+                    )
+                })
+            })
+            .unwrap_err()
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let retry = crate::history_producer::HistoryProducerOwner::for_test();
+        let decoded = retry
+            .scope(|| {
+                decode_original::<Vec<u8>>(&bytes, &mut MultisigHistoryBudget::new(100, 64 * 1024))
+            })
+            .unwrap();
+        assert_eq!(decoded, original);
+        let corrupt = retry
+            .scope(|| {
+                decode_original::<Vec<u8>>(
+                    b"not a Norito original",
+                    &mut MultisigHistoryBudget::new(100, 64 * 1024),
+                )
+            })
+            .unwrap_err()
+            .into_response();
+        assert_eq!(corrupt.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 }

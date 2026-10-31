@@ -12,9 +12,13 @@
 //!   else is rejected with the file and key. Such a file must not be combined with `--sora`
 //!   and must not use `extends`.
 //!
-//! In both cases a `data_dir` completes every state path the configuration leaves unset under
+//! In both cases a `data_dir` completes registered state paths the configuration leaves unset under
 //! `<data_dir>/state/` and every secret file under `<data_dir>/secrets/`
-//! ([`crate::parameters::defaults::data_dir`]). Explicit per-path values win. A relative
+//! ([`crate::parameters::defaults::data_dir`]). Opt-in service paths are completed only when
+//! their section sets `enabled = true`; disabled services retain their defaults.
+//! Explicit per-path values win. The `SoraNet` transport and streaming identities are
+//! node-local: a launcher creates a missing completed key file
+//! ([`NodeConfigReader::local_identities`], [`LocalIdentity`]). A relative
 //! `data_dir` resolves against the directory of the file that sets it and is then made absolute
 //! against the working directory, so every completed path is absolute. The resolved `data_dir`
 //! is written to the loader-owned source [`crate::parameters::defaults::data_dir::LAYOUT_SOURCE`],
@@ -22,7 +26,7 @@
 //! rejected.
 
 use crate::{
-    parameters::{defaults::data_dir as layout, user},
+    parameters::{actual::NodeSecretFile, defaults::data_dir as layout, user},
     profile::{
         DerivedGeometryV1, Profile, ProfileDigest, ProfileError, ProfileId, ProfileRole,
         deep_merge, leaf_keys,
@@ -30,8 +34,10 @@ use crate::{
 };
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{ParameterId, read::ConfigReader, toml::TomlSource};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// Node-file key selecting a compiled profile.
 pub const PROFILE_KEY: &str = "profile";
@@ -63,6 +69,9 @@ struct SecretFile {
     alternatives: &'static [&'static [&'static str]],
     /// The completion applies only when the parent section is configured.
     needs_parent: bool,
+    /// A node-local identity and the key of its public half: a completed file that this public
+    /// key does not pin is one of [`NodeConfigReader::local_identities`].
+    local_identity: Option<(NodeSecretFile, &'static [&'static str])>,
 }
 
 /// Secret files completed from `data_dir`.
@@ -72,30 +81,38 @@ const SECRET_FILES: &[SecretFile] = &[
         name: layout::VALIDATOR_KEY,
         alternatives: &[&["private_key"]],
         needs_parent: false,
+        local_identity: None,
     },
     SecretFile {
         key: &["soranet_transport_private_key_file"],
         name: layout::TRANSPORT_KEY,
         alternatives: &[&["soranet_transport_private_key"]],
         needs_parent: false,
+        local_identity: Some((NodeSecretFile::Transport, &["soranet_transport_public_key"])),
     },
     SecretFile {
         key: &["streaming", "identity_private_key_file"],
         name: layout::STREAMING_KEY,
         alternatives: &[&["streaming", "identity_private_key"]],
         needs_parent: false,
+        local_identity: Some((
+            NodeSecretFile::Streaming,
+            &["streaming", "identity_public_key"],
+        )),
     },
     SecretFile {
         key: &["torii", "faucet", "private_key_file"],
         name: layout::FAUCET_AUTHORITY_KEY,
         alternatives: &[],
         needs_parent: true,
+        local_identity: None,
     },
     SecretFile {
         key: &["torii", "account_onboarding", "private_key_file"],
         name: layout::ONBOARDING_AUTHORITY_KEY,
         alternatives: &[],
         needs_parent: true,
+        local_identity: None,
     },
 ];
 
@@ -194,6 +211,7 @@ pub struct NodeConfigReader {
     reader: ConfigReader,
     profile: Option<ProfileBinding>,
     data_dir: Option<PathBuf>,
+    local_identities: Vec<NodeSecretFile>,
 }
 
 impl NodeConfigReader {
@@ -204,6 +222,18 @@ impl NodeConfigReader {
     #[must_use]
     pub fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()
+    }
+
+    /// The node-local identities this configuration reads from `<data_dir>/secrets/` only because
+    /// the loader completed their key files: the `SoraNet` transport and streaming identities that
+    /// no inline key, explicit key file or configured public key sets.
+    ///
+    /// Nothing outside the node binds them (the validator key certifies the transport key at
+    /// every handshake), so a launcher creates each missing file with a fresh [`LocalIdentity`]
+    /// before reading the configuration. The validator key is never among them.
+    #[must_use]
+    pub fn local_identities(&self) -> &[NodeSecretFile] {
+        &self.local_identities
     }
 
     /// The prepared reader, for example to test whether a parameter is set explicitly.
@@ -239,6 +269,44 @@ impl NodeConfigReader {
     }
 }
 
+/// A fresh node-local Ed25519 identity ([`NodeConfigReader::local_identities`]) and its key-file
+/// record: the canonical private-key multihash and one newline, the record the configuration
+/// parser reads. The record is zeroized on drop.
+pub struct LocalIdentity {
+    public_key: PublicKey,
+    record: Zeroizing<String>,
+}
+
+impl LocalIdentity {
+    /// Generate an identity from the operating-system random source.
+    ///
+    /// # Errors
+    ///
+    /// When key generation or the canonical encoding fails.
+    pub fn generate() -> Result<Self, iroha_crypto::Error> {
+        let (public_key, private_key) =
+            KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?.into_parts();
+        let literal = Zeroizing::new(ExposedPrivateKey(private_key).try_to_multihash_string()?);
+        // Sized up front so appending the newline never leaves a reallocated copy behind.
+        let mut record = Zeroizing::new(String::with_capacity(literal.len() + 1));
+        record.push_str(&literal);
+        record.push('\n');
+        Ok(Self { public_key, record })
+    }
+
+    /// The public key of the identity.
+    #[must_use]
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    /// The bytes of the key file.
+    #[must_use]
+    pub fn record(&self) -> &[u8] {
+        self.record.as_bytes()
+    }
+}
+
 /// Prepare a node configuration: resolve its profile layers (if it selects a profile) and
 /// complete its `data_dir` layout. Environment overlays are disabled.
 ///
@@ -259,11 +327,7 @@ pub fn open_node_config(
                     .without_env()
                     .read_toml_with_extends(&path)
                     .change_context_lazy(|| NodeConfigError::ReadFile(path.clone()))?;
-                return complete_data_dir(reader).map(|(reader, data_dir)| NodeConfigReader {
-                    reader,
-                    profile: None,
-                    data_dir,
-                });
+                return complete_data_dir(reader, None);
             }
             open_profile_node(source, options)
         }
@@ -294,11 +358,7 @@ pub fn open_node_config_source(
         return open_profile_node(source, options);
     }
     let reader = ConfigReader::new().without_env().with_toml_source(source);
-    complete_data_dir(reader).map(|(reader, data_dir)| NodeConfigReader {
-        reader,
-        profile: None,
-        data_dir,
-    })
+    complete_data_dir(reader, None)
 }
 
 /// [`open_node_config`] followed by [`NodeConfigReader::read`].
@@ -422,11 +482,7 @@ fn open_profile_node(
         ConfigReader::new().without_env(),
         ConfigReader::with_toml_source,
     );
-    complete_data_dir(reader).map(|(reader, data_dir)| NodeConfigReader {
-        reader,
-        profile: Some(binding),
-        data_dir,
-    })
+    complete_data_dir(reader, Some(binding))
 }
 
 fn profile_error(error: ProfileError) -> Report<NodeConfigError> {
@@ -480,9 +536,15 @@ fn merge_value_tables(sources: &mut [TomlSource]) {
 /// the loader-owned [`layout::LAYOUT_SOURCE`], the marker the parser requires.
 fn complete_data_dir(
     mut reader: ConfigReader,
-) -> Result<(ConfigReader, Option<PathBuf>), Report<NodeConfigError>> {
+    profile: Option<ProfileBinding>,
+) -> Result<NodeConfigReader, Report<NodeConfigError>> {
     let Some(data_dir) = resolve_data_dir(&reader) else {
-        return Ok((reader, None));
+        return Ok(NodeConfigReader {
+            reader,
+            profile,
+            data_dir: None,
+            local_identities: Vec::new(),
+        });
     };
     let data_dir = match data_dir {
         Ok(data_dir) => data_dir,
@@ -498,6 +560,20 @@ fn complete_data_dir(
         .iter()
         .map(|(key, relative)| (*key, state_dir.join(relative)))
         .collect();
+    for (key, relative) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let enabled = ParameterId::from(key[..key.len() - 1].iter().copied().chain(["enabled"]));
+        if reader
+            .toml_sources()
+            .iter()
+            .rev()
+            .find_map(|source| source.fetch(&enabled))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+        {
+            completions.push((key, state_dir.join(relative)));
+        }
+    }
+    let mut local_identities = Vec::new();
     for secret in SECRET_FILES {
         let parent = &secret.key[..secret.key.len() - 1];
         if secret
@@ -514,6 +590,12 @@ fn complete_data_dir(
                 .any(|source| table_at(source.table(), parent).is_some())
         {
             continue;
+        }
+        if let Some((file, public_key)) = secret.local_identity
+            && !reader.contains_toml_parameter(secret.key)
+            && !reader.contains_toml_parameter(public_key)
+        {
+            local_identities.push(file);
         }
         completions.push((secret.key, secrets_dir.join(secret.name)));
     }
@@ -549,13 +631,15 @@ fn complete_data_dir(
             None => insert_at(&mut layout_table, key, value),
         }
     }
-    Ok((
-        reader.with_toml_source(TomlSource::new(
+    Ok(NodeConfigReader {
+        reader: reader.with_toml_source(TomlSource::new(
             PathBuf::from(layout::LAYOUT_SOURCE),
             layout_table,
         )),
-        Some(data_dir),
-    ))
+        profile,
+        data_dir: Some(data_dir),
+        local_identities,
+    })
 }
 
 /// The effective `data_dir`: resolved against the directory of the file that sets it, then made

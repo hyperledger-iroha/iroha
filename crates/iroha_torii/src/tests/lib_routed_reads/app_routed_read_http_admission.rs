@@ -17,6 +17,18 @@ mod app_routed_read_http_admission_tests {
         },
         task::Poll,
     };
+    async fn collect_test_body(
+        body: Body,
+        limit: usize,
+        declared: Option<usize>,
+    ) -> Result<AdmittedAppRoutedReadBody, Response> {
+        let app = mk_app_state_for_tests();
+        let memory = acquire_app_routed_read_body_memory(&app, declared.unwrap_or(limit))
+            .await
+            .expect("test body retention credit");
+        collect_app_routed_read_body(body, limit, declared, memory).await
+    }
+
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {
@@ -188,8 +200,7 @@ mod app_routed_read_http_admission_tests {
                 entry.decoder,
                 AppRoutedReadHttpDecoder::None
                     | AppRoutedReadHttpDecoder::Query("ListQuery")
-                    | AppRoutedReadHttpDecoder::Json("ListQuery")
-                    | AppRoutedReadHttpDecoder::Json("AccountInspectionRequest")
+                    | AppRoutedReadHttpDecoder::Json("ListQuery" | "AccountInspectionRequest")
             ));
             assert!(
                 APP_ROUTED_READ_HTTP_ENDPOINTS_V1
@@ -207,7 +218,7 @@ mod app_routed_read_http_admission_tests {
                 )
             })
             .collect();
-        assert_eq!(collections.len(), 32);
+        assert_eq!(collections.len(), 34);
         for pair in collections.chunks_exact(2) {
             assert_eq!(pair[0].endpoint, pair[1].endpoint);
             assert_eq!(
@@ -245,7 +256,7 @@ mod app_routed_read_http_admission_tests {
             inspection.decoder,
             AppRoutedReadHttpDecoder::Json("AccountInspectionRequest")
         );
-        assert_eq!(ids.len(), 43);
+        assert_eq!(ids.len(), 45);
     }
 
     async fn native_read_owner_probe(
@@ -336,7 +347,7 @@ mod app_routed_read_http_admission_tests {
 
     #[tokio::test]
     async fn account_inspection_real_handler_inherits_outer_http_owner() {
-        let app = mk_app_state_for_tests();
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let before = app.query_fanout_inflight.available_bytes();
         let descriptor = route_catalog::application_api::ACCOUNTS_INSPECT_POST;
         let account = AccountId::new(
@@ -563,14 +574,14 @@ mod app_routed_read_http_admission_tests {
 
         let response_only = tokio::sync::Semaphore::new(1);
         let response_only = Arc::new(response_only).acquire_owned().await.unwrap();
-        admission._fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
+        admission.fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
         assert!(matches!(
             admission.response_body_budget(),
             Err(Error::Query(
                 iroha_data_model::ValidationFail::InternalError(_)
             ))
         ));
-        admission._fanout_memory = None;
+        admission.fanout_memory = None;
         assert!(admission.response_body_budget().is_err());
     }
 
@@ -650,7 +661,7 @@ mod app_routed_read_http_admission_tests {
     }
     #[tokio::test]
     async fn missing_content_length_keeps_exact_owner_and_body_extraction_is_zero_copy() {
-        let admitted = collect_app_routed_read_body(Body::from("abc"), 8, None)
+        let admitted = collect_test_body(Body::from("abc"), 8, None)
             .await
             .expect("small unknown-length body");
         assert_eq!(admitted.bytes.as_ref(), b"abc");
@@ -667,6 +678,7 @@ mod app_routed_read_http_admission_tests {
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
             decode_plan: torii_routed_read_request_preflight_plan(&app).expect("test request plan"),
+            canonical_auth: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
         let extension = APP_ROUTED_READ_HTTP_ADMISSION
             .scope(admission, async {
@@ -690,7 +702,7 @@ mod app_routed_read_http_admission_tests {
                 _ => None,
             })
         }));
-        let admitted = collect_app_routed_read_body(body, 8, None)
+        let admitted = collect_test_body(body, 8, None)
             .await
             .expect("zero-byte body should drain successfully");
         assert_eq!(polls.load(Ordering::SeqCst), 2);
@@ -700,15 +712,15 @@ mod app_routed_read_http_admission_tests {
     }
     #[tokio::test]
     async fn unknown_and_lying_lengths_reject_exact_plus_one() {
-        let unknown = collect_app_routed_read_body(Body::from("123456789"), 8, None)
+        let unknown = collect_test_body(Body::from("123456789"), 8, None)
             .await
             .expect_err("unknown body over cap must fail");
         assert_eq!(unknown.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let short = collect_app_routed_read_body(Body::from("123"), 8, Some(4))
+        let short = collect_test_body(Body::from("123"), 8, Some(4))
             .await
             .expect_err("short declared body must fail");
         assert_eq!(short.status(), StatusCode::BAD_REQUEST);
-        let long = collect_app_routed_read_body(Body::from("12345"), 8, Some(4))
+        let long = collect_test_body(Body::from("12345"), 8, Some(4))
             .await
             .expect_err("long declared body must fail");
         assert_eq!(long.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -786,7 +798,7 @@ mod app_routed_read_http_admission_tests {
             Ok::<_, Infallible>(hyper::body::Frame::data(data))
         }));
         let body = Body::new(http_body_util::StreamBody::new(frames));
-        let admitted = collect_app_routed_read_body(body, BYTES, Some(BYTES))
+        let admitted = collect_test_body(body, BYTES, Some(BYTES))
             .await
             .expect("more than 4096 one-byte frames remain compatible");
         assert_eq!(admitted.bytes.len(), BYTES);
@@ -859,8 +871,9 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
     }
     #[tokio::test]
-    async fn busy_admission_fails_before_body_poll_and_task_local_clone_does_not_reacquire() {
-        let app = mk_app_state_for_tests();
+    async fn busy_body_admission_waits_without_body_poll_and_task_local_clone_does_not_reacquire() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_millis(20);
         let reservation = try_acquire_new_query_fanout_memory(&app)
             .expect("fixture occupies complete fanout working set");
         let _other_memory = app
@@ -868,19 +881,25 @@ mod app_routed_read_http_admission_tests {
             .try_acquire_parts([app.query_fanout_inflight.available_bytes()])
             .expect("fixture occupies every other complete working set");
         let occupied = app.query_fanout_inflight.available_permits();
+        let waiters = app.app_routed_read_waiters.available_permits();
         let polls = Arc::new(AtomicUsize::new(0));
         let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
-        let response = admission_router(Arc::clone(&app), descriptor, false)
-            .oneshot(json_request(descriptor.path(), pending_body(&polls)))
-            .await
-            .expect("busy response");
+        let mut response = Box::pin(
+            admission_router(Arc::clone(&app), descriptor, false)
+                .oneshot(json_request(descriptor.path(), pending_body(&polls))),
+        );
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters - 1);
+        let response = response.await.expect("busy response");
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
         assert_eq!(app.query_fanout_inflight.available_permits(), occupied);
         let plan = torii_routed_read_request_preflight_plan(&app).expect("test request plan");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
             decode_plan: plan,
+            canonical_auth: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
         APP_ROUTED_READ_HTTP_ADMISSION
             .scope(admission, async {
@@ -967,6 +986,7 @@ mod app_routed_read_http_admission_tests {
         let admission = AppRoutedReadHttpAdmission {
             reservation: owner.clone(),
             decode_plan: expected,
+            canonical_auth: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
         APP_ROUTED_READ_HTTP_ADMISSION
             .scope(admission, async {
@@ -1020,12 +1040,1044 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
         drop(occupied);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
-        let permit = acquire_app_routed_read_http_memory(&app, false)
+        let permit = acquire_app_routed_read_http_memory(&app, app.query_fanout_working_set_bytes)
             .await
             .unwrap();
         assert!(app.query_fanout_inflight.available_permits() < before);
         drop(permit);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn body_read_waits_before_polling_and_proceeds_when_capacity_frees() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let before = app.query_fanout_inflight.available_permits();
+        let waiters = app.app_routed_read_waiters.available_permits();
+        let occupied = occupy_fanout_pool(&app);
+        let polls = Arc::new(AtomicUsize::new(0));
+        let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
+        let waiting = admission_router(Arc::clone(&app), descriptor, false)
+            .oneshot(json_request(descriptor.path(), pending_body(&polls)));
+        let mut waiting = Box::pin(waiting);
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters - 1);
+        drop(waiting);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
+        let read = admission_router(Arc::clone(&app), descriptor, false)
+            .oneshot(json_request(descriptor.path(), Body::from("{}")));
+        let mut read = Box::pin(read);
+        assert!(futures::poll!(read.as_mut()).is_pending());
+        drop(occupied);
+        let response = read.await.expect("admitted after capacity frees");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        drop(response);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
+    }
+
+    #[tokio::test]
+    async fn retained_body_credit_follows_the_last_exact_byte_clone() {
+        let app = mk_app_state_for_tests();
+        let before = app.app_routed_read_body_inflight.available_bytes();
+        let memory = acquire_app_routed_read_body_memory(&app, 8).await.unwrap();
+        let body = collect_app_routed_read_body(Body::from("abc"), 8, None, memory)
+            .await
+            .unwrap();
+        let last = body.bytes.clone();
+        drop(body);
+        assert_eq!(last.as_ref(), b"abc");
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            before - 8
+        );
+        drop(last);
+        assert_eq!(app.app_routed_read_body_inflight.available_bytes(), before);
+    }
+
+    #[tokio::test]
+    async fn pending_owner_upgrade_keeps_body_credit_and_cancellation_releases_it() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let first_weight = routed_read_owner_weight(&app, tiers[0]).unwrap().0 as u64;
+        let capacity = app.query_fanout_inflight.capacity_bytes();
+        let blocker = app
+            .query_fanout_inflight
+            .try_acquire_parts([capacity - first_weight])
+            .unwrap();
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let router = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            owner_recording_route(&app, &owners, tiers[1]),
+        );
+        let body = "{\"limit\":200}";
+        let mut response =
+            Box::pin(router.oneshot(json_request_with_length(descriptor.path(), body)));
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        assert_eq!(*owners.lock().unwrap(), vec![tiers[0]]);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            0,
+            "the semaphore earmarks returned credit for the pending larger acquisition"
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before - body.len() as u64,
+            "the retained exact POST body remains charged independently"
+        );
+        drop(response);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            first_weight,
+            "cancelling the wait returns all execution credit without retaining an old owner"
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+        drop(blocker);
+        assert_eq!(app.query_fanout_inflight.available_bytes(), capacity);
+    }
+
+    #[tokio::test]
+    async fn three_concurrent_owner_upgrades_make_progress_without_holding_execution_credit() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let first_weight = routed_read_owner_weight(&app, tiers[0]).unwrap().0 as u64;
+        let capacity = app.query_fanout_inflight.capacity_bytes();
+        let blocker = app
+            .query_fanout_inflight
+            .try_acquire_parts([capacity - 3 * first_weight])
+            .unwrap();
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let owners = Arc::new(std::sync::Mutex::new([Vec::new(), Vec::new(), Vec::new()]));
+        let requests = (0..3).map(|index| {
+            let handler_app = Arc::clone(&app);
+            let owners = Arc::clone(&owners);
+            let barrier = Arc::clone(&barrier);
+            let refuse_below = tiers[1];
+            let route = any(move || {
+                let app = Arc::clone(&handler_app);
+                let owners = Arc::clone(&owners);
+                let barrier = Arc::clone(&barrier);
+                async move {
+                    let bytes = current_routed_read_memory_envelope(&app)
+                        .unwrap()
+                        .working_set_bytes;
+                    owners.lock().unwrap()[index].push(bytes);
+                    if bytes < refuse_below {
+                        // All three handlers must own their initial reservation before
+                        // any asks for a larger one; semaphore FIFO cannot serialize this setup.
+                        barrier.wait().await;
+                        torii_proxy_error_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "query_capacity_exceeded",
+                            "test read exceeds its owner",
+                        )
+                    } else {
+                        StatusCode::NO_CONTENT.into_response()
+                    }
+                }
+            });
+            let router = admission_router_with(Arc::clone(&app), descriptor, route);
+            router.oneshot(json_request_with_length(descriptor.path(), "{}"))
+        });
+        let mut responses = Box::pin(futures::future::join_all(requests));
+        assert!(futures::poll!(responses.as_mut()).is_pending());
+        assert!(futures::poll!(responses.as_mut()).is_pending());
+        assert!(
+            owners
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|attempts| attempts == &[tiers[0]])
+        );
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before - 6
+        );
+        drop(blocker);
+        for response in responses.await {
+            let response = response.unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            drop(response);
+        }
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+        assert_eq!(app.query_fanout_inflight.available_bytes(), capacity);
+        assert!(
+            owners
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|attempts| attempts == &[tiers[0], tiers[1]])
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn owner_escalation_does_not_restart_the_http_deadline() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_millis(100);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                let attempt = counted.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                if attempt == 0 {
+                    torii_proxy_error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "query_capacity_exceeded",
+                        "first owner is too small",
+                    )
+                } else {
+                    StatusCode::OK.into_response()
+                }
+            }
+        });
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let body_before = app.app_routed_read_body_inflight.available_bytes();
+        let started = tokio::time::Instant::now();
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+        drop(response);
+        assert_eq!(
+            app.app_routed_read_body_inflight.available_bytes(),
+            body_before
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_read_then_owner_growth_succeeds_within_one_deadline() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_millis(100);
+        let occupied = occupy_fanout_pool(&app);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                let attempt = counted.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                if attempt == 0 {
+                    torii_proxy_error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "query_capacity_exceeded",
+                        "first owner is too small",
+                    )
+                } else {
+                    Response::new(Body::from("completed"))
+                }
+            }
+        });
+        let descriptor = route_catalog::application_api::TRANSACTIONS_QUERY_POST;
+        let started = tokio::time::Instant::now();
+        let mut response = Box::pin(
+            admission_router_with(Arc::clone(&app), descriptor, route)
+                .oneshot(json_request_with_length(descriptor.path(), "{}")),
+        );
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(30)).await;
+        drop(occupied);
+        let response = response.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 64)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"completed"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(started.elapsed(), Duration::from_millis(70));
+    }
+
+    fn admission_router_with(
+        app: SharedAppState,
+        descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
+        route: axum::routing::MethodRouter,
+    ) -> Router {
+        Router::new()
+            .route(descriptor.path(), route)
+            .layer(from_fn_with_state(
+                app,
+                enforce_app_routed_read_http_admission,
+            ))
+            .layer(from_fn(move |request, next| {
+                insert_test_route_metadata(descriptor, request, next)
+            }))
+    }
+
+    /// Record each attempt's owner and refuse with an owner-limit error below `refuse_below`.
+    fn owner_recording_route(
+        app: &SharedAppState,
+        owners: &Arc<std::sync::Mutex<Vec<usize>>>,
+        refuse_below: usize,
+    ) -> axum::routing::MethodRouter {
+        let app = Arc::clone(app);
+        let owners = Arc::clone(owners);
+        any(move || {
+            let app = Arc::clone(&app);
+            let owners = Arc::clone(&owners);
+            async move {
+                let working_set = current_routed_read_memory_envelope(&app)
+                    .expect("handler runs under its routed-read owner")
+                    .working_set_bytes;
+                owners.lock().unwrap().push(working_set);
+                if working_set < refuse_below {
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "test read exceeds its owner",
+                    )
+                } else {
+                    axum::response::IntoResponse::into_response(StatusCode::NO_CONTENT)
+                }
+            }
+        })
+    }
+
+    fn json_request_with_length(path: &str, body: &'static str) -> Request<Body> {
+        let mut request = json_request(path, Body::from(body));
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+        request
+    }
+
+    #[tokio::test]
+    async fn routed_read_starts_with_the_smallest_owner_that_admits_its_body() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        assert!(tiers.len() > 1);
+        assert_eq!(
+            tiers.last().copied(),
+            Some(app.query_fanout_working_set_bytes)
+        );
+        assert!(tiers.windows(2).all(|pair| pair[0] < pair[1]));
+        let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let before = app.query_fanout_inflight.available_permits();
+        for (request, expected) in [
+            (json_request_with_length(descriptor.path(), "{}"), tiers[0]),
+            // An undeclared body length may need the whole configured body limit.
+            (
+                json_request(descriptor.path(), Body::from("{}")),
+                app.query_fanout_working_set_bytes,
+            ),
+        ] {
+            let response = admission_router_with(
+                Arc::clone(&app),
+                descriptor,
+                owner_recording_route(&app, &owners, 0),
+            )
+            .oneshot(request)
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            drop(response);
+            assert_eq!(owners.lock().unwrap().pop(), Some(expected));
+        }
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn routed_read_retries_with_a_larger_owner_only_when_its_own_limit_refuses() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
+        let before = app.query_fanout_inflight.available_permits();
+        for (refuse_below, status) in [
+            // Refused below the ceiling: each smaller owner once, then the ceiling serves it.
+            (ceiling, StatusCode::NO_CONTENT),
+            // Refused by every owner: the ceiling's refusal is returned unchanged.
+            (usize::MAX, StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let response = admission_router_with(
+                Arc::clone(&app),
+                descriptor,
+                owner_recording_route(&app, &owners, refuse_below),
+            )
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+            assert_eq!(response.status(), status);
+            drop(response);
+            assert_eq!(*owners.lock().unwrap(), tiers);
+            assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        }
+        // Any other refusal is final with the first owner.
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { StatusCode::NOT_FOUND }
+        });
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        drop(response);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn producer_refusal_marks_its_owner_for_a_larger_retry() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).count();
+        let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let route = any(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async {
+                let owner = crate::history_producer::HistoryProducerOwner::current()
+                    .expect("handler runs under its routed-read owner");
+                match owner.selected::<u8>(1 << 40) {
+                    Ok(_) => axum::response::IntoResponse::into_response(StatusCode::NO_CONTENT),
+                    Err(error) => axum::response::IntoResponse::into_response(error),
+                }
+            }
+        });
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(attempts.load(Ordering::SeqCst), tiers);
+    }
+
+    /// Model a bounded producer that keeps a valid row and continuation after its
+    /// actual admitted owner refuses the remaining selected-row backing.
+    fn successful_partial_owner_route(
+        owners: &Arc<std::sync::Mutex<Vec<usize>>>,
+        required: usize,
+    ) -> axum::routing::MethodRouter {
+        let owners = Arc::clone(owners);
+        any(move || {
+            let owners = Arc::clone(&owners);
+            async move {
+                let owner = crate::history_producer::HistoryProducerOwner::current()
+                    .expect("producer retains its routed-read owner");
+                owners.lock().unwrap().push(owner.working_set_bytes());
+                let complete = owner.selected::<u8>(required).is_ok();
+                Response::new(Body::from(if complete {
+                    r#"{"items":[1,2],"next_cursor":null}"#
+                } else {
+                    r#"{"items":[1],"next_cursor":"unread-row"}"#
+                }))
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn routed_read_retries_successful_partial_page_after_owner_refusal() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        assert!(tiers.len() > 1);
+        let required = QueryFanoutMemoryEnvelope::for_body_admission(tiers[0])
+            .unwrap()
+            .accumulator_retained_bytes
+            + 1;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let before = app.query_fanout_inflight.available_permits();
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let response = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            successful_partial_owner_route(&owners, required),
+        )
+        .oneshot(json_request_with_length(descriptor.path(), "{}"))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            r#"{"items":[1,2],"next_cursor":null}"#
+        );
+        assert_eq!(*owners.lock().unwrap(), tiers[..2]);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn routed_read_keeps_successful_partial_page_at_largest_owner() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let before = app.query_fanout_inflight.available_permits();
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let response = admission_router_with(
+            Arc::clone(&app),
+            descriptor,
+            successful_partial_owner_route(&owners, usize::MAX),
+        )
+        .oneshot(json_request_with_length(descriptor.path(), "{}"))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024).await.unwrap(),
+            r#"{"items":[1],"next_cursor":"unread-row"}"#
+        );
+        assert_eq!(*owners.lock().unwrap(), tiers);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn routed_read_does_not_retry_success_without_owner_refusal() {
+        let app = mk_app_state_for_tests();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&attempts);
+        let descriptor = route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST;
+        let route = any(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async {
+                let mut response = Response::new(Body::from("valid partial page"));
+                // A success header alone must not invent an owner refusal.
+                response.headers_mut().insert(
+                    "x-iroha-reject-code",
+                    HeaderValue::from_static("query_capacity_exceeded"),
+                );
+                response
+            }
+        });
+        let before = app.query_fanout_inflight.available_permits();
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn local_routed_read_owner_books_without_the_proxy_candidate_allowance() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let candidates = query_fanout_candidate_snapshot_overhead_bytes().unwrap();
+        let pool = &app.query_fanout_inflight;
+        let credit = |bytes: usize| {
+            u64::from(pool.permits_for_parts([bytes as u64]).unwrap().get())
+                * pool.bytes_per_permit.get()
+        };
+        let before = pool.available_bytes();
+        for (working_set, weight, local_only) in [
+            (tiers[0], tiers[0] - candidates, true),
+            (
+                app.query_fanout_working_set_bytes,
+                app.query_fanout_working_set_bytes,
+                false,
+            ),
+        ] {
+            let owner = acquire_app_routed_read_http_memory(&app, working_set)
+                .await
+                .unwrap();
+            assert_eq!(owner.is_local_only(), local_only);
+            assert_eq!(
+                owner.admitted_envelope(&app).unwrap().working_set_bytes,
+                working_set
+            );
+            assert_eq!(before - pool.available_bytes(), credit(weight));
+            drop(owner);
+            assert_eq!(pool.available_bytes(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_only_owner_refuses_to_send_its_read_to_another_validator() {
+        let app = mk_app_state_for_tests();
+        let smallest = routed_read_owner_working_sets(&app).next().unwrap();
+        let local = acquire_app_routed_read_http_memory(&app, smallest)
+            .await
+            .unwrap();
+        let complete = try_acquire_new_query_fanout_memory(&app).unwrap();
+        assert!(local_only_owner_refusal(&app).is_none());
+        COLLECTION_READ_MEMORY_RESERVATION
+            .scope(complete.clone(), async {
+                assert!(local_only_owner_refusal(&app).is_none());
+            })
+            .await;
+        COLLECTION_READ_MEMORY_RESERVATION
+            .scope(local.clone(), async {
+                let refusal = local_only_owner_refusal(&app).expect("local-only owner refuses");
+                assert!(!refusal.status().is_success());
+                assert!(app_routed_read_owner_refused(&refusal, &local));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn history_capacity_refusal_marks_the_routed_owner_for_a_larger_retry() {
+        use iroha_core::execution_attempt::ExecutionAttemptError;
+        use iroha_data_model::query::error::QueryExecutionFail;
+        let app = mk_app_state_for_tests();
+        let smallest = routed_read_owner_working_sets(&app).next().unwrap();
+        for (error, marks) in [
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::GasBudgetExceeded),
+                true,
+            ),
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::CapacityLimit),
+                true,
+            ),
+            (
+                ExecutionAttemptError::Rejected(QueryExecutionFail::NotFound),
+                false,
+            ),
+        ] {
+            let owner = acquire_app_routed_read_http_memory(&app, smallest)
+                .await
+                .unwrap();
+            COLLECTION_READ_MEMORY_RESERVATION
+                .scope(owner.clone(), async {
+                    drop(crate::canonical_history::query_attempt_error(error));
+                })
+                .await;
+            assert_eq!(owner.owner_limit_refused(), marks);
+        }
+    }
+
+    #[tokio::test]
+    async fn proof_read_credit_waits_for_the_pool_within_its_deadline() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let bytes = app.query_fanout_working_set_bytes;
+        let before = app.query_fanout_inflight.available_permits();
+        let occupied = occupy_fanout_pool(&app);
+        let mut waiting = Box::pin(acquire_query_pool_credit(&app, bytes));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        drop(occupied);
+        let credit = waiting.await.expect("credit once the pool frees");
+        assert!(app.query_fanout_inflight.available_permits() < before);
+        drop(credit);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        for timeout in [Duration::from_millis(20), Duration::ZERO] {
+            Arc::get_mut(&mut app).unwrap().query_queue_timeout = timeout;
+            let occupied = occupy_fanout_pool(&app);
+            let started = tokio::time::Instant::now();
+            assert!(acquire_query_pool_credit(&app, bytes).await.is_none());
+            assert!(started.elapsed() >= timeout);
+            drop(occupied);
+        }
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[test]
+    fn canonical_authentication_sizes_its_owner_from_the_request() {
+        let app = mk_app_state_for_tests();
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let mut headers = HeaderMap::new();
+        let unit = canonical_authentication_unit_bytes(&headers);
+        assert_eq!(unit, Some(CANONICAL_AUTHENTICATION_MIN_UNIT_BYTES));
+        assert_eq!(authentication_owner_working_set(&app, unit), tiers[0]);
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(1024 * 1024));
+        let unit = canonical_authentication_unit_bytes(&headers);
+        assert_eq!(unit, Some(1024 * 1024));
+        let owner = authentication_owner_working_set(&app, unit);
+        assert!(owner > tiers[0]);
+        let envelope = QueryFanoutMemoryEnvelope::for_body_admission(owner).unwrap();
+        assert!(envelope.route_body_bytes >= 1024 * 1024);
+        assert!(envelope.decode_allocated_bytes >= 1024 * 1024);
+        headers.remove(header::CONTENT_LENGTH);
+        headers.insert(
+            header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+        assert_eq!(canonical_authentication_unit_bytes(&headers), None);
+        assert_eq!(
+            authentication_owner_working_set(&app, None),
+            app.query_fanout_working_set_bytes
+        );
+        headers.remove(header::TRANSFER_ENCODING);
+        headers.insert(
+            crate::app_auth::HEADER_WITNESS,
+            HeaderValue::from_str(&"w".repeat(300_000)).unwrap(),
+        );
+        assert_eq!(canonical_authentication_unit_bytes(&headers), Some(300_000));
+    }
+
+    #[tokio::test]
+    async fn authentication_owner_waits_for_a_small_owner_or_borrows_the_admitted_one() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let tiers = routed_read_owner_working_sets(&app).collect::<Vec<_>>();
+        let before = app.query_fanout_inflight.available_permits();
+        let occupied = occupy_fanout_pool(&app);
+        let mut waiting = Box::pin(
+            crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
+                &app,
+                Some(CANONICAL_AUTHENTICATION_MIN_UNIT_BYTES),
+            ),
+        );
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        drop(occupied);
+        let Ok((owner, borrowed)) = waiting.await else {
+            panic!("authentication owner admitted after capacity frees");
+        };
+        assert!(!borrowed);
+        assert_eq!(owner.working_set_bytes(), tiers[0]);
+        drop(owner);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        let routed = acquire_app_routed_read_http_memory(&app, tiers[1])
+            .await
+            .unwrap();
+        COLLECTION_READ_MEMORY_RESERVATION
+            .scope(routed.clone(), async {
+                let Ok((owner, borrowed)) =
+                    crate::history_producer::HistoryProducerOwner::authentication_read_waiting(
+                        &app, None,
+                    )
+                    .await
+                else {
+                    panic!("routed owner is borrowed");
+                };
+                assert!(borrowed);
+                assert_eq!(owner.working_set_bytes(), tiers[1]);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn routed_read_retry_reuses_its_first_verified_authentication() {
+        let app = mk_app_state_for_tests();
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let route_app = Arc::clone(&app);
+        let route = any(move || {
+            let recorded = Arc::clone(&recorded);
+            let app = Arc::clone(&route_app);
+            async move {
+                let cached = routed_read_canonical_auth();
+                recorded.lock().unwrap().push(cached.is_some());
+                if cached.is_none() {
+                    remember_routed_read_canonical_auth(None);
+                }
+                let working_set = current_routed_read_memory_envelope(&app)
+                    .expect("handler runs under its routed-read owner")
+                    .working_set_bytes;
+                if working_set < ceiling {
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "test read exceeds its owner",
+                    )
+                } else {
+                    axum::response::IntoResponse::into_response(StatusCode::NO_CONTENT)
+                }
+            }
+        });
+        let response = admission_router_with(Arc::clone(&app), descriptor, route)
+            .oneshot(json_request_with_length(descriptor.path(), "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let seen = seen.lock().unwrap();
+        assert!(seen.len() > 1);
+        assert_eq!(seen.first(), Some(&false));
+        assert!(seen[1..].iter().all(|cached| *cached));
+        assert!(routed_read_canonical_auth().is_none());
+    }
+
+    #[tokio::test]
+    async fn signed_accounts_get_owner_retry_preserves_auth_and_rejects_external_replay() {
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(
+            crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
+        );
+        let routes = torii_visible_account_read_routes(app.as_ref(), Some(&ALICE_ID));
+        let route = collection_execution_route(app.as_ref(), &routes)
+            .expect("signed accounts fixture has an execution route");
+        assert!(should_execute_route_locally(app.as_ref(), route));
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::application_api::ACCOUNTS_GET;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let route_app = Arc::clone(&app);
+        let route_owners = Arc::clone(&owners);
+        let route = any(move |method: Method, uri: Uri, headers: HeaderMap| {
+            let app = Arc::clone(&route_app);
+            let owners = Arc::clone(&route_owners);
+            async move {
+                let working_set = current_routed_read_memory_envelope(&app)
+                    .expect("accounts handler has an admitted owner")
+                    .working_set_bytes;
+                owners.lock().unwrap().push(working_set);
+                let response = match handler_accounts_list(
+                    State(app),
+                    method,
+                    uri,
+                    headers,
+                    crate::loopback_connect_info(),
+                )
+                .await
+                {
+                    Ok(response) => response.into_response(),
+                    Err(error) => return error.into_response(),
+                };
+                // Exercise the real authenticated GET handler before making its owner
+                // insufficient. This deterministic capacity boundary reproduces a page
+                // whose retained rows fit only a larger owner, without a huge fixture.
+                if response.status().is_success() && working_set < ceiling {
+                    drop(response);
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "accounts page exceeds this test owner",
+                    )
+                } else {
+                    response
+                }
+            }
+        });
+        let router = admission_router_with(Arc::clone(&app), descriptor, route).layer(from_fn(
+            |request, next: Next| async move {
+                utils::with_current_response_format(ResponseFormat::Json, next.run(request)).await
+            },
+        ));
+        let uri: Uri = "/v1/accounts?limit=500".parse().expect("accounts URI");
+        let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::GET,
+            &uri,
+            &[],
+        );
+        let request = |headers: HeaderMap| {
+            let mut request = Request::builder()
+                .method(Method::GET)
+                .uri(uri.clone())
+                .body(Body::empty())
+                .expect("signed accounts request");
+            *request.headers_mut() = headers;
+            request
+        };
+        let response = router
+            .clone()
+            .oneshot(request(headers.clone()))
+            .await
+            .expect("accounts response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("accounts response body");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "an internal owner retry must not consume its own canonical nonce twice; owners={:?}; body={}",
+            *owners.lock().unwrap(),
+            String::from_utf8_lossy(&body),
+        );
+        drop(body);
+        let first_owners = owners.lock().unwrap().clone();
+        assert!(
+            first_owners.len() >= 2,
+            "the signed GET must actually retry"
+        );
+        assert!(first_owners.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(first_owners.last(), Some(&ceiling));
+        assert!(
+            routed_read_canonical_auth().is_none(),
+            "authentication stays request-local"
+        );
+
+        let replay = router
+            .clone()
+            .oneshot(request(headers))
+            .await
+            .expect("replay response");
+        assert_eq!(
+            replay.status(),
+            StatusCode::UNAUTHORIZED,
+            "another HTTP request with the consumed nonce must remain forbidden"
+        );
+        let body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("replay error body");
+        let body = String::from_utf8(body.to_vec()).expect("JSON error text");
+        assert!(body.contains("canonical_authentication_invalid"), "{body}");
+        assert!(body.contains("request nonce already used"), "{body}");
+        assert_eq!(
+            owners.lock().unwrap().len(),
+            first_owners.len() + 1,
+            "an external replay must fail before owner escalation"
+        );
+
+        let fresh_headers = crate::tests_runtime_handlers::signed_network_app_headers(
+            app.state.network_id_ref(),
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::GET,
+            &uri,
+            &[],
+        );
+        let fresh = router
+            .oneshot(request(fresh_headers))
+            .await
+            .expect("fresh request response");
+        assert_eq!(
+            fresh.status(),
+            StatusCode::OK,
+            "a fresh nonce still authenticates"
+        );
+    }
+
+    #[tokio::test]
+    async fn required_header_auth_owner_retry_preserves_auth_and_rejects_unsigned_and_replay() {
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
+        );
+        let ceiling = app.query_fanout_working_set_bytes;
+        let descriptor = route_catalog::aliases::RESOLVE_INDEX;
+        let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let route_app = Arc::clone(&app);
+        let route_owners = Arc::clone(&owners);
+        let route = any(
+            move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
+                let app = Arc::clone(&route_app);
+                let owners = Arc::clone(&route_owners);
+                async move {
+                    let caller = match require_signed_account_request(
+                        &app,
+                        &headers,
+                        &method,
+                        &uri,
+                        body.as_ref(),
+                        "test_auth_required",
+                        "signed account headers are required",
+                    )
+                    .await
+                    {
+                        Ok(caller) => caller,
+                        Err(error) => return error.into_response(),
+                    };
+                    assert_eq!(caller, *ALICE_ID);
+                    let working_set = current_routed_read_memory_envelope(&app)
+                        .expect("required-auth read has an admitted owner")
+                        .working_set_bytes;
+                    owners.lock().unwrap().push(working_set);
+                    if working_set < ceiling {
+                        torii_proxy_error_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "query_capacity_exceeded",
+                            "alias index exceeds this test owner",
+                        )
+                    } else {
+                        StatusCode::OK.into_response()
+                    }
+                }
+            },
+        );
+        let router = admission_router_with(Arc::clone(&app), descriptor, route).layer(from_fn(
+            |request, next: Next| async move {
+                utils::with_current_response_format(ResponseFormat::Json, next.run(request)).await
+            },
+        ));
+        let uri: Uri = descriptor.path().parse().expect("alias index URI");
+        let body = b"{}";
+        let request = |mut headers: HeaderMap| {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("2"));
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(uri.clone())
+                .body(Body::from(body.as_slice()))
+                .expect("alias index request");
+            *request.headers_mut() = headers;
+            request
+        };
+        let unsigned = router
+            .clone()
+            .oneshot(request(HeaderMap::new()))
+            .await
+            .expect("unsigned response");
+        assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+        drop(unsigned);
+        assert!(
+            owners.lock().unwrap().is_empty(),
+            "unsigned reads never execute"
+        );
+
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &ALICE_ID,
+            &ALICE_KEYPAIR,
+            &Method::POST,
+            &uri,
+            body,
+        );
+        let response = router
+            .clone()
+            .oneshot(request(headers.clone()))
+            .await
+            .expect("signed response");
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(response);
+        let successful_owners = owners.lock().unwrap().clone();
+        assert!(
+            successful_owners.len() >= 2,
+            "required authentication must survive a real retry"
+        );
+        assert!(successful_owners.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(successful_owners.last(), Some(&ceiling));
+
+        let replay = router
+            .clone()
+            .oneshot(request(headers))
+            .await
+            .expect("replay response");
+        assert_eq!(
+            replay.status(),
+            StatusCode::FORBIDDEN,
+            "required header auth preserves its existing credential-refusal status"
+        );
+        let replay_body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("replay body");
+        assert!(String::from_utf8_lossy(&replay_body).contains("request nonce already used"));
+        let unsigned = router
+            .oneshot(request(HeaderMap::new()))
+            .await
+            .expect("unsigned response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::UNAUTHORIZED,
+            "a separate unsigned request cannot inherit the earlier signed caller"
+        );
+        assert_eq!(
+            *owners.lock().unwrap(),
+            successful_owners,
+            "refused requests never reach the owner-bound read"
+        );
     }
 
     #[tokio::test]
@@ -1068,9 +2120,12 @@ mod app_routed_read_http_admission_tests {
         state.app_routed_read_waiters = Arc::new(tokio::sync::Semaphore::new(1));
         let before = app.query_fanout_inflight.available_permits();
         let occupied = occupy_fanout_pool(&app);
-        let mut waiting = Box::pin(acquire_app_routed_read_http_memory(&app, false));
+        let mut waiting = Box::pin(acquire_app_routed_read_http_memory(
+            &app,
+            app.query_fanout_working_set_bytes,
+        ));
         assert!(futures::poll!(waiting.as_mut()).is_pending());
-        let full = acquire_app_routed_read_http_memory(&app, false)
+        let full = acquire_app_routed_read_http_memory(&app, app.query_fanout_working_set_bytes)
             .await
             .err()
             .unwrap();

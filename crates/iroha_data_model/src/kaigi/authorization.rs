@@ -2,7 +2,7 @@
 //!
 //! These values are public circuit inputs, not authorization evidence. Core
 //! reconstructs them from the trusted network, stored call and host, and the
-//! authenticated subject. Each account binding retains all six digest lanes
+//! authenticated subject. Each account binding retains all 32 native digest bytes
 //! over the complete canonical Norito frame, including its controller policy.
 
 use std::io::{self, Write};
@@ -13,10 +13,105 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 
-use crate::{NetworkId, account::AccountId, kaigi::KaigiId, privacy::GoldilocksDigest384V1};
+use crate::{NetworkId, account::AccountId, kaigi::KaigiId};
+use iroha_crypto::native_commitment::{NativeCommitmentDomainV1, NativeCommitmentFrameV1};
 
 /// Maximum canonical Norito frame size for a Kaigi account or call identity.
 pub const KAIGI_AUTHORIZATION_IDENTITY_MAX_BYTES_V1: usize = 1024 * 1024;
+
+/// Complete native BLAKE3-256 identity, encoded as exactly 32 raw bytes.
+///
+/// This is a public context value, not authorization evidence. Core must
+/// recompute it from the complete canonical account or call before verification.
+/// Every bit is retained; words are injected into Pasta without reduction.
+#[repr(transparent)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::kaigi::authorization::KaigiIdentityDigestV1")]
+pub struct KaigiIdentityDigestV1([u8; 32]);
+
+impl KaigiIdentityDigestV1 {
+    /// Exact fixed payload width, independent of ambient Norito layout flags.
+    pub const BYTES: usize = 32;
+
+    /// Borrow every digest byte in the native hash output order.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; Self::BYTES] {
+        &self.0
+    }
+
+    /// Preserve the complete byte representation for native consumers.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; Self::BYTES] {
+        self.0
+    }
+
+    /// Inject all four little-endian words; no field reduction or truncation.
+    #[must_use]
+    pub fn words(self) -> [u64; 4] {
+        core::array::from_fn(|index| {
+            let start = index * 8;
+            u64::from_le_bytes(self.0[start..start + 8].try_into().expect("fixed word"))
+        })
+    }
+}
+
+impl norito::core::SerializePayload for KaigiIdentityDigestV1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+}
+impl<'de> norito::core::DeserializePayload<'de> for KaigiIdentityDigestV1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical Kaigi identity decode")
+    }
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let mut offset = 0;
+        let bytes = norito::core::decode_context_byte_array::<{ Self::BYTES }>(ptr, &mut offset)?;
+        norito::core::finish_context_fields(ptr, offset)?;
+        Ok(Self(bytes))
+    }
+}
+impl<'de> norito::core::DecodeFromSlice<'de> for KaigiIdentityDigestV1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let raw = bytes
+            .get(..Self::BYTES)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let mut digest = [0; Self::BYTES];
+        digest.copy_from_slice(raw);
+        norito::core::note_payload_access(bytes, Self::BYTES);
+        Ok((Self(digest), Self::BYTES))
+    }
+}
+impl norito::json::FastJsonWrite for KaigiIdentityDigestV1 {
+    fn write_json(&self, out: &mut String) {
+        crate::json_helpers::fixed_bytes::serialize(&self.0, out);
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        crate::json_helpers::fixed_bytes::serialize_bounded(&self.0, out)
+    }
+}
+impl norito::json::JsonDeserialize for KaigiIdentityDigestV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        crate::json_helpers::fixed_bytes::deserialize(parser).map(Self)
+    }
+}
 
 /// Public identity inputs for the final Kaigi authorization relation.
 ///
@@ -45,11 +140,11 @@ pub struct KaigiAuthorizationIdentitiesV1 {
     /// Exact network identity supplied by the trusted ledger context.
     pub network_id: NetworkId,
     /// Complete canonical call identifier under the call-identity domain.
-    pub call_id: GoldilocksDigest384V1,
+    pub call_id: KaigiIdentityDigestV1,
     /// Complete canonical original host under the account-identity domain.
-    pub host_id: GoldilocksDigest384V1,
+    pub host_id: KaigiIdentityDigestV1,
     /// Complete canonical proof subject under the same account-identity domain.
-    pub subject_id: GoldilocksDigest384V1,
+    pub subject_id: KaigiIdentityDigestV1,
 }
 
 impl KaigiAuthorizationIdentitiesV1 {
@@ -87,31 +182,31 @@ impl KaigiAuthorizationIdentitiesV1 {
 /// identity exceeds the fixed byte bound or cannot be allocated.
 pub fn kaigi_account_identity_v1(
     account: &AccountId,
-) -> Result<GoldilocksDigest384V1, norito::core::Error> {
+) -> Result<KaigiIdentityDigestV1, norito::core::Error> {
     hash_canonical_identity_v1(b"account-id", account)
 }
 
 fn hash_canonical_identity_v1<T: norito::core::NoritoSerialize>(
     role: &'static [u8],
     value: &T,
-) -> Result<GoldilocksDigest384V1, norito::core::Error> {
+) -> Result<KaigiIdentityDigestV1, norito::core::Error> {
     let mut frame = BoundedIdentityFrameV1::default();
     norito::core::write_canonical_to_writer(value, &mut frame)?;
-    fastpq_isi::hash_bytes_384_v1(
-        fastpq_isi::GoldilocksDigestDomainV1 {
+    let fields = [&frame.bytes[..]];
+    let commitment = NativeCommitmentFrameV1::new(
+        NativeCommitmentDomainV1 {
             catalog: b"iroha-kaigi-first-release-v1",
             protocol: b"kaigi-authorization-v1",
-            profile: b"poseidon-x7-goldilocks-6x64-v1",
             role,
             phase: b"canonical-norito",
             level: 0,
             index: 0,
             counter: 0,
         },
-        &[&frame.bytes],
+        &fields,
     )
-    .map(Into::into)
-    .ok_or_else(|| io::Error::other("Kaigi identity digest frame exceeds canonical bounds").into())
+    .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(KaigiIdentityDigestV1(*commitment.digest().as_bytes()))
 }
 
 #[derive(Default)]
@@ -188,8 +283,8 @@ mod tests {
             norito::json::from_str(&json).expect("decode identity JSON");
         assert_eq!(decoded, original);
         for digest in [original.call_id, original.host_id, original.subject_id] {
-            assert_eq!(digest.to_le_bytes().len(), 48);
-            assert_eq!(digest.words().len(), 6);
+            assert_eq!(digest.into_bytes().len(), 32);
+            assert_eq!(digest.words().len(), 4);
         }
     }
 
@@ -203,44 +298,194 @@ mod tests {
     }
 
     #[test]
-    fn identities_match_independent_six_lane_canonical_frame_vectors() {
-        // The model owner emitted the full canonical Norito frames. The
-        // independent Python SHAKE256/integer implementation in
-        // scripts/check_goldilocks_digest384_reference.py then evaluated all
-        // six lanes with the exact domains above, without using this adapter.
+    fn canonical_identity_frames_match_independently_assembled_native_framing() {
+        // Assemble the specified bytes directly, without calling the production
+        // frame emitter. The lower crypto owner separately pins independent
+        // BLAKE3 known-answer vectors for this frame, including the Kaigi role.
+        fn reference(role: &[u8], canonical: &[u8]) -> [u8; 32] {
+            let mut frame = b"iroha:native-commitment:frame:v1\0".to_vec();
+            for (tag, field) in (1_u8..=6).zip([
+                &b"blake3-256"[..],
+                &b"iroha-kaigi-first-release-v1"[..],
+                &b"kaigi-authorization-v1"[..],
+                &b"native-commitment-blake3-256-v1"[..],
+                role,
+                &b"canonical-norito"[..],
+            ]) {
+                frame.push(tag);
+                frame.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                frame.extend_from_slice(field);
+            }
+            for tag in 7_u8..=9 {
+                frame.push(tag);
+                frame.extend_from_slice(&0_u64.to_le_bytes());
+            }
+            frame.push(10);
+            frame.extend_from_slice(&1_u32.to_le_bytes());
+            frame.push(11);
+            frame.extend_from_slice(&u64::try_from(canonical.len()).unwrap().to_le_bytes());
+            frame.extend_from_slice(canonical);
+            *blake3::hash(&frame).as_bytes()
+        }
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("fixed canonical account public key");
         let account = AccountId::new(public_key);
-        let inputs = KaigiAuthorizationIdentitiesV1::new(
-            network(0x31),
-            &call("wonderland", "kaigi-authorization"),
-            &account,
-            &account,
-        )
-        .unwrap();
+        let call = call("wonderland", "kaigi-authorization");
+        let inputs =
+            KaigiAuthorizationIdentitiesV1::new(network(0x31), &call, &account, &account).unwrap();
+        let account_bytes = norito::encode_canonical(&account).unwrap();
+        let call_bytes = norito::encode_canonical(&call).unwrap();
         assert_eq!(
-            inputs.host_id.words(),
-            [
-                0xe696_37e2_f1fd_81d2,
-                0x7d8b_68f1_3700_deac,
-                0x17ca_2400_6e05_1ed6,
-                0x0bec_8048_fc1f_df62,
-                0x3d58_9bf3_292c_474c,
-                0x4f1a_f501_656d_52f5,
-            ]
+            inputs.host_id.as_bytes(),
+            &reference(b"account-id", &account_bytes)
         );
         assert_eq!(inputs.subject_id, inputs.host_id);
         assert_eq!(
+            inputs.call_id.as_bytes(),
+            &reference(b"call-id", &call_bytes)
+        );
+        assert_ne!(
+            reference(b"account-id", &account_bytes),
+            reference(b"call-id", &account_bytes)
+        );
+        for bytes in [&account_bytes, &call_bytes] {
+            for end in 0..bytes.len() {
+                assert_ne!(
+                    reference(b"account-id", bytes),
+                    reference(b"account-id", &bytes[..end])
+                );
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert_ne!(
+                reference(b"account-id", bytes),
+                reference(b"account-id", &trailing)
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_identity_frames_match_fixed_external_blake3_vectors() {
+        // Canonical model bytes were captured from the actual encoder. Digest
+        // answers were derived by an independent Python BLAKE3 implementation
+        // over the complete specified native frame, including domain and role.
+        let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("fixed canonical account public key");
+        let account = AccountId::new(public_key);
+        let call = call("wonderland", "kaigi-authorization");
+        let inputs =
+            KaigiAuthorizationIdentitiesV1::new(network(0x31), &call, &account, &account).unwrap();
+        assert_eq!(
+            norito::encode_canonical(&account).unwrap(),
+            hex::decode(concat!(
+                "4e525430000060e81473aed0a1276f1c5776d0f69c38004f0000000000000018cb63d94c8fc56a02",
+                "000000004a2100000000000000010001ce017f01a4016c019d01ce017e01a401b1012501e201e301",
+                "6b01db016301ea01330107013e0175019001ac01920181016a01e101e8016101b70104018b0103",
+            ))
+            .unwrap()
+        );
+        let account_digest: [u8; 32] =
+            hex::decode("b23bd023a5beb6da1e0473a701b0fe28f9a2e5db13b09903acf306c12d06dd89")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        assert_eq!(
+            norito::encode_canonical(&call).unwrap(),
+            hex::decode(concat!(
+                "4e52543000003c59d4919ec6cf3e2a2a26363002a6c4002d000000000000007df53756bab6151902",
+                "170b0a776f6e6465726c616e640a09756e6976657273616c14136b616967692d617574686f72697a",
+                "6174696f6e",
+            ))
+            .unwrap()
+        );
+        let call_digest: [u8; 32] =
+            hex::decode("85ed8175f4ce2177050c95f9695d6b58a6965a678998925a420152382efa50a0")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        assert_eq!(inputs.host_id.into_bytes(), account_digest);
+        assert_eq!(inputs.subject_id, inputs.host_id);
+        assert_eq!(kaigi_account_identity_v1(&account).unwrap(), inputs.host_id);
+        assert_eq!(inputs.call_id.into_bytes(), call_digest);
+        assert_eq!(
+            inputs.host_id.words(),
+            [
+                0xdab6_bea5_23d0_3bb2,
+                0x28fe_b001_a773_041e,
+                0x0399_b013_dbe5_a2f9,
+                0x89dd_062d_c106_f3ac
+            ]
+        );
+        assert_eq!(
             inputs.call_id.words(),
             [
-                0x6c3f_869e_c1ca_f8f3,
-                0xa17b_87f2_9393_cb3c,
-                0xaf29_09b4_eee6_2165,
-                0xcdd9_089f_bdba_11fc,
-                0x5757_08e3_3f7a_b761,
-                0x3ee0_794d_e3aa_38bc,
+                0x7721_cef4_7581_ed85,
+                0x586b_5d69_f995_0c05,
+                0x5a92_9889_675a_96a6,
+                0xa050_fa2e_3852_0142
             ]
+        );
+    }
+
+    #[test]
+    fn native_identity_preserves_every_bit_and_exact_codec_width() {
+        for bytes in [
+            [0; 32],
+            [0xff; 32],
+            [0x80; 32],
+            core::array::from_fn(|i| u8::try_from(i).unwrap()),
+        ] {
+            let digest = KaigiIdentityDigestV1(bytes);
+            assert_eq!(digest.as_bytes(), &bytes);
+            assert_eq!(digest.into_bytes(), bytes);
+            assert_eq!(digest.words().map(u64::to_le_bytes).concat(), bytes);
+            for flags in (u8::MIN..=u8::MAX)
+                .filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+            {
+                let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+                let encoded = norito::codec::encode_with_header_flags(&digest).0;
+                assert_eq!(encoded, bytes);
+                let (decoded, consumed) =
+                    norito::core::decode_field_canonical::<KaigiIdentityDigestV1>(&encoded)
+                        .unwrap();
+                assert_eq!(decoded, digest);
+                assert_eq!(consumed, 32);
+            }
+            let json = norito::json::to_json(&digest).unwrap();
+            assert_eq!(
+                norito::json::from_str::<KaigiIdentityDigestV1>(&json).unwrap(),
+                digest
+            );
+        }
+        for bit in 0..256 {
+            let mut bytes = [0; 32];
+            bytes[bit / 8] = 1 << (bit % 8);
+            let digest = KaigiIdentityDigestV1(bytes);
+            assert_eq!(digest.words().map(u64::to_le_bytes).concat(), bytes);
+            assert_ne!(digest, KaigiIdentityDigestV1([0; 32]));
+        }
+    }
+
+    #[test]
+    fn native_identity_rejects_every_truncation_trailing_byte_and_old_width() {
+        for length in (0..32).chain([33, 48, 64]) {
+            assert!(
+                norito::core::decode_field_canonical::<KaigiIdentityDigestV1>(&vec![0xff; length])
+                    .is_err()
+            );
+            let json = norito::json::to_json(&vec![0xff_u8; length]).unwrap();
+            assert!(norito::json::from_str::<KaigiIdentityDigestV1>(&json).is_err());
+        }
+        let bytes = [0xff; 33];
+        let (decoded, consumed) =
+            <KaigiIdentityDigestV1 as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+                .unwrap();
+        assert_eq!(decoded.as_bytes(), &[0xff; 32]);
+        assert_eq!(
+            consumed, 32,
+            "prefix ownership is explicit to the enclosing codec"
         );
     }
 

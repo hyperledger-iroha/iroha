@@ -5,7 +5,7 @@ use crate::secret::SecretPolynomial;
 use ff::Field as _;
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 fn expressions<F: PastaField>() -> CompiledExpressions<F> {
     CompiledExpressions {

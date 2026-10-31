@@ -18,9 +18,8 @@ fn retained_delivery_with_open_request(
     for row in vectors()["envelopes"].as_array().unwrap() {
         let envelope: KagemushaWalletEnvelopeV1 =
             archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()).unwrap();
-        match envelope.message {
-            KagemushaWalletMessageV1::Request { request: original } => request = Some(original),
-            _ => {}
+        if let KagemushaWalletMessageV1::Request { request: original } = envelope.message {
+            request = Some(original);
         }
     }
     let request = request
@@ -60,7 +59,7 @@ fn retained_delivery_with_open_request(
             online_charge: 0,
         },
     );
-    archived.credential = companion.payer_credential.clone();
+    archived.credential = companion.payer_credential;
     let mut body = archived.capsule.body().clone();
     body.wallet_id = wallet.wallet_id;
     body.kind = KagemushaWalletOperationKindV1::ArchiveSent;
@@ -106,7 +105,7 @@ fn retained_delivery_with_open_request(
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(capsule, &archive_capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner
         .assemble(capsule, &archive_capsule, &signature)
@@ -149,7 +148,8 @@ fn retained_delivery_with_open_request(
     marker.payment_key = archived.credential.body.payment_key;
     marker.generation = retained.selected_generation + 1;
     marker.state = capsule.head_marker_state();
-    wallet.custody.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+    wallet.custody.status =
+        SlotStatus::Released(marker_record(&marker, retained.completion_digest));
     wallet.publish_manifest(selected, &manifest).unwrap();
     let send_id = [77; 32];
     let send_operation = payment
@@ -180,7 +180,7 @@ fn retained_delivery_with_open_request(
         },
     });
     wallet
-        .retain_delivery_test_mapping(send, send_capsule, send_commitment, send_operation)
+        .retain_delivery_test_mapping(&send, send_capsule, send_commitment, send_operation)
         .unwrap();
     // Send completion/capsule/source are absent: only the explicit permanent tombstone is
     // available. A regression that reopens archive_send_source cannot pass this test.
@@ -205,7 +205,7 @@ fn retained_delivery_with_open_request(
     );
     wallet
         .retain_delivery_test_mapping(
-            intent,
+            &intent,
             archive_capsule,
             capsule.receipt_commitment(),
             operation,
@@ -227,7 +227,7 @@ fn bound_delivery_query_and_exact_retry_survive_collected_send_and_lost_app_ack(
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }
@@ -245,7 +245,7 @@ fn bound_delivery_open_request_survives_collected_send_and_lost_app_ack() {
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }
@@ -260,7 +260,7 @@ fn bound_delivery_rejects_changed_request_terms_signature_originals_or_completio
         let (mut wallet, send, credited, _) =
             retained_delivery_with_open_request(mutation < 3, Some(mutation));
         assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         assert!(
             wallet
                 .verified_delivery_projection(&send, &credited)
@@ -280,14 +280,10 @@ fn bound_delivery_foreign_request_and_unavailable_custody_never_mean_complete_or
             .credited_status_for_send(&[82; 32], &credited)
             .is_err()
     );
-    assert!(
-        wallet
-            .accept_credited_for_send(&[82; 32], &credited)
-            .is_err()
-    );
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &[82; 32], &credited).is_err());
     wallet.custody.unavailable = true;
     assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-    assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
     assert_eq!(wallet.custody.signatures, 0);
 }
 
@@ -302,7 +298,7 @@ fn bound_delivery_after_send_pruning_rejects_changed_private_tombstone() {
         .unwrap()
         .capsule_digest[0] ^= 1;
     assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-    assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+    assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
     assert_eq!(wallet.custody.signatures, 0);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 0);
 }
@@ -318,7 +314,7 @@ fn bound_delivery_after_send_pruning_rejects_mismatched_archive_completion_pair(
             retained.record.capsule_digest[0] ^= 1;
         }
         assert!(wallet.credited_status_for_send(&send, &credited).is_err());
-        assert!(wallet.accept_credited_for_send(&send, &credited).is_err());
+        assert!(lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).is_err());
         assert_eq!(wallet.custody.signatures, 0);
         assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 0);
     }
@@ -338,7 +334,7 @@ fn delivery_read_refusal_preserves_collected_send_and_exact_retry_without_signin
         assert!(matches!(status, Err(Error::DecodeResource(ref cause))
             if cause.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit));
         let retry = norito::with_decode_limits_scope(limits, || {
-            wallet.accept_credited_for_send(&send, &credited)
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited)
         });
         assert!(matches!(retry, Err(Error::DecodeResource(ref cause))
             if cause.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit));
@@ -348,7 +344,7 @@ fn delivery_read_refusal_preserves_collected_send_and_exact_retry_without_signin
             RequestStatusV1::Outcome(Completion::Complete(original.clone()))
         );
         assert_eq!(
-            wallet.accept_credited_for_send(&send, &credited).unwrap(),
+            lifecycle::fixture_archive_attempt(&mut wallet, &send, &credited).unwrap(),
             Completion::Complete(original.clone())
         );
     }

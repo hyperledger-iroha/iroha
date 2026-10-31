@@ -63,7 +63,7 @@ impl std::fmt::Debug for ClaimSignal {
 /// Original watch senders, detached before physical unlock and delivered afterwards.
 /// Intrusive links reuse the existing claim allocations; no queue allocation occurs.
 #[derive(Debug, Default)]
-pub(crate) struct RawGeometryReleases {
+pub struct RawGeometryReleases {
     head: Option<Arc<ClaimSignal>>,
 }
 
@@ -217,7 +217,7 @@ impl Drop for RawGeometryClaim {
 
 /// Observable operation progress, never a State or consensus authorization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RawGeometryPhase {
+pub enum RawGeometryPhase {
     /// Purely captured request; no storage effects have run.
     Captured,
     /// Original pending GC and history reconciliation are being completed.
@@ -226,7 +226,7 @@ pub(crate) enum RawGeometryPhase {
     Applying,
     /// Files and original successor map are installed; caller still owns catalog publication.
     FilesApplied,
-    /// The retained CatalogPublished phase is being made durable.
+    /// The retained `CatalogPublished` phase is being made durable.
     PublishingCatalog,
     /// Owned inverse reference publication is in progress.
     RollingBack,
@@ -383,7 +383,7 @@ impl RawGeometryProvisioningFailure {
 
 /// Exact request, original storage images and journal writer across local retry.
 #[must_use = "retain the original geometry operation until catalog publication or owned rollback"]
-pub(crate) struct RawGeometryAttempt {
+pub struct RawGeometryAttempt {
     kura: KuraInstanceIdentity,
     request: OwnedRequest,
     previous_bindings: Vec<LaneGeometryBinding>,

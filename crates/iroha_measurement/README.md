@@ -217,6 +217,92 @@ the manifest digest printed by each original harness invocation and replay it
 with the same pinned artifact and source.
 
 TODO: This is one Rust SDK flow. It does not complete the six SDK delivery
-surfaces (Rust, Kotlin/Java/Android, Swift, JavaScript, Python and C#), other-language emitters, SDK device thermal adapters, physical-device
+surfaces (Rust, Kotlin/Java/Android, Swift, JavaScript, Python and C#), other-language emitters beyond the Python diagnostic below, SDK device thermal adapters, physical-device
 runs or HTTP/ledger integration. Those ordinary implementation and execution
 gaps remain separate from this diagnostic target's component qualification.
+
+
+## Python SDK host diagnostic
+
+`python/iroha_python/tests/diagnostics/sdk_transaction_workload.py` is a test-only
+non-Rust producer of the same JSON view. It uses the original harness descriptor,
+strict JSON decoder and canonical JSON writer; no parallel schema or binary codec
+is introduced. The Rust Cargo consumer registry remains unchanged: this Python
+test does not add a recorder dependency to a workspace crate or shipping SDK.
+
+The `success` mode compares 128 calls on the same public `TransactionDraft` with
+and without observation. The phases call `to_builder().payload_json()`, `sign`,
+the actual `signed_transaction_versioned` getter, the canonical native envelope
+reader and the native JSON envelope roundtrip. Signing already includes encoding;
+the getter phase measures materialization, not a second encoding pass. The same
+fixed timestamp, nonce, public key fixtures and instruction are used throughout.
+The controls compare canonical bytes, signatures, hashes and payloads in memory;
+none of those values, keys or exception text enter records or terminal output.
+No HTTP request or ledger write occurs.
+
+`signing_failure` retains an actual native wrong-authority signing refusal and
+then retries the same unchanged draft with its correct key. `exception` retains
+a deliberately raised diagnostic exception after actual preparation and then
+retries the same input. The observation wrapper preserves the exact result object
+or exception instance. Failure and retry records have separate exclusive names;
+every expected sink is checked. These modes must run separately from `success`:
+a caught exception and zero child exit do not make a failed/unwound measurement
+acceptable. Their original harness reports must remain rejected.
+
+Only completed API-call counts and actual public byte lengths are recorded.
+`allocations.sources` is empty and phase allocation fields are zero because this
+adapter has no allocation instrumentation; they do not state zero SDK allocation.
+Kernel RSS is lifetime high-water, not a session peak difference. It includes
+interpreter/native startup, the unmeasured baseline and retained baseline/measured
+results; it is not isolated transient memory for 128 calls. Phase process
+CPU covers the process window; opening-thread CPU and active-thread counts cover
+only the instrumented calling thread. One declared worker means serial diagnostic
+scheduling, not native worker discovery. Thermal state is explicitly unavailable.
+Clock anomalies, missing records and instrumentation faults reject diagnostic
+evidence without changing SDK results. Observer-origin interrupts are isolated;
+an interrupt raised while the actual operation runs is re-raised unchanged.
+The diagnostic does not claim pool funding or physical-device coverage.
+
+Dependency-free controls reuse the unchanged golden and all shared mutation cases:
+
+```sh
+python3.12 -B -m unittest scripts.tests.python_sdk_measurement_test \
+  scripts.tests.zk_resource_harness_test.SchemaTwinTests
+```
+
+Those controls do not import the SDK or execute native signing. For native
+qualification, first complete integration, capture the entire source, build the
+matching Python native artifact and authenticate the imported Python packages,
+the diagnostic files, the loaded `iroha_native._crypto` extension and any native
+dependencies before and after execution. Use the existing artifact provenance
+contract and retain its external manifest digest. Bind that custody digest into
+`--config` (for example `python-sdk.<64-hex-manifest-digest>`), preserving the
+harness's existing manifest/source/executable checks. Its executable pin covers
+the Python interpreter, not imported code; the additional native/import custody
+is supplemental evidence, not a guarantee supplied by the harness itself.
+Do not qualify an ignored draft overlay or an old installed wheel as current source.
+
+Run the real interpreter executable directly, not a shell/shebang/framework
+launcher that changes its running image. Use a fresh run for each mode and retain
+the manifest digest printed by the unmodified harness:
+
+```sh
+python3.12 scripts/zk_resource_harness.py run \
+  --hardware <reference-hardware-record> --profile <actual-native-profile> \
+  --config python-sdk.<custody-digest> --cache-policy warm -- \
+  <exact-python-executable> -B \
+  python/iroha_python/tests/diagnostics/sdk_transaction_workload.py success
+```
+
+Repeat separately with `signing_failure` and `exception`, retain their rejected
+reports and both original failure and retry records, then use the original
+`salvage` command with each external manifest digest and matching scope. The
+successful run must pass the original full harness, including unattributed-time,
+process identity and resource accounting. Tiny adapter unit tests allow their
+unattributed-time finding because they are not SDK qualification; the native
+harness has no such exception or modified threshold.
+
+TODO: Execute and independently audit these three modes with a stable integrated
+source and matching native artifact. Source/fixture checks do not establish native
+success, E.1 completion, other-language coverage, end-to-end proving, HTTP/finality,
+Linux enforced-address-space coverage, Android/iOS thermal evidence or X.2/X.4.

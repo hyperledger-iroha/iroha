@@ -18,7 +18,7 @@ macro_rules! effect_indexes {
             da_shard_cursors: DaShardCursorIndex,
             da_pin_intents: DaPinStore,
             lane_manifests: LaneManifestRegistryHandle,
-            lane_privacy_registry: LanePrivacyRegistryHandle,
+            lane_privacy_registry: LanePrivacyRegistry,
             da_indexes_hydrated: Option<Result<(), DaIndexHydrationFailure>>,
         }
     };
@@ -33,7 +33,7 @@ macro_rules! define_indexes {
             retired: [iroha_allocation::release::DeferredReleaseBatch; 9],
             complete: bool,
             retired_manifests: Option<LaneManifestRegistryHandle>,
-            retired_privacy: Option<LanePrivacyRegistryHandle>,
+            retired_privacy: Option<LanePrivacyRegistry>,
         }
 
         impl<'state> StateEffectLocks<'state> {
@@ -77,7 +77,7 @@ macro_rules! define_indexes {
             }
 
             /// Original guards remain owned through the exact registry swap.
-            pub(in crate::state) fn install_registries(&mut self, manifests: LaneManifestRegistryHandle, privacy: LanePrivacyRegistryHandle) {
+            pub(in crate::state) fn install_registries(&mut self, manifests: LaneManifestRegistryHandle, privacy: LanePrivacyRegistry) {
                 assert!(self.complete && self.retired_manifests.is_none() && self.retired_privacy.is_none(), "one complete registry publication");
                 self.retired_manifests = Some(std::mem::replace(&mut **self.lane_manifests.as_mut().expect("prepared manifests"), manifests));
                 self.retired_privacy = Some(std::mem::replace(&mut **self.lane_privacy_registry.as_mut().expect("prepared privacy"), privacy));

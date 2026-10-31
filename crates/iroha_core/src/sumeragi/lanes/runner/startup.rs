@@ -216,10 +216,10 @@ impl Inner {
         loop {
             let key = {
                 let pending = self.starting.lock();
-                match last {
-                    Some(key) => pending.range((Excluded(key), Unbounded)).next(),
-                    None => pending.iter().next(),
-                }
+                last.map_or_else(
+                    || pending.iter().next(),
+                    |key| pending.range((Excluded(key), Unbounded)).next(),
+                )
                 .map(|(key, _)| *key)
             };
             let Some(key) = key else { break };
@@ -416,15 +416,15 @@ impl Inner {
             ))
         });
         let recovery = LaneExecutor::begin_recover(
-            record.clone(),
-            config.clone(),
-            instance,
-            Arc::new(GlobalAnchors::new(
-                Arc::clone(&inputs.state),
-                Arc::clone(&inputs.watch),
-            )),
-            StatelessChecks::new(inputs.network),
-            transactions,
+            (record.clone(), config.clone(), instance),
+            (
+                Arc::new(GlobalAnchors::new(
+                    Arc::clone(&inputs.state),
+                    Arc::clone(&inputs.watch),
+                )),
+                StatelessChecks::new(inputs.network),
+                transactions,
+            ),
             genesis.0,
             store.clone(),
             shared.clone(),

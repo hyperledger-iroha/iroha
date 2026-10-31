@@ -63,6 +63,10 @@ struct BoundProgressSidecar {
     index_metadata: StableSidecarMetadata,
 }
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Recovery carries the exact open sidecar descriptors and namespace inline without allocating a replacement owner"
+)]
 enum BoundProgressPair {
     Absent(BoundProgressNamespace),
     Present(BoundProgressSidecar),

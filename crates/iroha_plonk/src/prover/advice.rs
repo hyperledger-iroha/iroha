@@ -12,13 +12,13 @@
 
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 use rayon::prelude::*;
 
 use super::{ProverError, random_values, write_point};
 use crate::{
     keys::ProvingKey,
-    pcs::ipa::{PinnedParams, commit::Secrecy},
+    pcs::ipa::PinnedParams,
     protocol::Shape,
     transcript::{Transcript, TranscriptWrite},
 };
@@ -53,7 +53,7 @@ pub(super) struct InstanceColumns<F> {
 /// retain the caller's dense IFFT. The constructor supplies the same original
 /// input that produced its padded column; this is not a public coefficient API.
 ///
-/// c_i = n^-1 sum_j a_j omega^(-ij). A one-element prefix is constant;
+/// `c_i = n^-1 sum_j a_j omega^(-ij)`. A one-element prefix is constant;
 /// a two-element prefix adds one geometric sequence. Shape, never values,
 /// selects the path. All Rayon work joins before cancellation is returned.
 fn interpolate_short_instance<F: iroha_pasta::PastaField>(
@@ -292,7 +292,7 @@ pub(super) fn commit<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let mut advice = Advice {
         values,
@@ -309,26 +309,20 @@ where
         column[shape.usable_rows..].copy_from_slice(&random);
     }
     advice.blinds = random_values(rng, shape.num_advice);
-    let tables = pk.commitment_tables();
-    let commitments = advice
-        .values
-        .par_iter()
-        .zip(advice.blinds.par_iter())
-        .map(|(values, blind)| {
-            tables
-                .commit_lagrange_cancellable(
-                    params.params(),
-                    values,
-                    blind,
-                    Secrecy::Secret,
-                    budget,
-                    cancellation,
-                )
-                .map(|point| point.to_affine())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // One bounded batch: per-column Rayon tasks would let nested stealing open more
+    // MSM kernels than the shared scratch ceiling admits.
+    let columns: Vec<&[C::ScalarExt]> = advice.values.iter().map(Vec::as_slice).collect();
+    let commitments = pk
+        .commitment_tables()
+        .commit_lagrange_secret_columns_cancellable(
+            params.params(),
+            &columns,
+            &advice.blinds,
+            budget,
+            cancellation,
+        )?;
     for commitment in &commitments {
-        write_point(transcript, commitment)?;
+        write_point(transcript, &commitment.to_affine())?;
     }
     Ok(advice)
 }

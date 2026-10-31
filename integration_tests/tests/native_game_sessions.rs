@@ -793,16 +793,11 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             checkpoint_state: Some(state),
         };
         let proof_started = std::time::Instant::now();
-        let proof = tokio::task::spawn_blocking(move || prove_race_v1(request)).await??;
+        let proof = tokio::task::spawn_blocking(move || prove_race_v1(&request)).await??;
         verify_game_proof_for_history_v1(
             &proof,
             &resolved.manifest,
-            &outcome,
-            resolved.checkpoint.as_ref().map(|signed| &signed.checkpoint),
-            &resolved.transcript_anchors,
-            &resolved.forced_batches,
-            &resolved.participants,
-            resolved.epoch,
+            &outcome,iroha_core_privacy::execution_proofs::GameProofHistoryV1 { checkpoint: resolved.checkpoint.as_ref().map(|signed| &signed.checkpoint), anchors: &resolved.transcript_anchors, batches: &resolved.forced_batches, participants: &resolved.participants, epoch: resolved.epoch },
         )?;
         let proof_bytes = proof.encode();
         ensure!(

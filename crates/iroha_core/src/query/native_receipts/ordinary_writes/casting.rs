@@ -24,7 +24,7 @@ use norito::Error;
 
 /// Immutable backing owner; each leaf has no heap-bearing fields. Field order frees values
 /// before refunding the one original exact array charge. There is no cloning or extraction API.
-pub(crate) struct CastingOwner {
+pub struct CastingOwner {
     values: Vec<Binding>,
     charge: AllocationCharge,
 }

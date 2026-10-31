@@ -93,14 +93,19 @@ Limits, stated once:
   verifier or a function on the operation's recorded path to it. That shows
   the test is about the verifier. It does not show that the call runs, or
   that a valid proof is accepted rather than an invalid one rejected.
-* Authority. Checks are found in a handler's own `impl` blocks: listed check
+* Authority. Checks are found in a handler's own `impl` blocks, or in its
+  explicitly recorded original-invocation entry: listed check
   names, permission tokens, comparisons with the signer and every function
   that receives the signer. A check inside a shared helper is recorded with
   `scope: file` and anchored, so its removal fails; one added inside such a
   helper is not detected.
+* Original invocation. An explicit entry records the typed dispatch, required
+  context parameter and exact unconditional detached refusal. These are source
+  anchors; Rust typing and runtime custody tests establish provenance.
 * Handler tripwire. A verifier call is found in the handler's blocks and in
   the functions of its file they call, `helper_depth` levels deep; deeper or
-  cross-file calls are found by the entry-point census only if the verifier
+  cross-file calls, and callees of an original-invocation entry, are found by
+  the entry-point census only if the verifier
   is one of its tokens. Macro-generated handlers are read per file.
 * Entry points. The census counts calls of the listed entry points. A new
   verifier function that is no token, and a restore validator whose name has
@@ -676,6 +681,20 @@ def anchor_names(tree: Tree, anchor: dict) -> list[str]:
     if function in (None, "execute", "execute_authorized") and owner:
         return [owner]
     return [function] if function else []
+
+
+def anchor_item_text(tree: Tree, anchor: dict, *, signature: bool = False) -> str | None:
+    """Read one anchored item's raw body, or only its signature when requested."""
+    text = tree.read(anchor.get("path", ""))
+    if text is None:
+        return None
+    position = symbol_position(text, anchor.get("symbol", ""))
+    if position is None:
+        return None
+    span = rust_index(text).item_span(position)
+    if span is None:
+        return None
+    return text[position:span[0]] if signature else text[span[0]:span[1]]
 
 
 def anchor_closure(tree: Tree, anchor: dict, stop: frozenset = frozenset()) -> str | None:
@@ -1742,9 +1761,15 @@ class Checker:
                     continue
                 if squash(block["symbol"]) != squash(handler.get("symbol", "")):
                     self.error(f"{label}: handler symbol is `{block['symbol']}`, recorded `{handler.get('symbol')}`")
-                scope = handler_scope(self.tree, block, entry["name"])
+                execution = self.operation_execution_entry(label, operation)
+                if operation.get("invocation"):
+                    raw_scope = anchor_item_text(self.tree, execution) or ""
+                    scope = code_only(raw_scope)
+                else:
+                    scope = handler_scope(self.tree, block, entry["name"])
+                    raw_scope = handler_scope(self.tree, block, entry["name"], raw=True)
                 received |= argument_callees(scope, tuple(registry.get("authority_words", [])))
-                found = authority_tokens(scope, handler_scope(self.tree, block, entry["name"], raw=True), registry)
+                found = authority_tokens(scope, raw_scope, registry)
                 listed = {check["symbol"] for check in operation.get("authority", []) if check.get("scope", "handler") == "handler"}
                 for token in sorted(found - listed):
                     self.error(
@@ -1760,7 +1785,9 @@ class Checker:
                         self.error(f"{label}: authority check `{check.get('symbol')}` outside the handler needs `what`")
                 if not operation.get("authority") and not operation.get("authority_note"):
                     self.error(f"{label}: an operation with no authority check needs authority_note")
-                calls = sorted(set(verifier_calls.findall(handler_scope(self.tree, block, entry["name"], helper_depth))))
+                calls = sorted(set(verifier_calls.findall(
+                    scope if operation.get("invocation") else handler_scope(self.tree, block, entry["name"], helper_depth)
+                )))
                 if calls and operation.get("status", {}).get("verification") in ("not_applicable", "absent") \
                         and not operation.get("verifier_calls_note"):
                     self.error(
@@ -1788,6 +1815,48 @@ class Checker:
                     self.error(
                         f"{label}: recorded as absent, but the registry now has {entry['type']}; list it as an operation"
                     )
+
+    def operation_execution_entry(self, label: str, operation: dict) -> dict:
+        """Check an original-invocation entry while retaining its detached registry refusal.
+
+        This source inventory checks explicit linkage and exact refusal/context anchors;
+        Rust typing and runtime custody tests establish the invocation's authority.
+        """
+        handler = operation.get("handler", {})
+        invocation = operation.get("invocation")
+        if invocation is None:
+            return handler
+        if not isinstance(invocation, dict) or not handler:
+            self.error(f"{label}: invocation requires a registered handler and an entry record")
+            return handler
+        entry, dispatch = invocation.get("entry", {}), invocation.get("dispatch", {})
+        entry_names = anchor_names(self.tree, entry)
+        entry_code = anchor_item_text(self.tree, entry, signature=True)
+        dispatch_code = anchor_item_text(self.tree, dispatch)
+        if not entry_names or entry_code is None or dispatch_code is None:
+            self.error(f"{label}: invocation entry and dispatch must name existing functions")
+            return handler
+        entry_code, dispatch_code = code_only(entry_code), code_only(dispatch_code)
+        instruction = operation.get("isi", {}).get("type", "").rsplit("::", 1)[-1]
+        if not instruction or not names(dispatch_code, instruction) or not names(dispatch_code, entry_names[0]):
+            self.error(f"{label}: invocation dispatch must name the exact instruction and entry")
+        for field, code in (("dispatch_guard", dispatch_code), ("context_parameter", entry_code)):
+            expected = invocation.get(field)
+            if not isinstance(expected, str) or not expected or squash(expected) not in squash(code):
+                self.error(f"{label}: invocation {field} is absent from its function")
+        text = self.tree.read(handler.get("path", "")) or ""
+        block = block_after(text, re.escape(handler.get("symbol", "")))
+        detached = fn_body(block or "", "execute")
+        refusal = invocation.get("detached_body")
+        refusal_code = code_only(refusal).strip() if isinstance(refusal, str) else ""
+        error_call = re.match(r"Err\s*\(", refusal_code)
+        if not error_call or balanced(refusal_code, error_call.end() - 1, "(", ")") != len(refusal_code) \
+                or re.search(r"\breturn\b", refusal_code):
+            self.error(f"{label}: invocation detached_body must be one unconditional Err expression")
+        if not isinstance(refusal, str) or not refusal or detached is None \
+                or squash(strip_comments(detached)) != squash(refusal):
+            self.error(f"{label}: detached handler must retain its exact unconditional refusal")
+        return entry
 
     def dispatch_entries(self) -> list[str]:
         """Functions through which every protocol of the closed list is dispatched."""
@@ -1849,7 +1918,7 @@ class Checker:
 
     def check_verifier_path(self, label: str, operation: dict, targets: list[str]) -> list[str]:
         """Names of the `verifier_path` links, each shown to name the next and the last a target."""
-        handler = operation.get("handler") if isinstance(operation.get("handler"), dict) else None
+        handler = self.operation_execution_entry(label, operation) if isinstance(operation.get("handler"), dict) else None
         links = operation.get("verifier_path")
         if links is None:
             links = [handler] if handler else []
@@ -2153,13 +2222,10 @@ class Checker:
         dispatch_code = anchor_closure(self.tree, {"path": dispatch.get("path", ""),
                                                    "symbol": "fn " + dispatch.get("function", "") + "("}) or ""
         instruction = section.get("single_route", {}).get("handler", {}).get("entry", {})
-        gate = roles.get("gate_site")
-        gated = self.handler_is_gated(instruction, "resolve_qualified_privacy_activation_v1")
-        if gated and not isinstance(gate, dict):
-            self.error("exact12.roles: the handler calls the admission gate; record it as `gate_site`")
-        if not gated and gate is not None:
-            self.error("exact12.roles: the handler no longer calls the admission gate; remove `gate_site` and "
-                       "record applied roles as `implemented`")
+        if roles.get("gate_site") is not None or section.get("admission_gate") is not None:
+            self.error("exact12.roles: retired documentary admission-gate metadata is forbidden")
+        if not self.handler_is_gated(instruction, "resolve_admitted_privacy_protocol_v1"):
+            self.error("exact12.roles: selected native implementation and policy admission must remain in the handler")
         tasks = self.tasks()
         seen_protocols: list[str] = []
         for row in rows:
@@ -2194,12 +2260,12 @@ class Checker:
             expected_effects = (
                 "unreachable" if verification == "refused"
                 else "none" if row.get("effect_class") == "VerifyOnly"
-                else "gated" if gated else "implemented"
+                else "implemented"
             )
             if row.get("state_effects") != expected_effects:
                 self.error(
                     f"{label}: state_effects must be `{expected_effects}` (verification `{verification}`, effect class "
-                    f"`{row.get('effect_class')}`, admission gate {'present' if gated else 'absent'}), "
+                    f"`{row.get('effect_class')}`), "
                     f"recorded `{row.get('state_effects')}`"
                 )
             if row.get("delivery") not in DELIVERY:
@@ -2231,9 +2297,76 @@ class Checker:
             if {row.get("verification") for row in own} != {protocol.get("status", {}).get("verification")}:
                 self.error(f"exact12.roles: protocol {variant} is recorded `{protocol.get('status', {}).get('verification')}`, "
                            f"its roles {sorted({str(row.get('verification')) for row in own})}")
+            role_states = {row.get("state_effects") for row in own}
+            if role_states != {protocol.get("status", {}).get("state_effects")}:
+                self.error(f"exact12.roles: protocol {variant} records state effects "
+                           f"`{protocol.get('status', {}).get('state_effects')}`, its roles {sorted(role_states)}")
             if sorted({row.get("ledger_effect") for row in own}) != sorted(protocol.get("ledger_effect", [])):
                 self.error(f"exact12.roles: protocol {variant} records ledger effects {protocol.get('ledger_effect')}, "
                            f"its roles {sorted({str(row.get('ledger_effect')) for row in own})}")
+
+    def dedicated_effect_owners(self, route: dict, rows: list[dict]) -> list[str]:
+        """Check each request-only role's sole effect owner and generic refusal.
+
+        These are source invariants, not runtime custody or proof qualification.
+        A dedicated carrier may share the semantic native verifier, but it may
+        not retain a second generic route or accept an unbound attachment.
+        """
+        owners: list[str] = []
+        roles = {row.get("role"): row for row in rows}
+        seen: set[str] = set()
+        generic = code_only(self.production(route.get("handler", {}).get("path", "")))
+        preparation = fn_body(generic, "prepare") or ""
+        for record in route.get("dedicated_requests", []):
+            role, owner = record.get("role"), record.get("path")
+            label = f"exact12.single_route.dedicated_requests[{role}]"
+            if role in seen or role not in roles or owner in owners:
+                self.error(f"{label}: role and effect owner must be unique and recorded")
+            seen.add(role)
+            row = roles.get(role, {})
+            if row.get("executor_arm", {}).get("path") != owner:
+                self.error(f"{label}: effect owner differs from the role executor")
+            operation = next((op for op in self.inv.get("operations", []) if op.get("id") == record.get("operation")), None)
+            if operation is None or operation.get("handler", {}).get("path") != owner:
+                self.error(f"{label}: dedicated instruction must name its actual owner")
+            protocol = row.get("protocol", "")
+            guard = f"if instruction.envelope.protocol_id == PrivacyProtocolIdV1::{protocol} {{ return Err("
+            if not contains(preparation, guard):
+                self.error(f"{label}: generic preparation must reject this protocol")
+            effect = row.get("ledger_effect", "")
+            executor = fn_body(generic, "execute_after_admission") or ""
+            if not contains(executor, f"VerifiedPrivacyLedgerEffectsV1::{effect}(_) => Err("):
+                self.error(f"{label}: generic executor must reject this effect in execute_after_admission")
+            source = code_only(self.production(owner or ""))
+            for function in ("execute_x509_submission", "execute_x509_after_admission"):
+                body = fn_body(source, function) or ""
+                if not contains(body, "binding.require_original_execution(request, proof, authority, state_transaction)?;"):
+                    self.error(f"{label}: {function} must reject a foreign original binding")
+            entry_body = fn_body(source, "execute_x509_submission") or ""
+            admission = (
+                "let admitted = resolve_admitted_privacy_protocol_v1( "
+                "&state_transaction.world.privacy_protocol_policies, "
+                f"PrivacyProtocolIdV1::{protocol}, state_transaction.block_height(), "
+                ") .map_err(|error| invalid_privacy_parameter(error.to_string()))?;"
+            )
+            if not contains(entry_body, admission):
+                self.error(f"{label}: selected implementation and policy admission must reject")
+            body = fn_body(source, "execute_x509_after_admission") or ""
+            checks = (
+                f"if effects.role() != PrivacyActionRoleV1::{role}",
+                f"|| effects.protocol_id() != PrivacyProtocolIdV1::{protocol}",
+                "|| effects.statement_digest() != statement_digest",
+                "|| effects.action_index() != expected_action_index",
+                "|| effects.encoded_action_bytes() != encoded_action_bytes { return Err(",
+                f"let VerifiedPrivacyLedgerEffectsV1::{effect}(effect) = effects.into_ledger() else {{ return Err(",
+            )
+            if not all(contains(body, check) for check in checks):
+                self.error(f"{label}: verified effect bindings and variant must reject substitution")
+            for call in ("verify_privacy_zk_x509_attached_v1", "apply_verified_effect"):
+                if len(re.findall(r"\b" + call + r"\s*\(", body)) != 1:
+                    self.error(f"{label}: selected verifier and effect application must each occur once")
+            owners.append(owner)
+        return owners
 
     def check_exact12_single_route(self) -> None:
         section = self.inv.get("exact12", {})
@@ -2331,8 +2464,9 @@ class Checker:
             if item.get("use") not in EFFECT_USES:
                 self.error(f"{prefix}: ledger_consumers[{item.get('path')}].use must be one of {EFFECT_USES}")
         applying = [item.get("path") for item in consumers if item.get("use") == "ledger_application"]
-        if applying != [handler.get("path")]:
-            self.error(f"{prefix}: exactly the handler applies a verified effect, recorded {applying}")
+        dedicated = self.dedicated_effect_owners(route, rows)
+        if applying != [handler.get("path"), *dedicated]:
+            self.error(f"{prefix}: exactly the recorded role owners apply verified effects, recorded {applying}")
         enum = effects.get("enum", {})
         variants = enum_variants(self.tree.read(enum.get("path", "")) or "", enum.get("enum", "")) or []
         variant_use = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(enum.get("enum", "")) + r"\s*::\s*(\w+)")
@@ -2390,16 +2524,23 @@ class Checker:
             for verifier in row.get("native_verifiers", []):
                 check_callers(f"{prefix}: role {row.get('role')}", verifier, {native.get("dispatch")},
                               [native.get("dispatch")])
-        operations = {operation["id"] for operation in self.inv.get("operations", [])}
+        operations = {operation["id"]: operation for operation in self.inv.get("operations", [])}
         for item in route.get("administrative_proof_operations", []):
             label = f"{prefix}: administrative operation {item.get('id')}"
             if item.get("id") not in operations:
                 self.error(f"{label}: not a listed operation")
             callers = list(item.get("callers", []))
             check_callers(label, item.get("verifier", {}), set(callers), callers)
-            code = anchor_closure(self.tree, item.get("executor", {})) or ""
-            if not names(code, item.get("verifier", {}).get("name", "\0")):
-                self.error(f"{label}: its executor does not call `{item.get('verifier', {}).get('name')}`")
+            operation = operations.get(item.get("id"))
+            if operation and operation.get("invocation"):
+                entry = self.operation_execution_entry(label, operation)
+                if item.get("executor") != entry:
+                    self.error(f"{label}: its executor must be the recorded invocation entry")
+                self.check_verifier_path(label, operation, [item.get("verifier", {}).get("name", "\0")])
+            else:
+                code = anchor_closure(self.tree, item.get("executor", {})) or ""
+                if not names(code, item.get("verifier", {}).get("name", "\0")):
+                    self.error(f"{label}: its executor does not call `{item.get('verifier', {}).get('name')}`")
         for path in sorted(tooling - used_tooling):
             self.error(f"{prefix}: non_admission_callers[{path}] calls no recorded native verifier; remove the row")
 
@@ -2504,8 +2645,9 @@ class Checker:
             if actual != expected:
                 self.error(f"{label}: {function} circuit_id maps {actual}, recorded {expected}")
         delegate = code_only(fn_body(text, "circuit_id") or "")
-        expected_delegate = ("if let Some(kind) = self.kaigi() { kind.circuit_id() } else { "
-                             "self.confidential().expect().circuit_id() }")
+        expected_delegate = ("self.kaigi().map_or_else( "
+                             "|| self.confidential().expect().circuit_id(), "
+                             "KaigiRelation::circuit_id, )")
         if re.sub(r"\s+", "", delegate) != re.sub(r"\s+", "", expected_delegate):
             self.error(f"{label}: circuit_id must delegate to its selected native kind")
         identifiers = []

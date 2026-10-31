@@ -83,33 +83,29 @@ fn signed_lifecycle_manifest_writer_refusal_retains_preflight_and_original_retry
             if commands.send(()).is_err() {
                 break;
             }
-            match response_rx.recv_timeout(Duration::from_secs(5)) {
-                Ok((result, actual)) => {
-                    attempts.push(result);
-                    identities.push(actual);
-                    unchanged.push(
-                        state.state_commit_lock.try_lock().is_some()
-                            && state.state_write_lock.try_lock().is_some()
-                            && state.lane_lifecycle_lock.try_lock().is_some()
-                            && state.da_shard_cursors.try_write().is_some()
-                            && state.da_indexes_hydrated.try_write().is_some()
-                            && state.state_view_generation() == generation
-                            && state.transactions.latest_height()
-                                == usize::try_from(original_height)
-                                    .expect("fixture height fits usize")
-                            && state.geometry_publication.lock().is_none()
-                            && state
-                                .kura
-                                .lane_geometry_journal_state_for_test()
-                                .ok()
-                                .as_ref()
-                                == Some(&geometry),
-                    );
-                }
-                Err(_) => {
-                    returned_before_release = false;
-                    break;
-                }
+            if let Ok((result, actual)) = response_rx.recv_timeout(Duration::from_secs(5)) {
+                attempts.push(result);
+                identities.push(actual);
+                unchanged.push(
+                    state.state_commit_lock.try_lock().is_some()
+                        && state.state_write_lock.try_lock().is_some()
+                        && state.lane_lifecycle_lock.try_lock().is_some()
+                        && state.da_shard_cursors.try_write().is_some()
+                        && state.da_indexes_hydrated.try_write().is_some()
+                        && state.state_view_generation() == generation
+                        && state.transactions.latest_height()
+                            == usize::try_from(original_height).expect("fixture height fits usize")
+                        && state.geometry_publication.lock().is_none()
+                        && state
+                            .kura
+                            .lane_geometry_journal_state_for_test()
+                            .ok()
+                            .as_ref()
+                            == Some(&geometry),
+                );
+            } else {
+                returned_before_release = false;
+                break;
             }
         }
         // Even the original blocking implementation must finish before we assert.
@@ -212,29 +208,26 @@ fn original_append_manifest_refusal_keeps_typed_wait_and_retries_the_same_frame(
             if commands.send(()).is_err() {
                 break;
             }
-            match response_rx.recv_timeout(Duration::from_secs(5)) {
-                Ok((attempt, retained)) => {
-                    let wait = match &attempt {
-                        Err(Attempt::Rejected(error))
-                            if error.kind() == std::io::ErrorKind::WouldBlock =>
+            if let Ok((attempt, retained)) = response_rx.recv_timeout(Duration::from_secs(5)) {
+                let wait = match &attempt {
+                    Err(Attempt::Rejected(error))
+                        if error.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        match error
+                            .get_ref()
+                            .and_then(|cause| cause.downcast_ref::<StateViewError>())
                         {
-                            match error
-                                .get_ref()
-                                .and_then(|cause| cause.downcast_ref::<StateViewError>())
-                            {
-                                Some(StateViewError::Busy(wait)) => Some(wait.clone()),
-                                _ => None,
-                            }
+                            Some(StateViewError::Busy(wait)) => Some(wait.clone()),
+                            _ => None,
                         }
-                        _ => None,
-                    };
-                    attempts.push((attempt, retained));
-                    waits.push(wait);
-                }
-                Err(_) => {
-                    returned_before_release = false;
-                    break;
-                }
+                    }
+                    _ => None,
+                };
+                attempts.push((attempt, retained));
+                waits.push(wait);
+            } else {
+                returned_before_release = false;
+                break;
             }
         }
         let mut cx = Context::from_waker(Waker::noop());
@@ -346,12 +339,11 @@ fn original_append_driver_retains_manifest_release_without_timer_or_foreign_wake
                 drop(state.crypto.read());
             }
             commands.send(phase).unwrap();
-            match response_rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(observation) => observations.push(observation),
-                Err(_) => {
-                    returned_before_release = false;
-                    break;
-                }
+            if let Ok(observation) = response_rx.recv_timeout(Duration::from_secs(5)) {
+                observations.push(observation)
+            } else {
+                returned_before_release = false;
+                break;
             }
         }
         drop(blocker);

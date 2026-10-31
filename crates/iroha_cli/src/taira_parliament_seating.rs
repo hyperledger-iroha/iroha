@@ -51,22 +51,22 @@ use crate::{Run, RunContext};
 
 /// Canonical Taira product profile; its `[gov]` and `[torii.faucet]` seating keys are the
 /// recommended profile of `specs/sccp.md` §4.14.5.
-pub(crate) const CANONICAL_TAIRA_PROFILE: &str =
+pub const CANONICAL_TAIRA_PROFILE: &str =
     include_str!("../../../configs/soranexus/taira/config.toml");
 /// Default number of genesis citizens `C`.
-pub(crate) const DEFAULT_GENESIS_CITIZENS: u32 = 16;
+pub const DEFAULT_GENESIS_CITIZENS: u32 = 16;
 /// Default XOR fee float minted to every genesis citizen on top of its bond.
-pub(crate) const DEFAULT_FEE_FLOAT_XOR: &str = "1000";
+pub const DEFAULT_FEE_FLOAT_XOR: &str = "1000";
 /// Upper bound on genesis citizens rendered by one seating run.
 const MAX_GENESIS_CITIZENS: u32 = 256;
 /// Directory, relative to the generated network, holding the citizen runtime secrets.
-pub(crate) const CITIZEN_DIRECTORY: &str = "runtime/taira-parliament-citizens";
+pub const CITIZEN_DIRECTORY: &str = "runtime/taira-parliament-citizens";
 /// Public citizen manifest written next to the citizen keys.
-pub(crate) const CITIZEN_MANIFEST_FILE: &str = "citizens.json";
+pub const CITIZEN_MANIFEST_FILE: &str = "citizens.json";
 const CITIZEN_MANIFEST_SCHEMA_V1: &str = "iroha.taira.parliament-citizens.v1";
 const SEAT_REPORT_SCHEMA_V1: &str = "iroha.taira.parliament-seating.v1";
 /// The citizenship bond must be at least this many faucet claims (§4.14.5 item 1).
-pub(crate) const BOND_FAUCET_CLAIMS: u32 = 40;
+pub const BOND_FAUCET_CLAIMS: u32 = 40;
 /// A Policy Jury of at most this many seats never needs a Confirmation Jury (§4.14.5 item 2).
 const MARGIN_FREE_POLICY_JURY_SEATS: u64 = 20;
 /// Citizens a Confirmation Jury needs outside the Policy Jury.
@@ -118,7 +118,7 @@ const PUBLIC_BODIES: [(&str, usize); 8] = {
 };
 
 /// `[gov]` keys copied verbatim from the canonical profile into every seated validator config.
-pub(crate) const GOV_SEATING_KEYS: [&str; 16] = [
+pub const GOV_SEATING_KEYS: [&str; 16] = [
     "citizenship_asset_id",
     "citizenship_bond_amount",
     "min_enactment_delay",
@@ -138,7 +138,7 @@ pub(crate) const GOV_SEATING_KEYS: [&str; 16] = [
 ];
 
 /// `[torii.faucet]` keys copied from the canonical profile when a validator enables a faucet.
-pub(crate) const FAUCET_SEATING_KEYS: [&str; 4] = [
+pub const FAUCET_SEATING_KEYS: [&str; 4] = [
     "pow_max_anchor_age_blocks",
     "pow_adaptive_lookback_blocks",
     "pow_adaptive_claims_per_extra_bit",
@@ -167,7 +167,7 @@ const PUBLISHED_SAMPLE_PUBLIC_KEYS: [&str; 6] = [
 
 /// Faucet reach of one profile: what an anonymous claimant can collect and how fast.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FaucetReach {
+pub struct FaucetReach {
     amount: Quantity,
     difficulty_bits: u64,
     max_anchor_age_blocks: u64,
@@ -215,7 +215,7 @@ impl FaucetReach {
 
 /// The consensus `[gov]` and `[torii.faucet]` values that decide whether the Parliament can sit.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SeatingProfile {
+pub struct SeatingProfile {
     public_bodies: Vec<(&'static str, u64)>,
     coordination_explicit: bool,
     policy_jury_size: u64,
@@ -230,7 +230,7 @@ pub(crate) struct SeatingProfile {
 
 /// One §4.14.5 requirement with its verdict.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SeatingRequirement {
+pub struct SeatingRequirement {
     /// Stable requirement name.
     pub(crate) name: &'static str,
     /// Whether the requirement holds.
@@ -466,13 +466,11 @@ impl SeatingProfile {
             ok: bond_ok,
             detail: bond_detail,
         });
-        requirements.push(match &self.faucet {
-            None => SeatingRequirement {
+        requirements.push(self.faucet.as_ref().map_or_else(|| SeatingRequirement {
                 name: "adaptive_faucet_difficulty",
                 ok: true,
                 detail: "faucet disabled".to_owned(),
-            },
-            Some(faucet) => SeatingRequirement {
+            }, |faucet| SeatingRequirement {
                 name: "adaptive_faucet_difficulty",
                 ok: faucet.lookback_blocks > 0
                     && faucet.claims_per_extra_bit > 0
@@ -481,15 +479,12 @@ impl SeatingProfile {
                     "pow_adaptive_lookback_blocks={} pow_adaptive_claims_per_extra_bit={} pow_adaptive_max_extra_bits={}",
                     faucet.lookback_blocks, faucet.claims_per_extra_bit, faucet.max_extra_bits
                 ),
-            },
-        });
-        requirements.push(match &self.faucet {
-            None => SeatingRequirement {
+            }));
+        requirements.push(self.faucet.as_ref().map_or_else(|| SeatingRequirement {
                 name: "faucet_anchor_age_below_lookback",
                 ok: true,
                 detail: "faucet disabled".to_owned(),
-            },
-            Some(faucet) => {
+            }, |faucet| {
                 let claims = u64::from(BOND_FAUCET_CLAIMS);
                 let burst = faucet.burst_evaluations(claims);
                 let flat = faucet.flat_evaluations(claims);
@@ -506,8 +501,7 @@ impl SeatingProfile {
                         faucet.max_anchor_age_blocks, faucet.lookback_blocks
                     ),
                 }
-            }
-        });
+            }));
         requirements
     }
 
@@ -565,23 +559,22 @@ impl SeatingProfile {
         &self,
         live_amount: Option<&Quantity>,
     ) -> (bool, String) {
-        let Some(amount) = live_amount.or(self.faucet.as_ref().map(|faucet| &faucet.amount)) else {
+        let Some(amount) =
+            live_amount.or_else(|| self.faucet.as_ref().map(|faucet| &faucet.amount))
+        else {
             return (true, "faucet disabled".to_owned());
         };
         let reach = amount.try_mul_decimal(Quantity::from(BOND_FAUCET_CLAIMS).as_numeric());
-        match reach {
-            Ok(reach) => (
+        reach.map_or_else(|_| (
+                false,
+                format!("faucet amount {amount} overflows the reach check"),
+            ), |reach| (
                 self.citizenship_bond >= reach,
                 format!(
                     "citizenship_bond_amount={} against {BOND_FAUCET_CLAIMS} faucet claims of {amount} = {reach}",
                     self.citizenship_bond
                 ),
-            ),
-            Err(_) => (
-                false,
-                format!("faucet amount {amount} overflows the reach check"),
-            ),
-        }
+            ))
     }
 }
 
@@ -613,7 +606,7 @@ fn collect_published_keys(
 /// Every account controlled by a key whose private half ships in this repository: the default
 /// governance accounts, the `iroha_test_samples` accounts and every public key named in
 /// [`PUBLISHED_KEY_SOURCES`].
-pub(crate) fn published_accounts() -> BTreeSet<AccountId> {
+pub fn published_accounts() -> BTreeSet<AccountId> {
     use iroha_config::parameters::defaults::governance as d;
     let mut accounts = BTreeSet::from([
         d::citizenship_escrow_account_id(),
@@ -637,7 +630,7 @@ pub(crate) fn published_accounts() -> BTreeSet<AccountId> {
 ///
 /// # Errors
 /// Returns an error when the configuration has a non-table `[gov]`.
-pub(crate) fn set_citizenship_escrow(config: &mut toml::Table, escrow: &AccountId) -> Result<()> {
+pub fn set_citizenship_escrow(config: &mut toml::Table, escrow: &AccountId) -> Result<()> {
     let literal = {
         let _chain = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
         escrow.to_string()
@@ -659,7 +652,7 @@ pub(crate) fn set_citizenship_escrow(config: &mut toml::Table, escrow: &AccountI
 /// # Errors
 /// Lists every failed §4.14.5 requirement, including a citizenship escrow controlled by a
 /// published key.
-pub(crate) fn refuse_unseated(profile: &SeatingProfile, citizens: u64) -> Result<()> {
+pub fn refuse_unseated(profile: &SeatingProfile, citizens: u64) -> Result<()> {
     let failed = profile
         .requirements(Some(citizens))
         .into_iter()
@@ -679,7 +672,7 @@ pub(crate) fn refuse_unseated(profile: &SeatingProfile, citizens: u64) -> Result
 
 /// Parliament-relevant content of one genesis manifest.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct GenesisCitizenCensus {
+pub struct GenesisCitizenCensus {
     /// Distinct citizens registered with at least the configured bond.
     pub(crate) eligible: BTreeSet<AccountId>,
     /// Citizen registrations below the configured bond.
@@ -728,7 +721,7 @@ fn grants_parliament_manager(instruction: &InstructionBox) -> bool {
 }
 
 /// Take the Parliament census of one genesis instruction stream against `bond`.
-pub(crate) fn genesis_citizen_census<'a>(
+pub fn genesis_citizen_census<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox> + 'a,
     bond: &Quantity,
 ) -> GenesisCitizenCensus {
@@ -758,7 +751,7 @@ pub(crate) fn genesis_citizen_census<'a>(
 ///
 /// # Errors
 /// Returns every failed requirement, including a `CanManageParliament` grant.
-pub(crate) fn require_seated_genesis<'a>(
+pub fn require_seated_genesis<'a>(
     profile: &SeatingProfile,
     instructions: impl IntoIterator<Item = &'a InstructionBox> + 'a,
 ) -> Result<GenesisCitizenCensus> {
@@ -815,7 +808,7 @@ fn peer_configs(localnet_dir: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// # Errors
 /// Returns an error when a config is unreadable or two validators disagree.
-pub(crate) fn localnet_seating_profile(localnet_dir: &Path) -> Result<SeatingProfile> {
+pub fn localnet_seating_profile(localnet_dir: &Path) -> Result<SeatingProfile> {
     let mut shared: Option<SeatingProfile> = None;
     for path in peer_configs(localnet_dir)? {
         let text = String::from_utf8(read_bounded(&path, "validator config")?)
@@ -840,7 +833,7 @@ pub(crate) fn localnet_seating_profile(localnet_dir: &Path) -> Result<SeatingPro
 ///
 /// # Errors
 /// Returns an error when a validator config is unreadable or any requirement fails.
-pub(crate) fn require_seated_localnet(
+pub fn require_seated_localnet(
     localnet_dir: &Path,
     manifest: &iroha_genesis::RawGenesisTransaction,
 ) -> Result<GenesisCitizenCensus> {
@@ -852,7 +845,7 @@ pub(crate) fn require_seated_localnet(
 ///
 /// # Errors
 /// Returns an error when the configuration has a non-table `[gov]` or `[torii.faucet]`.
-pub(crate) fn apply_seating_keys(config: &mut toml::Table, canonical: &toml::Table) -> Result<()> {
+pub fn apply_seating_keys(config: &mut toml::Table, canonical: &toml::Table) -> Result<()> {
     let canonical_gov = sub_table(Some(canonical), "gov")?
         .ok_or_else(|| eyre!("canonical profile has no [gov] table"))?;
     let canonical_faucet = sub_table(sub_table(Some(canonical), "torii")?, "faucet")?
@@ -891,7 +884,7 @@ pub(crate) fn apply_seating_keys(config: &mut toml::Table, canonical: &toml::Tab
 /// A deterministic citizenship escrow outside every published key, for fixtures of seated
 /// networks (a real seating run generates a fresh one and discards its key).
 #[cfg(test)]
-pub(crate) fn fixture_citizenship_escrow() -> AccountId {
+pub fn fixture_citizenship_escrow() -> AccountId {
     AccountId::new(
         KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("fixture escrow key")
@@ -904,7 +897,7 @@ pub(crate) fn fixture_citizenship_escrow() -> AccountId {
 /// [`fixture_citizenship_escrow`] and an enabled faucet with the canonical amount, for fixtures
 /// of seated networks.
 #[cfg(test)]
-pub(crate) fn canonical_seating_config_toml() -> String {
+pub fn canonical_seating_config_toml() -> String {
     let canonical: toml::Table =
         toml::from_str(CANONICAL_TAIRA_PROFILE).expect("canonical Taira profile");
     let canonical_faucet = canonical["torii"]["faucet"]
@@ -931,7 +924,7 @@ pub(crate) fn canonical_seating_config_toml() -> String {
 ///
 /// # Errors
 /// Returns an error when the fee float overflows the bond.
-pub(crate) fn citizen_genesis_instructions(
+pub fn citizen_genesis_instructions(
     citizens: &[AccountId],
     asset: &AssetDefinitionId,
     bond: &Quantity,
@@ -974,7 +967,7 @@ pub(crate) fn citizen_genesis_instructions(
 ///
 /// # Errors
 /// Returns an error for a zero reset nonce.
-pub(crate) fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<InstructionBox> {
+pub fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<InstructionBox> {
     if reset_nonce == [0; 32] {
         return Err(eyre!("the SCCP reset nonce must be nonzero"));
     }
@@ -990,9 +983,9 @@ pub(crate) fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<Instruct
 /// # Errors
 /// Returns an error when the OS CSPRNG fails.
 pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
-    use rand::rand_core::TryRngCore as _;
+    use rand::rand_core::TryRng as _;
     let mut nonce = [0_u8; 32];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| eyre!("OS CSPRNG failed: {error}"))?;
     Ok(nonce)
@@ -1002,7 +995,7 @@ pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
 ///
 /// # Errors
 /// Returns an error when the document has no transaction array.
-pub(crate) fn append_genesis_transaction(
+pub fn append_genesis_transaction(
     manifest: &mut Value,
     instructions: &[InstructionBox],
 ) -> Result<()> {
@@ -1031,7 +1024,7 @@ pub(crate) fn append_genesis_transaction(
 ///
 /// # Errors
 /// Returns an error when the template has no `[account]` table.
-pub(crate) fn citizen_client_config(
+pub fn citizen_client_config(
     template: &toml::Table,
     public_key: &iroha_crypto::PublicKey,
     private_key_file: &str,
@@ -1062,7 +1055,7 @@ pub(crate) fn citizen_client_config(
 /// One genesis citizen in the public manifest.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct CitizenEntryV1 {
+pub struct CitizenEntryV1 {
     /// Zero-based citizen index.
     pub(crate) index: u32,
     /// Canonical citizen account.
@@ -1078,7 +1071,7 @@ pub(crate) struct CitizenEntryV1 {
 /// Public manifest of one seating run; holds no secret.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct CitizenManifestV1 {
+pub struct CitizenManifestV1 {
     /// Exact schema.
     pub(crate) schema: String,
     /// Chain identifier of the seated network.
@@ -1305,12 +1298,12 @@ impl SeatParliament {
             .sccp_proposer_public_key
             .as_ref()
             .map(|key| AccountId::new(key.clone()));
-        if let Some(proposer) = &sccp_proposer {
-            if !census.registered_accounts.contains(proposer) {
-                return Err(eyre!(
-                    "SCCP proposer {proposer} is not registered by the generated genesis"
-                ));
-            }
+        if let Some(proposer) = &sccp_proposer
+            && !census.registered_accounts.contains(proposer)
+        {
+            return Err(eyre!(
+                "SCCP proposer {proposer} is not registered by the generated genesis"
+            ));
         }
         let keys = (0..self.citizens)
             .map(|_| {

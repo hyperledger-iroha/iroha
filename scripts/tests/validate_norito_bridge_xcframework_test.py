@@ -64,6 +64,9 @@ PRIVACY_JNI_SYMBOLS = [
         "nativeInspectExact12CapabilityManifest",
         "nativeRequireExact12CapabilityTupleForNetworkV1",
         "nativeValidateExact12SubmitProofConstructionForNetworkV1",
+        "nativeCreateZkX509RequestV1",
+        "nativeInspectZkX509RequestV1",
+        "nativeMaterializeZkX509StatementV1",
         "nativeExact12FixtureBundle",
         "nativeValidateExact12FixtureBundle",
     )
@@ -161,7 +164,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         rust_commit = "b" * 40
         self.payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 31,
+            "native_bridge_abi_version": 33,
             "privacy_production_enabled": True,
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
@@ -174,14 +177,14 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 ).hexdigest(),
                 "environment_profiles": validator.EXPECTED_ENVIRONMENT_PROFILES,
                 "cargo_build_jobs": 1,
-                "rust_toolchain_channel": "1.93.1",
-                "cargo_release": "1.93.1",
+                "rust_toolchain_channel": "1.99.1",
+                "cargo_release": "1.99.1",
                 "cargo_commit_hash": "c" * 40,
                 "cargo_binary_sha256": exact_hash,
-                "rustc_release": "1.93.1",
+                "rustc_release": "1.99.1",
                 "rustc_commit_hash": rust_commit,
                 "rustc_binary_sha256": exact_hash,
-                "rustdoc_release": "1.93.1",
+                "rustdoc_release": "1.99.1",
                 "rustdoc_commit_hash": rust_commit,
                 "rustdoc_binary_sha256": exact_hash,
                 "python_version": "3.12.13",
@@ -353,6 +356,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_validation_fee_current_policy_proof_verify_v1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             "iroha_privacy_validate_exact12_capability_manifest_v1",
+            "iroha_privacy_validate_exact12_submit_proof_construction_v1",
             *(
                 symbol for symbol in current
                 if symbol.startswith("connect_norito_kagemusha_wallet_")
@@ -620,14 +624,19 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(validator.ValidationError, "forbidden symbol inventory"):
                     self.validate()
 
-    def test_rejects_manifest_missing_authoritative_privacy_capability_validator(self) -> None:
-        self.payload["required_symbols"] = [
-            symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
-            if symbol != "iroha_privacy_validate_exact12_capability_manifest_v1"
-        ]
-        self.write_manifest()
-        with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
-            self.validate()
+    def test_rejects_manifest_missing_authoritative_privacy_validators(self) -> None:
+        for missing in (
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+            "iroha_privacy_validate_exact12_submit_proof_construction_v1",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
 
     def test_rejects_manifest_omitting_retired_top_up_request_binding(self) -> None:
         self.payload["forbidden_symbols"] = [
@@ -903,9 +912,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ).hexdigest()
         environment["python_version"] = validator.platform.python_version()
         actual_rust_identities = {
-            "cargo": ("1.93.1", "c" * 40),
-            "rustc": ("1.93.1", "b" * 40),
-            "rustdoc": ("1.93.1", "b" * 40),
+            "cargo": ("1.99.1", "c" * 40),
+            "rustc": ("1.99.1", "b" * 40),
+            "rustdoc": ("1.99.1", "b" * 40),
         }
 
         def tool_output(

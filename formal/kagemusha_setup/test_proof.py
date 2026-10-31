@@ -84,7 +84,7 @@ class ProofControls(unittest.TestCase):
                 self.assertTrue(record['fixed_poseidon'])
                 self.assertEqual(len(result.rounds), 6)
                 self.assertEqual(record['opening_sets'], [[0], [0, 1], [0, 2]])
-                self.assertEqual(record['proof_bytes'], 1312)
+                self.assertEqual(record['proof_bytes'], 1376)
                 self.assertEqual(record['contradictory'], identity[1])
 
     def test_verifier_sources_and_poseidon_constants_unchanged(self):

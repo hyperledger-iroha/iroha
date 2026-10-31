@@ -1,4 +1,4 @@
-"""Independent coefficient, degree, finite-field and essential-hypothesis controls."""
+"""Abstract offset/raw-variable controls; no selected-native abort/privacy claim."""
 
 import hashlib
 from itertools import product
@@ -30,6 +30,7 @@ class FoldAlgebra(unittest.TestCase):
     def test_exact_leading_coefficients_and_degrees(self):
         for k in range(1, 5):
             n = 1 << k
+            # [] is an abstract constant-vector boundary, not a native source.
             for sources in ([[2] * k], [[], [2] * k], [[-1] * k, [3] * k, [2]]):
                 with self.subTest(k=k, sources=sources):
                     ring, original, rounds, generator = recurrence(k, sources, [1] * n)
@@ -66,7 +67,8 @@ class FoldAlgebra(unittest.TestCase):
                                 self.assertEqual(coefficient, ring.multiply(ring.constant(auxiliary), row[side + "_aux"]))
 
     def test_symbolic_rounds_match_scalar_recurrence(self):
-        # Concrete challenge zero is legal for alpha/z/zeta; only round u is inverted.
+        # Abstract raw alpha/z/zeta may be zero; only formal round u is inverted.
+        # These values do not model selected native transcript feedback or nz.
         modulus, k = 101, 3
         sources, logs = [[2, 3, 4], [5]], list(range(1, 9))
         ring, original, rounds, final = recurrence(k, sources, logs, 7, modulus)
@@ -89,6 +91,8 @@ class FoldAlgebra(unittest.TestCase):
             self.assertEqual(ring.evaluate(final, values), g[0])
 
     def test_full_length_hypothesis_has_a_short_only_counterexample(self):
+        # k=1 has an abstract width-zero source. At k>=2 the positive-width
+        # source isolates missing-full-length behavior within native width bounds.
         for k in range(1, 5):
             _, original, rounds, _ = recurrence(k, [[2] * (k - 1)], [1] * (1 << k))
             self.assertEqual(original[-1], {})
@@ -101,7 +105,9 @@ class FoldAlgebra(unittest.TestCase):
         unshifted = ring.inner(original[:4], [ring.variable(1, i) for i in range(4, 8)])
         self.assertEqual(ring.coefficient(unshifted, 1, 11), {})
 
-    def test_union_bound_sums_all_rounds_at_native_depth(self):
+    def test_hypothetical_union_bound_sums_all_rounds_through_depth16(self):
+        # The same numerical coefficient is retained only for the stated raw-
+        # variable/offset exception predicate, including the abstract depth16 case.
         for k in (1, 2, 4, 16):
             for inputs in (1, 2, 4, 17):
                 n, d = 1 << k, inputs - 1
@@ -112,8 +118,10 @@ class FoldAlgebra(unittest.TestCase):
         self.assertEqual(abort_coefficient(16, 4), 3_015_266)
 
     def test_exhaustive_small_field_exception_union(self):
-        # With m=1 alpha drops out. Enumerate every remaining challenge tape,
-        # including zero and all tapes following an earlier exceptional message.
+        # With m=1 alpha drops out. Enumerate every hypothetical raw-variable
+        # tape, including zero and tapes after an earlier exceptional message.
+        # Exact predicate: u=0 OR L_offset=0 OR R_offset=0 OR G=0. It is not the
+        # selected native refusal predicate (masked L/R, nz(u), full-group G).
         modulus = 17
         for logs in ([1, 1], [1, -1], [3, 5]):
             ring, _, rounds, generator = recurrence(1, [[2]], logs, 1, modulus)

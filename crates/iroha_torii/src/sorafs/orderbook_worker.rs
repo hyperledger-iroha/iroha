@@ -1,4 +1,4 @@
-//! Pure state-machine logic for the durable native SoraFS orderbook worker.
+//! Pure state-machine logic for the durable native `SoraFS` orderbook worker.
 //!
 //! This module performs no queue, signer, filesystem, or wall-clock access. The supervised Torii
 //! adapter supplies one coherent finalized-ledger observation keyed by the exact retained

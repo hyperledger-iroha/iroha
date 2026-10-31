@@ -43,7 +43,7 @@ fn complete_original_capture_rechecks_every_input_and_only_closed_static_names()
             .iter()
             .map(|entry| entry.inputs.len())
             .sum::<usize>(),
-        77
+        75
     );
     let maximum = image
         .directories
@@ -51,7 +51,7 @@ fn complete_original_capture_rechecks_every_input_and_only_closed_static_names()
         .flat_map(|entry| &entry.inputs)
         .map(|input| input.maximum)
         .sum::<usize>();
-    assert_eq!(maximum, 73_160_704);
+    assert_eq!(maximum, 73_152_512);
     assert!(maximum <= MAX_TOTAL);
     let ((), parses) = count_semantic_validations(|| {
         for directory in &image.directories {
@@ -139,8 +139,8 @@ fn captured_source_has_exact_transitive_paths_access_and_extent_without_disk_fal
             "genesis.expected_hash",
             ConfigFileAccess::Public,
         ),
-        (RUNTIME, "onboarding-signer.key", ConfigFileAccess::Private),
-        (RUNTIME, "ledger-signer.key", ConfigFileAccess::Private),
+        (GENERATION, "client.toml", ConfigFileAccess::Private),
+        (GENERATION, "peer0.toml", ConfigFileAccess::Private),
         (TABLES, "rans_seed0.toml", ConfigFileAccess::Public),
     ] {
         let directory = &image.directories[slot];

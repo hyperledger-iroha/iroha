@@ -8,12 +8,16 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 use std::sync::OnceLock;
+mod runtime_expectation;
 pub mod set;
 pub mod specialized;
+pub(crate) use runtime_expectation::check_trigger_runtime;
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
 pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
 /// Internal registration-height metadata used to defer new trigger incarnations.
 pub(crate) const TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY: &str = "__registered_block_height";
+/// Immutable digest of the runtime closure admitted with this trigger incarnation.
+pub(crate) const TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY: &str = "__runtime_expectation_v1";
 /// Internal authorization mode captured when a data trigger is registered.
 pub(crate) const DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY: &str =
     "__data_scope_authorization_v1";
@@ -225,11 +229,12 @@ pub mod isi {
     use super::{super::prelude::*, *};
     use iroha_data_model::isi::error::{InvalidParameterError, RepetitionError};
     use iroha_model_base::name::Name;
-    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 4] = [
+    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 5] = [
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
         DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
         DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
+        TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY,
     ];
     pub(super) const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
     pub(super) const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
@@ -572,16 +577,16 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-            let remove_entry = if let Some(permissions) =
-                state_transaction.world.account_permissions.get_mut(&holder)
-            {
-                permissions.retain(|permission| {
-                    !is_permission_trigger_associated_with_any(permission, trigger_ids)
+            let remove_entry = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&holder)
+                .is_some_and(|permissions| {
+                    permissions.retain(|permission| {
+                        !is_permission_trigger_associated_with_any(permission, trigger_ids)
+                    });
+                    permissions.is_empty()
                 });
-                permissions.is_empty()
-            } else {
-                false
-            };
             if remove_entry {
                 state_transaction
                     .world
@@ -680,8 +685,7 @@ pub mod isi {
                     Error::InvalidParameter(InvalidParameterError::SmartContract(
                         format!(
                             "contract manifest trigger authority `{owner}` must be registered before activation"
-                        )
-                        .into(),
+                        ),
                     ))
                 })?;
             }
@@ -703,31 +707,27 @@ pub mod isi {
         }
         if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
             new_trigger.action().filter()
+            && let Some(period_ms) = schedule.period_ms
         {
-            if let Some(period_ms) = schedule.period_ms {
-                if period_ms == 0 {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "Time trigger period must be greater than zero".into(),
-                        ),
-                    ));
-                }
-                let min_period_ms = state_transaction
-                    .world
-                    .parameters
-                    .sumeragi()
-                    .block_cadence_ms()
-                    .get();
-                if period_ms < min_period_ms {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            format!(
-                                "Time trigger period must be at least the signed block cadence of {min_period_ms} ms"
-                            )
-                            .into(),
-                        ),
-                    ));
-                }
+            if period_ms == 0 {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Time trigger period must be greater than zero".into(),
+                    ),
+                ));
+            }
+            let min_period_ms = state_transaction
+                .world
+                .parameters
+                .sumeragi()
+                .block_cadence_ms()
+                .get();
+            if period_ms < min_period_ms {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "Time trigger period must be at least the signed block cadence of {min_period_ms} ms"
+                    )),
+                ));
             }
         }
         if new_trigger.action().retry_policy().is_some()
@@ -795,6 +795,11 @@ pub mod isi {
         {
             use iroha_primitives::json::Json;
             enforce_trigger_metadata_limits(new_trigger.action().metadata(), state_transaction)?;
+            let runtime_expectation = runtime_expectation::capture_trigger_runtime(
+                new_trigger.action().executable(),
+                &state_transaction.world,
+                state_transaction._curr_block.height().get(),
+            )?;
             let key_height = TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse::<Name>()
                 .expect("Valid metadata key");
@@ -805,6 +810,17 @@ pub mod isi {
             let created_ms = state_transaction._curr_block.creation_time().as_millis();
             let created_ms = u64::try_from(created_ms).unwrap_or(u64::MAX);
             let mut metadata = new_trigger.action().clone().metadata;
+            let runtime_expectation = Json::try_new(runtime_expectation).map_err(|error| {
+                state_transaction.world.attempt_error_to_instruction_error(
+                    crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+                        Error::Conversion(error.to_string())
+                    }),
+                )
+            })?;
+            metadata.insert(
+                runtime_expectation::metadata_key().clone(),
+                runtime_expectation,
+            );
             metadata.insert(key_height, Json::from(height));
             metadata.insert(key_time, Json::from(created_ms));
             if let Some(authorization) = data_scope_authorization {
@@ -1299,9 +1315,7 @@ pub mod isi {
                 .expect("parameter name");
             transaction
                 .world
-                .parameters_mut_for_testing()
-                .get_mut()
-                .set_parameter(Parameter::Custom(CustomParameter::new(
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
                     name,
                     Json::new(64_u64),
                 )))
@@ -1569,11 +1583,10 @@ pub mod query {
                 let iter: Box<dyn Iterator<Item = Trigger> + '_> =
                     Box::new(candidate_ids.into_iter().filter_map(move |id| {
                         triggers.trigger_by_id(&id).filter(|trigger| {
-                            if let Some(predicate) = predicate_json.as_ref() {
-                                predicate_matches_trigger(predicate, trigger)
-                            } else {
-                                filter.applies(trigger)
-                            }
+                            predicate_json.as_ref().map_or_else(
+                                || filter.applies(trigger),
+                                |predicate| predicate_matches_trigger(predicate, trigger),
+                            )
                         })
                     }));
                 return Ok(iter);
@@ -1583,11 +1596,10 @@ pub mod query {
                 return Ok(iter);
             }
             Ok(Box::new(iter.filter(move |trigger| {
-                if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_trigger(predicate, trigger)
-                } else {
-                    filter.applies(trigger)
-                }
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(trigger),
+                    |predicate| predicate_matches_trigger(predicate, trigger),
+                )
             })))
         }
     }
@@ -1648,9 +1660,49 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use std::{str::FromStr, time::Duration};
+    include!("applying_time_register_tests.rs");
+    include!("runtime_expectation_tests.rs");
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
+    /// Author admission input for isolated component fixtures without genesis authority.
+    fn component_trigger_world() -> World {
+        let world = World::default();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("funded component parameter fixture");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .expect("canonical trigger fixture crypto policy"),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .expect("install original trigger component crypto policy");
+        parameters.commit();
+        world
+    }
+
+    #[test]
+    fn component_trigger_fixture_owns_policy_without_genesis_authority() {
+        assert!(World::default().parameters.view().crypto_policy().is_none());
+        let state = State::new(
+            component_trigger_world(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura().blocks_count(), 0);
+        assert_eq!(
+            state
+                .world
+                .parameters
+                .view()
+                .require_crypto_policy()
+                .unwrap(),
+            &crate::sumeragi::test_chain::crypto_fixture_policy(),
+        );
+    }
+
     /// Apply the original signed genesis before exercising a trigger's executor.
     fn authenticated_trigger_state() -> State {
         use crate::sumeragi::{
@@ -1752,7 +1804,7 @@ mod tests {
     #[test]
     fn ordinary_data_triggers_require_an_exact_owned_subject() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1798,7 +1850,7 @@ mod tests {
     #[test]
     fn global_data_trigger_permission_is_bound_to_the_trigger_authority() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1833,7 +1885,7 @@ mod tests {
         drop(stx);
         drop(state_block);
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1863,7 +1915,7 @@ mod tests {
     #[test]
     fn genesis_global_data_trigger_requires_prior_exact_capability_and_remains_revocable() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1913,7 +1965,7 @@ mod tests {
     #[test]
     fn data_trigger_scope_recheck_blocks_reused_trigger_id() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -1966,7 +2018,7 @@ mod tests {
     #[test]
     fn data_trigger_scope_recheck_follows_domain_ownership() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2017,7 +2069,7 @@ mod tests {
     #[test]
     fn global_data_trigger_stops_immediately_when_exact_capability_is_revoked() {
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2240,7 +2292,7 @@ mod tests {
             trigger::action::{Action, Repeats},
         };
         let state = State::new(
-            World::default(),
+            component_trigger_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -2314,7 +2366,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         // Prepare a block and state transaction
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -2385,7 +2437,7 @@ mod tests {
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero"),
             None,
@@ -2629,7 +2681,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -2730,7 +2782,7 @@ mod tests {
             norito::codec::Encode::encode(&lease),
         );
         stx.world
-            .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+            .insert_account_alias_binding(&(alias.clone()), &(ALICE_ID.clone()));
         stx.world
             .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), ALICE_ID.clone()));
         assert_eq!(
@@ -2783,7 +2835,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -2823,7 +2875,7 @@ mod tests {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         // Bootstrap world with a domain and Alice account
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -2887,7 +2939,7 @@ mod tests {
     fn active_trigger_ids_excludes_disabled_trigger() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2937,7 +2989,7 @@ mod tests {
     fn active_trigger_ids_excludes_malformed_enabled_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2987,7 +3039,7 @@ mod tests {
     fn active_trigger_ids_recover_after_malformed_enabled_is_set_true() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3053,7 +3105,7 @@ mod tests {
     fn active_trigger_ids_recover_after_disabled_enabled_flag_is_removed() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3119,7 +3171,7 @@ mod tests {
     fn active_trigger_ids_exclude_trigger_after_enabled_is_set_false() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3182,7 +3234,7 @@ mod tests {
     fn active_trigger_ids_follow_numeric_enabled_flag_transitions() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3270,7 +3322,7 @@ mod tests {
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3358,7 +3410,7 @@ mod tests {
     fn find_triggers_returns_registered_triggers_for_pass_predicate() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -3441,6 +3493,7 @@ mod tests {
             "__registered_block_height",
             DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
             DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
+            TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY,
         ] {
             let key: Name = raw.parse().expect("valid name");
             let err =
@@ -3463,7 +3516,7 @@ mod tests {
     fn time_trigger_with_zero_period_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3505,7 +3558,7 @@ mod tests {
     fn time_trigger_period_shorter_than_block_cadence_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3588,7 +3641,7 @@ mod tests {
     fn trigger_registration_enforces_metadata_limit() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
+        let state = State::new(component_trigger_world(), kura, query_handle);
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3602,9 +3655,7 @@ mod tests {
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));
         stx.world
-            .parameters
-            .get_mut()
-            .set_parameter(param)
+            .set_parameter_for_testing(param)
             .expect("valid fixture parameters");
         let mut metadata = Metadata::default();
         metadata.insert("oversized".parse().unwrap(), Json::new("0123456789"));

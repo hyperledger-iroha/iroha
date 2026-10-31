@@ -8,7 +8,45 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
     private let featureMasks: [UInt8] = [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31]
     private let networkBytes = Data(repeating: 0xd1, count: 32)
 
-    func testManagedProjectionPreservesFieldsWithoutGrantingNativeQualification() throws {
+    func testNativeConstructionRejectsEmptyInputsWithoutMintingAdmission() throws {
+        let network = try NetworkId(bytes: networkBytes)
+        for (manifest, instruction) in [(Data(), Data([1])), (Data([1]), Data())] {
+            XCTAssertThrowsError(try PrivacyNativeBridge.requireExact12SubmitProofConstructionV1(
+                manifestArchive: manifest, protocolId: .zkAcePqAuthorizationV1,
+                instructionArchive: instruction, expectedNetworkId: network)) { error in
+                XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                               .invalidArchive("construction input is empty or exceeds its transport bound"))
+            }
+        }
+    }
+
+    func testSecurityClaimCanonicalArchiveMatchesCurrentRustOwner() throws {
+        // Exact canonical archive emitted by the Rust fixture owner.
+        let claim = securityClaim(protocolId: .zkAcePqAuthorizationV1, digestByte: 0x31)
+        XCTAssertEqual(exact12CatalogCommitment().count, 32)
+        let expected = try XCTUnwrap(Data(hexString:
+            "4e525430000087368b9da35faa6d2dee8dd5dbdf70cf00b900000000000000d355b690039f4e5b02205bcf366f" +
+            "b18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb00400000000040000000002800002800021" +
+            "203131313131313131313131313131313131313131313131313131313131313131212031313131313131313131" +
+            "313131313131313131313131313131313131313131312120e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1" +
+            "e1e1e1e1e1e1e1e1e1e1e12120e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
+        ))
+        XCTAssertEqual(
+            noritoEncode(
+                typeName: "iroha_data_model::privacy::PrivacySecurityClaimV1",
+                payload: claim.claim,
+                flags: NoritoHeader.compactLen,
+                payloadAlignment: 2
+            ),
+            expected
+        )
+        XCTAssertEqual(
+            claim.digest,
+            try XCTUnwrap(Data(hexString: "fdfe96fbb683002b794b5ad83d6ce637359d145b6e8aea5275a82cfe6ab89efd"))
+        )
+    }
+
+    func testManagedProjectionPreservesFieldsWithoutGrantingNativeAuthority() throws {
         let fixture = makeFixture(includePendingState: true)
         let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
             fixture.manifest,
@@ -27,12 +65,12 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             manifest.consensusPolicy.currentLimits.orderedValues,
             expectedConsensusLimits
         )
-        let consensusTightening = try XCTUnwrap(
-            manifest.consensusPolicy.pendingTightening
+        let consensusUpdate = try XCTUnwrap(
+            manifest.consensusPolicy.pendingUpdate
         )
-        XCTAssertEqual(consensusTightening.scheduledAtHeight, 2)
-        XCTAssertEqual(consensusTightening.effectiveAtHeight, 302)
-        XCTAssertEqual(consensusTightening.nextLimits.retainedRootCount, 1_024)
+        XCTAssertEqual(consensusUpdate.scheduledAtHeight, 2)
+        XCTAssertEqual(consensusUpdate.effectiveAtHeight, 302)
+        XCTAssertEqual(consensusUpdate.nextLimits.retainedRootCount, 1_024)
         XCTAssertEqual(
             manifest.consensusPolicy.canonicalNorito,
             consensusPolicy(includePendingState: true)
@@ -41,81 +79,44 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         let first = manifest.row(for: .zkAcePqAuthorizationV1)
         XCTAssertTrue(first.localCompiledTupleMatches)
         XCTAssertTrue(first.isNetworkAvailable)
-        XCTAssertEqual(first.readiness, .productionQualified)
-        guard let activation = first.activation else {
-            return XCTFail("active row lost its complete committed activation")
+        XCTAssertEqual(first.readiness, .available)
+        guard case let .available(profile) = first.compiledProfile else {
+            return XCTFail("available row lost its complete canonical profile")
         }
-        XCTAssertEqual(activation.protocolId, .zkAcePqAuthorizationV1)
-        XCTAssertEqual(activation.proofSystemId, .starkFriSha3_384Goldilocks)
-        XCTAssertEqual(activation.engineId, .nativeGoldilocksSha3_384StarkFri)
-        XCTAssertEqual(activation.parameterId, Data(repeating: 0x31, count: 32))
-        XCTAssertEqual(activation.parameterDigest, Data(repeating: 0x31, count: 32))
-        XCTAssertEqual(activation.verifierDigest, Data(repeating: 0x31, count: 32))
-        XCTAssertEqual(
-            activation.statementSchemaDigest,
-            Data(repeating: 0x31, count: 32)
-        )
-        XCTAssertEqual(
-            activation.engineManifestDigest,
-            Data(repeating: 0x31, count: 32)
-        )
-        XCTAssertEqual(activation.protocolLimits.values, [])
-        XCTAssertNil(activation.pendingProtocolLimitsTightening)
-        let qualification = try XCTUnwrap(manifest.qualification)
-        XCTAssertEqual(qualification.deploymentQualification.networkId.bytes, networkBytes)
-        XCTAssertEqual(qualification.deploymentQualification.genesisHash, networkBytes)
-        let releaseBinding = qualification.releaseManifest.protocols[0]
-        XCTAssertEqual(releaseBinding.securityClaim.protocolId, .zkAcePqAuthorizationV1)
-        XCTAssertEqual(releaseBinding.securityClaim.securityModel, .postQuantumQrom)
-        XCTAssertEqual(releaseBinding.securityClaim.targetSecurityBits, 128)
-        XCTAssertEqual(releaseBinding.securityClaim.achievedSecurityBits, 128)
-        XCTAssertEqual(
-            releaseBinding.securityClaim.catalogCommitment,
-            exact12CatalogCommitment()
-        )
-        let expectedClaimDigest = try XCTUnwrap(Data(
-            hexString: "810fdc49f332423016cb7dbb7383dd03ccae74bf605202e0b8de7101439878a2"
-        ))
-        XCTAssertEqual(
-            releaseBinding.securityClaimDigest,
-            expectedClaimDigest
-        )
-        XCTAssertEqual(
-            qualification.releaseManifest.manifestDigest,
-            Data(repeating: 0xe3, count: 32)
-        )
-        XCTAssertEqual(
-            qualification.deploymentQualification.releaseManifestDigest,
-            Data(repeating: 0xe3, count: 32)
-        )
-        XCTAssertEqual(
-            qualification.deploymentQualification.qualificationDigest,
-            Data(repeating: 0xe4, count: 32)
-        )
-        XCTAssertEqual(activation.canonicalNorito, activationForProfileZero())
-        guard case let .active(proposed, activated, since) = activation.lifecycle else {
-            return XCTFail("active lifecycle projection was not retained")
-        }
-        XCTAssertEqual([proposed, activated, since], [1, 2, 2])
+        XCTAssertEqual(profile.protocolId, .zkAcePqAuthorizationV1)
+        XCTAssertEqual(profile.proofSystemId, .starkFriSha3_384Goldilocks)
+        XCTAssertEqual(profile.engineId, .nativeGoldilocksSha3_384StarkFri)
+        XCTAssertEqual(profile.parameterId, Data(repeating: 0x31, count: 32))
+        XCTAssertEqual(profile.parameterDigest, Data(repeating: 0x31, count: 32))
+        XCTAssertEqual(profile.verifierDigest, Data(repeating: 0x31, count: 32))
+        XCTAssertEqual(profile.statementSchemaDigest, Data(repeating: 0x31, count: 32))
+        XCTAssertEqual(profile.engineManifestDigest, Data(repeating: 0x31, count: 32))
+        let policy = try XCTUnwrap(first.policy)
+        XCTAssertEqual(policy.protocolId, .zkAcePqAuthorizationV1)
+        XCTAssertEqual(policy.currentLimits.values, [])
+        XCTAssertNil(policy.pendingUpdate)
+        XCTAssertEqual(manifest.networkId.bytes, networkBytes)
+        XCTAssertEqual(policy.canonicalNorito, policyForProfileZero())
+        XCTAssertEqual(first.effectiveProtocolLimits, profile.protocolLimits)
 
         let jindo = manifest.row(for: .irohaJindoPolynomialCommitmentV1)
-        XCTAssertEqual(jindo.readiness, .productionQualified)
+        XCTAssertEqual(jindo.readiness, .available)
         XCTAssertTrue(jindo.isNetworkAvailable)
-        let jindoActivation = try XCTUnwrap(jindo.activation)
-        XCTAssertEqual(jindoActivation.protocolLimits.values, [4])
-        let jindoTightening = try XCTUnwrap(
-            jindoActivation.pendingProtocolLimitsTightening
+        let jindoPolicy = try XCTUnwrap(jindo.policy)
+        XCTAssertEqual(jindoPolicy.currentLimits.values, [4])
+        let jindoUpdate = try XCTUnwrap(
+            jindoPolicy.pendingUpdate
         )
-        XCTAssertEqual(jindoTightening.scheduledAtHeight, 2)
-        XCTAssertEqual(jindoTightening.effectiveAtHeight, 302)
-        XCTAssertEqual(jindoTightening.nextLimits.values, [3])
+        XCTAssertEqual(jindoUpdate.scheduledAtHeight, 2)
+        XCTAssertEqual(jindoUpdate.effectiveAtHeight, 302)
+        XCTAssertEqual(jindoUpdate.nextLimits.values, [3])
         XCTAssertEqual(
-            jindoActivation.canonicalNorito,
-            activationForJindoWithPendingTightening()
+            jindoPolicy.canonicalNorito,
+            policyForJindoWithPendingUpdate()
         )
     }
 
-    func testPendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights() throws {
+    func testPendingUpdateAcceptsNextBlockAndRejectsInvalidSnapshotHeights() throws {
         let cases: [(UInt64, UInt64, UInt64, Bool)] = [
             (3, 4, 3, true), (3, 5, 3, true),
             (UInt64.max - 1, UInt64.max, UInt64.max - 1, true),
@@ -127,7 +128,6 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             for (scheduled, effective, committed, accepted) in cases {
                 let valid = (committed, committed == UInt64.max ? UInt64.max : committed + 1)
                 let fixture = makeFixture(
-                    includeQualification: false,
                     committedHeight: committed,
                     includePendingState: true,
                     consensusSchedule: consensus ? (scheduled, effective) : valid,
@@ -138,7 +138,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                         fixture.manifest, nativeCatalogArchive: fixture.catalog
                     )
                     XCTAssertEqual(manifest.canonicalBytes(), fixture.manifest)
-                    XCTAssertFalse(manifest.row(for: .irohaJindoPolynomialCommitmentV1).isNetworkAvailable)
+                    XCTAssertTrue(manifest.row(for: .irohaJindoPolynomialCommitmentV1).isNetworkAvailable)
                 } else {
                     XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
                         fixture.manifest, nativeCatalogArchive: fixture.catalog
@@ -148,120 +148,108 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
-    func testProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight() throws {
-        for committedHeight in [UInt64(1), UInt64(3), UInt64.max] {
-            let fixture = makeFixture(
-                rowZeroReadiness: enumValue(1, enumValue(2)),
-                rowZeroLifecycle: enumValue(0, structure(u64(1))),
-                includeQualification: false,
-                committedHeight: committedHeight
-            )
+    func testPolicyAbsenceNeverDisablesCanonicalImplementation() throws {
+        for height in [UInt64(0), UInt64(1), UInt64(3), UInt64.max] {
+            let fixture = makeFixture(omitRowZeroPolicy: true, committedHeight: height)
             let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
-                fixture.manifest, nativeCatalogArchive: fixture.catalog
-            )
+                fixture.manifest, nativeCatalogArchive: fixture.catalog)
             let row = manifest.row(for: .zkAcePqAuthorizationV1)
-            guard case let .proposed(proposed) = try XCTUnwrap(row.activation).lifecycle else {
-                return XCTFail("pending lifecycle was not retained")
+            XCTAssertNil(row.policy)
+            XCTAssertEqual(row.readiness, .available)
+            guard case let .available(profile) = row.compiledProfile else {
+                return XCTFail("canonical profile was lost")
             }
-            XCTAssertEqual(proposed, 1)
-            XCTAssertEqual(row.readiness, .unavailable(.proposed))
-            XCTAssertFalse(row.isNetworkAvailable)
-            let forged = makeFixture(
-                rowZeroLifecycle: enumValue(0, structure(u64(1))),
-                includeQualification: false,
-                committedHeight: committedHeight
-            )
-            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-                forged.manifest, nativeCatalogArchive: forged.catalog
-            ))
+            XCTAssertEqual(row.effectiveProtocolLimits, profile.protocolLimits)
+            XCTAssertNoThrow(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+                manifest, protocolId: row.protocolId))
         }
     }
 
-    func testSameHeightActivationRetainsQualificationAndHistoryRequirements() throws {
-        let cases: [(UInt32, UInt64, UInt32)] = [(1, 1, 5), (2, 2, 3), (3, 2, 4)]
-        for (tag, since, reason) in cases {
-            let activated = tag == 3 ? option(u64(1)) : u64(1)
-            let fixture = makeFixture(
-                rowZeroReadiness: enumValue(1, enumValue(reason)),
-                rowZeroLifecycle: enumValue(tag, structure(u64(1), activated, u64(since))),
-                includeQualification: false
-            )
-            let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
-                fixture.manifest, nativeCatalogArchive: fixture.catalog
-            )
-            let row = manifest.row(for: .zkAcePqAuthorizationV1)
-            let lifecycle = try XCTUnwrap(row.activation).lifecycle
-            switch lifecycle {
-            case let .active(proposed, activated, stateSince):
-                XCTAssertEqual([proposed, activated, stateSince], [1, 1, 1])
-                XCTAssertEqual(row.readiness, .unavailable(.missingProductionQualification))
-            case let .suspended(proposed, activated, stateSince):
-                XCTAssertEqual([proposed, activated, stateSince], [1, 1, 2])
-                XCTAssertEqual(row.readiness, .unavailable(.suspended))
-            case let .retired(proposed, activated, stateSince):
-                XCTAssertEqual(proposed, 1)
-                XCTAssertEqual(activated, 1)
-                XCTAssertEqual(stateSince, 2)
-                XCTAssertEqual(row.readiness, .unavailable(.retired))
-            case .proposed:
-                XCTFail("explicit activation was lost")
+    func testProtocolUpdatesAllowChangedBoundedValuesInEitherDirection() throws {
+        for (current, next, accepted) in [(4, 3, true), (3, 4, true), (3, 3, false),
+                                         (4, 5, false), (0, 3, false), (3, 0, false)] {
+            let policy = policyForJindoWithPendingUpdate(current: UInt32(current), next: UInt32(next))
+            let fixture = makeFixture(jindoPolicyOverride: policy)
+            if accepted {
+                let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                    fixture.manifest, nativeCatalogArchive: fixture.catalog)
+                let row = manifest.row(for: .irohaJindoPolynomialCommitmentV1)
+                XCTAssertEqual(row.effectiveProtocolLimits?.values, [UInt32(current)])
+                XCTAssertEqual(row.policy?.pendingUpdate?.nextLimits.values, [UInt32(next)])
+            } else {
+                XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                    fixture.manifest, nativeCatalogArchive: fixture.catalog))
             }
-            XCTAssertFalse(row.isNetworkAvailable)
         }
     }
 
-    func testExplicitActivationRejectsRemovedScheduleAndInvalidHistory() throws {
-        let cases: [(Data, UInt32)] = [
-            (enumValue(0, structure(u64(1), u64(4))), 2),
-            (enumValue(0, structure()), 2),
-            (enumValue(0, structure(u64(0))), 2),
-            (enumValue(0, structure(u64(4))), 2),
-            (enumValue(1, structure(u64(2), u64(1), u64(2))), 5),
-            (enumValue(1, structure(u64(1), u64(2), u64(1))), 5),
-            (enumValue(1, structure(u64(1), u64(4), u64(4))), 5),
-            (enumValue(2, structure(u64(1), u64(1), u64(1))), 3),
-            (enumValue(3, structure(u64(1), option(u64(1)), u64(1))), 4),
-            (enumValue(3, structure(u64(1), option(nil), u64(1))), 4),
-        ]
-        for (lifecycle, reason) in cases {
-            let fixture = makeFixture(
-                rowZeroReadiness: enumValue(1, enumValue(reason)),
-                rowZeroLifecycle: lifecycle,
-                includeQualification: false
-            )
+    func testRetiredLifecycleReasonsAndActivationRecordAreRejected() throws {
+        for tag in UInt32(1)...UInt32(4) {
+            let fixture = makeFixture(rowZeroReadiness: enumValue(1, enumValue(tag)))
             XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-                fixture.manifest, nativeCatalogArchive: fixture.catalog
-            ))
+                fixture.manifest, nativeCatalogArchive: fixture.catalog))
+        }
+        let digest = structure(Data(repeating: 0x31, count: 32))
+        let retiredActivation = structure(
+            enumValue(0), enumValue(0), enumValue(0), digest, digest, digest, digest, digest,
+            enumValue(1, structure(u64(1), u64(2), u64(2))), enumValue(0), option(nil))
+        for malformed in [retiredActivation, policyForProfileZero() + Data([0]),
+                          structure(enumValue(0), enumValue(1, structure(u32(16), u32(1))), option(nil))] {
+            let fixture = makeFixture(rowZeroPolicy: malformed)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog))
         }
     }
 
-    func testActiveProtocolWithoutSingletonEvidenceIsUnavailable() throws {
-        let fixture = makeFixture(includeQualification: false)
+    func testConsensusUpdatesAllowChangedBoundedValuesInEitherDirection() throws {
+        for (current, next, accepted) in [(2_048, 1_024, true), (1_024, 2_048, true),
+                                         (1_024, 1_024, false), (1_024, 2_049, false)] {
+            let policy = consensusPolicy(includePendingState: true,
+                                         currentRetained: UInt32(current), nextRetained: UInt32(next))
+            let fixture = makeFixture(consensusPolicyOverride: policy)
+            if accepted {
+                let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                    fixture.manifest, nativeCatalogArchive: fixture.catalog)
+                XCTAssertEqual(manifest.consensusPolicy.currentLimits.retainedRootCount, UInt32(current))
+                XCTAssertEqual(manifest.consensusPolicy.pendingUpdate?.nextLimits.retainedRootCount, UInt32(next))
+            } else {
+                XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                    fixture.manifest, nativeCatalogArchive: fixture.catalog))
+            }
+        }
+    }
+
+    func testSupportedProtocolIsAvailableWhileAnotherConcreteImplementationIsUnavailable() throws {
+        let fixture = makeFixture(includePendingState: true)
         let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
-            fixture.manifest,
-            nativeCatalogArchive: fixture.catalog
+            fixture.manifest, nativeCatalogArchive: fixture.catalog
         )
-        XCTAssertNil(manifest.qualification)
-        XCTAssertEqual(
-            manifest.row(for: .zkAcePqAuthorizationV1).readiness,
-            .unavailable(.missingProductionQualification)
-        )
+        XCTAssertEqual(manifest.networkId.bytes, networkBytes)
+        XCTAssertEqual(manifest.row(for: .zkAcePqAuthorizationV1).readiness, .available)
+        XCTAssertEqual(manifest.row(for: .irohaJindoPolynomialCommitmentV1).readiness, .available)
+        let x509 = manifest.row(for: .irohaZkX509StarkP256V1)
+        XCTAssertEqual(x509.compiledProfile, .unavailable(.jointSecurityReductionIncomplete))
+        XCTAssertEqual(x509.readiness, .unavailable(.compiledProfile(.jointSecurityReductionIncomplete)))
+        XCTAssertFalse(x509.isNetworkAvailable)
+        XCTAssertNil(x509.policy)
+        // Managed projection remains a byte check, even for an independently available row.
+        XCTAssertThrowsError(try PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+            manifest, protocolId: .zkAcePqAuthorizationV1
+        ))
     }
 
-    func testManagedProjectionUsesTheCanonicalArchiveBoundForOpaqueEvidence() throws {
-        // This internal codec only retains evidence bytes; Rust alone validates their contents.
-        for evidenceBytes in [130 * 1024, 241 * 1024] {
-            let fixture = makeFixture(opaqueProofArtifacts: Data(repeating: 0, count: evidenceBytes))
-            XCTAssertLessThanOrEqual(
-                fixture.manifest.count,
-                PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
-            )
-            let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
-                fixture.manifest,
-                nativeCatalogArchive: fixture.catalog
-            )
-            XCTAssertEqual(projection.canonicalBytes(), fixture.manifest)
+    func testRemovedDocumentaryFieldAndArchiveOverflowAreRejected() throws {
+        for removed in [Data([0]), Data([1]), Data(repeating: 0, count: 130 * 1024)] {
+            let fixture = makeFixture(removedQualificationField: removed)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
         }
+        let fixture = makeFixture()
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+            Data(repeating: 0, count: PrivacyExact12CapabilityManifestV1.maximumArchiveBytes + 1),
+            nativeCatalogArchive: fixture.catalog
+        ))
     }
 
     func testStandaloneProjectionCannotMintAuthenticatedNetworkAdmission() throws {
@@ -278,31 +266,31 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
-    func testMismatchedSingletonEvidenceCanOnlyDeriveInvalidReadiness() throws {
-        let invalid = makeFixture(
-            rowZeroReadiness: enumValue(1, enumValue(6)),
-            committedHeight: 4,
-            qualificationActivationHeight: 3,
-            qualificationConvergenceHeight: 4
-        )
-        let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
-            invalid.manifest,
-            nativeCatalogArchive: invalid.catalog
-        )
-        XCTAssertEqual(
-            manifest.row(for: .zkAcePqAuthorizationV1).readiness,
-            .unavailable(.invalidProductionQualification)
-        )
+    func testRetiredDocumentaryReadinessReasonsAndForgedUnavailableRowsAreRejected() throws {
+        for reason in [UInt32(5), 6] {
+            let fixture = makeFixture(rowZeroReadiness: enumValue(1, enumValue(reason)))
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
+        }
+        for reason in [enumValue(3, Data([0])), enumValue(4)] {
+            let fixture = makeFixture(x509UnavailableReason: reason)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
+        }
+    }
 
-        let forged = makeFixture(
-            committedHeight: 4,
-            qualificationActivationHeight: 3,
-            qualificationConvergenceHeight: 4
-        )
-        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-            forged.manifest,
-            nativeCatalogArchive: forged.catalog
-        ))
+    func testManifestRejectsElevenAndThirteenRowsBeforeProjection() throws {
+        for count in [11, 13] {
+            let fixture = makeFixture(manifestRowCount: count)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            )) { error in
+                XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                               .invalidArchive("protocols must contain exactly 12 rows"))
+            }
+        }
     }
 
     func testEveryTruncationAndOneByteSuffixFailClosed() throws {
@@ -331,8 +319,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             ),
             ("experimental readiness", makeFixture(rowZeroReadiness: enumValue(1))),
             ("consensus ceiling", makeFixture(maxActionsPerTransaction: 2)),
-            ("activation tuple", makeFixture(activationDigestByte: 0x32)),
-            ("security claim digest", makeFixture(corruptSecurityClaimDigest: true)),
+            ("policy protocol", makeFixture(policyProtocolTag: 1)),
             ("reordered rows", makeFixture(swapFirstRows: true)),
         ]
         for (label, fixture) in cases {
@@ -372,17 +359,40 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
+    func testUnavailableImplementationStaysUnavailableWithOrdinaryPolicy() throws {
+        let available = makeFixture(x509Readiness: enumValue(0))
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+            available.manifest, nativeCatalogArchive: available.catalog)) { error in
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                           .invalidArchive("readiness was not derived from the canonical implementation"))
+        }
+        let policy = structure(enumValue(5), enumValue(5), option(nil))
+        let fixture = makeFixture(x509Policy: policy)
+        let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+            fixture.manifest, nativeCatalogArchive: fixture.catalog)
+        let row = manifest.row(for: .irohaZkX509StarkP256V1)
+        XCTAssertEqual(row.policy?.canonicalNorito, policy)
+        XCTAssertEqual(row.readiness, .unavailable(.compiledProfile(.jointSecurityReductionIncomplete)))
+        XCTAssertNil(row.effectiveProtocolLimits)
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+            manifest, protocolId: .irohaZkX509StarkP256V1))
+        let wrongPolicy = makeFixture(x509Policy: policyForProfileZero())
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+            wrongPolicy.manifest, nativeCatalogArchive: wrongPolicy.catalog))
+    }
+
     func testCatalogSubstitutionAndDigestShellsFailClosed() throws {
         let fixture = makeFixture()
         let substituted = makeFixture(catalogDigestByte: 0x32)
-        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-            fixture.manifest,
-            nativeCatalogArchive: substituted.catalog
+        let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
+            fixture.manifest, nativeCatalogArchive: substituted.catalog
+        )
+        XCTAssertFalse(projection.row(for: .zkAcePqAuthorizationV1).localCompiledTupleMatches)
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+            projection, protocolId: .zkAcePqAuthorizationV1
         )) { error in
-            XCTAssertEqual(
-                error as? PrivacyExact12CapabilityManifestErrorV1,
-                .compiledTupleMismatch(.zkAcePqAuthorizationV1)
-            )
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                           .compiledTupleMismatch(.zkAcePqAuthorizationV1))
         }
 
         for digest in [Data(repeating: 0, count: 32), Data(repeating: 0xa5, count: 32)] {
@@ -391,6 +401,39 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                 shell.manifest,
                 nativeCatalogArchive: shell.catalog
             ))
+        }
+    }
+
+    func testSelectedProtocolDoesNotDependOnAnUnrelatedLocalTuple() throws {
+        let fixture = makeFixture(includePendingState: true)
+        let otherLocalCatalog = makeFixture(catalogDigestByte: 0x32).catalog
+        let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
+            fixture.manifest, nativeCatalogArchive: otherLocalCatalog
+        )
+        let jindo = try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+            projection, protocolId: .irohaJindoPolynomialCommitmentV1
+        )
+        XCTAssertEqual(jindo.protocolId, .irohaJindoPolynomialCommitmentV1)
+        XCTAssertTrue(jindo.localCompiledTupleMatches)
+        XCTAssertEqual(jindo.readiness, .available)
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+            projection, protocolId: .zkAcePqAuthorizationV1
+        )) { error in
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                           .compiledTupleMismatch(.zkAcePqAuthorizationV1))
+        }
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+            projection, protocolId: .irohaZkX509StarkP256V1
+        )) { error in
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                           .unavailableProtocol(.irohaZkX509StarkP256V1))
+        }
+        // The same selected-row predicate runs after authenticated native validation;
+        // calling this projection helper alone cannot issue the opaque admission.
+        XCTAssertThrowsError(try PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+            projection, protocolId: .irohaJindoPolynomialCommitmentV1
+        )) { error in
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .invalidAdmission)
         }
     }
 
@@ -477,11 +520,25 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             fixture.manifest, nativeCatalogArchive: fixture.catalog
         )
         let expected = try NetworkId(bytes: networkBytes)
-        for index in 0..<48 {
+        for index in 0..<32 {
             var catalog = exact12CatalogCommitment()
             catalog[index] ^= 1
             XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireSubmitProofInstruction(
                 submitProofInstruction(catalogCommitment: catalog),
+                row: manifest.row(for: .zkAcePqAuthorizationV1),
+                consensusLimits: manifest.consensusPolicy.currentLimits,
+                expectedNetworkId: expected
+            ))
+        }
+        let canonical = exact12CatalogCommitment()
+        XCTAssertEqual(canonical.count, 32)
+        for hostile in [
+            Data(canonical.dropLast()), canonical + Data([0]),
+            canonical + Data(repeating: 0, count: 16),
+            Data([0xe0, 0x37, 0xf1, 0x39, 0x04, 0xa0, 0x30, 0x7c, 0x00, 0xdb, 0x15, 0xd8, 0x5c, 0xfb, 0x40, 0x6b, 0xd7, 0x97, 0x72, 0xd2, 0x01, 0x44, 0xa9, 0x49, 0xde, 0xf0, 0xf3, 0xfd, 0xa7, 0x8e, 0x34, 0x2e, 0x74, 0x7f, 0x65, 0x78, 0x7c, 0xbf, 0xbf, 0xfa, 0xc9, 0x4f, 0x11, 0xc3, 0x69, 0xe2, 0xbb, 0xff]),
+        ] {
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireSubmitProofInstruction(
+                submitProofInstruction(catalogCommitment: hostile),
                 row: manifest.row(for: .zkAcePqAuthorizationV1),
                 consensusLimits: manifest.consensusPolicy.currentLimits,
                 expectedNetworkId: expected
@@ -499,27 +556,25 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
-    func testDeploymentProjectionBindsExactNetworkAndGenesisWithoutGrantingAuthority() throws {
+    func testAuthoritativeSnapshotBindsEveryNetworkByteWithoutGrantingAuthority() throws {
         let expected = try NetworkId(bytes: networkBytes)
         let fixture = makeFixture()
         let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
             fixture.manifest, nativeCatalogArchive: fixture.catalog
         )
-        try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
-            manifest, expectedNetworkId: expected
-        )
-        // Each changed byte remains a canonical NetworkId; recomputing the
-        // unsigned manifest digest cannot change the caller's expected network.
+        try PrivacyExact12CapabilityManifestCodecV1.requireNetworkV1(manifest, expectedNetworkId: expected)
+        // Recomputing the unsigned manifest digest never changes the expected network.
         for index in 0..<32 {
             var changed = networkBytes
             changed[index] ^= 2
             let other = try NetworkId(bytes: changed)
-            let moved = makeFixture(deploymentNetworkBytes: changed, deploymentGenesisBytes: changed)
+            let moved = makeFixture(manifestNetworkBytes: changed)
             let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
                 moved.manifest, nativeCatalogArchive: moved.catalog
             )
-            XCTAssertEqual(projection.qualification?.deploymentQualification.networkId, other)
-            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
+            XCTAssertEqual(projection.networkId, other)
+            XCTAssertNotEqual(projection.manifestDigest, manifest.manifestDigest)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireNetworkV1(
                 projection, expectedNetworkId: expected
             ))
             XCTAssertThrowsError(try PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
@@ -527,31 +582,24 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             )) { error in
                 XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .invalidAdmission)
             }
-            let mismatched = makeFixture(deploymentGenesisBytes: changed)
-            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-                mismatched.manifest, nativeCatalogArchive: mismatched.catalog
-            ))
         }
     }
 
-    func testDeploymentProjectionRejectsNoncanonicalNetworkAndGenesisFields() throws {
+    func testSnapshotRejectsMissingOrNoncanonicalNetworkAndOldManifestLayout() throws {
         for invalid in [Data(), Data(repeating: 0xd1, count: 31),
                         Data(repeating: 0xd1, count: 33), structure(networkBytes),
                         Data(repeating: 0, count: 32), Data(repeating: 0xd0, count: 32)] {
-            for fixture in [makeFixture(deploymentNetworkBytes: invalid),
-                            makeFixture(deploymentGenesisBytes: invalid)] {
-                XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
-                    fixture.manifest, nativeCatalogArchive: fixture.catalog
-                ))
-            }
+            let fixture = makeFixture(manifestNetworkBytes: invalid)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
         }
-        let missing = makeFixture(includeQualification: false)
-        let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
-            missing.manifest, nativeCatalogArchive: missing.catalog
-        )
-        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireDeploymentNetworkV1(
-            projection, expectedNetworkId: NetworkId(bytes: networkBytes)
-        ))
+        for fixture in [makeFixture(omitNetwork: true),
+                        makeFixture(removedQualificationField: Data([0]), omitNetwork: true)] {
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
+        }
     }
 
     func testAllTwelveStatementContextsRequireExactExpectedNetwork() throws {
@@ -598,14 +646,17 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             flags: NoritoHeader.compactLen,
             payloadAlignment: 16
         )
-        XCTAssertThrowsError(try TransactionInstructionFrame(
-            wireName: PrivacyExact12FixtureCodecV1.submitProofWireId,
-            framedPayload: frame
-        )) { error in
-            XCTAssertEqual(
-                error as? ExecutableBatchInputError,
-                .privacyExact12CapabilityAdmissionRequired
-            )
+        for wire in [PrivacyExact12FixtureCodecV1.submitProofWireId,
+                     PrivacyExact12FixtureCodecV1.submitX509WireId] {
+            XCTAssertThrowsError(try TransactionInstructionFrame(
+                wireName: wire,
+                framedPayload: frame
+            )) { error in
+                XCTAssertEqual(
+                    error as? ExecutableBatchInputError,
+                    .privacyExact12CapabilityAdmissionRequired
+                )
+            }
         }
 
         let ordinary = try TransactionInstructionFrame(
@@ -706,19 +757,26 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
-    func testPublicValidatorRejectsEmptyReleaseAndDeploymentEvidence() throws {
-        // This structurally framed fixture has no executable/stage/audit evidence,
-        // no release signatures, and no validator canaries or signatures.
+    func testNativeProjectionCannotAdmitFabricatedSelectedTuples() throws {
         let fixture = makeFixture()
-        XCTAssertThrowsError(try PrivacyNativeBridge.validateExact12CapabilityManifestV1(
-            fixture.manifest
-        )) { error in
-            if PrivacyNativeBridge.isNativeAvailable {
-                guard let nativeError = error as? PrivacyExact12CapabilityManifestErrorV1,
-                      case .invalidArchive = nativeError else {
-                    return XCTFail("Rust must reject the unsigned qualification: \(error)")
-                }
-            } else {
+        if PrivacyNativeBridge.isNativeAvailable {
+            // Structural native validation accepts this canonical model; the actual
+            // local catalog exposes the selected tuple mismatch without gating others.
+            let projection = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(fixture.manifest)
+            XCTAssertFalse(projection.row(for: .zkAcePqAuthorizationV1).localCompiledTupleMatches)
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(
+                projection, protocolId: .zkAcePqAuthorizationV1
+            )) { error in
+                XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1,
+                               .compiledTupleMismatch(.zkAcePqAuthorizationV1))
+            }
+            XCTAssertThrowsError(try PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+                projection, protocolId: .zkAcePqAuthorizationV1
+            )) { error in
+                XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .invalidAdmission)
+            }
+        } else {
+            XCTAssertThrowsError(try PrivacyNativeBridge.validateExact12CapabilityManifestV1(fixture.manifest)) { error in
                 XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .nativeUnavailable)
             }
         }
@@ -726,25 +784,28 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
 
     private func makeFixture(
         rowZeroReadiness: Data? = nil,
-        rowZeroLifecycle: Data? = nil,
+        rowZeroPolicy: Data? = nil,
+        omitRowZeroPolicy: Bool = false,
         maxActionsPerTransaction: UInt32 = 1,
-        activationDigestByte: UInt8 = 0x31,
+        policyProtocolTag: UInt32 = 0,
         catalogDigestByte: UInt8 = 0x31,
-        includeQualification: Bool = true,
-        corruptSecurityClaimDigest: Bool = false,
         committedHeight: UInt64 = 3,
-        qualificationActivationHeight: UInt64 = 2,
-        qualificationConvergenceHeight: UInt64 = 3,
         useRetiredNineFieldRows: Bool = false,
         useRetiredExperimentalAssurance: Bool = false,
         swapFirstRows: Bool = false,
+        manifestRowCount: Int = 12,
         embeddedDigest: Data? = nil,
         includePendingState: Bool = false,
         consensusSchedule: (UInt64, UInt64) = (2, 302),
         protocolSchedule: (UInt64, UInt64) = (2, 302),
-        opaqueProofArtifacts: Data? = nil,
-        deploymentNetworkBytes: Data? = nil,
-        deploymentGenesisBytes: Data? = nil
+        manifestNetworkBytes: Data? = nil,
+        removedQualificationField: Data? = nil,
+        omitNetwork: Bool = false,
+        x509UnavailableReason: Data? = nil,
+        x509Readiness: Data? = nil,
+        x509Policy: Data? = nil,
+        jindoPolicyOverride: Data? = nil,
+        consensusPolicyOverride: Data? = nil
     ) -> Fixture {
         var profiles = (0..<12).map { _ in enumValue(1, enumValue(0)) }
         profiles[0] = availableProfile(
@@ -762,6 +823,9 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             limits: enumValue(6, structure(u32(4)))
         )
 
+        let x509Reason = x509UnavailableReason ?? enumValue(3)
+        profiles[5] = enumValue(1, x509Reason)
+
         var catalogProfiles = profiles
         if catalogDigestByte != 0x31 {
             catalogProfiles[0] = availableProfile(
@@ -777,29 +841,27 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         for index in 0..<12 {
             let readiness: Data
             if index == 0 {
-                readiness = rowZeroReadiness ?? (
-                    includeQualification
-                        ? enumValue(0)
-                        : enumValue(1, enumValue(5))
-                )
+                readiness = rowZeroReadiness ?? enumValue(0)
+            } else if index == 5 {
+                readiness = x509Readiness ?? enumValue(1, enumValue(0, x509Reason))
             } else if index == 6 {
-                readiness = includePendingState
-                    ? (includeQualification ? enumValue(0) : enumValue(1, enumValue(5)))
-                    : enumValue(1, enumValue(1))
+                readiness = enumValue(0)
             } else {
                 readiness = enumValue(1, enumValue(0, enumValue(0)))
             }
-            let activation: Data
+            let policy: Data
             if index == 0 {
-                activation = option(activationForProfileZero(
-                    digestByte: activationDigestByte,
-                    useRetiredExperimentalAssurance: useRetiredExperimentalAssurance,
-                    lifecycle: rowZeroLifecycle
-                ))
+                policy = option(omitRowZeroPolicy ? nil : rowZeroPolicy ?? policyForProfileZero(
+                    protocolTag: policyProtocolTag,
+                    useRetiredExperimentalAssurance: useRetiredExperimentalAssurance))
+            } else if index == 5 {
+                policy = option(x509Policy)
+            } else if index == 6, let override = jindoPolicyOverride {
+                policy = option(override)
             } else if index == 6, includePendingState {
-                activation = option(activationForJindoWithPendingTightening(schedule: protocolSchedule))
+                policy = option(policyForJindoWithPendingUpdate(schedule: protocolSchedule))
             } else {
-                activation = option(nil)
+                policy = option(nil)
             }
             let commonFields = structure(
                 enumValue(UInt32(index)),
@@ -815,14 +877,17 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                     enumValue(index == 0 || (index == 6 && includePendingState) ? 2 : 0),
                     to: &encodedRow
                 )
-                appendField(activation, to: &encodedRow)
+                appendField(policy, to: &encodedRow)
                 appendField(option(nil), to: &encodedRow)
             } else {
-                appendField(activation, to: &encodedRow)
+                appendField(policy, to: &encodedRow)
             }
             rows.append(encodedRow)
         }
         if swapFirstRows { rows.swapAt(0, 1) }
+        precondition((11...13).contains(manifestRowCount))
+        if manifestRowCount == 11 { rows.removeLast() }
+        if manifestRowCount == 13 { rows.append(rows[11]) }
 
         let catalogRows = catalogProfiles.enumerated().map { index, profile in
             structure(enumValue(UInt32(index)), profile)
@@ -835,27 +900,20 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         )
 
         let digest: Data
-        let qualification = includeQualification
-            ? exact12Qualification(
-                corruptSecurityClaimDigest: corruptSecurityClaimDigest,
-                firstActivationHeight: qualificationActivationHeight,
-                convergenceHeight: qualificationConvergenceHeight,
-                opaqueProofArtifacts: opaqueProofArtifacts,
-                deploymentNetworkBytes: deploymentNetworkBytes ?? networkBytes,
-                deploymentGenesisBytes: deploymentGenesisBytes ?? networkBytes
-            )
-            : nil
         if let embeddedDigest {
             digest = embeddedDigest
         } else {
             let normalized = buildManifest(
                 rows: rows,
-                qualification: qualification,
+                network: manifestNetworkBytes ?? networkBytes,
+                removedQualificationField: removedQualificationField,
+                omitNetwork: omitNetwork,
                 digest: Data(repeating: 0, count: 32),
                 maxActionsPerTransaction: maxActionsPerTransaction,
                 includePendingState: includePendingState,
                 schedule: consensusSchedule,
-                committedHeight: committedHeight
+                committedHeight: committedHeight,
+                consensusPolicyOverride: consensusPolicyOverride
             )
             var preimage = Data("iroha:privacy:exact12-capability-manifest:v1".utf8)
             preimage.append(u64(UInt64(normalized.count)))
@@ -865,12 +923,15 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         return Fixture(
             manifest: buildManifest(
                 rows: rows,
-                qualification: qualification,
+                network: manifestNetworkBytes ?? networkBytes,
+                removedQualificationField: removedQualificationField,
+                omitNetwork: omitNetwork,
                 digest: digest,
                 maxActionsPerTransaction: maxActionsPerTransaction,
                 includePendingState: includePendingState,
                 schedule: consensusSchedule,
-                committedHeight: committedHeight
+                committedHeight: committedHeight,
+                consensusPolicyOverride: consensusPolicyOverride
             ),
             catalog: catalog
         )
@@ -890,28 +951,18 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         ))
     }
 
-    private func activationForProfileZero(
-        digestByte: UInt8 = 0x31,
-        useRetiredExperimentalAssurance: Bool = false,
-        lifecycle: Data? = nil
+    private func policyForProfileZero(
+        protocolTag: UInt32 = 0,
+        useRetiredExperimentalAssurance: Bool = false
     ) -> Data {
-        let digest = structure(Data(repeating: digestByte, count: 32))
-        var activation = structure(
-            enumValue(0), enumValue(0), enumValue(0),
-            digest, digest, digest, digest, digest,
-            lifecycle ?? enumValue(1, structure(u64(1), u64(2), u64(2))),
-            enumValue(0), option(nil)
-        )
-        if useRetiredExperimentalAssurance {
-            appendField(enumValue(0), to: &activation)
-        }
-        return activation
+        var policy = structure(enumValue(protocolTag), enumValue(0), option(nil))
+        if useRetiredExperimentalAssurance { appendField(enumValue(0), to: &policy) }
+        return policy
     }
 
     private func securityClaim(
         protocolId: PrivacyProtocolIdV1,
-        digestByte: UInt8,
-        corruptDigest: Bool = false
+        digestByte: UInt8
     ) -> (claim: Data, digest: Data) {
         let bindingDigest = structure(Data(repeating: digestByte, count: 32))
         let claim = structure(
@@ -926,7 +977,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             structure(Data(repeating: 0xe2, count: 32))
         )
         let canonicalClaim = noritoEncode(
-            typeName: "iroha_data_model::privacy::protocol::PrivacySecurityClaimV1",
+            typeName: "iroha_data_model::privacy::PrivacySecurityClaimV1",
             payload: claim,
             flags: NoritoHeader.compactLen,
             payloadAlignment: 2
@@ -934,113 +985,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         var preimage = Data("iroha:privacy:security-claim:v1".utf8)
         preimage.append(u64(UInt64(canonicalClaim.count)))
         preimage.append(canonicalClaim)
-        var claimDigest = Data(SHA256.hash(data: preimage))
-        if corruptDigest {
-            claimDigest[claimDigest.startIndex] ^= 0xff
-        }
+        let claimDigest = Data(SHA256.hash(data: preimage))
         return (claim, claimDigest)
-    }
-
-    private func exact12Qualification(
-        corruptSecurityClaimDigest: Bool,
-        firstActivationHeight: UInt64,
-        convergenceHeight: UInt64,
-        opaqueProofArtifacts: Data?,
-        deploymentNetworkBytes: Data,
-        deploymentGenesisBytes: Data
-    ) -> Data {
-        let releaseDigest = Data(repeating: 0xe3, count: 32)
-        let releaseBindings = PrivacyProtocolIdV1.allCases.enumerated().map { index, protocolId in
-            releaseBinding(
-                protocolId,
-                digestByte: profileDigestByte(index),
-                corruptSecurityClaimDigest: corruptSecurityClaimDigest && index == 0
-            )
-        }
-        let source = structure(
-            structure(Data(repeating: 0xa1, count: 32)),
-            Data([1]),
-            compactString("swift-test-toolchain"),
-            structure(Data(repeating: 0xa2, count: 32)),
-            structure(Data(repeating: 0xa3, count: 32))
-        )
-        let release = structure(
-            u16(1),
-            compactString("iroha-privacy-exact12-v1"),
-            exact12CatalogCommitment(),
-            source,
-            u16(1),
-            structure(Data(repeating: 0xa4, count: 32)),
-            structure(Data(repeating: 0xa5, count: 32)),
-            sequence([]),
-            sequence(releaseBindings),
-            sequence([]),
-            opaqueProofArtifacts ?? sequence([]),
-            sequence([]),
-            sequence([]),
-            structure(Data(repeating: 0xa6, count: 32)),
-            sequence([]),
-            structure(Data(repeating: 0xe2, count: 32)),
-            sequence([]),
-            structure(releaseDigest)
-        )
-        let activations = PrivacyProtocolIdV1.allCases.enumerated().map { index, protocolId in
-            structure(
-                enumValue(protocolId.noritoDiscriminant),
-                u64(index == 0 ? firstActivationHeight : 2)
-            )
-        }
-        let deployment = structure(
-            u16(1),
-            compactString("swift-test-chain"),
-            // Rust COMPACT_LEN encodes both owning fields with raw32 inner bytes.
-            deploymentNetworkBytes,
-            deploymentGenesisBytes,
-            structure(releaseDigest),
-            structure(Data(repeating: 0xd1, count: 32)),
-            sequence(activations),
-            structure(Data(repeating: 0xd2, count: 32)),
-            compactString("v1"),
-            u64(convergenceHeight),
-            structure(Data(repeating: 0xd3, count: 32)),
-            sequence([]),
-            sequence([]),
-            structure(Data(repeating: 0xe4, count: 32))
-        )
-        return structure(release, deployment)
-    }
-
-    private func releaseBinding(
-        _ protocolId: PrivacyProtocolIdV1,
-        digestByte: UInt8,
-        corruptSecurityClaimDigest: Bool
-    ) -> Data {
-        let digest = structure(Data(repeating: digestByte, count: 32))
-        let claim = securityClaim(
-            protocolId: protocolId,
-            digestByte: digestByte,
-            corruptDigest: corruptSecurityClaimDigest
-        )
-        return structure(
-            enumValue(protocolId.noritoDiscriminant),
-            enumValue(protocolId.expectedProofSystem.rawValue),
-            enumValue(protocolId.expectedEngine.rawValue),
-            digest,
-            digest,
-            digest,
-            digest,
-            digest,
-            claim.claim,
-            structure(claim.digest)
-        )
-    }
-
-    private func profileDigestByte(_ index: Int) -> UInt8 {
-        switch index {
-        case 0: return 0x31
-        case 6: return 0x61
-        default: return UInt8(0x40 + index)
-        }
     }
 
     private func securityModelTag(_ protocolId: PrivacyProtocolIdV1) -> UInt32 {
@@ -1055,17 +1001,12 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
     }
 
     private func exact12CatalogCommitment() -> Data {
-        let words: [UInt64] = [
-            0x7c30_a004_39f1_37e0,
-            0x6b40_fb5c_d815_db00,
-            0x49a9_4401_d272_97d7,
-            0x2e34_8ea7_fdf3_f0de,
-            0xfabf_bf7c_7865_7f74,
-            0xffbb_e269_c311_4fc9,
-        ]
-        return words.reduce(into: Data()) { output, word in
-            output.append(u64(word))
-        }
+        Data([
+            0x5b, 0xcf, 0x36, 0x6f, 0xb1, 0x8d, 0x2e, 0x43,
+            0x61, 0x48, 0x6c, 0x01, 0x5d, 0xa5, 0xb4, 0x1a,
+            0x3f, 0xb0, 0x0e, 0xdf, 0x05, 0x61, 0x10, 0x42,
+            0xcc, 0xc4, 0x52, 0x12, 0x0d, 0x17, 0x6e, 0xb0,
+        ])
     }
 
     private func submitProofInstruction(
@@ -1118,31 +1059,27 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         return enumValue(tag, structure(context, Data([1])))
     }
 
-    private func activationForJindoWithPendingTightening(
-        schedule: (UInt64, UInt64) = (2, 302)
+    private func policyForJindoWithPendingUpdate(
+        schedule: (UInt64, UInt64) = (2, 302),
+        current: UInt32 = 4,
+        next: UInt32 = 3
     ) -> Data {
-        let digest = structure(Data(repeating: 0x61, count: 32))
-        return structure(
-            enumValue(6), enumValue(5), enumValue(5),
-            digest, digest, digest, digest, digest,
-            enumValue(1, structure(u64(1), u64(2), u64(2))),
-            enumValue(6, structure(u32(4))),
-            option(structure(
-                u64(schedule.0), u64(schedule.1), enumValue(6, structure(u32(3)))
-            ))
-        )
+        structure(enumValue(6), enumValue(6, structure(u32(current))),
+                  option(structure(u64(schedule.0), u64(schedule.1), enumValue(6, structure(u32(next))))))
     }
 
     private func consensusPolicy(
         maxActionsPerTransaction: UInt32 = 1,
         includePendingState: Bool = false,
-        schedule: (UInt64, UInt64) = (2, 302)
+        schedule: (UInt64, UInt64) = (2, 302),
+        currentRetained: UInt32 = 2_048,
+        nextRetained: UInt32 = 1_024
     ) -> Data {
         let current = structure(
             u32(maxActionsPerTransaction), u32(2),
             u32(9 * 1024 * 1024), u32(9_699_840),
             u32(9_699_840), u32(16_711_680),
-            u32(256 * 1024), u32(8), u32(8), u32(2_048)
+            u32(256 * 1024), u32(8), u32(8), u32(currentRetained)
         )
         let pending: Data?
         if includePendingState {
@@ -1153,7 +1090,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                     u32(maxActionsPerTransaction), u32(2),
                     u32(9 * 1024 * 1024), u32(9_699_840),
                     u32(9_699_840), u32(16_711_680),
-                    u32(256 * 1024), u32(8), u32(8), u32(1_024)
+                    u32(256 * 1024), u32(8), u32(8), u32(nextRetained)
                 )
             )
         } else {
@@ -1167,23 +1104,28 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
 
     private func buildManifest(
         rows: [Data],
-        qualification: Data?,
+        network: Data,
+        removedQualificationField: Data?,
+        omitNetwork: Bool,
         digest: Data,
         maxActionsPerTransaction: UInt32,
         includePendingState: Bool,
         schedule: (UInt64, UInt64),
-        committedHeight: UInt64
+        committedHeight: UInt64,
+        consensusPolicyOverride: Data?
     ) -> Data {
-        manifestFrame(structure(
-            u32(1), u64(committedHeight),
-            consensusPolicy(
-                maxActionsPerTransaction: maxActionsPerTransaction,
-                includePendingState: includePendingState,
-                schedule: schedule
-            ),
-            option(qualification),
-            sequence(rows), structure(digest)
-        ))
+        var payload = structure(u32(1))
+        if !omitNetwork { appendField(network, to: &payload) }
+        appendField(u64(committedHeight), to: &payload)
+        appendField(consensusPolicyOverride ?? consensusPolicy(
+            maxActionsPerTransaction: maxActionsPerTransaction,
+            includePendingState: includePendingState,
+            schedule: schedule
+        ), to: &payload)
+        if let removedQualificationField { appendField(removedQualificationField, to: &payload) }
+        appendField(sequence(rows), to: &payload)
+        appendField(structure(digest), to: &payload)
+        return manifestFrame(payload)
     }
 
     private func manifestFrame(_ payload: Data) -> Data {

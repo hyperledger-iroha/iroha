@@ -1,6 +1,6 @@
 //! Owned capture of all ten actual trigger journals after one retention admission.
 //!
-//! SetBlock has no event queue, execution frame, or prepared-code cache. Its four
+//! `SetBlock` has no event queue, execution frame, or prepared-code cache. Its four
 //! active-ID maps are real MV owners and are retained alongside action maps,
 //! IDs and bytecode/reference counts. Transaction-local postings and lifecycle
 //! generations end with the child apply/drop; its mutable borrow precludes
@@ -23,17 +23,17 @@ mod frozen_read;
 
 #[path = "set_capture.rs"]
 mod capture;
-pub(crate) use capture::SetBlockCapture;
+pub use capture::SetBlockCapture;
 
 #[path = "set_publication.rs"]
 mod publication;
-pub(crate) use publication::{
+pub use publication::{
     AbortedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet, SetPublicationError,
 };
 
 /// Capture refusal leaves every original trigger writer unpublished and released.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DetachError<E> {
+pub enum DetachError<E> {
     /// Original component acquisition modes are inconsistent.
     #[error("trigger journal {field} mode {actual:?} differs from {expected:?}")]
     InconsistentMode {
@@ -53,13 +53,13 @@ pub(crate) enum DetachError<E> {
 ///
 /// Every component retains its exact current/undo identity, including untouched
 /// stores and discarded-tip-only changes in replacement mode. These deltas are
-/// not a full SetReadOnly view and grant no publication authority. The original
+/// not a full `SetReadOnly` view and grant no publication authority. The original
 /// caller's resource guard drops after all retained payloads.
 ///
 /// TODO: compose with the remaining World/State journals, resource admission and
 /// finality under one consuming publisher. Prepared component publication alone
 /// is not aggregate State authority.
-pub(crate) struct DetachedSet<Admission> {
+pub struct DetachedSet<Admission> {
     mode: mv::BlockMode,
     data_triggers: DetachedStorage<TriggerId, LoadedAction<DataEventFilter>, ()>,
     pipeline_triggers: DetachedStorage<TriggerId, LoadedAction<PipelineEventFilterBox>, ()>,

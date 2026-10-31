@@ -1,6 +1,6 @@
 //! Core bond-kernel validation and transition tests (`specs/finance/bond_ops.md`).
 use core::num::NonZeroU64;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
@@ -43,9 +43,7 @@ use iroha_primitives::{json::Json, numeric::NumericSpec};
 
 use super::*;
 use crate::{
-    kura::Kura,
     prelude::World,
-    query::store::LiveQueryStore,
     state::{State, StateReadOnly},
 };
 
@@ -133,7 +131,7 @@ fn terms(ids: &[AccountId; ACCOUNTS]) -> BondTerms {
 }
 
 struct Harness {
-    state: State,
+    state: Arc<State>,
     height: u64,
     ids: [AccountId; ACCOUNTS],
     bond: AssetDefinitionId,
@@ -227,14 +225,14 @@ impl Harness {
             assets,
             [],
         );
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+            crate::sumeragi::test_chain::TestChainConfig::new(world, 0),
+        )
+        .expect("original signed bond fixture genesis");
+        let state = Arc::clone(chain.state());
         Self {
+            height: chain.height(),
             state,
-            height: 0,
             ids,
             bond,
             eur,
@@ -242,7 +240,8 @@ impl Harness {
         }
     }
 
-    /// Execute `f` in its own block at `time_ms`; the transaction is applied only on success.
+    /// Execute a component overlay after original genesis; apply its transaction only on success.
+    /// These overlays retain their real parent but do not claim new certified chain history.
     fn run<R>(
         &mut self,
         time_ms: u64,
@@ -251,7 +250,7 @@ impl Harness {
         self.height += 1;
         let header = BlockHeader::new(
             NonZeroU64::new(self.height).expect("height"),
-            None,
+            self.state.view().latest_block_hash(),
             None,
             time_ms,
             0,
@@ -890,7 +889,6 @@ fn recording_is_paged_and_unbounded_in_holders() {
                 &accounts()[HOLDER_A],
                 AccountController::Single(key(0x51).public_key().clone()),
             )
-            .map_err(Error::from)
         })
         .expect_err("rekey during recording");
     assert!(error.to_string().contains("is being recorded"), "{error}");
@@ -1042,7 +1040,7 @@ fn settle_atomic(
     }
     movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
     let instruction = SettleAtomic::new(
-        stx.network_id.clone(),
+        stx.network_id,
         SettlementId::new(
             ids[seller].clone(),
             "frozen_bond_trade".parse().expect("settlement reference"),
@@ -1506,7 +1504,7 @@ fn redemption_claim_fails_atomically_when_units_are_missing() {
     let bond = h.bond.clone();
     let holder = h.ids[HOLDER_A].clone();
     h.run(MATURITY, |stx| {
-        let network = stx.network_id().clone();
+        let network = *stx.network_id();
         crate::smartcontracts::isi::asset::isi::debit_numeric_asset_balance_for_test(
             &mut stx.world,
             &network,
@@ -1567,8 +1565,8 @@ fn issuer_policies_cannot_trap_funded_payments() {
     }
     h.record_fund_cashflow(4, MATURITY);
     // After funding, the bond issuer requires a binding nobody has on the bond itself.
-    let bond = h.bond.clone();
-    h.set_usage_policy(MATURITY, &bond, &[]);
+    let instrument = h.bond.clone();
+    h.set_usage_policy(MATURITY, &instrument, &[]);
     h.claim_all(MATURITY, 4);
     assert_eq!(h.record().state.redeemed_units, q("300"));
     assert_eq!(h.vault_eur(), Quantity::zero());
@@ -1937,7 +1935,6 @@ fn rekey_moves_bond_parties_and_unclaimed_entitlements() {
                     &old,
                     AccountController::Single(key(seed).public_key().clone()),
                 )
-                .map_err(Error::from)
             })
             .expect("rekey");
         h.ids[who] = new.clone();
@@ -1969,7 +1966,6 @@ fn rekey_moves_bond_parties_and_unclaimed_entitlements() {
                 &vault,
                 AccountController::Single(key(0x64).public_key().clone()),
             )
-            .map_err(Error::from)
         })
         .expect_err("vault rekey");
     assert!(error.to_string().contains("bond.retained"), "{error}");
@@ -2450,8 +2446,7 @@ fn entitlements_of_one_bond_iterate_as_a_key_range() {
     assert_eq!(
         world
             .bond_entitlements_of_bond_iter(&h.bond, None, None)
-            .rev()
-            .next()
+            .next_back()
             .map(|(id, _)| id.clone()),
         Some(last)
     );
@@ -2490,4 +2485,45 @@ fn entitlement_keys_group_one_cash_flow() {
     }
     let first_flow: Vec<_> = keys.iter().take(ids.len()).map(|key| key.index).collect();
     assert!(first_flow.iter().all(|index| *index == 0));
+}
+
+#[test]
+fn bond_fixture_authenticates_genesis_before_funding_component_custody() {
+    let mut harness = Harness::new();
+    let parent = harness
+        .state
+        .view()
+        .latest_block_hash()
+        .expect("original signed parent");
+    assert_eq!(harness.state.committed_height(), 1);
+    assert_eq!(harness.state.kura().blocks_count(), 1);
+    assert_eq!(
+        harness
+            .state
+            .view()
+            .world()
+            .parameters()
+            .require_crypto_policy()
+            .unwrap(),
+        &crate::sumeragi::test_chain::crypto_fixture_policy(),
+    );
+    assert!(
+        harness
+            .state
+            .view()
+            .world()
+            .parameters()
+            .staking_policy()
+            .is_some()
+    );
+    harness.register();
+    harness.record_fund_cashflow(0, COUPON_0 - DAY);
+    assert!(harness.vault_eur() > Quantity::zero());
+    assert_eq!(harness.state.view().latest_block_hash(), Some(parent));
+    assert_eq!(
+        harness.state.committed_height(),
+        1,
+        "component overlays do not fabricate finality"
+    );
+    assert_eq!(harness.state.kura().blocks_count(), 1);
 }

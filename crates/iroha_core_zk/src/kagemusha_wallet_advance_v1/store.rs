@@ -1406,9 +1406,9 @@ mod std_fs {
             }
         }
         fn staging_name(&self) -> io::Result<String> {
-            use rand::rand_core::TryRngCore as _;
+            use rand::rand_core::TryRng as _;
             super::staging_name_with_entropy(|bytes| {
-                rand::rngs::OsRng
+                rand::rngs::SysRng
                     .try_fill_bytes(bytes)
                     .map_err(io::Error::other)
             })
@@ -1923,10 +1923,10 @@ mod sim {
                 let mut entries = dir.durable.clone();
                 if seeded {
                     for operation in &dir.pending {
-                        let survives = match mask {
-                            Some(mask) => index < 64 && (mask >> index) & 1 == 1,
-                            None => rng.below(2) == 1,
-                        };
+                        let survives = mask.map_or_else(
+                            || rng.below(2) == 1,
+                            |mask| index < 64 && (mask >> index) & 1 == 1,
+                        );
                         index = index.saturating_add(1);
                         if survives {
                             operation.apply(&mut entries);

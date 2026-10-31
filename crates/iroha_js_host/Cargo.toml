@@ -33,7 +33,7 @@ iroha_version = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 base64 = { workspace = true }
 hex = { workspace = true }
-rand_core_06 = { workspace = true }
+rand = { workspace = true }
 zeroize = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
@@ -41,6 +41,7 @@ blake3 = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+iroha_private_settlement = { workspace = true }
 iroha_storage_client = { workspace = true }
 kotodama_lang = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk" }

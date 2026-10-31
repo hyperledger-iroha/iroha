@@ -47,7 +47,7 @@ fn capacity() -> Error {
     ))
 }
 
-fn codec_error(error: norito::Error) -> Error {
+fn codec_error(error: &norito::Error) -> Error {
     if error.is_decode_resource_limit() {
         capacity()
     } else {
@@ -66,7 +66,7 @@ fn beacon_binding_error(error: GlobalThresholdBeaconError) -> Error {
     invalid(format!("invalid prepared committee beacon: {error}"))
 }
 
-fn response_error(error: crate::utils::BoundedResponseEncodeError) -> Error {
+fn response_error(error: &crate::utils::BoundedResponseEncodeError) -> Error {
     match error {
         crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
         | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. } => capacity(),
@@ -83,16 +83,16 @@ fn admitted_copy<T>(value: &T, max_frame_bytes: usize) -> Result<T, Error>
 where
     T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
 {
-    let length = norito::canonical_frame_len(value).map_err(codec_error)?;
+    let length = norito::canonical_frame_len(value).map_err(|value| codec_error(&value))?;
     if length > max_frame_bytes {
         return Err(capacity());
     }
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let bytes = norito::core::to_bytes_bounded(value, length).map_err(|error| match error {
-        norito::core::BoundedEncodeError::Serialization(error) => codec_error(error),
+        norito::core::BoundedEncodeError::Serialization(error) => codec_error(&(error)),
         _ => capacity(),
     })?;
-    norito::decode_canonical(&bytes).map_err(codec_error)
+    norito::decode_canonical(&bytes).map_err(|value| codec_error(&value))
 }
 
 fn load(
@@ -100,6 +100,8 @@ fn load(
     target_epoch: Option<u64>,
     limits: NativeFinalityLimits,
 ) -> Result<ValidatorCommitteeStatusV1, Error> {
+    use iroha_data_model::query::error::QueryExecutionFail;
+
     let height = u64::try_from(state.height()).map_err(|_| invalid("committee height overflow"))?;
     limits.validate().map_err(invalid)?;
     if height < 2 {
@@ -111,7 +113,7 @@ fn load(
     // Keep one cumulative decode scope and source allowance for both attachments.
     let mut source_blocks_left = limits.block_count as u64;
     let mut source_bytes_left = limits.journal_bytes as u64;
-    use iroha_data_model::query::error::QueryExecutionFail;
+
     let query_error = crate::canonical_history::query_attempt_error;
     let mut admit = |work, bytes| {
         if bytes > limits.block_bytes as u64 {
@@ -361,8 +363,8 @@ pub async fn handler_validator_committee_status(
                 limits.decode_limits().map_err(invalid)?,
                 || load(&view, query.target_epoch, limits),
             )?;
-            crate::utils::respond_with_format_bounded(payload, format, response_limit)
-                .map_err(response_error)
+            crate::utils::respond_with_format_bounded(&(payload), format, response_limit)
+                .map_err(|value| response_error(&value))
         })
         .await?;
     let response = proof_response_with_exact_egress(
@@ -394,7 +396,7 @@ mod tests {
         .expect_err("original zero allocation owner refuses its first byte");
         assert!(resource.is_decode_resource_limit());
         assert!(matches!(
-            codec_error(resource),
+            codec_error(&(resource)),
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 QueryExecutionFail::GasBudgetExceeded
             ))
@@ -443,7 +445,12 @@ mod tests {
                     else {
                         panic!("allocation usage probe must refuse without charging");
                     };
-                    (result, attempted as usize - budget - 1)
+                    (
+                        result,
+                        usize::try_from(attempted).expect("fixture allocation count fits usize")
+                            - budget
+                            - 1,
+                    )
                 },
             )
         };
@@ -470,7 +477,7 @@ mod tests {
         );
         assert_eq!(source, [vec![0x37; 512], vec![0x51; 128]]);
         assert!(matches!(
-            codec_error(norito::Error::LengthMismatch),
+            codec_error(&(norito::Error::LengthMismatch)),
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
     }
@@ -503,8 +510,9 @@ mod tests {
 
     #[test]
     fn validator_committee_status_large_signed_source_fits_its_reserved_envelope() {
-        // This genuine source exceeds one generic decode unit while leaving room
-        // for both complete source decodes, RS16 scratch and the final artifact.
+        // This genuine source reaches artifact materialization with one generic
+        // decode unit, then exhausts it. The full committee envelope retains room
+        // for the complete source work and final artifact together.
         let chain = committee_source_with_logs(256 * 1024);
         let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
         let legacy = QueryFanoutMemoryEnvelope::new(48 * 1024 * 1024, 0).unwrap();
@@ -518,14 +526,18 @@ mod tests {
             allocated_bytes: legacy.decode_allocated_bytes,
             ..envelope.limits
         };
+        let refused_result = read(refused);
         assert!(
             matches!(
-                read(refused),
+                &refused_result,
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::CapacityLimit
+                    QueryExecutionFail::GasBudgetExceeded
                 )))
             ),
-            "the former generic decode unit cannot admit this genuine finalized source"
+            "the generic decode unit cannot finish the source's final artifact: {:?}",
+            refused_result
+                .as_ref()
+                .map(|status| status.latest_finality.block_wire.len()),
         );
         let observed = read(envelope.limits)
             .expect("same source fits the complete acquired committee envelope");
@@ -536,24 +548,27 @@ mod tests {
         for format in [ResponseFormat::Json, ResponseFormat::Norito] {
             let observed = read(envelope.limits).unwrap();
             let response = crate::utils::respond_with_format_bounded(
-                observed,
+                &(observed),
                 format,
                 envelope.response_bytes,
             )
             .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let observed = read(envelope.limits).unwrap();
-            let refused = crate::utils::respond_with_format_bounded(observed, format, 1)
-                .map_err(response_error);
-            assert!(matches!(
-                refused,
-                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::GasBudgetExceeded
-                )))
-            ));
+            let refused = crate::utils::respond_with_format_bounded(&(observed), format, 1)
+                .map_err(|value| response_error(&value));
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        QueryExecutionFail::GasBudgetExceeded
+                    )))
+                ),
+                "bounded response must retain its exact capacity refusal: {refused:?}"
+            );
         }
         assert!(matches!(
-            response_error(crate::utils::BoundedResponseEncodeError::Serialization),
+            response_error(&(crate::utils::BoundedResponseEncodeError::Serialization)),
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
         let insufficient_source = NativeFinalityLimits {
@@ -574,23 +589,37 @@ mod tests {
 
     #[test]
     fn validator_committee_status_oversized_signed_source_refuses_without_poisoning() {
-        // Measured independently with one diagnostic cumulative scope: this
-        // source needs over 48 MiB of admitted work, so it must never be admitted
-        // by reallocating phases within the 48 MiB total request reservation.
-        let chain = committee_source_with_logs(1024 * 1024);
+        // Each original frame fits its source ceiling, but the complete cold
+        // reads exceed this request's cumulative decode allowance. The larger
+        // payload keeps this refusal meaningful after source-copy reductions.
+        let chain = committee_source_with_logs(3 * 1024 * 1024);
         let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
+        let lengths =
+            [1, 3, 2].map(|height| chain.committed(height).block().encode_wire().unwrap().len());
+        assert!(
+            lengths
+                .iter()
+                .all(|length| *length <= envelope.limits.block_bytes)
+        );
+        assert!(lengths.iter().sum::<usize>() <= envelope.limits.journal_bytes);
         let view = chain.state().view();
         for _ in 0..2 {
             let refused = norito::core::with_decode_limits_scope(
                 envelope.limits.decode_limits().unwrap(),
                 || load(&view, None, envelope.limits),
             );
-            assert!(matches!(
-                refused,
-                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::CapacityLimit
-                )))
-            ));
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        QueryExecutionFail::CapacityLimit
+                    )))
+                ),
+                "oversized signed source must retain its exact capacity refusal: {:?}",
+                refused
+                    .as_ref()
+                    .map(|status| status.latest_finality.block_wire.len()),
+            );
         }
         assert_eq!(view.height(), 3);
         assert_eq!(chain.kura().blocks_count(), 3);
@@ -656,7 +685,7 @@ mod tests {
             else {
                 panic!("allocation usage probe must refuse without charging");
             };
-            attempted as usize - budget - 1
+            usize::try_from(attempted).expect("fixture allocation count fits usize") - budget - 1
         });
         let exact = frame.len() + decoded_bytes;
         let limits = norito::DecodeLimits::new(65536, 65536, 65536, exact, 128);

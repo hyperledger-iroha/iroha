@@ -366,11 +366,14 @@ pub const SYSCALL_IROHA_HASH: u32 = 0x9A;
 /// space remains, otherwise allocated HEAP). Stack/output, private, unallocated, malformed, and
 /// ABI-disallowed envelopes are rejected.
 pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
-// Smart-contract host shims (development API)
+// Canonical operation-tagged smart-contract bridge.
 /// Execute an operation-tagged instruction from canonical `&NoritoBytes(InstructionBox)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
 /// `r11` operation tag authorizing a decoded `SubmitBallot` instruction for syscall `0xA0`.
 pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
+/// Queue exactly `SubmitPrivacyZkX509CertificateV1` using original signed attachment custody.
+/// Returns an opaque local action ordinal, never proof success or applied effects.
+pub const SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509: u64 = 2;
 /// Execute a query from canonical `&NoritoBytes(QueryRequest)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY: u32 = 0xA1;
 /// Convenience syscall used by samples: create one NFT per known account.
@@ -1466,9 +1469,18 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_ASSET_LOCK_EXPIRE, "ASSET_LOCK_EXPIRE"),
     (SYSCALL_ASSET_UID_HOLDING_QUOTE, "ASSET_UID_HOLDING_QUOTE"),
     (SYSCALL_TRANSFER_TO_LINKED_FI, "TRANSFER_TO_LINKED_FI"),
-    (SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL, "ASSET_LOCK_DRAWDOWN_WATERFALL"),
-    (SYSCALL_ASSET_LOCK_CANCEL_WATERFALL, "ASSET_LOCK_CANCEL_WATERFALL"),
-    (SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL, "ASSET_LOCK_EXPIRE_WATERFALL"),
+    (
+        SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL,
+        "ASSET_LOCK_DRAWDOWN_WATERFALL",
+    ),
+    (
+        SYSCALL_ASSET_LOCK_CANCEL_WATERFALL,
+        "ASSET_LOCK_CANCEL_WATERFALL",
+    ),
+    (
+        SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL,
+        "ASSET_LOCK_EXPIRE_WATERFALL",
+    ),
     (SYSCALL_ASSET_FI_LINK_REVISION, "ASSET_FI_LINK_REVISION"),
     (SYSCALL_ASSET_SAME_UID, "ASSET_SAME_UID"),
 ];
@@ -3352,8 +3364,8 @@ mod tests {
                 SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL,
                 SYSCALL_ASSET_LOCK_CANCEL_WATERFALL,
                 SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL,
-    SYSCALL_ASSET_FI_LINK_REVISION,
-    SYSCALL_ASSET_SAME_UID,
+                SYSCALL_ASSET_FI_LINK_REVISION,
+                SYSCALL_ASSET_SAME_UID,
             ]
         );
         for &syscall in GENERIC_PROGRAM_DENIED_SYSCALLS_V1 {

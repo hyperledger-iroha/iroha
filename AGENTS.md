@@ -5,7 +5,8 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 ## Quickstart
 - Build workspace: `cargo build --workspace`
 - Fast focused loop: `scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p <crate> --lib`
-- Fast local optimized daemon: `scripts/cargo_fast.sh --stable-local-metadata -- build --profile local-release -p irohad --bin iroha3d`
+- Fast local optimized daemon: `scripts/cargo_fast.sh --stable-local-metadata --incremental -- build --profile local-release -p irohad --bin iroha3d`
+- Local tests reuse the ordinary warm target and enable incremental compilation. Use a stable `--target-slot <name>` only for concurrent builds; use `--no-incremental` for constrained or deliberately cold measurements.
 - Builds can take about 20 minutes; use a 20-minute timeout for build steps.
 - Test everything: `cargo test` or `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
 - Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
@@ -17,14 +18,31 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - JVM attestation tooling: from `kotlin`, run `./gradlew :tools:test :tools:installDist --console=plain`; the repository shell launcher invokes the same Kotlin-owned command.
 - Android managed consumers: from `kotlin`, run `./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest --console=plain` with JDK 21 and the Android SDK configured.
 - Android consumers of host JNI: from `kotlin`, run `IROHA_NATIVE_LIBRARY_PATH=<absolute-rebuilt-host-library-directory> ./gradlew :client-android:testDebugHostNative :kagemusha-wallet-android:testDebugHostNative --console=plain`. Missing native artifacts fail; this is separate from physical-device qualification.
-- Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
+- Check this machine's tools: `make doctor`.
+- Scripts dependencies (Python 3.11+): `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
 - Sumeragi core and simulator: `cargo test -p iroha_sumeragi --features sim`; mutation gate: `python3 scripts/sumeragi_mutation_gate.py --jobs 4`.
 
 ## Overview
 - Hyperledger Iroha 3 is a blockchain platform in its first release.
 - The first release prohibits backward compatibility: remove retired layouts,
-  aliases, shims, fallback decoders, and parallel legacy implementations.
+  aliases, shims, fallback decoders and parallel legacy implementations, and
+  delete old code. The live-upgrade foundation (`specs/live_runtime_upgrades.md`)
+  carries no compatibility path forward: a running network adopts it once at a
+  governed checkpoint that becomes its trust anchor, and every bridge or import
+  used up to and including that adoption (for example an interim checkpoint
+  import) is deleted afterwards.
+- A network running the live-upgrade foundation changes only through governed
+  definitions: a change publishes new immutable definitions and moves an
+  execution root to a new selection, and a definition's encoding and semantics
+  never change while any selection contains it. Governance (SORA Parliament for
+  the universal root, a permissioned data space's admins for that data space)
+  restricts and retires definitions without stranding obligations, and a
+  retired definition's code is deleted once no obligation needs it and the
+  checkpoint startup floor is above its last use. Selection-based dispatch is
+  that mechanism, not backward compatibility; heuristic fallback decoders,
+  ambiguous aliases and node-local protocol toggles stay prohibited. A genesis
+  reset is not an upgrade mechanism.
 - SoraFS and ordinary server/release signing support authenticated software
   custody without an HSM prerequisite. Enforce signatures, permissions, finality,
   revocation, and replay protection from verifiable protocol state. Do not relabel
@@ -103,7 +121,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Cross-library wire-format and fixture tests use the Kotlin implementation against the shared fixtures, including Java-source consumers. Preserve every assertion when retiring a Java implementation suite.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
   - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
+- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes. This forbids build-dependent omission; which host profile a contract may use is decided by the root's committed selection (`specs/live_runtime_upgrades.md`).
 - Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
 - CI guard: `scripts/check_no_legacy_codec.sh` ensures retired non-Norito codec dependencies do not re-enter the workspace. Run it locally if you touch serialization code.
 - Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
@@ -158,7 +176,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## ABI Evolution (What Agents Must Do)
 Note: First release policy
-- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship; prefer clarity and correctness over premature stability.
+- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship, as long as no live selection contains the definition being changed; prefer clarity and correctness over premature stability.
 
 - General:
   - ABI policy is enforced unconditionally in v1 (both syscall surface and pointer‑ABI types). Do not add runtime toggles.

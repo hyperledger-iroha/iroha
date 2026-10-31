@@ -38,9 +38,10 @@ fn name_json_error(message: &'static str) -> norito::json::Error {
         col: 1,
     }
 }
+// ICU4X 2.4.0 / Unicode 18.0.0 is the single first-release consensus profile.
 const EXPECTED_NFC_DATA_SHA256: [u8; 32] = [
-    0xbe, 0x71, 0xcd, 0xd0, 0x40, 0x2b, 0x3d, 0xf5, 0x8c, 0x10, 0xe7, 0xbd, 0x33, 0x3d, 0xb0, 0x59,
-    0x95, 0x13, 0x5c, 0xf3, 0x70, 0x4f, 0xa3, 0x7b, 0x1e, 0xb9, 0x2f, 0xa0, 0x4a, 0x18, 0x7d, 0x2e,
+    0x2b, 0x7e, 0xb1, 0x8c, 0x55, 0x6a, 0x34, 0x48, 0xde, 0x29, 0xf9, 0x2a, 0x3b, 0x90, 0xfc, 0x5e,
+    0xa2, 0xc9, 0xbf, 0xc2, 0x5a, 0x6e, 0x6c, 0x4a, 0xeb, 0xf0, 0xf0, 0x7a, 0x6b, 0x51, 0xd4, 0x01,
 ];
 type NormalizerCell = OnceLock<Result<ComposingNormalizerBorrowed<'static>, ()>>;
 /// Lazily initialized, profile-checked NFC normalizer shared across [`Name`] parsing.
@@ -117,6 +118,15 @@ mod model {
     pub struct Name(pub(super) ConstString);
 }
 impl Name {
+    /// Exact optional persistent backing requested by the canonical JSON reader.
+    ///
+    /// This plans storage only. Canonical validation and its separately reported
+    /// normalization scratch remain mandatory before a Name is accepted.
+    #[must_use]
+    pub fn json_decode_allocation_layout(candidate: &str) -> Option<std::alloc::Layout> {
+        ConstString::decode_allocation_layout(candidate)
+    }
+
     /// Exact optional string allocation made by [`Self::try_clone_for_admission`].
     #[must_use]
     pub fn admission_clone_layout(&self) -> Option<std::alloc::Layout> {
@@ -666,6 +676,31 @@ mod tests {
             .expect("Unicode scalar space is non-empty");
         assert_eq!(maximum, nfc_scratch::MAX_DECOMPOSITION_SCALARS);
     }
+
+    #[test]
+    fn unicode_18_combining_marks_use_the_reviewed_consensus_spelling() {
+        // Exhaustive scalar comparison against ICU 2.2 found these 21 new
+        // combining marks: each allows the following acute accent to compose
+        // with the preceding Latin starter. No scalar decomposition changed.
+        for scalar in [
+            0x05c8, 0x05c9, 0x1aee, 0x1aef, 0x10ecc, 0x10ecd, 0x10ef0, 0x10ef1, 0x10ef2, 0x10ef4,
+            0x10ef6, 0x1d127, 0x1d128, 0x1d250, 0x1d251, 0x1d252, 0x1d25b, 0x1d25c, 0x1d25f,
+            0x1d280, 0x1d281,
+        ] {
+            let mark = char::from_u32(scalar).expect("reviewed Unicode scalar");
+            let input = format!("a{mark}\u{301}\u{300}\u{315}");
+            let expected = format!("á{mark}\u{300}\u{315}");
+            assert_eq!(Name::normalize(&input).expect("reviewed profile"), expected);
+            assert!(input.parse::<Name>().is_err());
+            let name = expected.parse::<Name>().expect("canonical spelling");
+            assert_eq!(name.as_ref(), expected);
+            let bytes = Encode::encode(&name);
+            assert_eq!(
+                Name::decode(&mut bytes.as_slice()).expect("roundtrip"),
+                name
+            );
+        }
+    }
     #[test]
     fn decode_name() {
         // Limit to valid strings for roundtrip via codec
@@ -904,3 +939,20 @@ mod scratch_tests;
 
 #[cfg(test)]
 mod borrowed_text_tests;
+
+#[cfg(test)]
+mod json_decode_layout_tests {
+    use super::*;
+    #[test]
+    fn json_decode_plan_matches_exact_validated_name_backing() {
+        for length in (1..=40).chain([255]) {
+            let text = "x".repeat(length);
+            let value =
+                <Name as norito::json::JsonObjectKeyOwned>::from_json_key_text(&text).unwrap();
+            assert_eq!(
+                Name::json_decode_allocation_layout(&text),
+                value.admission_clone_layout()
+            );
+        }
+    }
+}

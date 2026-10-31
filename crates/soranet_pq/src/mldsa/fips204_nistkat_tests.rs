@@ -9,10 +9,8 @@
 //! response file regenerated from a changed implementation cannot pass on its own.
 use super::*;
 use crate::nistkat_sha256;
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput as _, Update as _, XofReader as _},
-};
+use sha3::digest::{ExtendableOutput as _, Update as _, XofReader as _};
+use shake::Shake256;
 
 const SUITES: [MlDsaSuite; 3] = [
     MlDsaSuite::MlDsa44,

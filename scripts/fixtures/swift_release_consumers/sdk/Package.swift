@@ -15,7 +15,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "IrohaNativeConsumer",
-            dependencies: [.product(name: "IrohaSwift", package: "IrohaSwift")]
+            dependencies: [
+                .product(name: "IrohaSwift", package: "IrohaSwift"),
+                .product(name: "IrohaSwiftMobileTransports", package: "IrohaSwift")
+            ]
         )
     ]
 )

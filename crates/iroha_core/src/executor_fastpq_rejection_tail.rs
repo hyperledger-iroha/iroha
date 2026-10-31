@@ -1,6 +1,6 @@
 //! Bound the complete post-rejection source tail before signed body work starts.
 //!
-//! At most one retained ballot slash and one PipelineGas transfer share the same
+//! At most one retained ballot slash and one `PipelineGas` transfer share the same
 //! E owner. Nexus burn/receipt settlement contributes no transfer. These public
 //! shape exemplars neither replace the live ledger nor describe an executable
 //! witness; every original quantity uses the widest legal positive encoding.
@@ -217,7 +217,8 @@ fn check(
                     .sponsor_program()
                     .is_some_and(|(selected, _)| selected == program) =>
             {
-                &state.nexus.fees.sponsor_vault_custody_account_id
+                crate::executor::root_fees::sponsor_vault_custody(state)
+                    .map_err(|error| TailError::Fault(error.to_string()))?
             }
             _ => {
                 return Err(TailError::Fault(

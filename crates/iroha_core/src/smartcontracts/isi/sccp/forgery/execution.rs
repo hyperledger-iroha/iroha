@@ -14,6 +14,8 @@ use super::{
     ForgeryVerificationError, Observation, VerificationControl, original_source, store,
     verify_observation,
 };
+#[cfg(test)]
+use crate::state::WorldReadOnly;
 use crate::{
     state::{
         EvidencePreparationError, StateReadOnly, StateStorageAdmissionError, StateTransaction,
@@ -40,11 +42,11 @@ use iroha_data_model::sccp::events::SccpEvent;
     variant_size_differences,
     reason = "retain original inline resource/refusal owners without a new allocation"
 )]
-pub(crate) enum ForgeryExecutionError {
+pub enum ForgeryExecutionError {
     /// Recomputed exact parent relation, never an ingress admission receipt.
     #[error(transparent)]
     Verification(#[from] ForgeryVerificationError),
-    /// Every slashable G6 member already has a permanent offence for this generation.
+    /// No slashable G6 member is new and recorded evidence already names this generation.
     #[error("SCCP forgery evidence duplicate")]
     EvidenceDuplicate,
     /// Original fixed-pool map/key admission or source join refusal.
@@ -58,7 +60,7 @@ pub(crate) enum ForgeryExecutionError {
 /// Local preparation retains either the existing storage owner or a move-only
 /// execution refusal. Neither form is a deterministic verdict on signed evidence.
 #[derive(Debug)]
-pub(crate) enum ForgeryLocalRefusal {
+pub enum ForgeryLocalRefusal {
     /// Original State storage or finite evidence-pool refusal.
     Storage(StateStorageAdmissionError),
     /// Original physical pairing allocator cause, moved without diagnostic copying.
@@ -161,6 +163,7 @@ impl ForgeryExecutionError {
 
 struct PreparedExecution {
     keys: [Option<OffenceKey>; 31],
+    generation: u64,
     record: RetainedEvidenceRecord,
     evidence_id: [u8; 32],
     events: event_graph::FundedForgeryEvents,
@@ -170,7 +173,7 @@ struct PreparedExecution {
 /// This function cannot be substituted for the sole-signed direct entrypoint binding.
 /// Penalties consume Pending later under their immutable delay; L3 and holds become
 /// visible immediately through the same committed record/offence/max transaction.
-pub(crate) fn execute_forgery(
+pub fn execute_forgery(
     evidence: &SubmitSccpForgeryEvidenceV1,
     stx: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ForgeryExecutionError> {
@@ -235,15 +238,14 @@ fn prepare_execution(
         VerificationControl::Synchronous,
     )?;
     let mut keys: [Option<OffenceKey>; 31] = std::array::from_fn(|_| None);
-    let new_signers = super::new_signers(
+    // Zero new signers still records while no evidence names this generation (step 7).
+    let new_signers = super::new_offenders(
         &*stx.world,
         candidate.generation(),
         candidate.qc().signers,
         stx.world.sccp_forgery_offences.allocation_budget(),
-    )?;
-    if new_signers == 0 {
-        return Err(ForgeryExecutionError::EvidenceDuplicate);
-    }
+    )?
+    .ok_or(ForgeryExecutionError::EvidenceDuplicate)?;
     let mut unslashable = 0_u32;
     for (signer, _, member) in candidate.signers() {
         let Some(member) = member else {
@@ -293,6 +295,7 @@ fn prepare_execution(
     let record = prepared.into_record(stx)?;
     Ok(PreparedExecution {
         keys,
+        generation: candidate.generation().generation,
         record,
         evidence_id,
         events,
@@ -305,6 +308,7 @@ fn publish(
 ) -> Result<(), ForgeryExecutionError> {
     let PreparedExecution {
         keys,
+        generation,
         record,
         evidence_id,
         events,
@@ -326,6 +330,8 @@ fn publish(
             }
         }
     }
+    // A record without offenders names its generation too: the §4.10 hold reads this maximum.
+    store::raise_forgery_max_generation(stx, generation);
     if stx
         .world
         .consensus_evidence

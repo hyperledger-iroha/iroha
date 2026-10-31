@@ -1,7 +1,7 @@
 //! Prepaid selected native authority, borrowing the original creation corpus and proofs.
 //!
 //! No full lane/World graph is decoded. Only the selected core committee and epoch acquire
-//! new storage. PoPs and unused parameter fields remain in the original authenticated bytes.
+//! new storage. `PoPs` and unused parameter fields remain in the original authenticated bytes.
 //! Cryptographic admission caches and the original source decoder remain separate owners.
 
 mod raw;
@@ -20,7 +20,7 @@ use iroha_sumeragi::types::{Committee, EpochConfig, EpochId, Hash32, HeightConfi
 use super::{LanePayload, LanePayloadError};
 
 /// Original creation bytes and immutable selected incarnation, preserved across local refusal.
-pub(crate) struct LaneAuthorityRead {
+pub struct LaneAuthorityRead {
     source: LanePayload,
     incarnation: [u8; 32],
 }
@@ -136,8 +136,8 @@ struct AuthorityConfig {
 }
 
 /// Exact prepaid selected configuration and original immutable creation/proof bytes.
-/// This is a configuration owner, not a PoP verification cache or monetary admission.
-pub(crate) struct LaneAuthority {
+/// This is a configuration owner, not a `PoP` verification cache or monetary admission.
+pub struct LaneAuthority {
     source: LanePayload,
     incarnation: [u8; 32],
     authority: AuthorityConfig,
@@ -239,7 +239,7 @@ impl LaneAuthority {
 
     /// Inspect exact original key/proof bytes without allocating a second credential graph.
     /// The key borrow lasts only for this callback; its canonical compact encoding is scanned
-    /// into bounded stack storage. PoPs borrow the original retained creation record.
+    /// into bounded stack storage. `PoPs` borrow the original retained creation record.
     pub(crate) fn visit_members<'a>(
         &'a self,
         mut visit: impl FnMut(&[u8], &'a [u8]) -> Result<(), LanePayloadError>,
@@ -255,6 +255,7 @@ impl LaneAuthority {
 fn array<T>(length: usize) -> Result<Layout, AllocationRefusal> {
     Layout::array::<T>(length).map_err(|_| AllocationRefusal::DemandOverflow)
 }
+#[derive(Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,
@@ -265,10 +266,10 @@ struct Construction {
 }
 impl Drop for Construction {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            if let Some(charges) = self.charges.take() {
-                std::mem::forget(charges);
-            }
+        if std::thread::panicking()
+            && let Some(charges) = self.charges.take()
+        {
+            std::mem::forget(charges);
         }
     }
 }

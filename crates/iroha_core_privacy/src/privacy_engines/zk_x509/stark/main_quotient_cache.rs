@@ -21,6 +21,33 @@ pub(super) struct MainQuotientCachePlanV1 {
 }
 
 impl MainQuotientCachePlanV1 {
+    /// Public work forecast when private coefficient allocations have their
+    /// exact admitted capacities. Construction independently deducts actual
+    /// capacities before retaining the fixed prefix.
+    #[cfg(test)]
+    pub(super) fn fixed_prefix_columns_v1(
+        self,
+        native_rows: usize,
+        fixed_width: usize,
+        stripes: usize,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let private = self
+            .base_columns
+            .checked_add(self.aux_columns)
+            .and_then(|count| {
+                self.coefficient_count
+                    .checked_mul(core::mem::size_of::<F>())
+                    .and_then(|bytes| bytes.checked_add(core::mem::size_of::<PrivateTableV1<F>>()))
+                    .and_then(|bytes| count.checked_mul(bytes))
+            })
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<MainQuotientReplayCacheV1>()))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let available = self
+            .payload_limit
+            .checked_sub(private)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        fixed_prefix_count_v1(native_rows, fixed_width, stripes, available)
+    }
     /// Keep expensive P-256 arithmetic auxiliary replay in the same byte budget.
     /// Base columns copy already-retained cells; auxiliary columns reconstruct
     /// running products. Other registrations retain their existing priorities.
@@ -113,11 +140,38 @@ impl MainQuotientCachePlanV1 {
     }
 }
 
+fn fixed_prefix_count_v1(
+    native_rows: usize,
+    fixed_width: usize,
+    stripes: usize,
+    available: usize,
+) -> Result<usize, ZkX509StarkErrorV1> {
+    if native_rows == 0
+        || !native_rows.is_power_of_two()
+        || native_rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+        || stripes == 0
+        || !stripes.is_power_of_two()
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let per_column = native_rows
+        .checked_mul(core::mem::size_of::<F>())
+        .and_then(|bytes| bytes.checked_add(core::mem::size_of::<PrivateTableV1<F>>()))
+        .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+    Ok(if stripes == 1 {
+        0
+    } else {
+        fixed_width.min(available / per_column)
+    })
+}
+
 /// Masked coefficients have clearing owners throughout construction and reuse.
 pub(super) struct MainQuotientReplayCacheV1 {
     columns: Vec<PrivateTableV1<F>>,
     base_columns: usize,
     coefficient_count: usize,
+    fixed_coefficients: Vec<PrivateTableV1<F>>,
+    payload_limit: usize,
 }
 
 impl MainQuotientReplayCacheV1 {
@@ -134,6 +188,8 @@ impl MainQuotientReplayCacheV1 {
             columns: Vec::new(),
             base_columns: plan.base_columns,
             coefficient_count: plan.coefficient_count,
+            fixed_coefficients: Vec::new(),
+            payload_limit: plan.payload_limit,
         };
         cache
             .columns
@@ -176,6 +232,88 @@ impl MainQuotientReplayCacheV1 {
             }
         }
         Ok(cache)
+    }
+
+    /// Count both caches by actual capacity under their single registration
+    /// allowance. The stored budget and both owner headers are included.
+    pub(super) fn allocated_payload_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
+        let headers = self
+            .columns
+            .capacity()
+            .checked_add(self.fixed_coefficients.capacity())
+            .and_then(|count| count.checked_mul(core::mem::size_of::<PrivateTableV1<F>>()))
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Self>()))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        self.columns
+            .iter()
+            .chain(&self.fixed_coefficients)
+            .try_fold(headers, |total, column| {
+                column
+                    .capacity()
+                    .checked_mul(core::mem::size_of::<F>())
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or(ZkX509StarkErrorV1::ProofTooLarge)
+            })
+    }
+
+    /// Retain a public prefix only after the private cache's actual capacity
+    /// has been deducted. No source, replay, runtime or device allowance is
+    /// released, and a one-stripe registration never copies fixed coefficients.
+    pub(super) fn with_fixed_coefficients_v1(
+        mut self,
+        fixed: &[Vec<F>],
+        native_rows: usize,
+        stripes: usize,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        if native_rows == 0
+            || !native_rows.is_power_of_two()
+            || native_rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+            || stripes == 0
+            || !stripes.is_power_of_two()
+            || fixed.is_empty()
+            || !self.fixed_coefficients.is_empty()
+            || fixed.iter().any(|column| {
+                column.len() != native_rows
+                    || column.iter().any(|value| F::canonical(value.0).is_none())
+            })
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let available = self
+            .payload_limit
+            .checked_sub(self.allocated_payload_v1()?)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let count = fixed_prefix_count_v1(native_rows, fixed.len(), stripes, available)?;
+        self.fixed_coefficients
+            .try_reserve_exact(count)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if self.fixed_coefficients.capacity() != count
+            || self.allocated_payload_v1()? > self.payload_limit
+        {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        for original in &fixed[..count] {
+            let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+            column
+                .try_reserve_exact(native_rows)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+            if column.capacity() != native_rows
+                || self
+                    .allocated_payload_v1()?
+                    .checked_add(column.capacity() * core::mem::size_of::<F>())
+                    .is_none_or(|bytes| bytes > self.payload_limit)
+            {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+            column.extend_from_slice(original);
+            self.fixed_coefficients.push(column);
+        }
+        Ok(self)
+    }
+
+    /// Borrow the immutable public prefix while both caches remain in this owner.
+    pub(super) fn fixed_coefficients_v1(&self) -> &[PrivateTableV1<F>] {
+        &self.fixed_coefficients
     }
 
     /// Reuse the prefix and replay only the uncached suffix, in canonical order.

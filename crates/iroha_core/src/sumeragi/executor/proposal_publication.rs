@@ -29,6 +29,10 @@ impl ProposalRecovery {
 }
 
 impl Worker<'_> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn admit_built_payload(
         &mut self,
         payload: PayloadBytes,
@@ -110,6 +114,10 @@ impl Worker<'_> {
         Ok(BuiltPayload { payload, admission })
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
     pub(super) fn recover_proposal_admission(
         &mut self,
         body: &AvailableBody,
@@ -182,6 +190,9 @@ impl Worker<'_> {
                     decoded: None,
                     returned_refusal: None,
                     amx_legs: None,
+                    uid_bindings: None,
+                    successor_context: Default::default(),
+                    policy_decode_controls: None,
                     parent_service:
                         super::super::certified_chain::ParentServicePreparation::default(),
                 }),
@@ -258,6 +269,9 @@ mod tests {
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service:
                     super::super::super::certified_chain::ParentServicePreparation::default(),
             };

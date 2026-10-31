@@ -1,4 +1,4 @@
-//! OpenAPI catalog, capability, and transport contract tests.
+//! `OpenAPI` catalog, capability, and transport contract tests.
 
 use super::*;
 
@@ -1002,21 +1002,24 @@ fn account_capabilities_document_exact_public_bootstrap_policy() {
     );
     let schemas = component_schemas(&document);
     let schema = &schemas["AccountCapabilitiesV1"];
-    assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(schema["additionalProperties"].as_bool(), Some(true));
     assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
     assert_eq!(
         schema["properties"]["schema_version"]["const"].as_u64(),
         Some(1)
     );
-    assert_eq!(
-        schema["properties"]["default_signing"]["const"].as_str(),
-        Some("ed25519")
+    assert!(
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .get("default_signing")
+            .is_none()
     );
     assert_eq!(
         schema["properties"]["network_prefix"]["maximum"].as_u64(),
         Some(65535)
     );
-    assert_eq!(schema["required"].as_array().expect("required").len(), 5);
+    assert_eq!(schema["required"].as_array().expect("required").len(), 4);
     let node = openapi_operation(&document, "/v1/node/capabilities", "get");
     assert!(
         node["parameters"]
@@ -1042,10 +1045,10 @@ fn account_capabilities_document_exact_public_bootstrap_policy() {
 #[test]
 fn generated_spec_includes_documented_paths() {
     let doc = generate_spec();
-    if std::env::var("PRINT_TORII_SPEC").is_ok() {
-        if let Ok(json) = norito::json::to_string_pretty(&doc) {
-            println!("{json}");
-        }
+    if std::env::var("PRINT_TORII_SPEC").is_ok()
+        && let Ok(json) = norito::json::to_string_pretty(&doc)
+    {
+        println!("{json}");
     }
     let paths = doc
         .get("paths")

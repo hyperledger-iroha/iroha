@@ -16,7 +16,7 @@ const MAX_FLOOR_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Private one-use evidence retained only by the executor of the original signed External.
 /// No decoder, instruction caller, snapshot, or nested execution can construct this owner.
-pub(crate) struct PinOutboxOperationOrigin {
+pub struct PinOutboxOperationOrigin {
     signed_hash: HashOf<SignedTransaction>,
     entry_hash: HashOf<TransactionEntrypoint>,
     entry_index: u64,
@@ -25,7 +25,7 @@ pub(crate) struct PinOutboxOperationOrigin {
 }
 
 /// Capture a sole direct native instruction from its original signed network input.
-pub(crate) fn capture_pin_outbox_operation_origin(
+pub fn capture_pin_outbox_operation_origin(
     state: &mut StateTransaction<'_, '_>,
     signed: &SignedTransaction,
     instruction: &InstructionBox,
@@ -207,16 +207,15 @@ fn consume_origin<T: norito::codec::Encode>(
             "Musubi pin-outbox original signed operation differs",
         ));
     }
-    let scope = match crate::executor::root_scope::execution_root_scope(state) {
-        Ok(scope) => scope,
-        Err(_) => {
-            if state.is_execution_deferred() {
-                return Err(invariant("local Musubi root read did not complete"));
-            }
-            return Err(invariant(
-                "Musubi pin-outbox requires the original Global root",
-            ));
+    let scope = if let Ok(scope) = crate::executor::root_scope::execution_root_scope(state) {
+        scope
+    } else {
+        if state.is_execution_deferred() {
+            return Err(invariant("local Musubi root read did not complete"));
         }
+        return Err(invariant(
+            "Musubi pin-outbox requires the original Global root",
+        ));
     };
     if scope != SumeragiRootScope::Global {
         return Err(invariant(

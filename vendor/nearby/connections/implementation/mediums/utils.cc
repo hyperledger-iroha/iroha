@@ -1,0 +1,102 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "connections/implementation/mediums/utils.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+#include "absl/strings/ascii.h"
+#include "absl/strings/escaping.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
+#include "internal/platform/base64_utils.h"
+#include "internal/platform/byte_array.h"
+#include "internal/platform/crypto.h"  //NOLINT
+#include "internal/platform/nsd_service_info.h"
+#include "internal/platform/prng.h"
+
+namespace nearby {
+namespace connections {
+
+namespace {
+constexpr int kDefaultSaltLength = 16;
+
+// Appended to the service ID before it is hashed, so that a Wi-Fi Aware
+// service name never collides with the Wi-Fi LAN mDNS service type derived
+// from the same service ID (AWDL does the same with "_AWDL").
+constexpr absl::string_view kWifiAwareServiceIdSuffixForServiceName = "_AWARE";
+}  // namespace
+
+ByteArray Utils::GenerateRandomBytes(size_t length) {
+  Prng prng;
+  std::string data;
+  data.reserve(length);
+
+  // Adds 4 random bytes per iteration.
+  while (length > 0) {
+    std::uint32_t val = prng.NextUint32();
+    for (int i = 0; i < 4; i++) {
+      data += val & 0xFF;
+      val >>= 8;
+      length--;
+
+      if (!length) break;
+    }
+  }
+
+  return ByteArray(data);
+}
+
+ByteArray Utils::Sha256Hash(const ByteArray& source, size_t length) {
+  return Utils::Sha256Hash(std::string(source), length);
+}
+
+ByteArray Utils::Sha256Hash(const std::string& source, size_t length) {
+  ByteArray full_hash(length);
+  full_hash.CopyAt(0, Crypto::Sha256(source));
+  return full_hash;
+}
+
+// Generates salts.
+std::string Utils::GenerateSalt() { return GenerateSalt(kDefaultSaltLength); }
+
+std::string Utils::GenerateSalt(size_t length) {
+  ByteArray salt = GenerateRandomBytes(length);
+  return Base64Utils::Encode(salt);
+}
+
+std::string Utils::GenerateServiceType(absl::string_view service_id) {
+  const ByteArray service_id_hash = Sha256Hash(
+      std::string(service_id), NsdServiceInfo::kTypeFromServiceIdHashLength);
+  return absl::StrFormat(NsdServiceInfo::kNsdTypeFormat,
+                         absl::AsciiStrToUpper(absl::BytesToHexString(
+                             std::string(service_id_hash))));
+}
+
+std::string Utils::GenerateWifiAwareServiceName(absl::string_view service_id) {
+  // Wi-Fi Aware service names have the form of an mDNS service type without
+  // the trailing dot ("_<hash>._tcp"); that is what Apple's WiFiAwareServices
+  // Info.plist keys and Android's NAN service names look like.
+  return std::string(absl::StripSuffix(
+      GenerateServiceType(
+          absl::StrCat(service_id, kWifiAwareServiceIdSuffixForServiceName)),
+      "."));
+}
+
+}  // namespace connections
+}  // namespace nearby

@@ -30,7 +30,7 @@ public final class NativeSignerBridgeJavaConsumerTest {
 
   @Test
   void exposesNominalNetworkAndContractConstants() {
-    assertEquals(31, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION);
+    assertEquals(33, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION);
     assertEquals(7, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION);
     final NetworkId network = TestNetworkIds.INSTANCE.canonical();
     assertEquals(NetworkId.BYTE_LENGTH, network.bytes().length);
@@ -115,6 +115,21 @@ public final class NativeSignerBridgeJavaConsumerTest {
   }
 
   @Test
+  void nativeExceptionRetainsItsCauseAndLeavesTheNextJniCallUsable() {
+    requireNative();
+    final Pair<byte[], byte[]> pair =
+        NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));
+    for (int attempt = 0; attempt < 32; attempt++) {
+      // Nonempty input reaches Rust: the managed boundary only rejects empty keys.
+      final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+          () -> NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ED25519, new byte[] {1}));
+      assertTrue(error.getMessage().contains("invalid private key bytes"));
+      assertArrayEquals(pair.getSecond(),
+          NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ED25519, pair.getFirst()));
+    }
+  }
+
+  @Test
   void nativeEd25519KeyDerivationAndSignatureAgree() {
     requireNative();
     final Pair<byte[], byte[]> pair =
@@ -175,7 +190,7 @@ public final class NativeSignerBridgeJavaConsumerTest {
 
   private static void requireNative() {
     assertTrue(NativeSignerBridge.isNativeAvailable(),
-        "same-source connect_norito_bridge ABI 31 / signer contract 7 is required");
+        "same-source connect_norito_bridge ABI 33 / signer contract 7 is required");
   }
 
   private static FeePaymentIntent noFeePayment() {

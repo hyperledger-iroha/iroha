@@ -286,7 +286,7 @@ fn with_original(
 
 fn bind_input(
     tx: &mut StateTransaction<'_, '_>,
-    route: super::super::network_policy_routes::CapturedNetworkPolicyRoute,
+    route: &super::super::network_policy_routes::CapturedNetworkPolicyRoute,
     authenticated: &crate::block::AuthenticatedGenesisTransaction,
     signed: &SignedTransaction,
     input_index: usize,
@@ -308,7 +308,7 @@ async fn candidate_testing_only_exact_direct_original_instruction_can_install() 
         |block, route, original, signed, instruction, input, ordinal| {
             for case in 0..11 {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 let authority = signed.authority();
                 match case {
                     3 => tx.current_entrypoint_index = Some(input as u64 + 1),
@@ -365,7 +365,7 @@ async fn candidate_testing_consumption_is_one_use_including_rejected_consumption
         |block, route, original, signed, instruction, input, ordinal| {
             for wrong_authority in [false, true] {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 tx.arm_direct_parliament_candidate_testing(
                     signed,
                     signed.authority(),
@@ -410,18 +410,11 @@ async fn candidate_testing_genesis_output_seal_rejects_omission_injection_and_ch
     let original = prepared.genesis.block();
     let mut block = prepared.state.block(original.header());
     assert!(validate_genesis_output(original, &block).is_err());
-    block
-        .world
-        .parameters
-        .get_mut()
-        .set_parameter(parameter())
-        .unwrap();
+    block.world.set_parameter_for_testing(parameter()).unwrap();
     assert!(validate_genesis_output(original, &block).is_ok());
     block
         .world
-        .parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(CustomParameter::new(
+        .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
             ParliamentCandidateTestingPolicyV1::parameter_id().clone(),
             Json::new("substitution"),
         )))
@@ -432,12 +425,7 @@ async fn candidate_testing_genesis_output_seal_rejects_omission_injection_and_ch
     let source = absent.genesis.block();
     let mut block = absent.state.block(source.header());
     assert!(validate_genesis_output(source, &block).is_ok());
-    block
-        .world
-        .parameters
-        .get_mut()
-        .set_parameter(parameter())
-        .unwrap();
+    block.world.set_parameter_for_testing(parameter()).unwrap();
     assert!(validate_genesis_output(source, &block).is_err());
 }
 
@@ -458,9 +446,7 @@ fn candidate_testing_codec_refusals_stay_deferred_and_invalid_policy_stays_rejec
 async fn candidate_testing_preseeded_same_value_never_replaces_original_installation() {
     for selected in [false, true] {
         let mut cfg = config(selected);
-        let mut parameters = cfg.world.parameters.view().get().clone();
-        parameters.set_parameter(parameter()).unwrap();
-        cfg.world.parameters = mv::cell::Cell::new(parameters);
+        cfg.world.set_parameter_for_testing(parameter()).unwrap();
         // The real preparation owner executes original native genesis, even though it
         // discards the overlay while deriving signed policy commitments.
         let failure = CertifiedTestChain::prepare(cfg).unwrap_err();
@@ -491,7 +477,7 @@ async fn candidate_testing_borrowed_and_user_executor_dispatch_cannot_inherit_di
         |block, route, original, signed, instruction, input, ordinal| {
             for dispatch in 0..3 {
                 let mut tx = block.transaction();
-                bind_input(&mut tx, route, original, signed, input);
+                bind_input(&mut tx, &(route), original, signed, input);
                 tx.arm_direct_parliament_candidate_testing(
                     signed,
                     signed.authority(),

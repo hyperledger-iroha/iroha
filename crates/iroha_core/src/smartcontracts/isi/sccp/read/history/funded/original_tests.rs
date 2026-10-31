@@ -11,7 +11,7 @@ use iroha_sccp::v1::{
 
 /// An in-memory history that counts the leaves it hands out.
 struct Leaves {
-    leaves: Vec<[u8; 32]>,
+    hashes: Vec<[u8; 32]>,
     peaks: Vec<[u8; 32]>,
     reads: Cell<u64>,
 }
@@ -31,7 +31,7 @@ impl Leaves {
             .peaks()
             .to_vec();
         Self {
-            leaves,
+            hashes: leaves,
             peaks,
             reads: Cell::new(0),
         }
@@ -40,7 +40,7 @@ impl Leaves {
 
 impl BorrowedHistorySource for Leaves {
     fn size(&self) -> u64 {
-        self.leaves.len() as u64
+        self.hashes.len() as u64
     }
 
     fn peaks(&self) -> &[[u8; 32]] {
@@ -49,7 +49,7 @@ impl BorrowedHistorySource for Leaves {
 
     fn leaf(&self, index: u64) -> Option<[u8; 32]> {
         self.reads.set(self.reads.get() + 1);
-        self.leaves.get(usize::try_from(index).unwrap()).copied()
+        self.hashes.get(usize::try_from(index).unwrap()).copied()
     }
 }
 
@@ -59,7 +59,7 @@ fn paths_and_roots_equal_the_promote_odd_tree() {
     let mut cache = HistoryNodeCache::default();
     // Every size up to three chunks, and the chunk and power-of-two edges above.
     for size in (1..=70_u64).chain([95, 96, 97, 127, 128, 129, 150]) {
-        let prefix = &source.leaves[..usize::try_from(size).unwrap()];
+        let prefix = &source.hashes[..usize::try_from(size).unwrap()];
         for index in 0..size {
             let (root, path) = cache.root_and_path(&source, index, size).expect("in range");
             assert_eq!(root, history_root(prefix).unwrap(), "size {size}");
@@ -183,7 +183,7 @@ fn a_warm_cache_reads_far_fewer_leaves_than_the_history() {
     cache.root_and_path(&source, 0, 4_096).expect("warm-up");
     source.reads.set(0);
     let (_, path) = cache.root_and_path(&source, 1_234, 4_000).expect("path");
-    assert_eq!(path, history_path(&source.leaves[..4_000], 1_234).unwrap());
+    assert_eq!(path, history_path(&source.hashes[..4_000], 1_234).unwrap());
     assert!(
         source.reads.get() < 1_024,
         "a warm path read {} leaves",
@@ -200,8 +200,8 @@ fn a_replaced_history_rebuilds_the_cache() {
     for size in [90_u64, 130] {
         let replaced = Leaves::new(5, size);
         let (root, path) = cache.root_and_path(&replaced, 70, size).expect("rebuilt");
-        assert_eq!(root, history_root(&replaced.leaves).unwrap());
-        assert_eq!(path, history_path(&replaced.leaves, 70).unwrap());
+        assert_eq!(root, history_root(&replaced.hashes).unwrap());
+        assert_eq!(path, history_path(&replaced.hashes, 70).unwrap());
     }
 }
 
@@ -210,10 +210,10 @@ fn an_older_view_of_the_same_history_reuses_the_cache() {
     let mut cache = HistoryNodeCache::default();
     let newer = Leaves::new(6, 200);
     cache.root_and_path(&newer, 0, 200).expect("newer");
-    let older = Leaves::from_leaves(newer.leaves[..150].to_vec());
+    let older = Leaves::from_leaves(newer.hashes[..150].to_vec());
     let (root, path) = cache.root_and_path(&older, 149, 150).expect("older");
-    assert_eq!(root, history_root(&older.leaves).unwrap());
-    assert_eq!(path, history_path(&older.leaves, 149).unwrap());
+    assert_eq!(root, history_root(&older.hashes).unwrap());
+    assert_eq!(path, history_path(&older.hashes, 149).unwrap());
     assert_eq!(
         cache.inner.covered, 192,
         "no rebuild for a consistent prefix"

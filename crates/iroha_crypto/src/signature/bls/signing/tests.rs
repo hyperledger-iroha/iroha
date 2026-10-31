@@ -15,10 +15,12 @@ fn key<C: BlsConfiguration>(seed: u8) -> super::super::implementation::ManagedSe
 
 fn upstream_once<C: BlsConfiguration>(bytes: &[u8], message: &[u8]) -> Vec<u8> {
     let mut key = SecretKey::<C::Engine>::from_bytes(bytes).unwrap();
-    key.sign_once(&w3f_bls::Message::new(
-        super::super::implementation::MESSAGE_CONTEXT,
-        message,
-    ))
+    // Upstream now requires its split-key blinding path; the resulting BLS
+    // signature is independent of the fixture's blinding randomness.
+    key.sign(
+        &w3f_bls::Message::new(super::super::implementation::MESSAGE_CONTEXT, message),
+        crate::rng::bls_rng_from_seed_slice(b"upstream signature relation fixture"),
+    )
     .to_bytes()
 }
 
@@ -84,7 +86,7 @@ struct Draw {
     length: usize,
 }
 #[cfg(feature = "rand")]
-impl rand_core::TryRngCore for Draw {
+impl rand_core::TryRng for Draw {
     type Error = EntropyFailure;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         panic!("signing draws one byte slice")
@@ -108,7 +110,7 @@ fn upstream_random<C: BlsConfiguration>(
     message: &[u8],
     rng: &mut Draw,
 ) -> Result<Vec<u8>, Error> {
-    use rand_core::TryRngCore as _;
+    use rand_core::TryRng as _;
     let mut key = SecretKey::<C::Engine>::from_bytes(bytes)
         .map_err(|error| Error::Signing(error.to_string()))?;
     let message = w3f_bls::Message::new(super::super::implementation::MESSAGE_CONTEXT, message);
@@ -128,7 +130,7 @@ fn upstream_random<C: BlsConfiguration>(
         ));
     }
     Ok(key
-        .sign(&message, crate::rng::rng_from_seed_slice(&seed))
+        .sign(&message, crate::rng::bls_rng_from_seed_slice(&seed))
         .to_bytes())
 }
 

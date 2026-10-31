@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
           shared-key: numeric-v1-sdk-rust
@@ -49,8 +49,8 @@ jobs:
       run:
         working-directory: javascript/iroha_js
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: npm
@@ -94,15 +94,15 @@ jobs:
       run:
         working-directory: javascript/iroha_js
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
-          toolchain: 1.93.1-x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1-x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
           shared-key: numeric-v1-sdk-js-native
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: npm
@@ -118,7 +118,7 @@ jobs:
           "${GITHUB_ENV}"
           "${GITHUB_PATH}"
           "${HOME}/.cargo/bin/rustup"
-          "1.93.1-x86_64-unknown-linux-gnu"
+          "1.99.1-x86_64-unknown-linux-gnu"
       - name: Verify Cargo lock isolation
         working-directory: ${{ github.workspace }}
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
@@ -149,8 +149,8 @@ jobs:
       run:
         working-directory: kotlin
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: "21"
@@ -175,8 +175,8 @@ jobs:
       run:
         working-directory: java/iroha_android
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: "21"
@@ -193,7 +193,7 @@ jobs:
           --console=plain
 
   swift:
-    # This workflow does not own an authenticated ABI-31 Apple artifact handoff.
+    # This workflow does not own an authenticated ABI-33 Apple artifact handoff.
     # The release orchestrator must materialize NoritoBridge.xcframework outside
     # the checkout, set MOBILE_SDK_APPLE_ARTIFACT_DIR to that canonical directory,
     # and supply the source/tool identity required by check_mobile_sdk_artifacts.sh.
@@ -206,8 +206,8 @@ jobs:
       run:
         working-directory: IrohaSwift
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Bind the canonical mobile Python
@@ -233,20 +233,20 @@ jobs:
           release_lock="$(IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$release_lock" \
             privacy_sdk_resolve_cargo_lockfile "$GITHUB_WORKSPACE" "$MOBILE_SDK_PYTHON_BINARY")"
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-      - name: Authenticate the externally provisioned ABI-31 Swift bridge
+      - name: Authenticate the externally provisioned ABI-33 Swift bridge
         working-directory: ${{ github.workspace }}
         run: |
           if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" ]]; then
-            echo "an authenticated external ABI-31 Apple artifact handoff is required" >&2
+            echo "an authenticated external ABI-33 Apple artifact handoff is required" >&2
             exit 1
           fi
           if [[ "$MOBILE_SDK_APPLE_ARTIFACT_DIR" != /* ]]; then
-            echo "the ABI-31 Apple artifact directory must be absolute" >&2
+            echo "the ABI-33 Apple artifact directory must be absolute" >&2
             exit 1
           fi
           case "$MOBILE_SDK_APPLE_ARTIFACT_DIR" in
             "$GITHUB_WORKSPACE"|"$GITHUB_WORKSPACE"/*)
-              echo "the ABI-31 Apple artifact directory must remain outside the checkout" >&2
+              echo "the ABI-33 Apple artifact directory must remain outside the checkout" >&2
               exit 1
               ;;
           esac
@@ -266,8 +266,8 @@ jobs:
       run:
         working-directory: python/iroha_python
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
           cache: pip
@@ -296,10 +296,10 @@ jobs:
       run:
         working-directory: csharp
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.403
       - name: Verify .NET Numeric V1, quantity builders, and manifest policies
         run: >-
           dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj

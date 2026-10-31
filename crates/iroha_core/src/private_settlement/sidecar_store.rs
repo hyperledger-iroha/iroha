@@ -53,21 +53,15 @@ use iroha_data_model::{
     },
     privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
 };
+use iroha_fs::{FileIdentity, FileSnapshot, PrivateDirectory, PublishMode};
 use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, Encode};
-#[cfg(any(not(windows), test))]
-use std::fs;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     fs::File,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-};
-#[cfg(not(windows))]
-use std::{
-    fs::OpenOptions,
-    io::{Read as _, Write as _},
 };
 use thiserror::Error;
 
@@ -77,9 +71,8 @@ const SIDECAR_RECORD_EXTENSION_V1: &str = ".aps1";
 const PROVISIONAL_RECORD_MAGIC_V1: [u8; 4] = *b"APV1";
 const PROVISIONAL_RECORD_VERSION_V1: u8 = 1;
 const PROVISIONAL_RECORD_EXTENSION_V1: &str = ".apv1";
-const SIDECAR_TEMP_DIRECTORY_V1: &str = ".tmp";
-const SIDECAR_TEMP_EXTENSION_V1: &str = ".tmp";
 const SIDECAR_WRITER_LOCK_FILE_V1: &str = ".writer.lock";
+const SIDECAR_STAGING_DIRECTORY_V1: &str = ".staging";
 const FINALIZED_RECEIPT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:finalized-receipt:v1\0";
 const ABORT_RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:abort-receipt:v1\0";
@@ -708,9 +701,6 @@ pub enum PrivateSettlementSidecarStoreErrorV1 {
     /// A local persistence operation failed.
     #[error("private-settlement sidecar persistence failed")]
     Backend,
-    /// This host lacks the required private-owner and retained-file controls.
-    #[error("private-settlement sidecar store is unsupported on this platform")]
-    UnsupportedPlatform,
 }
 
 #[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
@@ -1108,20 +1098,16 @@ impl Drop for SidecarStoreDirectoryLeaseV1 {
 
 /// Atomic owner-only file store for encrypted restricted sidecars.
 ///
-/// One process-local lease and one held native writer lock enforce a single
-/// writer (Unix advisory lock or Windows exclusive private original). Open validates every record before the handle becomes available.
-/// Never place the directory or its ancestors in an attacker-writable path.
+/// One process-local lease and one held native exclusive lock enforce a single
+/// writer. The shared filesystem owner retains directory and ancestor custody
+/// on Unix and Windows; open validates every record before exposing the handle.
 pub struct PrivateSettlementFileSidecarStoreV1 {
-    root: PathBuf,
-    #[cfg(not(windows))]
-    temp_root: PathBuf,
+    root: PrivateDirectory,
+    staging: PrivateDirectory,
     config: PrivateSettlementSidecarStoreConfigV1,
     state: Mutex<SidecarStoreStateV1>,
     _lease: SidecarStoreDirectoryLeaseV1,
-    #[cfg(not(windows))]
-    _writer_lock: File,
-    #[cfg(windows)]
-    native: windows::NativeStore,
+    writer_lock: File,
 }
 
 impl fmt::Debug for PrivateSettlementFileSidecarStoreV1 {
@@ -1139,64 +1125,38 @@ impl PrivateSettlementFileSidecarStoreV1 {
     ///
     /// # Errors
     ///
-    /// Rejects unsupported platforms, concurrent openers, permissive ownership,
+    /// Rejects unsafe filesystems, concurrent openers, permissive ownership,
     /// unknown entries, corrupt/non-canonical records, and capacity violations.
     pub fn open(
         root: impl AsRef<Path>,
         config: PrivateSettlementSidecarStoreConfigV1,
     ) -> Result<Self, PrivateSettlementSidecarStoreErrorV1> {
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (root, config);
-            return Err(PrivateSettlementSidecarStoreErrorV1::UnsupportedPlatform);
+        let requested_root = root.as_ref();
+        if requested_root.as_os_str().is_empty() {
+            return Err(PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid);
         }
-        #[cfg(windows)]
-        {
-            if root.as_ref().as_os_str().is_empty() {
-                return Err(PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid);
-            }
-            let native = windows::NativeStore::open(root.as_ref())?;
-            let root = native.path().to_path_buf();
-            let lease = acquire_sidecar_store_lease_v1(root.clone())?;
-            let state = native.recover(config)?;
-            Ok(Self {
-                root,
-                config,
-                state: Mutex::new(state),
-                _lease: lease,
-                native,
-            })
-        }
-        #[cfg(unix)]
-        {
-            let requested_root = root.as_ref();
-            if requested_root.as_os_str().is_empty() {
-                return Err(PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid);
-            }
-            ensure_owner_directory_v1(requested_root)?;
-            let canonical_root = fs::canonicalize(requested_root)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            let lease = acquire_sidecar_store_lease_v1(canonical_root.clone())?;
-            let writer_lock = acquire_sidecar_store_writer_lock_v1(&canonical_root)?;
-            let temp_root = canonical_root.join(SIDECAR_TEMP_DIRECTORY_V1);
-            ensure_owner_directory_v1(&temp_root)?;
-            clean_stale_temp_files_v1(&temp_root)?;
-            let state = load_file_store_v1(&canonical_root, config)?;
-            Ok(Self {
-                root: canonical_root,
-                temp_root,
-                config,
-                state: Mutex::new(state),
-                _lease: lease,
-                _writer_lock: writer_lock,
-            })
-        }
+        let root = PrivateDirectory::open_or_create(requested_root)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        let lease = acquire_sidecar_store_lease_v1(root.path().to_owned())?;
+        let staging = open_sidecar_staging_v1(&root)?;
+        let writer_lock = acquire_sidecar_store_writer_lock_v1(&staging)?;
+        reconcile_sidecar_staging_v1(&root, &staging)?;
+        let state = load_file_store_v1(&root, config)?;
+        validate_sidecar_writer_v1(&staging, &writer_lock)?;
+        Ok(Self {
+            root,
+            staging,
+            config,
+            state: Mutex::new(state),
+            _lease: lease,
+            writer_lock,
+        })
     }
 
-    /// Canonical owner-only store directory.
+    /// Retained owner-only store directory.
     #[must_use]
     pub fn root(&self) -> &Path {
-        &self.root
+        self.root.path()
     }
 
     /// Commit every staged reservation for a test-network atomicity
@@ -1324,7 +1284,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
         match self.persist_provisional_record_v1(digest, &encoded) {
             Ok(()) => {}
-            Err(failure) if failure.committed => {
+            Err(failure) if failure.may_have_committed => {
                 insert_provisional_index_v1(&mut state, &candidate, encoded_len)?;
                 state.canonical_bytes = next_bytes;
                 state.poisoned = true;
@@ -1403,15 +1363,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .filter(|bytes| *bytes <= self.config.max_total_bytes)
             .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
         if let Err(failure) = self.persist_record_v1(digest, &encoded, false) {
-            #[cfg(windows)]
-            {
-                state.poisoned = failure.committed;
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = failure;
-                state.poisoned = self.root.join(sidecar_file_name_v1(digest)).exists();
-            }
+            state.poisoned = failure.may_have_committed;
             return Err(PrivateSettlementSidecarStoreErrorV1::Backend);
         }
         if self.remove_provisional_record_v1(digest).is_err() {
@@ -1483,7 +1435,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
         match self.persist_record_v1(digest, &encoded, false) {
             Ok(()) => {}
-            Err(failure) if failure.committed => {
+            Err(failure) if failure.may_have_committed => {
                 insert_index_v1(&mut state, &candidate, encoded_len)?;
                 state.canonical_bytes = next_bytes;
                 state.poisoned = true;
@@ -2676,7 +2628,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
         match self.persist_record_v1(digest, &encoded, true) {
             Ok(()) => {}
-            Err(failure) if failure.committed => {
+            Err(failure) if failure.may_have_committed => {
                 if update_index_v1(state, durable, encoded_len).is_err() {
                     state.poisoned = true;
                     return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
@@ -2732,7 +2684,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
                 .clone();
             match self.remove_record_v1(digest) {
                 Ok(()) => {}
-                Err(failure) if failure.committed => {
+                Err(failure) if failure.may_have_committed => {
                     remove_index_v1(&mut state, digest, &metadata)?;
                     state.poisoned = true;
                     return Err(PrivateSettlementSidecarStoreErrorV1::Backend);
@@ -2759,7 +2711,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
                 .clone();
             match self.remove_provisional_record_v1(digest) {
                 Ok(()) => {}
-                Err(failure) if failure.committed => {
+                Err(failure) if failure.may_have_committed => {
                     remove_provisional_index_v1(&mut state, digest, &metadata)?;
                     state.poisoned = true;
                     return Err(PrivateSettlementSidecarStoreErrorV1::Backend);
@@ -2778,39 +2730,16 @@ impl PrivateSettlementFileSidecarStoreV1 {
         &self,
         digest: Hash,
     ) -> Result<DurablePrivateSettlementSidecarV1, PrivateSettlementSidecarStoreErrorV1> {
-        #[cfg(windows)]
-        {
-            self.native.read(&sidecar_file_name_v1(digest), |bytes| {
-                decode_certified_record_v1(bytes, digest)
-            })
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)?;
+        let bytes = read_sidecar_bytes_v1(&self.root, &sidecar_file_name_v1(digest))?;
+        let record = norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(&bytes)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        record.validate()?;
+        if record.payload_digest() != digest {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
         }
-        #[cfg(not(windows))]
-        {
-            let path = self.root.join(sidecar_file_name_v1(digest));
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-            let file = open_owner_file_v1(&path, &metadata)?;
-            let mut bytes = Vec::with_capacity(
-                usize::try_from(metadata.len())
-                    .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?,
-            );
-            file.take(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            if bytes.len() as u64 != metadata.len()
-                || bytes.is_empty()
-                || bytes.len() as u64 > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1
-            {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            let record = norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(&bytes)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-            record.validate()?;
-            if record.payload_digest() != digest {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            Ok(record)
-        }
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)?;
+        Ok(record)
     }
 
     fn read_provisional_record_v1(
@@ -2818,41 +2747,17 @@ impl PrivateSettlementFileSidecarStoreV1 {
         digest: Hash,
     ) -> Result<DurablePrivateSettlementProvisionalSidecarV1, PrivateSettlementSidecarStoreErrorV1>
     {
-        #[cfg(windows)]
-        {
-            self.native
-                .read(&provisional_file_name_v1(digest), |bytes| {
-                    decode_provisional_record_v1(bytes, digest)
-                })
-        }
-        #[cfg(not(windows))]
-        {
-            let path = self.root.join(provisional_file_name_v1(digest));
-            let metadata = fs::symlink_metadata(&path)
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)?;
+        let bytes = read_sidecar_bytes_v1(&self.root, &provisional_file_name_v1(digest))?;
+        let record =
+            norito::decode_canonical::<DurablePrivateSettlementProvisionalSidecarV1>(&bytes)
                 .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-            let file = open_owner_file_v1(&path, &metadata)?;
-            let mut bytes = Vec::with_capacity(
-                usize::try_from(metadata.len())
-                    .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?,
-            );
-            file.take(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            if bytes.len() as u64 != metadata.len()
-                || bytes.is_empty()
-                || bytes.len() as u64 > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1
-            {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            let record =
-                norito::decode_canonical::<DurablePrivateSettlementProvisionalSidecarV1>(&bytes)
-                    .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-            record.validate()?;
-            if record.payload_digest() != digest {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            Ok(record)
+        record.validate()?;
+        if record.payload_digest() != digest {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
         }
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)?;
+        Ok(record)
     }
 
     fn persist_record_v1(
@@ -2880,115 +2785,53 @@ impl PrivateSettlementFileSidecarStoreV1 {
         bytes: &[u8],
         replacing: bool,
     ) -> Result<(), DurableSidecarMutationFailureV1> {
-        #[cfg(windows)]
-        {
-            self.native.persist(file_name, bytes, replacing)
-        }
-        #[cfg(not(windows))]
-        {
-            let target = self.root.join(&file_name);
-            let temp = self
-                .temp_root
-                .join(format!("{file_name}{SIDECAR_TEMP_EXTENSION_V1}"));
-            validate_target_state_v1(&target, replacing)
-                .map_err(|_| DurableSidecarMutationFailureV1::before())?;
-            reject_existing_temp_v1(&temp)
-                .map_err(|_| DurableSidecarMutationFailureV1::before())?;
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                options.mode(0o600);
-            }
-            let mut file = options
-                .open(&temp)
-                .map_err(|_| DurableSidecarMutationFailureV1::before())?;
-            if file.write_all(bytes).is_err() || file.sync_all().is_err() {
-                drop(file);
-                let _ = fs::remove_file(&temp);
-                return Err(DurableSidecarMutationFailureV1::before());
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt as _;
-                let path_metadata = match fs::symlink_metadata(&temp) {
-                    Ok(metadata) => metadata,
-                    Err(_) => {
-                        drop(file);
-                        let _ = fs::remove_file(&temp);
-                        return Err(DurableSidecarMutationFailureV1::before());
-                    }
-                };
-                let opened = match file.metadata() {
-                    Ok(metadata) => metadata,
-                    Err(_) => {
-                        drop(file);
-                        let _ = fs::remove_file(&temp);
-                        return Err(DurableSidecarMutationFailureV1::before());
-                    }
-                };
-                if path_metadata.file_type().is_symlink()
-                    || !path_metadata.file_type().is_file()
-                    || path_metadata.nlink() != 1
-                    || path_metadata.uid() != rustix::process::geteuid().as_raw()
-                    || path_metadata.mode() & 0o777 != 0o600
-                    || path_metadata.dev() != opened.dev()
-                    || path_metadata.ino() != opened.ino()
-                    || path_metadata.len() != opened.len()
-                {
-                    drop(file);
-                    let _ = fs::remove_file(&temp);
-                    return Err(DurableSidecarMutationFailureV1::before());
-                }
-            }
-            drop(file);
-            if fs::rename(&temp, &target).is_err() {
-                let _ = fs::remove_file(&temp);
-                return Err(DurableSidecarMutationFailureV1::before());
-            }
-            if sync_directory_v1(&self.root).is_err() || sync_directory_v1(&self.temp_root).is_err()
-            {
-                return Err(DurableSidecarMutationFailureV1::after());
-            }
-            Ok(())
-        }
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)
+            .map_err(|_| DurableSidecarMutationFailureV1::before())?;
+        validate_sidecar_target_v1(&self.root, file_name, replacing)
+            .map_err(|_| DurableSidecarMutationFailureV1::before())?;
+        // The shared writer can fail after publication. Conservatively poison the
+        // in-memory index on every writer error; restart admits only actual durable bytes.
+        self.root
+            .write_atomic_from_staging(
+                &self.staging,
+                file_name,
+                bytes,
+                if replacing {
+                    PublishMode::Replace
+                } else {
+                    PublishMode::CreateNew
+                },
+            )
+            .map_err(|_| DurableSidecarMutationFailureV1::after())?;
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)
+            .map_err(|_| DurableSidecarMutationFailureV1::after())
     }
 
     fn remove_record_v1(&self, digest: Hash) -> Result<(), DurableSidecarMutationFailureV1> {
-        let target = self.root.join(sidecar_file_name_v1(digest));
-        self.remove_named_record_v1(&target)
+        self.remove_named_record_v1(&sidecar_file_name_v1(digest))
     }
 
     fn remove_provisional_record_v1(
         &self,
         digest: Hash,
     ) -> Result<(), DurableSidecarMutationFailureV1> {
-        let target = self.root.join(provisional_file_name_v1(digest));
-        self.remove_named_record_v1(&target)
+        self.remove_named_record_v1(&provisional_file_name_v1(digest))
     }
 
-    fn remove_named_record_v1(&self, target: &Path) -> Result<(), DurableSidecarMutationFailureV1> {
-        #[cfg(windows)]
+    fn remove_named_record_v1(&self, name: &str) -> Result<(), DurableSidecarMutationFailureV1> {
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)
+            .map_err(|_| DurableSidecarMutationFailureV1::before())?;
+        validate_sidecar_target_v1(&self.root, name, true)
+            .map_err(|_| DurableSidecarMutationFailureV1::before())?;
+        if !self
+            .root
+            .remove_private(name)
+            .map_err(|_| DurableSidecarMutationFailureV1::after())?
         {
-            {
-                if target.parent() != Some(self.root.as_path()) {
-                    return Err(DurableSidecarMutationFailureV1::before());
-                }
-                let name = target
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or_else(DurableSidecarMutationFailureV1::before)?;
-                self.native.remove(name)
-            }
+            return Err(DurableSidecarMutationFailureV1::after());
         }
-        #[cfg(not(windows))]
-        {
-            validate_target_state_v1(target, true)
-                .map_err(|_| DurableSidecarMutationFailureV1::before())?;
-            fs::remove_file(target).map_err(|_| DurableSidecarMutationFailureV1::before())?;
-            sync_directory_v1(&self.root).map_err(|_| DurableSidecarMutationFailureV1::after())
-        }
+        validate_sidecar_writer_v1(&self.staging, &self.writer_lock)
+            .map_err(|_| DurableSidecarMutationFailureV1::after())
     }
 }
 
@@ -3074,16 +2917,20 @@ fn durable_availability_evidence_for_wire_v1(
 
 #[derive(Clone, Copy, Debug)]
 struct DurableSidecarMutationFailureV1 {
-    committed: bool,
+    may_have_committed: bool,
 }
 
 impl DurableSidecarMutationFailureV1 {
     const fn before() -> Self {
-        Self { committed: false }
+        Self {
+            may_have_committed: false,
+        }
     }
 
     const fn after() -> Self {
-        Self { committed: true }
+        Self {
+            may_have_committed: true,
+        }
     }
 }
 
@@ -3378,307 +3225,293 @@ fn indexed_metadata_v1(
     }
 }
 
-#[cfg(unix)]
-fn ensure_owner_directory_v1(root: &Path) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
-    match fs::symlink_metadata(root) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink()
-                || !metadata.file_type().is_dir()
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.mode() & 0o777 != 0o700
-            {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let parent = root
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .ok_or(PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid)?;
-            let parent_metadata = fs::symlink_metadata(parent)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            if parent_metadata.file_type().is_symlink() || !parent_metadata.file_type().is_dir() {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            let mut builder = fs::DirBuilder::new();
-            builder.mode(0o700);
-            builder
-                .create(root)
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            sync_directory_v1(parent).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        }
-        Err(_) => return Err(PrivateSettlementSidecarStoreErrorV1::Backend),
-    }
-    let metadata =
-        fs::symlink_metadata(root).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o777 != 0o700
-    {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    Ok(())
-}
+// A promotion publishes one certified record before deleting its provisional
+// counterpart. A crash may therefore leave one extra record, plus the staging child.
+const SIDECAR_MAX_COMMITTED_NAMES_V1: usize = PRIVATE_SETTLEMENT_SIDECAR_HARD_MAX_RECORDS_V1 + 2;
+// The operation mutex and persistent exclusive lock serialize atomic writers;
+// open cleans a prior interrupted publication before admitting another operation.
+const SIDECAR_MAX_STAGED_FILES_V1: usize = 1;
 
-#[cfg(unix)]
 fn acquire_sidecar_store_writer_lock_v1(
-    root: &Path,
+    root: &PrivateDirectory,
 ) -> Result<File, PrivateSettlementSidecarStoreErrorV1> {
-    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-    let path = root.join(SIDECAR_WRITER_LOCK_FILE_V1);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink()
-                || !metadata.file_type().is_file()
-                || metadata.nlink() != 1
-                || metadata.len() != 0
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.mode() & 0o777 != 0o600
-            {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+    let file = root
+        .open_ownership_lock(SIDECAR_WRITER_LOCK_FILE_V1)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                PrivateSettlementSidecarStoreErrorV1::StoreAlreadyOpen
+            } else {
+                PrivateSettlementSidecarStoreErrorV1::Corrupt
             }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(PrivateSettlementSidecarStoreErrorV1::Backend),
-    }
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
-        .mode(0o600);
-    let file = options
-        .open(&path)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-    let path_metadata =
-        fs::symlink_metadata(&path).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    let opened = file
-        .metadata()
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    if path_metadata.file_type().is_symlink()
-        || !path_metadata.file_type().is_file()
-        || path_metadata.nlink() != 1
-        || path_metadata.len() != 0
-        || path_metadata.uid() != rustix::process::geteuid().as_raw()
-        || path_metadata.mode() & 0o777 != 0o600
-        || path_metadata.dev() != opened.dev()
-        || path_metadata.ino() != opened.ino()
-    {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::StoreAlreadyOpen)?;
-    sync_directory_v1(root).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        })?;
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => PrivateSettlementSidecarStoreErrorV1::StoreAlreadyOpen,
+        std::fs::TryLockError::Error(_) => PrivateSettlementSidecarStoreErrorV1::Backend,
+    })?;
+    validate_sidecar_writer_v1(root, &file)?;
     Ok(file)
 }
 
-#[cfg(unix)]
-fn open_owner_file_v1(
-    path: &Path,
-    path_metadata: &fs::Metadata,
-) -> Result<File, PrivateSettlementSidecarStoreErrorV1> {
-    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-    if path_metadata.file_type().is_symlink()
-        || !path_metadata.file_type().is_file()
-        || path_metadata.nlink() != 1
-        || path_metadata.uid() != rustix::process::geteuid().as_raw()
-        || path_metadata.mode() & 0o777 != 0o600
-    {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+fn validate_sidecar_writer_v1(
+    root: &PrivateDirectory,
+    original: &File,
+) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
+    let validate = || -> std::io::Result<bool> {
+        root.revalidate()?;
+        FileSnapshot::private_journal(original)?;
+        let named = root.open_read(SIDECAR_WRITER_LOCK_FILE_V1)?;
+        FileSnapshot::private_journal(&named)?;
+        let same = original.metadata()?.len() == 0
+            && named.metadata()?.len() == 0
+            && FileIdentity::of(original)? == FileIdentity::of(&named)?;
+        root.revalidate()?;
+        Ok(same)
+    };
+    if validate().map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)? {
+        Ok(())
+    } else {
+        Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
-        .open(path)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-    let opened = file
-        .metadata()
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    if !opened.file_type().is_file()
-        || opened.nlink() != 1
-        || opened.uid() != rustix::process::geteuid().as_raw()
-        || opened.mode() & 0o777 != 0o600
-        || path_metadata.dev() != opened.dev()
-        || path_metadata.ino() != opened.ino()
-        || path_metadata.len() != opened.len()
-    {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    Ok(file)
 }
 
-#[cfg(not(any(unix, windows)))]
-fn open_owner_file_v1(
-    _path: &Path,
-    _path_metadata: &fs::Metadata,
-) -> Result<File, PrivateSettlementSidecarStoreErrorV1> {
-    Err(PrivateSettlementSidecarStoreErrorV1::UnsupportedPlatform)
-}
-
-#[cfg(unix)]
-fn validate_target_state_v1(
-    path: &Path,
+fn validate_sidecar_target_v1(
+    root: &PrivateDirectory,
+    name: &str,
     must_exist: bool,
 ) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if must_exist => {
-            let _ = open_owner_file_v1(path, &metadata)?;
+    let opened = root.open_read(name);
+    root.revalidate()
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+    match opened {
+        Ok(file) if must_exist => {
+            FileSnapshot::private_journal(&file)
+                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
             Ok(())
         }
-        Ok(_) => Err(PrivateSettlementSidecarStoreErrorV1::Corrupt),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !must_exist => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
+        Err(error) if !must_exist && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(PrivateSettlementSidecarStoreErrorV1::Corrupt),
+    }
+}
+
+fn read_sidecar_bytes_v1(
+    root: &PrivateDirectory,
+    name: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, PrivateSettlementSidecarStoreErrorV1> {
+    let read = || -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
+        let original = root.open_retained_private(name)?;
+        let before = FileSnapshot::private_journal(original.file())?;
+        let length = original.file().metadata()?.len();
+        if length == 0 || length > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 {
+            return Err(std::io::Error::other("invalid sidecar extent"));
         }
-        Err(_) => Err(PrivateSettlementSidecarStoreErrorV1::Backend),
+        let length = usize::try_from(length)
+            .map_err(|_| std::io::Error::other("sidecar extent exceeds address space"))?;
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| std::io::Error::other("sidecar allocation refused"))?;
+        bytes.resize(length, 0);
+        iroha_fs::read_exact_at(original.file(), &mut bytes, 0)?;
+        let mut tail = [0_u8; 1];
+        if iroha_fs::read_at(original.file(), &mut tail, length as u64)? != 0
+            || FileSnapshot::private_journal(original.file())? != before
+        {
+            return Err(std::io::Error::other("sidecar changed during read"));
+        }
+        original.revalidate()?;
+        root.revalidate()?;
+        Ok(bytes)
+    };
+    read().map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)
+}
+
+fn open_sidecar_staging_v1(
+    root: &PrivateDirectory,
+) -> Result<PrivateDirectory, PrivateSettlementSidecarStoreErrorV1> {
+    let names = root
+        .entries(SIDECAR_MAX_COMMITTED_NAMES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+    if names.is_empty() {
+        return root
+            .create_child(SIDECAR_STAGING_DIRECTORY_V1)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn validate_target_state_v1(
-    _path: &Path,
-    _must_exist: bool,
-) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    Err(PrivateSettlementSidecarStoreErrorV1::UnsupportedPlatform)
-}
-
-#[cfg(not(windows))]
-fn reject_existing_temp_v1(path: &Path) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(PrivateSettlementSidecarStoreErrorV1::Corrupt),
-        Err(_) => Err(PrivateSettlementSidecarStoreErrorV1::Backend),
-    }
-}
-
-#[cfg(unix)]
-fn clean_stale_temp_files_v1(temp_root: &Path) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    use std::os::unix::fs::MetadataExt as _;
-    let mut removed = false;
-    for entry in
-        fs::read_dir(temp_root).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?
-    {
-        let entry = entry.map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        let file_type = entry
-            .file_type()
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-        let record_name = name
-            .strip_suffix(SIDECAR_TEMP_EXTENSION_V1)
+    // A populated first-release store requires its original staging namespace. Flat
+    // temporary files and the retired root lock are unknown, never migrated or discarded.
+    for name in &names {
+        let name = name
+            .to_str()
             .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-        if parse_sidecar_file_name_v1(record_name).is_err()
-            && parse_provisional_file_name_v1(record_name).is_err()
+        if name != SIDECAR_STAGING_DIRECTORY_V1
+            && parse_sidecar_file_name_v1(name).is_err()
+            && parse_provisional_file_name_v1(name).is_err()
         {
             return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
         }
-        let metadata = entry
-            .metadata()
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        if file_type.is_symlink()
-            || !file_type.is_file()
-            || metadata.nlink() != 1
-            || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o777 != 0o600
-            || metadata.len() > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1
-        {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-        }
-        fs::remove_file(entry.path()).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        removed = true;
     }
-    if removed {
-        sync_directory_v1(temp_root).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    }
-    Ok(())
+    root.open_child(SIDECAR_STAGING_DIRECTORY_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)
 }
 
-#[cfg(unix)]
+fn reconcile_sidecar_staging_v1(
+    root: &PrivateDirectory,
+    staging: &PrivateDirectory,
+) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
+    // Record custody is inspected one original at a time, as in ordinary loading. The
+    // distinct staging namespace contains only the already-held writer lock and at most
+    // one unpublished native temporary. Its recovery retains every original through
+    // deletion without accumulating a descriptor per committed sidecar record.
+    let names = root
+        .entries(SIDECAR_MAX_COMMITTED_NAMES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+    for name in &names {
+        if name == SIDECAR_STAGING_DIRECTORY_V1 {
+            continue;
+        }
+        let name = name
+            .to_str()
+            .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        if parse_sidecar_file_name_v1(name).is_err()
+            && parse_provisional_file_name_v1(name).is_err()
+        {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+        }
+        let original = root
+            .open_retained_private(name)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        let before = FileSnapshot::private_journal(original.file())
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        original
+            .revalidate()
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        if FileSnapshot::private_journal(original.file())
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?
+            != before
+        {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+        }
+    }
+    if root
+        .entries(SIDECAR_MAX_COMMITTED_NAMES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?
+        != names
+    {
+        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+    }
+    staging
+        .reconcile_atomic_staging(
+            &[SIDECAR_WRITER_LOCK_FILE_V1],
+            1,
+            SIDECAR_MAX_STAGED_FILES_V1,
+            PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize,
+        )
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+    root.revalidate()
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)
+}
+
 fn load_file_store_v1(
-    root: &Path,
+    root: &PrivateDirectory,
     config: PrivateSettlementSidecarStoreConfigV1,
 ) -> Result<SidecarStoreStateV1, PrivateSettlementSidecarStoreErrorV1> {
-    let mut state = empty_file_store_state_v1();
-    let mut entries = fs::read_dir(root)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-    entries.sort_by_key(|entry| {
-        let name = entry.file_name();
+    let mut state = SidecarStoreStateV1 {
+        index: BTreeMap::new(),
+        by_leg: BTreeMap::new(),
+        provisional_index: BTreeMap::new(),
+        provisional_by_leg: BTreeMap::new(),
+        pool_reservations: BTreeMap::new(),
+        nullifier_reservations: BTreeMap::new(),
+        output_reservations: BTreeMap::new(),
+        canonical_bytes: 0,
+        poisoned: false,
+    };
+    let mut entries = root
+        .entries(SIDECAR_MAX_COMMITTED_NAMES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+    entries.sort_by_key(|name| {
         let provisional = name
             .to_str()
             .is_some_and(|name| name.ends_with(PROVISIONAL_RECORD_EXTENSION_V1));
-        (!provisional, name)
+        (!provisional, name.clone())
     });
     let mut provisional_records = BTreeMap::new();
     let mut final_records = BTreeMap::new();
     for entry in entries {
         let name = entry
-            .file_name()
             .into_string()
             .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-        if name == SIDECAR_TEMP_DIRECTORY_V1 {
-            let file_type = entry
-                .file_type()
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-            if file_type.is_symlink() || !file_type.is_dir() {
-                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-            }
-            continue;
-        }
-        if name == SIDECAR_WRITER_LOCK_FILE_V1 {
+        if name == SIDECAR_STAGING_DIRECTORY_V1 {
             continue;
         }
         let provisional = name.ends_with(PROVISIONAL_RECORD_EXTENSION_V1);
-        let _digest = if provisional {
+        let digest = if provisional {
             parse_provisional_file_name_v1(&name)?
         } else {
             parse_sidecar_file_name_v1(&name)?
         };
-        let metadata = entry
-            .metadata()
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        if metadata.len() == 0 || metadata.len() > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-        }
-        let _next_total = state
+        let bytes = read_sidecar_bytes_v1(root, &name)?;
+        let canonical_bytes = bytes.len() as u64;
+        let next_total = state
             .canonical_bytes
-            .checked_add(metadata.len())
+            .checked_add(canonical_bytes)
             .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
-        let file = open_owner_file_v1(&entry.path(), &metadata)?;
-        let mut bytes = Vec::with_capacity(
-            usize::try_from(metadata.len())
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?,
-        );
-        file.take(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        if bytes.len() as u64 != metadata.len() {
+        if provisional {
+            let record =
+                norito::decode_canonical::<DurablePrivateSettlementProvisionalSidecarV1>(&bytes)
+                    .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+            record.validate()?;
+            if record.payload_digest() != digest {
+                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+            }
+            insert_provisional_index_v1(&mut state, &record, canonical_bytes)?;
+            provisional_records.insert(digest, record);
+        } else {
+            let record = norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(&bytes)
+                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+            record.validate()?;
+            if record.payload_digest() != digest {
+                return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+            }
+            insert_index_v1(&mut state, &record, canonical_bytes)?;
+            final_records.insert(digest, record);
+        }
+        state.canonical_bytes = next_total;
+    }
+    for (digest, provisional) in provisional_records {
+        let leg_key = provisional.leg_key();
+        let Some(final_digest) = state.by_leg.get(&leg_key).copied() else {
+            continue;
+        };
+        if final_digest != digest {
             return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
         }
-        index_canonical_file_v1(
-            &mut state,
-            &mut provisional_records,
-            &mut final_records,
-            &name,
-            &bytes,
-        )?;
+        let final_record = final_records
+            .get(&digest)
+            .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        if !final_matches_provisional_v1(&final_record.sidecar, &provisional) {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+        }
+        let metadata = state
+            .provisional_index
+            .get(&digest)
+            .cloned()
+            .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        if !root
+            .remove_private(provisional_file_name_v1(digest))
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?
+        {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
+        }
+        remove_provisional_index_v1(&mut state, digest, &metadata)?;
     }
-    let reconciled =
-        reconcile_loaded_records_v1(&mut state, provisional_records, final_records, |name| {
-            fs::remove_file(root.join(name))
-                .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)
-        })?;
-    if reconciled {
-        sync_directory_v1(root).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+    let record_count = state
+        .index
+        .len()
+        .checked_add(state.provisional_index.len())
+        .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
+    if record_count > config.max_records || state.canonical_bytes > config.max_total_bytes {
+        return Err(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded);
     }
-    check_file_store_capacity_v1(&state, config)?;
     Ok(state)
 }
 
@@ -3753,11 +3586,6 @@ fn hex_nibble_v1(byte: u8) -> Result<u8, PrivateSettlementSidecarStoreErrorV1> {
     }
 }
 
-#[cfg(not(windows))]
-fn sync_directory_v1(path: &Path) -> std::io::Result<()> {
-    File::open(path)?.sync_all()
-}
-
 fn open_sidecar_store_roots_v1() -> &'static Mutex<BTreeSet<PathBuf>> {
     static ROOTS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
     ROOTS.get_or_init(|| Mutex::new(BTreeSet::new()))
@@ -3775,134 +3603,11 @@ fn acquire_sidecar_store_lease_v1(
     Ok(SidecarStoreDirectoryLeaseV1 { canonical_root })
 }
 
-fn decode_certified_record_v1(
-    bytes: &[u8],
-    digest: Hash,
-) -> Result<DurablePrivateSettlementSidecarV1, PrivateSettlementSidecarStoreErrorV1> {
-    let record = norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(bytes)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-    record.validate()?;
-    if record.payload_digest() != digest {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    Ok(record)
-}
-
-fn decode_provisional_record_v1(
-    bytes: &[u8],
-    digest: Hash,
-) -> Result<DurablePrivateSettlementProvisionalSidecarV1, PrivateSettlementSidecarStoreErrorV1> {
-    let record = norito::decode_canonical::<DurablePrivateSettlementProvisionalSidecarV1>(bytes)
-        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-    record.validate()?;
-    if record.payload_digest() != digest {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    Ok(record)
-}
-
-fn empty_file_store_state_v1() -> SidecarStoreStateV1 {
-    SidecarStoreStateV1 {
-        index: BTreeMap::new(),
-        by_leg: BTreeMap::new(),
-        provisional_index: BTreeMap::new(),
-        provisional_by_leg: BTreeMap::new(),
-        pool_reservations: BTreeMap::new(),
-        nullifier_reservations: BTreeMap::new(),
-        output_reservations: BTreeMap::new(),
-        canonical_bytes: 0,
-        poisoned: false,
-    }
-}
-
-fn index_canonical_file_v1(
-    state: &mut SidecarStoreStateV1,
-    provisional_records: &mut BTreeMap<Hash, DurablePrivateSettlementProvisionalSidecarV1>,
-    final_records: &mut BTreeMap<Hash, DurablePrivateSettlementSidecarV1>,
-    name: &str,
-    bytes: &[u8],
-) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    if bytes.is_empty() || bytes.len() as u64 > PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 {
-        return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-    }
-    let provisional = name.ends_with(PROVISIONAL_RECORD_EXTENSION_V1);
-    let digest = if provisional {
-        parse_provisional_file_name_v1(name)?
-    } else {
-        parse_sidecar_file_name_v1(name)?
-    };
-    let next_total = state
-        .canonical_bytes
-        .checked_add(bytes.len() as u64)
-        .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
-    if provisional {
-        let record = decode_provisional_record_v1(bytes, digest)?;
-        insert_provisional_index_v1(state, &record, bytes.len() as u64)?;
-        provisional_records.insert(digest, record);
-    } else {
-        let record = decode_certified_record_v1(bytes, digest)?;
-        insert_index_v1(state, &record, bytes.len() as u64)?;
-        final_records.insert(digest, record);
-    }
-    state.canonical_bytes = next_total;
-    Ok(())
-}
-
-fn reconcile_loaded_records_v1(
-    state: &mut SidecarStoreStateV1,
-    provisional_records: BTreeMap<Hash, DurablePrivateSettlementProvisionalSidecarV1>,
-    final_records: BTreeMap<Hash, DurablePrivateSettlementSidecarV1>,
-    mut retire: impl FnMut(&str) -> Result<(), PrivateSettlementSidecarStoreErrorV1>,
-) -> Result<bool, PrivateSettlementSidecarStoreErrorV1> {
-    let mut reconciled = false;
-    for (digest, provisional) in provisional_records {
-        let leg_key = provisional.leg_key();
-        let Some(final_digest) = state.by_leg.get(&leg_key).copied() else {
-            continue;
-        };
-        if final_digest != digest {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-        }
-        let final_record = final_records
-            .get(&digest)
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-        if !final_matches_provisional_v1(&final_record.sidecar, &provisional) {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-        }
-        let metadata = state
-            .provisional_index
-            .get(&digest)
-            .cloned()
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
-        retire(&provisional_file_name_v1(digest))?;
-        remove_provisional_index_v1(state, digest, &metadata)?;
-        reconciled = true;
-    }
-    Ok(reconciled)
-}
-
-fn check_file_store_capacity_v1(
-    state: &SidecarStoreStateV1,
-    config: PrivateSettlementSidecarStoreConfigV1,
-) -> Result<(), PrivateSettlementSidecarStoreErrorV1> {
-    let record_count = state
-        .index
-        .len()
-        .checked_add(state.provisional_index.len())
-        .ok_or(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded)?;
-    if record_count > config.max_records || state.canonical_bytes > config.max_total_bytes {
-        return Err(PrivateSettlementSidecarStoreErrorV1::CapacityExceeded);
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-#[path = "sidecar_store/windows.rs"]
-mod windows;
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::{fs, fs::OpenOptions, io::Write as _};
+    include!("sidecar_custody_tests.rs");
     use crate::privacy_engines::atomic_private_settlement::test_fixtures::*;
     use crate::private_settlement::protocol::{
         private_settlement_prepare_barrier_v1, private_settlement_prepared_bundle_digest_v1,
@@ -3931,7 +3636,7 @@ pub(crate) mod tests {
         privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
     };
 
-    pub(crate) struct SidecarFixtureV1 {
+    pub struct SidecarFixtureV1 {
         pub(crate) sidecar: PrivateSettlementRestrictedSidecarV1,
         pub(crate) validator: PeerId,
         pub(crate) auditor: AccountId,
@@ -3991,11 +3696,11 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn sidecar_fixture() -> SidecarFixtureV1 {
+    pub fn sidecar_fixture() -> SidecarFixtureV1 {
         sidecar_fixture_with_threshold(1)
     }
 
-    pub(crate) fn provisional_material_fixture(
+    pub fn provisional_material_fixture(
         fixture: &SidecarFixtureV1,
     ) -> PrivateSettlementProvisionalLegMaterialV1 {
         let mut manifest = fixture.sidecar.manifest.clone();
@@ -4018,7 +3723,7 @@ pub(crate) mod tests {
         material
     }
 
-    pub(crate) fn sidecar_fixture_with_threshold(min_approvals: u8) -> SidecarFixtureV1 {
+    pub fn sidecar_fixture_with_threshold(min_approvals: u8) -> SidecarFixtureV1 {
         sidecar_fixture_with_threshold_and_ordinal(min_approvals, 0)
     }
 
@@ -4157,7 +3862,7 @@ pub(crate) mod tests {
             .expect("successor projection")
     }
 
-    pub(crate) fn audit_approval(
+    pub fn audit_approval(
         store: &PrivateSettlementFileSidecarStoreV1,
         fixture: &SidecarFixtureV1,
         digest: Hash,
@@ -5002,7 +4707,7 @@ pub(crate) mod tests {
         .expect("prepared bundle digest");
         let barrier = private_settlement_prepare_barrier_v1(
             fixture.sidecar.manifest.clone(),
-            vec![fixture.sidecar.authority.clone(), second_authority.clone()],
+            &[fixture.sidecar.authority.clone(), second_authority.clone()],
             vec![fixture.sidecar.payload.delta.clone(), second_delta.clone()],
             vec![local_prepare.clone(), second_prepare.clone()],
         )
@@ -5971,11 +5676,8 @@ pub(crate) mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn restart_cleans_known_temp_and_rejects_tampered_canonical_record() {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
         let fixture = sidecar_fixture();
         let digest = fixture.sidecar.payload_digest();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -5988,20 +5690,16 @@ pub(crate) mod tests {
         store.store(fixture.sidecar).expect("store");
         drop(store);
 
-        let stale = root.join(SIDECAR_TEMP_DIRECTORY_V1).join(format!(
-            "{}{}",
-            sidecar_file_name_v1(digest),
-            SIDECAR_TEMP_EXTENSION_V1
-        ));
-        let mut stale_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&stale)
-            .expect("stale temp");
+        let owner = PrivateDirectory::open(&root)
+            .expect("retained owner")
+            .open_child(SIDECAR_STAGING_DIRECTORY_V1)
+            .expect("original staging");
+        let stale = owner.path().join(".iroha-fs-1-0.tmp");
+        let mut stale_file = owner.create_lock(".iroha-fs-1-0.tmp").expect("stale temp");
         stale_file.write_all(b"interrupted-write").expect("write");
         stale_file.sync_all().expect("sync");
         drop(stale_file);
+        drop(owner);
         let reopened = PrivateSettlementFileSidecarStoreV1::open(
             &root,
             PrivateSettlementSidecarStoreConfigV1::default(),

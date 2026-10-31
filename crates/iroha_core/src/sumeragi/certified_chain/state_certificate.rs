@@ -10,23 +10,21 @@ use iroha_data_model::query::error::QueryExecutionFail;
 
 mod execution_walk;
 pub(super) mod parent_service_attempt;
-pub(crate) use parent_service_attempt::ParentServicePreparation;
+pub use parent_service_attempt::ParentServicePreparation;
 mod parent_service_copy;
 mod parent_service_qc;
 #[cfg(test)]
-pub(crate) use parent_service_copy::{
+pub use parent_service_copy::{
     ParentServiceCopyAdmissionProbe, observe_parent_service_copy_admission,
 };
 use parent_service_qc::ParentServiceQcPreparation;
 mod parent_service_signers;
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-pub(crate) use parent_service_qc::admit_parent_service_fixture;
+pub use parent_service_qc::admit_parent_service_fixture;
 #[cfg(test)]
-pub(crate) use parent_service_qc::{
-    ParentServiceQcAdmissionProbe, observe_parent_service_qc_admission,
-};
+pub use parent_service_qc::{ParentServiceQcAdmissionProbe, observe_parent_service_qc_admission};
 #[cfg(test)]
-pub(crate) use parent_service_signers::{
+pub use parent_service_signers::{
     ParentServiceSignersAdmissionProbe, observe_parent_service_signers_admission,
 };
 use parent_service_signers::{ParentServiceSignersPreparation, RetainedSigners};
@@ -247,6 +245,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         }
     }
 
+    #[cfg(test)]
     fn executed_successor_authority<'a>(
         &self,
         parent: &'a CommittedBlock,
@@ -379,6 +378,9 @@ mod allocation_tests {
     fn admitted_parent_pair_retains_exact_original_slots_and_refunds_on_unwind() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let view = chain.state().view();
         let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
@@ -447,6 +449,9 @@ mod allocation_tests {
     fn admitted_receipt_refusal_preserves_original_pool_source_and_exact_retry() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let budget = chain.state().ivm_execution_budget();
         let block = chain
@@ -519,6 +524,9 @@ mod allocation_tests {
     fn admitted_result_slot_refusal_releases_receipt_and_retries_original_frame() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let budget = chain.state().ivm_execution_budget();
         let block = chain
@@ -753,6 +761,9 @@ mod allocation_tests {
 
     #[test]
     fn parent_pair_completion_releases_receipts_after_transferring_exact_source_owner() {
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let view = chain.state().view();
         let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
@@ -870,7 +881,7 @@ mod allocation_tests {
 
 /// A local original-source refusal or an invalid consensus-carried parent proof.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ParentServiceError {
+pub enum ParentServiceError {
     #[error("invalid parent service proof: {0}")]
     Invalid(String),
     #[error("parent service original source is unavailable: {0}")]
@@ -883,7 +894,7 @@ pub(crate) enum ParentServiceError {
 
 /// An authenticated, proposal-bound parent participation decision.
 /// Only the original State-tip reader constructs it; it has no wire constructor.
-pub(crate) struct VerifiedParentService {
+pub struct VerifiedParentService {
     proposal: HashOf<IrohaHeader>,
     height: u64,
     timestamp_ms: u64,
@@ -1092,6 +1103,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     /// Authenticate the common parent participation input against the captured
     /// original execution tip. The offered QC supplies no authority or source.
+    #[cfg(test)]
     pub(crate) fn authenticate_parent_service(
         &self,
         proposal: &SignedBlock,
@@ -1135,6 +1147,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     }
 
     /// Private relation after an original-tip walk; tests retain genuine executed receipts.
+    #[cfg(test)]
     pub(super) fn verify_parent_service_at(
         &self,
         proposal: &SignedBlock,
@@ -1350,12 +1363,14 @@ impl ParentServicePreparation {
 }
 
 #[cfg(test)]
+type ParentServiceAdmissionCallback = Box<dyn FnOnce(&CommittedBlock, &CommittedBlock)>;
+#[cfg(test)]
 thread_local! {
-    static PARENT_SERVICE_ADMISSION_PROBE: std::cell::RefCell<Option<Box<dyn FnOnce(&CommittedBlock, &CommittedBlock)>>> = const { std::cell::RefCell::new(None) };
+    static PARENT_SERVICE_ADMISSION_PROBE: std::cell::RefCell<Option<ParentServiceAdmissionCallback>> = const { std::cell::RefCell::new(None) };
 }
 /// Only observe the actual production admission boundary; no fake refusal is injected.
 #[cfg(test)]
-pub(crate) struct ParentServiceAdmissionProbe;
+pub struct ParentServiceAdmissionProbe;
 #[cfg(test)]
 impl Drop for ParentServiceAdmissionProbe {
     fn drop(&mut self) {
@@ -1365,7 +1380,7 @@ impl Drop for ParentServiceAdmissionProbe {
     }
 }
 #[cfg(test)]
-pub(crate) fn observe_parent_service_admission(
+pub fn observe_parent_service_admission(
     callback: impl FnOnce(&CommittedBlock, &CommittedBlock) + 'static,
 ) -> ParentServiceAdmissionProbe {
     PARENT_SERVICE_ADMISSION_PROBE.with(|slot| {

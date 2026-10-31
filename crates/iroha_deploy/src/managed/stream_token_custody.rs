@@ -562,7 +562,7 @@ impl ManagedStreamTokenCustody {
             |attempt| {
                 original
                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                    .retire(&account, &attempt.wallet_path())
+                    .retire(&account, attempt.directory())
             },
             |attempt, observation, deadline| {
                 original
@@ -1256,13 +1256,13 @@ impl ManagedStreamTokenCustody {
                 .request(attempt.terms(), attempt.observation()?, deadline)?
                 .inspect_in_parent(&account, attempt.directory())
         })?;
-        let path = directory.path().join("transaction");
+        let name = std::ffi::OsStr::new("transaction");
         match original.request(deadline)? {
             journal::Request::Configure(request) => {
-                account.verify_stream_token_custody_configure_journal(&path, &request)
+                account.verify_stream_token_custody_configure_journal(directory, name, &request)
             }
             journal::Request::Enroll(request) => {
-                account.verify_stream_token_custody_enroll_journal(&path, &request)
+                account.verify_stream_token_custody_enroll_journal(directory, name, &request)
             }
         }
         .map_err(|error| {

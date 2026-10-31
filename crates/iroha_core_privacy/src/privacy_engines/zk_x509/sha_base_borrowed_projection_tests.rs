@@ -245,6 +245,7 @@ fn sha_borrowed_projection_bits_only_preserves_late_witness_digest_refusal() {
     // Match the existing genuine late-witness negative: bypass only the outer
     // fixture constructor so per-call revalidation fails after earlier writes.
     let source = ZkX509ShaBatchSegmentBaseSourceV1 {
+        retained_base: None,
         schedule: &schedule,
         witnesses: &witnesses,
         replay: ZkX509ShaSegmentReplayV1::new(0).unwrap(),

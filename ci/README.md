@@ -70,11 +70,12 @@ workflow continues to run the complete workspace matrix on `main`, tags, and
 manual release gates. Apply the `ci/full` label to a pull request to force all
 seven routed Rust lanes before merge.
 
-Use the same routing locally:
+Use the same routing locally. Local runs and the contributor guards compare against the
+branch named in `ci/default_base_ref`, unless `--base` or `AGENTS_BASE_REF` says otherwise:
 
 ```sh
 scripts/dev_workflow.sh
-scripts/dev_workflow.sh --base origin/main
+scripts/dev_workflow.sh --base origin/some-branch
 scripts/dev_workflow.sh --full
 python3 scripts/rust_ci.py validate
 ```
@@ -108,7 +109,7 @@ types, source path, sorted features, and the complete Cargo profile, and fails
 closed when any identity field is missing. A baseline is usable only when its
 scope, manifest, packages, target selection, workspace/locked mode, budget
 policy, and exact Rust release match the current command. The PR affected lane
-therefore runs the guard with Rust 1.93.1.
+therefore runs the guard with Rust 1.99.1.
 
 ## Build-efficiency lineage provenance
 
@@ -336,9 +337,8 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 ## Cargo `build-dir` decision
 
 Rust 1.91 stabilised the `[build] build-dir` option, which allows relocating
-`target/`. The workspace baseline is now Rust 1.92, but we audited the CI
-wrappers and decided **not** to override this
-setting:
+`target/`. The workspace compiler is pinned in `rust-toolchain.toml`. CI
+wrappers retain the default build directory for these reasons:
 
 - `ci/check_sorafs_fixtures.sh` exports `target/go-cache`, `target/go-mod-cache`,
   and other Go workdirs when it runs the cross-language chunker suite

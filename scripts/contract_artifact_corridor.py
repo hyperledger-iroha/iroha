@@ -3,7 +3,7 @@
 
 `specs/sccp.md` §5.2.5, §5.5: `contracts/evm/sccp/SccpTairaXor.sol` and the one
 library it imports, `contracts/evm/sccp/lib/BLS12_381.sol`, are compiled by the
-Ethereum `solc` 0.8.31+commit.fd3a2265 with the legacy pipeline, `evmVersion:
+Ethereum `solc` 0.8.38+commit.1835d247 with the legacy pipeline, `evmVersion:
 cancun`, optimizer runs 200 and no metadata hash or CBOR trailer. The same
 creation code serves Ethereum and BSC, so there is one target, `evm`. The
 compiler ships native macOS universal (arm64 + x86-64), Linux x86-64 and Linux
@@ -62,7 +62,7 @@ ARTIFACT_LOCK_SCHEMA = "iroha.sccp.contract-artifact-lock.v1"
 COMPILER_LOCK_SCHEMA = "iroha.sccp.contract-compiler-lock.v1"
 TARGETS = ("evm",)
 PLATFORMS = ("linux-amd64", "linux-arm64", "macos-universal")
-SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.8.31;"
+SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.8.38;"
 SCCP_SOURCE = "contracts/evm/sccp/SccpTairaXor.sol"
 SCCP_CONTRACT = SCCP_SOURCE + ":SccpTairaXor"
 # §5.2.4 hash-to-G2 library: the only file `SccpTairaXor.sol` may import. Its
@@ -105,30 +105,30 @@ EXPECTED_SETTINGS = {
     "outputSelection": OUTPUT_SELECTION,
     "viaIR": False,
 }
-# Reviewed SHA-256 pins; the values match binaries.soliditylang.org/<platform>/list.json.
+# Reviewed SHA-256 pins; verified against the official v0.8.38 release assets.
 EXPECTED_COMPILERS = {
     "evm": {
-        "identity": "solc-0.8.31+commit.fd3a2265",
+        "identity": "solc-0.8.38+commit.1835d247",
         "banner": "solc, the solidity compiler commandline interface",
-        "reported_version": "0.8.31+commit.fd3a2265",
+        "reported_version": "0.8.38+commit.1835d247",
         "artifacts": {
             "linux-amd64": {
-                "url": "https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.31+commit.fd3a2265",
-                "sha256": "aac9cd0116e9ae0cd3d8f64a8641381845dc9f12e2a52653de36fb619323e557",
+                "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-static-linux",
+                "sha256": "65c3180a336eabb6bdc4bbd49cc405aeb233976964ae6c11fba2a6c8be8f3243",
                 "format": "elf-x86-64",
-                "reported_version": "0.8.31+commit.fd3a2265.Linux.g++",
+                "reported_version": "0.8.38+commit.1835d247.Linux.g++",
             },
             "linux-arm64": {
-                "url": "https://binaries.soliditylang.org/linux-arm64/solc-linux-arm64-v0.8.31+commit.fd3a2265",
-                "sha256": "acf358d82da7db033debb2f4db11e1c9cfcb02b0cb5b5ddbb9635ad817b41bdd",
+                "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-static-linux-arm",
+                "sha256": "7a986c8f85945fec780d2cbb352cdd85959b7222dd33830a7563c2af4bc1fca0",
                 "format": "elf-aarch64",
-                "reported_version": "0.8.31+commit.fd3a2265.Linux.g++",
+                "reported_version": "0.8.38+commit.1835d247.Linux.g++",
             },
             "macos-universal": {
-                "url": "https://binaries.soliditylang.org/macosx-amd64/solc-macosx-amd64-v0.8.31+commit.fd3a2265",
-                "sha256": "f5a243d6b2dd8fba307e36c5fefa2d8eb3ae74ba81036d1c17c971b5d346ade9",
+                "url": "https://github.com/argotorg/solidity/releases/download/v0.8.38/solc-macos",
+                "sha256": "b18ac1d1f48394c71ca9aefbf0fb94fef24c87b358f48578de5941e234e0a2a9",
                 "format": "macho-universal-arm64-x86-64",
-                "reported_version": "0.8.31+commit.fd3a2265.Darwin.appleclang",
+                "reported_version": "0.8.38+commit.1835d247.Darwin.appleclang",
             },
         },
     },
@@ -391,7 +391,7 @@ def _compiler_spec(target: str, value: object) -> CompilerSpec:
     compiler = _require_object(value, f"{target} compiler")
     _require_exact_keys(compiler, ("identity", "banner", "reported_version", "artifacts"), f"{target} compiler")
     if compiler != EXPECTED_COMPILERS[target]:
-        raise CorridorError(f"{target} compiler must be the reviewed native Solidity 0.8.31 release")
+        raise CorridorError(f"{target} compiler must be the reviewed native Solidity 0.8.38 release")
     artifacts = _require_object(compiler["artifacts"], f"{target} compiler artifacts")
     if set(artifacts) != set(PLATFORMS):
         raise CorridorError(f"{target} compiler must pin every native platform")
@@ -774,7 +774,7 @@ def _mask_solidity_comments_and_strings(source: str, relative: str) -> str:
 
 
 def validate_solidity_source_policy(source: str, relative: str) -> None:
-    """Require the exact 0.8.31 pragma and reject the §5.5 legacy-pipeline bug patterns.
+    """Require the exact 0.8.38 pragma and retain the narrow §5.5 source policy.
 
     `SccpTairaXor.sol` contains exactly one import, the §5.2.4 library; every
     other source is self-contained.
@@ -793,7 +793,7 @@ def validate_solidity_source_policy(source: str, relative: str) -> None:
             f"contract source must use exactly {SOLIDITY_VERSION_PRAGMA!r} and no other pragma: {relative}"
         )
     if re.search(r"\bdelete\b", masked):
-        raise CorridorError(f"contract source must not use `delete` (0.8.31 legacy-pipeline policy): {relative}")
+        raise CorridorError(f"contract source must not use `delete` (§5.5 source policy): {relative}")
     if re.search(r"\blayout\s+at\b", masked):
         raise CorridorError(f"contract source must not declare a custom storage layout: {relative}")
     import_tokens = list(re.finditer(r"\bimport\b", masked))

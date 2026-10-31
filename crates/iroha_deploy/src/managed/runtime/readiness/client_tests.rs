@@ -73,7 +73,15 @@ fn readiness_peer_contexts_share_original_transport_without_rebinding_policy() {
         assert_eq!(actual.account, expected.account);
         assert_eq!(actual.network_id, expected.network_id);
         assert_eq!(actual.chain, expected.chain);
-        assert_eq!(actual.headers, expected.headers);
+        assert_eq!(
+            actual.headers,
+            expected
+                .headers
+                .iter()
+                .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                .collect(),
+            "canonical header names must preserve every configured header value"
+        );
         assert_eq!(actual.key_pair.public_key(), expected.key_pair.public_key());
         client.status().get().unwrap();
     }
@@ -138,7 +146,15 @@ fn readiness_generated_context_preserves_direct_loopback_policy() {
         assert_eq!(actual.account, expected.account);
         assert_eq!(actual.network_id, expected.network_id);
         assert_eq!(actual.chain, expected.chain);
-        assert_eq!(actual.headers, expected.headers);
+        assert_eq!(
+            actual.headers,
+            expected
+                .headers
+                .iter()
+                .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                .collect(),
+            "canonical header names must preserve every configured header value"
+        );
         assert_eq!(actual.key_pair.public_key(), expected.key_pair.public_key());
         assert_eq!(
             client.client().http_transport_policy(),

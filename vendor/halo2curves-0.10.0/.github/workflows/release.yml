@@ -1,0 +1,59 @@
+name: Open a release PR
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release
+        required: true
+        type: string
+env:
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  make-release-pr:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [halo2curves]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+            profile: minimal
+
+      - name: Get current version
+        id: get-version
+        run: |
+          echo "CURRENT_VERSION=$(./script/get_current_version.sh ${{ matrix.package }})" >> $GITHUB_ENV
+
+      - name: Check version
+        id: version-check
+        run: |
+          IFS='.' read -ra INPUT_VERSION <<< "${{ github.event.inputs.version }}"
+          IFS='.' read -ra CURRENT_VERSION <<< "${{ env.CURRENT_VERSION }}"
+
+          for i in "${!INPUT_VERSION[@]}"; do
+            if (( INPUT_VERSION[i] > CURRENT_VERSION[i] )); then
+              echo "Input version is larger than current version. Proceeding..."
+              exit 0
+            elif (( INPUT_VERSION[i] < CURRENT_VERSION[i] )); then
+              echo "Input version is not larger than current version. Failing..."
+              exit 1
+            fi
+          done
+          
+          echo "Input version is equal to current version. Failing..."
+          exit 1
+
+      - name: Install cargo-release
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-release
+          
+      - uses: cargo-bins/release-pr@v2
+        with:
+            pr-template-file: .github/release-pr-template.ejs
+            github-token: ${{ secrets.GITHUB_TOKEN }}
+            version: ${{ inputs.version }}
+            crate-release-all: true

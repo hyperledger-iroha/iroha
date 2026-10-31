@@ -1210,11 +1210,13 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             name,
             spec,
             mintable,
+            owning_domain,
         } => {
             f(*asset);
             f(*name);
             f(*spec);
             f(*mintable);
+            f(*owning_domain);
         }
         TransferAsset {
             from,
@@ -1503,6 +1505,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         Instr::ZkVerify { payload, .. }
         | Instr::VerifyProof { payload, .. }
+        | Instr::PresentX509 { payload, .. }
         | Instr::VendorExecuteInstruction { payload, .. }
         | Instr::VendorExecuteQuery { payload, .. }
         | Instr::QueryExecuteNorito { payload, .. }
@@ -1790,7 +1793,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::GetMerklePath { dest, .. }
         | Instr::GetMerkleCompact { dest, .. }
         | Instr::GetRegisterMerkleCompact { dest, .. } => Some(*dest),
-        Instr::VerifyProof { dest, .. } => Some(*dest),
+        Instr::VerifyProof { dest, .. } | Instr::PresentX509 { dest, .. } => Some(*dest),
         Instr::Sm4GcmSeal { dest, .. } => Some(*dest),
         Instr::Sm4GcmOpen { dest, .. } => Some(*dest),
         Instr::Sm4CcmSeal { dest, .. } => Some(*dest),

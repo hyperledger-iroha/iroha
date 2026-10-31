@@ -45,7 +45,7 @@ hex = { workspace = true, features = ["alloc"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 base64 = { workspace = true }
 quinn = "0.11.12"
-rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+rustls = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync"] }
 tracing = { workspace = true }
@@ -57,15 +57,15 @@ rand = { workspace = true, features = ["std_rng"] }
 blake3 = { workspace = true, features = ["zeroize"] }
 time = { workspace = true }
 iroha_primitives = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 tokio-tungstenite = { workspace = true }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = [] }
 soranet_pq = { workspace = true }
 tempfile = "3.23.0"
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-rcgen = "=0.14.5"
+rcgen = "=0.14.10"
 
 [[test]]
 name = "soranet_relay_integration"

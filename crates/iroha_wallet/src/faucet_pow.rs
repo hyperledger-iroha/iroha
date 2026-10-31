@@ -121,7 +121,7 @@ pub(crate) fn solve_faucet_puzzle(
         challenge_salt_hex,
     )?;
     validate_work_budget(log_n, r, p, difficulty_bits)?;
-    let params = ScryptParams::new(log_n, r, p, 32)
+    let params = ScryptParams::new(log_n, r, p)
         .map_err(|err| eyre!("invalid faucet scrypt parameters: {err}"))?;
     let difficulty_bits =
         u32::try_from(difficulty_bits).map_err(|_| eyre!("faucet difficulty is too large"))?;
@@ -323,9 +323,34 @@ mod resource_tests {
     use super::*;
 
     #[test]
+    fn faucet_scrypt_preserves_independent_nonce_and_digest_vector() {
+        // Python hashlib/OpenSSL scrypt: password=36_u64.to_be_bytes(),
+        // salt=[3;32], N=16, r=1, p=1, dklen=32. Nonces 0..36 fail four bits.
+        let challenge = [3; 32];
+        let params = ScryptParams::new(4, 1, 1).unwrap();
+        let nonce = solve_faucet_pow(
+            &challenge,
+            &params,
+            4,
+            Instant::now() + Duration::from_secs(30),
+        )
+        .unwrap();
+        assert_eq!(nonce, 36_u64.to_be_bytes());
+        let mut digest = [0; 32];
+        derive_scrypt(&nonce, &challenge, &params, &mut digest).unwrap();
+        assert_eq!(
+            digest,
+            [
+                15, 205, 106, 79, 6, 228, 182, 224, 112, 235, 6, 147, 174, 218, 231, 252, 71, 251,
+                14, 130, 26, 226, 144, 244, 16, 49, 222, 215, 117, 34, 20, 156,
+            ]
+        );
+    }
+
+    #[test]
     fn faucet_preparation_deadline_stops_cpu_work_before_dispatch() {
         let expired = Instant::now();
-        let params = ScryptParams::new(1, 1, 1, 32).unwrap();
+        let params = ScryptParams::new(1, 1, 1).unwrap();
         let error = solve_faucet_pow(&[0; 32], &params, 1, expired).unwrap_err();
         assert_eq!(
             error.downcast_ref::<std::io::Error>().unwrap().kind(),

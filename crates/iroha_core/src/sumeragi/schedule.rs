@@ -34,9 +34,12 @@ pub use iroha_data_model::sumeragi_finality::{
     consensus_key, genesis_registrations, global_committee,
 };
 
+pub(crate) mod continuation;
 mod epoch_graph;
 mod execution;
-pub(crate) use execution::authenticate_successor_context;
+pub(crate) use execution::{
+    authenticate_successor_context, compare_successor_context, require_successor_cut,
+};
 mod retained;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) mod test_support;
@@ -179,10 +182,10 @@ pub fn validate_parameter_change(
 
 /// The validators signed into genesis: every `RegisterPeerWithPop` of the genesis body with its
 /// exact proof of possession, which is verified here (`specs/sumeragi.md` §10.3: a key enters
-/// the schedule only with a valid PoP). Lane-committee registrations are not validators.
+/// the schedule only with a valid `PoP`). Lane-committee registrations are not validators.
 ///
 /// # Errors
-/// A non-instruction transaction, a non-BLS-normal key, an invalid PoP or a duplicate.
+/// A non-instruction transaction, a non-BLS-normal key, an invalid `PoP` or a duplicate.
 pub fn genesis_validators(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, GenesisCommitteeError> {

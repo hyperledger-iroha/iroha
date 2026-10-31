@@ -469,14 +469,14 @@ mod tests {
             .into()
     }
     fn sample_policy_bundle(
-        policy_id: IdentifierPolicyId,
+        policy_id: &IdentifierPolicyId,
         owner: AccountId,
         signer: &KeyPair,
         secret: &[u8],
     ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
         // Typed public fixture for signing/validation; this does not perform encryption.
         let backend = RamLfeBackend::HkdfSha3_512PrfV1;
-        let program_id = sample_program_id(&policy_id);
+        let program_id = sample_program_id(policy_id);
         let program_policy = RamLfeProgramPolicy::new(
             program_id.clone(),
             owner.clone(),
@@ -818,7 +818,8 @@ mod tests {
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
             .expect("valid RAM-LFE test secret");
-        let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, secret.as_ref());
+        let (_, program_policy) =
+            sample_policy_bundle(&(policy_id), owner, &signer, secret.as_ref());
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,
@@ -846,7 +847,7 @@ mod tests {
         let owner = checked_fixture_account(0x51);
         let signer = checked_fixture_ed25519_keypair(0x52);
         let (policy, program_policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             owner.clone(),
             &signer,
             b"fixture secret",
@@ -902,7 +903,7 @@ mod tests {
         let owner = checked_fixture_account(0x61);
         let signer = checked_fixture_ed25519_keypair(0x62);
         let (policy, mut program_policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             owner.clone(),
             &signer,
             b"fixture secret",
@@ -951,7 +952,7 @@ mod tests {
         let owner = checked_fixture_account(0x71);
         let signer = checked_fixture_ed25519_keypair(0x72);
         let (policy, supported_policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             owner.clone(),
             &signer,
             b"fixture secret",
@@ -976,50 +977,62 @@ mod tests {
                     verified_at_ms: draft.resolved_at_ms,
                     expires_at_ms: None,
                 };
-                assert_insecure(service.execute_owner_prf(
-                    &program_policy,
-                    "alice@example.com",
-                    &[1; 32],
-                    &iroha_data_model::NetworkId::from_genesis_hash(
-                        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"test-network")),
-                    ),
-                ));
-                assert_insecure(service.derive_owner_prf(
-                    (&policy, &program_policy),
-                    "alice@example.com",
-                    &[1; 32],
-                    draft.opening.clone(),
-                    None,
-                    &iroha_data_model::NetworkId::from_genesis_hash(
-                        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"test-network")),
-                    ),
-                ));
-                assert_insecure(service.issue_execution_receipt(&program_policy, &execution));
-                assert_insecure(service.sign_receipt(&policy, &program_policy, &draft, &claim));
-                assert_insecure(service.issue_claim_receipt(
-                    &policy,
-                    &program_policy,
-                    &draft,
-                    claim.uaid,
-                    owner.clone(),
-                ));
+                assert_insecure(
+                    &(service.execute_owner_prf(
+                        &program_policy,
+                        "alice@example.com",
+                        &[1; 32],
+                        &iroha_data_model::NetworkId::from_genesis_hash(
+                            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                                b"test-network",
+                            )),
+                        ),
+                    )),
+                );
+                assert_insecure(
+                    &(service.derive_owner_prf(
+                        (&policy, &program_policy),
+                        "alice@example.com",
+                        &[1; 32],
+                        draft.opening.clone(),
+                        None,
+                        &iroha_data_model::NetworkId::from_genesis_hash(
+                            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                                b"test-network",
+                            )),
+                        ),
+                    )),
+                );
+                assert_insecure(&(service.issue_execution_receipt(&program_policy, &execution)));
+                assert_insecure(&(service.sign_receipt(&policy, &program_policy, &draft, &claim)));
+                assert_insecure(
+                    &(service.issue_claim_receipt(
+                        &policy,
+                        &program_policy,
+                        &draft,
+                        claim.uaid,
+                        owner.clone(),
+                    )),
+                );
             }
             let mut execution = execution_fixture(&supported_policy);
             execution.backend = backend;
-            assert_insecure(service.issue_execution_receipt(&supported_policy, &execution));
+            assert_insecure(&(service.issue_execution_receipt(&supported_policy, &execution)));
             let mut draft = resolution_fixture(&supported_policy, &signer);
             draft.backend = backend;
-            assert_insecure(service.issue_claim_receipt(
-                &policy,
-                &supported_policy,
-                &draft,
-                UniversalAccountId::from_hash(Hash::new(b"uaid")),
-                owner.clone(),
-            ));
+            assert_insecure(
+                &(service.issue_claim_receipt(
+                    &policy,
+                    &supported_policy,
+                    &draft,
+                    UniversalAccountId::from_hash(Hash::new(b"uaid")),
+                    owner.clone(),
+                )),
+            );
         }
     }
 
-    fn assert_insecure<T: std::fmt::Debug>(result: Result<T, IdentifierResolutionError>) {
+    fn assert_insecure<T: std::fmt::Debug>(result: &Result<T, IdentifierResolutionError>) {
         assert!(
             matches!(
                 result,
@@ -1035,7 +1048,7 @@ mod tests {
     fn hkdf_metadata_is_never_decoded_or_executed_as_bfv() {
         let signer = checked_fixture_ed25519_keypair(0x81);
         let (_, mut policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             checked_fixture_account(0x82),
             &signer,
             b"fixture",
@@ -1064,7 +1077,7 @@ mod tests {
     fn authenticated_opening_rejects_every_mismatched_context() {
         let signer = checked_fixture_ed25519_keypair(0x91);
         let (_, policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             checked_fixture_account(0x92),
             &signer,
             b"fixture",
@@ -1123,7 +1136,7 @@ mod tests {
         ];
         let signer = checked_fixture_ed25519_keypair(0xa1);
         let (_, mut policy) = sample_policy_bundle(
-            "email#retail".parse().expect("policy"),
+            &("email#retail".parse().expect("policy")),
             checked_fixture_account(0xa2),
             &signer,
             b"fixture",

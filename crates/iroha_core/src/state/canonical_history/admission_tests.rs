@@ -117,7 +117,7 @@ fn callback_allocation_refusal_keeps_the_actual_state_pool_release_owner() {
         drop(ChargedBuffer::<u8>::new(1, &foreign).unwrap());
         assert!(matches!(wake.as_mut().poll(&mut context), Poll::Pending));
         drop(held);
-        assert!(matches!(wake.as_mut().poll(&mut context), Poll::Ready(_)));
+        assert!(matches!(wake.as_mut().poll(&mut context), Poll::Ready(())));
     }
     drop(registration);
     budget.set_limit_bytes(original_limit);

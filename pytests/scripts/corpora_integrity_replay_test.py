@@ -140,7 +140,7 @@ class SecurityCorporaReplayTests(unittest.TestCase):
         readme = (ROOT / "fuzz" / "README.md").read_text(encoding="utf-8")
         self.assertIn("name: Adversarial Norito and IVM fuzz diagnostics", workflow)
         self.assertIn(
-            "cargo +nightly-2025-05-08 install cargo-fuzz", workflow
+            "cargo +nightly-2026-10-23 install cargo-fuzz", workflow
         )
         self.assertIn(
             "Verify immutable security-corpus integrity fingerprints", workflow

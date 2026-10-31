@@ -719,7 +719,10 @@ fn whole_check_instruction_bound_precedes_oversized_nested_row_comparison() {
     assert!(norito::canonical_frame_len(&check).unwrap() > FINAL_PROMOTION_MAX_RECORD_BYTES_V1);
     transact(&mut f.state, 3_000, |tx| {
         let before = retained(tx);
-        assert_eq!(apply(check.clone(), &f.observer, tx), Err(Error::Invalid));
+        assert_eq!(
+            apply(&(check.clone()), &f.observer, tx),
+            Err(Error::Invalid)
+        );
         assert_no_writes(tx, &check, &f.observer, false);
         assert_eq!(retained(tx), before);
     });

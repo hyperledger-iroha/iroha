@@ -140,10 +140,10 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
     );
 }
 fn transaction_batch_body_for_test(
-    payloads: Vec<Vec<u8>>,
+    payloads: &Vec<Vec<u8>>,
 ) -> crate::utils::extractors::NoritoBytes {
     crate::utils::extractors::NoritoBytes(Bytes::from(
-        norito::to_bytes(&payloads).expect("encode transaction batch envelope"),
+        norito::to_bytes(payloads).expect("encode transaction batch envelope"),
     ))
 }
 #[test]
@@ -206,7 +206,7 @@ async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
 }
 #[test]
 fn transaction_batch_body_limit_rejects_before_decode() {
-    let body = transaction_batch_body_for_test(vec![vec![0_u8; 16]]).0;
+    let body = transaction_batch_body_for_test(&(vec![vec![0_u8; 16]])).0;
     let error = validate_transaction_batch_body_size(&body, body.len() - 1)
         .expect_err("wire bytes over the configured limit must be rejected");
     assert!(matches!(
@@ -242,11 +242,11 @@ fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
 }
 #[tokio::test]
 async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .transaction_batch_max_transactions = 1;
-    let body = transaction_batch_body_for_test(vec![vec![0xff], vec![0xff]]);
+    let body = transaction_batch_body_for_test(&(vec![vec![0xff], vec![0xff]]));
     let error =
         match super::handler_post_transactions_batch(State(app.clone()), HeaderMap::new(), body)
             .await
@@ -282,9 +282,11 @@ async fn transaction_batch_authenticates_before_fresh_capacity_and_preserves_cus
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![
-            iroha_version::codec::EncodeVersioned::encode_versioned(&transaction),
-        ]),
+        transaction_batch_body_for_test(
+            &(vec![iroha_version::codec::EncodeVersioned::encode_versioned(
+                &transaction,
+            )]),
+        ),
     )
     .await
     .expect("native batch admission");
@@ -293,7 +295,7 @@ async fn transaction_batch_authenticates_before_fresh_capacity_and_preserves_cus
     let error = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![vec![0xff]]),
+        transaction_batch_body_for_test(&(vec![vec![0xff]])),
     )
     .await
     .expect_err("bad canonical bytes");
@@ -326,10 +328,10 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -364,7 +366,7 @@ async fn transaction_batch_duplicate_reuses_custody_at_full_capacity_without_cha
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![payload.clone(), payload]),
+        transaction_batch_body_for_test(&(vec![payload.clone(), payload])),
     )
     .await
     .expect("duplicate entries retain the first pending entry");
@@ -411,10 +413,10 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(
-            [&tx1, &tx2]
+            &([&tx1, &tx2]
                 .into_iter()
                 .map(iroha_version::codec::EncodeVersioned::encode_versioned)
-                .collect(),
+                .collect()),
         ),
     )
     .await
@@ -443,8 +445,27 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
 async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
     use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
 
-    let app = mk_app_state_for_tests();
     let key = checked_torii_test_ed25519_keypair(0xce, "ordinary batch signer");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        world_with_account(&AccountId::new(key.public_key().clone())),
+        1_000,
+    );
+    let fees = iroha_data_model::block::consensus::RootFeePolicy {
+        base_fee: Quantity::from(1_u32),
+        per_byte_fee: Quantity::zero(),
+        per_instruction_fee: Quantity::zero(),
+        per_gas_unit_fee: Quantity::zero(),
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    };
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            fees.clone()
+                .into_custom_parameter()
+                .expect("original positive batch fee schedule"),
+        ));
+    let app = native_ingress_app_with_config_for_test(config);
+    assert_eq!(app.state.world_view().parameters().root_fees(), Some(&fees));
     let tx = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         AccountId::new(key.public_key().clone()),
@@ -454,9 +475,9 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(vec![
-            iroha_version::codec::EncodeVersioned::encode_versioned(&tx),
-        ]),
+        transaction_batch_body_for_test(
+            &(vec![iroha_version::codec::EncodeVersioned::encode_versioned(&tx)]),
+        ),
     )
     .await
     .expect("ordinary batch returns one classified economic outcome");
@@ -473,7 +494,7 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_batch() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -505,7 +526,7 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {
@@ -536,7 +557,7 @@ fn transaction_api_token_preauth_key_never_contains_raw_token_text() {
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -571,7 +592,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {
@@ -596,7 +617,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
@@ -620,7 +641,7 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
-        transaction_batch_body_for_test(payloads),
+        transaction_batch_body_for_test(&(payloads)),
     )
     .await
     {
@@ -788,7 +809,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
 #[tokio::test]
 #[cfg(feature = "app_api")]
 async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
@@ -1169,16 +1190,14 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
         "derive public peer inventory handler fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-        world_with_account(&authority),
-        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
-    );
-    configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    let app = native_ingress_with_offline_foreign_app_for_test(world_with_account(&authority));
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
     );
-    let signed = authorize_query_for_test(
+    let native_network = *app.state.network_id_ref();
+    let signed = authorize_native_query_for_fixture(
+        native_network,
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
         authority.clone(),
     )
@@ -1198,7 +1217,8 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
             if message.contains("CanReadAllLedgerData")
     ));
     grant_account_permission_for_test(&app, &authority, CanReadAllLedgerData.into());
-    let signed = authorize_query_for_test(
+    let signed = authorize_native_query_for_fixture(
+        native_network,
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
         authority,
     )
@@ -1588,6 +1608,173 @@ async fn global_asset_balance_route_requires_exact_holder_scope_and_known_policy
         &app,
         &account_query,
         &ALICE_ID
+    ));
+}
+
+#[cfg(feature = "app_api")]
+fn commit_dynamic_account_alias_for_routing_test(
+    app: &SharedAppState,
+    owner: &AccountId,
+    alias: &str,
+    dataspace_id: DataSpaceId,
+) {
+    use iroha_core::smartcontracts::Execute;
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+    };
+
+    bind_dynamic_account_alias_for_test(app, owner, alias, dataspace_id);
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    // The raw lease fixture omits derived account scope. Native alias repair must
+    // populate the same routing index as a committed SNS setup, without buying a lease.
+    EnsureAlias::new(
+        AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: ResolvedAccountAliasV1::new(alias.parse().unwrap(), dataspace_id),
+            target_account: owner.clone(),
+            provision: AccountProvisionV1::Existing,
+            role: AccountAliasRoleV1::Additional,
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: 0,
+            expected_payment_asset: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap(),
+            max_amount: iroha_primitives::numeric::Quantity::zero(),
+            valid_until_ms: 0,
+        },
+    )
+    .execute(owner, &mut tx)
+    .expect("native alias repair refreshes account scope");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit native account alias repair");
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn global_account_reads_survive_sns_namespace_without_physical_catalog() {
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
+    use iroha_data_model::query::{
+        QueryRequest, QueryResponse, SingularQueryOutputBox, account::prelude::FindAccountById,
+    };
+
+    let owner_key = checked_torii_test_ed25519_keypair(0xa7, "SNS-only namespace owner");
+    let stranger_key = checked_torii_test_ed25519_keypair(0xa8, "SNS-only namespace stranger");
+    let owner = AccountId::new(owner_key.public_key().clone());
+    let stranger = AccountId::new(stranger_key.public_key().clone());
+    let world = World::with(
+        [],
+        [
+            Account::new(owner.clone()).build(&owner),
+            Account::new(stranger.clone()).build(&stranger),
+        ],
+        [],
+    );
+    let (mut app, _, chain) = executed_history_test_fixture(
+        TestChainConfig::new(world, 1_000),
+        &owner_key,
+        vec![Log::new(Level::INFO, "SNS account routing fixture".to_owned()).into()],
+        true,
+    );
+    Arc::get_mut(&mut app).unwrap().local_peer_id = Some(chain.validators()[0].0.clone());
+    let private_id = iroha_core::sns::dataspace_id_for_sns_alias("dpn").unwrap();
+    commit_dynamic_account_alias_for_routing_test(&app, &owner, "admin@dpn", private_id);
+    {
+        let state = app.state.view();
+        assert!(state.nexus().dataspace_catalog.by_id(private_id).is_none());
+        assert!(
+            state
+                .world()
+                .account_scope_entry(&owner)
+                .unwrap()
+                .iter()
+                .any(|(id, _)| *id == private_id),
+            "active namespace and account leases must add the logical private scope"
+        );
+    }
+    assert_eq!(
+        super::resolve_torii_target_account_routes(&app, &owner).unwrap(),
+        vec![RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+    );
+    assert!(super::should_execute_route_locally(
+        app.as_ref(),
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+    ));
+    for (authority, key, expected) in [
+        (&owner, &owner_key, StatusCode::OK),
+        (&stranger, &stranger_key, StatusCode::FORBIDDEN),
+    ] {
+        let mut request = authorize_query_for_test(
+            QueryRequest::Singular(FindAccountById::new(owner.clone()).into()),
+            authority.clone(),
+        );
+        request.network_id = *app.state.network_id_ref();
+        let response = super::handler_signed_query(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(request.sign(key)),
+        )
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let QueryResponse::Singular(SingularQueryOutputBox::Account(account)) =
+                norito::decode_from_bytes(&bytes).unwrap()
+            else {
+                panic!("exact account query must return the original domainless account");
+            };
+            assert_eq!(account.id, owner);
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn catalogued_account_scope_still_requires_an_authoritative_physical_lane() {
+    let owner = checked_torii_test_account_id(0xa9, "catalogued account scope owner");
+    let private_id = iroha_core::sns::dataspace_id_for_sns_alias("dpn").unwrap();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut dataspaces = nexus.dataspace_catalog.entries().to_vec();
+    dataspaces.push(iroha_data_model::nexus::DataSpaceMetadata {
+        id: private_id,
+        alias: "dpn".into(),
+        description: None,
+        fault_tolerance: 1,
+    });
+    nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(dataspaces).unwrap();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    let app = mk_app_state_for_tests_with_world_and_nexus(
+        World::with([], [Account::new(owner.clone()).build(&owner)], []),
+        nexus,
+    );
+    commit_dynamic_account_alias_for_routing_test(&app, &owner, "admin@dpn", private_id);
+    assert!(matches!(
+        super::resolve_torii_target_account_routes(&app, &owner),
+        Err(iroha_core::queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })
+            if dataspace_id == private_id
     ));
 }
 
@@ -2947,8 +3134,8 @@ async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
 }
 
 #[cfg(feature = "app_api")]
-#[test]
-fn long_lived_dataspace_context_rechecks_permission_revocation() {
+#[tokio::test]
+async fn long_lived_dataspace_context_rechecks_permission_revocation() {
     let caller = checked_torii_test_account_id(0xdb, "derive revocable stream reader fixture key");
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world_with_account(&caller),
@@ -2967,6 +3154,7 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         &"/v1/contracts/activity".parse().unwrap(),
         "v1/contracts/activity",
     )
+    .await
     .expect("unsigned one-shot admission");
     assert!(
         !one_shot
@@ -3029,6 +3217,223 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         !context.authorization_is_current(),
         "a long-lived stream must terminate after losing any admitted route"
     );
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn one_shot_visibility_comes_from_its_view_and_seeds_admitted_contexts() {
+    let caller = checked_torii_test_account_id(0xd3, "derive one-view visibility reader key");
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    let permission: Permission = CanReadRestrictedDataspace {
+        dataspace: restricted_dataspace,
+    }
+    .into();
+    grant_account_permission_for_test(&app, &caller, permission);
+    let signed = super::ToriiAccountReadVisibility::Signed(caller.clone());
+
+    let state_view = app.state.view();
+    let in_view = signed.dataspace_visibility_in(&state_view);
+    assert_eq!(
+        in_view,
+        super::torii_dataspace_read_visibility_in(&state_view, Some(&caller))
+    );
+    assert!(in_view.allows_dataspace(restricted_dataspace));
+    assert!(
+        !super::ToriiAccountReadVisibility::None
+            .dataspace_visibility_in(&state_view)
+            .allows_dataspace(restricted_dataspace)
+    );
+    drop(state_view);
+    assert_eq!(signed.dataspace_visibility(app.as_ref()), in_view);
+
+    // An admitted baseline is retained exactly as resolved; it is never re-read.
+    let narrowed = routing::DataspaceReadVisibility::new(
+        std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL]),
+        false,
+    );
+    let admitted = signed
+        .clone()
+        .into_admitted_dataspace_context(app.clone(), narrowed.clone());
+    assert_eq!(admitted.admitted_visibility, narrowed);
+    assert_eq!(admitted.caller(), Some(&caller));
+    let resolved = signed.into_dataspace_context(app.clone());
+    assert_eq!(resolved.admitted_visibility, in_view);
+    let anonymous = super::ToriiAccountReadVisibility::None
+        .into_admitted_dataspace_context(app, narrowed.clone());
+    assert_eq!(anonymous.caller(), None);
+    assert_eq!(anonymous.admitted_visibility, narrowed);
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn global_reader_grant_and_visibility_resolve_together() {
+    const ENDPOINT: &str = "v1/blocks/stream";
+    let caller = checked_torii_test_account_id(0xd4, "derive one-view global reader key");
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    match super::torii_global_reader_visibility(
+        app.as_ref(),
+        &super::ToriiAccountReadVisibility::None,
+        ENDPOINT,
+    ) {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        other => panic!("an anonymous global read must be refused: {other:?}"),
+    }
+    let signed = super::ToriiAccountReadVisibility::Signed(caller.clone());
+    match super::torii_global_reader_visibility(app.as_ref(), &signed, ENDPOINT) {
+        Err(Error::Query(ValidationFail::NotPermitted(message))) => assert_eq!(
+            message,
+            "CanReadAllLedgerData permission is required for v1/blocks/stream"
+        ),
+        other => panic!("a reader without the global grant must be refused: {other:?}"),
+    }
+
+    grant_account_permission_for_test(&app, &caller, CanReadAllLedgerData.into());
+    let visibility = super::torii_global_reader_visibility(app.as_ref(), &signed, ENDPOINT)
+        .expect("a global reader is admitted");
+    assert!(visibility.can_read_all());
+    assert!(visibility.allows_dataspace(restricted_dataspace));
+    assert_eq!(visibility, signed.dataspace_visibility(app.as_ref()));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn global_reader_admission_refuses_anonymous_requests_before_reading_state() {
+    let app = crate::mk_app_state_for_tests();
+    let uri: Uri = "/v1/blocks/stream".parse().expect("blocks stream uri");
+    match super::require_torii_global_reader(
+        &app,
+        &HeaderMap::new(),
+        &Method::GET,
+        &uri,
+        "v1/blocks/stream",
+    )
+    .await
+    {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        Err(other) => panic!("anonymous stream admission refused for another reason: {other:?}"),
+        Ok(_) => panic!("anonymous callers must not open the complete block stream"),
+    }
+}
+
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+#[tokio::test]
+async fn explorer_metrics_requires_a_canonical_global_reader() {
+    let result = super::handler_explorer_metrics(
+        State(crate::mk_app_state_for_tests()),
+        HeaderMap::new(),
+        Method::GET,
+        "/v1/explorer/metrics".parse().expect("metrics uri"),
+        crate::loopback_connect_info(),
+    )
+    .await;
+    match result {
+        Err(Error::AppUnauthorized { code, .. }) => {
+            assert_eq!(code, "canonical_authentication_required");
+        }
+        Err(other) => panic!("anonymous metrics refused for another reason: {other:?}"),
+        Ok(_) => panic!("Explorer metrics require a canonical global reader"),
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn asset_registration_checks_definition_visibility_in_its_projection_view() {
+    let owner = checked_torii_test_account_id(0xd5, "derive registration visibility owner key");
+    let global: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse()
+        .expect("global definition address");
+    let restricted = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("cash", "restricted").expect("definition seed"),
+        "kina".parse().expect("definition name"),
+    );
+    let mut world = World::with(
+        [],
+        [Account::new(owner.clone()).build(&owner)],
+        [AssetDefinition::numeric(
+            global.clone(),
+            "XOR",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner)],
+    );
+    world
+        .insert_direct_asset_definition_with_assets_for_testing(
+            AssetDefinition::numeric(
+                restricted.clone(),
+                "Kina",
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                None,
+            )
+            .build(&owner),
+            DataSpaceId::new(10),
+            [],
+        )
+        .expect("restricted definition home");
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    assert_initial_nexus_catalog_for_test(&app.state, &private_ingress_nexus_for_test());
+    assert!(
+        app.state
+            .view()
+            .world()
+            .asset_definition(&global)
+            .unwrap()
+            .spec()
+            .scale()
+            .is_none(),
+        "the fixture deliberately has no fixed registration scale"
+    );
+    let request = |asset: &AssetDefinitionId| {
+        super::offline_asset_registration::handler(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::GET,
+            format!("/v1/assets/definitions/{asset}/registration")
+                .parse()
+                .expect("registration uri"),
+            crate::loopback_connect_info(),
+            AxPath(asset.to_string()),
+        )
+    };
+
+    let absent = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("cash", "restricted").expect("definition seed"),
+        "absent".parse().expect("definition name"),
+    );
+    // A hidden home is indistinguishable from an absent definition.
+    for hidden in [&restricted, &absent] {
+        match request(hidden).await {
+            Err(Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))) => {}
+            Err(other) => panic!("hidden definition refused for another reason: {other:?}"),
+            Ok(_) => panic!("an anonymous reader must not project a hidden definition"),
+        }
+    }
+    // A visible definition passes the same-view check and reaches the projection,
+    // which refuses the fixture's absent fixed scale.
+    match request(&global).await {
+        Err(Error::AppServiceUnavailable { code, .. }) => {
+            assert_eq!(code, "offline_asset_registration_unavailable");
+        }
+        Err(other) => panic!("visible definition refused for another reason: {other:?}"),
+        Ok(_) => panic!("the fixture has no fixed registration scale"),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -3238,7 +3643,7 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
     let key_pair =
         checked_torii_test_ed25519_keypair(0xf4, "derive find triggers authority fixture key");
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
@@ -3247,13 +3652,15 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let native_network = *app.state.network_id_ref();
     let denied = super::handler_signed_query(
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_triggers_query_for_test(
+        versioned_query_for_test(signed_native_find_triggers_query_for_fixture(
+            native_network,
             authority.clone(),
             &key_pair,
         )),
@@ -3270,7 +3677,11 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_triggers_query_for_test(authority, &key_pair)),
+        versioned_query_for_test(signed_native_find_triggers_query_for_fixture(
+            native_network,
+            authority,
+            &key_pair,
+        )),
     )
     .await
     .expect("find triggers query should execute")
@@ -3292,7 +3703,7 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         "derive find active trigger ids authority fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
@@ -3301,13 +3712,15 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
+    let native_network = *app.state.network_id_ref();
     let denied = super::handler_signed_query(
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
+        versioned_query_for_test(signed_native_find_active_trigger_ids_query_for_fixture(
+            native_network,
             authority.clone(),
             &key_pair,
         )),
@@ -3324,8 +3737,10 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         crate::loopback_connect_info(),
         None,
         crate::NoritoQuery(QueryOptions::default()),
-        versioned_query_for_test(signed_find_active_trigger_ids_query_for_test(
-            authority, &key_pair,
+        versioned_query_for_test(signed_native_find_active_trigger_ids_query_for_fixture(
+            native_network,
+            authority,
+            &key_pair,
         )),
     )
     .await
@@ -3959,7 +4374,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let invalid_portfolio = match super::handler_accounts_portfolio(
         State(app.clone()),
         axum::http::Method::GET,
@@ -4094,7 +4509,7 @@ async fn anonymous_loopback_cannot_read_restricted_or_missing_explorer_accounts(
         checked_torii_test_account_id(0xfc, "derive missing explorer account detail fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::explorer-account-detail-routes"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
@@ -4208,7 +4623,7 @@ async fn account_assets_reject_invalid_queries_before_routing() {
         checked_torii_test_account_id(0xf7, "derive account assets validation fixture key");
     // The minimal app has no visible route for this account, which used to
     // answer every query, valid or not, with an empty page.
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = mk_native_app_state_for_tests_with_world(world_with_account(&authority));
     let uri: axum::http::Uri =
         format!("/v1/accounts/{authority}/assets?filter=unknown_field%20%3D%201")
             .parse()

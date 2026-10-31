@@ -116,7 +116,7 @@ impl NativeTransactions {
         // A fresh full-width signed submission identity makes first mutation versus exact
         // replay unambiguous even when two identical actions are signed in the same millisecond.
         let mut nonce = [0u8; 32];
-        rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
             .map_err(|_| Error::Unavailable)?;
         if nonce == [0; 32] {
             return Err(Error::Unavailable);
@@ -183,15 +183,19 @@ impl NativeTransactions {
     ) -> Result<[u8; 32], Error> {
         remaining(deadline)?;
         let hash = TransactionEntrypoint::External(signed.clone()).hash();
-        let (drift, limits) = self.state.transaction_admission_limits();
+        let parameters = self.state.transaction_admission_parameters();
+        let admission_policy = parameters
+            .require_crypto_policy()
+            .map_err(|_| Error::Unavailable)?;
         let accepted = AcceptedTransaction::accept(
             signed.clone(),
             self.state.network_id_ref(),
-            drift,
-            limits,
-            self.state.crypto().as_ref(),
+            parameters.sumeragi().max_clock_drift(),
+            parameters.transaction(),
+            admission_policy,
         )
         .map_err(|_| Error::Unavailable)?;
+        drop(parameters);
         let plan = self
             .queue
             .route_plan_with_state(&accepted, &self.state)

@@ -37,10 +37,8 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
     let (state, proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let parameters = state
-        .world
-        .parameters
-        .block()
+    let parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+        .expect("funded original parameter-only fixture block")
         .try_detach(|_| Ok::<_, ()>(()))
         .unwrap();
     let budget = state.ivm_execution_budget();

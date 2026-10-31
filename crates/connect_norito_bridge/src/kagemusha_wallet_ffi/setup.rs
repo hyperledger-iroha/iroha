@@ -99,16 +99,19 @@ pub(crate) enum Setup {
     PaymentCompanion {
         payment: Vec<u8>,
     },
-    Credited(Vec<u8>),
+    ObserveCredited {
+        send_request: [u8; 32],
+        original: Vec<u8>,
+    },
+    ResumeDeferredReceipt,
+    DrainDeferredArchive,
     BoundCredited {
         send_request: [u8; 32],
         original: Vec<u8>,
-        query: bool,
     },
     CreditProjection {
         id: [u8; 32],
         anchor: Vec<u8>,
-        newer: Vec<u8>,
     },
     CreditedOriginal {
         status: bool,
@@ -125,14 +128,14 @@ pub(crate) enum Setup {
     },
 }
 // Kind 46 Awaiting carries the entrypoint hash Native derived from the retained wire, the
-// caller's only route selector. Kinds 62 Confirmed and 61 Rejected carry the certified height
+// caller's only route selector. Kinds 70 Confirmed and 69 Rejected carry the certified height
 // and native commit hash, which is not the Iroha header hash. They never reuse the walk's
 // retired 44/49, which had this shape with the header hash, so a mixed SDK/Native pair refuses.
 fn ledger_outcome(value: state::LedgerAttemptOutcomeV1) -> Response {
     let (kind, height, bytes) = match value {
         state::LedgerAttemptOutcomeV1::Awaiting { entrypoint } => (46, 0, entrypoint),
-        state::LedgerAttemptOutcomeV1::Rejected(commit) => (61, commit.height, commit.commit_hash),
-        state::LedgerAttemptOutcomeV1::Confirmed(commit) => (62, commit.height, commit.commit_hash),
+        state::LedgerAttemptOutcomeV1::Rejected(commit) => (69, commit.height, commit.commit_hash),
+        state::LedgerAttemptOutcomeV1::Confirmed(commit) => (70, commit.height, commit.commit_hash),
     };
     Response {
         kind,
@@ -141,12 +144,12 @@ fn ledger_outcome(value: state::LedgerAttemptOutcomeV1) -> Response {
         ..Response::default()
     }
 }
-// Kind 60 EpochRequired is DATA from selectors 34 and 36 only: the untrusted target height.
+// Kind 68 EpochRequired is DATA from selectors 34 and 36 only: the untrusted target height.
 fn ledger_ingest(value: state::LedgerAttemptIngestV1) -> Response {
     match value {
         state::LedgerAttemptIngestV1::Outcome(outcome) => ledger_outcome(outcome),
         state::LedgerAttemptIngestV1::EpochRequired { target_height } => Response {
-            kind: 60,
+            kind: 68,
             sequence: u128::from(target_height),
             ..Response::default()
         },
@@ -154,17 +157,13 @@ fn ledger_ingest(value: state::LedgerAttemptIngestV1) -> Response {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        43 | 47 | 48 | 49 | 50 | 51 | 52 => [0; 3],
+        43 | 47 | 48 | 49 | 50 | 51 | 52 | 57 | 58 => [0; 3],
         53 => [
             iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1,
             0,
             0,
         ],
-        44 => [
-            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
-            KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
-            0,
-        ],
+        44 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         0 | 4 | 6 | 15 | 18 | 19 | 20 | 24 | 27 | 38 => [0; 3],
         39 | 40 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
@@ -208,9 +207,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
         ],
         // Transport selectors 7 and 11 (the deleted Offer) stay retired.
-        3 | 8..=10 | 12..=14 | 16..=17 | 41..=42 | 54 | 55 => {
-            [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0]
-        }
+        8..=10 | 12..=14 | 16..=17 | 42 | 55 | 56 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, 0, 0],
         5 => [
             KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1,
@@ -238,7 +235,7 @@ pub(crate) fn request(
     let bounds = bounds(selector)?;
     if (matches!(
         selector,
-        2 | 19 | 20 | 25 | 27 | 39 | 41 | 42 | 43 | 44 | 45 | 54
+        2 | 19 | 20 | 25 | 27 | 39 | 42 | 43 | 44 | 45 | 56
     ) != (id != [0; 32]))
         || (!matches!(selector, 47 | 53) && (matches!(selector, 2 | 27 | 39) != (amount != 0)))
         || (selector == 53 && amount > u128::from(u64::MAX))
@@ -332,28 +329,24 @@ pub(crate) fn request(
         55 if !first.is_empty() => Setup::PaymentCompanion {
             payment: first.to_vec(),
         },
-        3 if !first.is_empty() => Setup::Credited(first.to_vec()),
-        41..=42 if !first.is_empty() => Setup::BoundCredited {
+        42 if !first.is_empty() => Setup::BoundCredited {
             send_request: id,
             original: first.to_vec(),
-            query: selector == 42,
         },
         43 => Setup::CreditProjection {
             id,
             anchor: Vec::new(),
-            newer: Vec::new(),
         },
         44 if !first.is_empty() => Setup::CreditProjection {
             id,
             anchor: first.to_vec(),
-            newer: second.to_vec(),
         },
-        // Verified delivery before any Archive: the Credited original alone, with no anchor.
-        54 if !first.is_empty() => Setup::CreditProjection {
-            id,
-            anchor: Vec::new(),
-            newer: first.to_vec(),
+        56 if !first.is_empty() => Setup::ObserveCredited {
+            send_request: id,
+            original: first.to_vec(),
         },
+        57 => Setup::ResumeDeferredReceipt,
+        58 => Setup::DrainDeferredArchive,
         16..=17 if !first.is_empty() => Setup::CreditedOriginal {
             status: selector == 17,
             original: first.to_vec(),
@@ -374,12 +367,24 @@ pub(crate) fn request(
         _ => return Err(Failure::code(INVALID)),
     })
 }
-fn take_time<T>(times: &mut BTreeMap<u64, T>, token: u64) -> Result<T> {
-    times.remove(&token).ok_or(Failure::code(INVALID))
+pub(super) fn take_time<T>(
+    times: &mut BTreeMap<u64, review::OriginBound<T>>,
+    token: u64,
+    origin: u64,
+) -> Result<T> {
+    times
+        .get(&token)
+        .ok_or(Failure::code(INVALID))?
+        .require_origin(origin)?;
+    times
+        .remove(&token)
+        .map(|bound| bound.value)
+        .ok_or(Failure::code(INVALID))
 }
 fn take_time_response<T>(
-    times: &mut BTreeMap<u64, T>,
+    times: &mut BTreeMap<u64, review::OriginBound<T>>,
     token: u64,
+    origin: u64,
     anchor: &[u8],
     certificate: &[u8],
 ) -> Result<(
@@ -389,7 +394,7 @@ fn take_time_response<T>(
 )> {
     // Malformed response bytes must retire the exchange too: the SDK has already
     // consumed its token, so leaving this entry live would make it unreachable.
-    let exchange = take_time(times, token)?;
+    let exchange = take_time(times, token, origin)?;
     Ok((exchange, decode(anchor)?, decode(certificate)?))
 }
 fn ledger_progress(progress: Option<state::LedgerProgressV1>) -> Response {
@@ -423,7 +428,7 @@ where
     P: advance::KagemushaWalletPlatformV1,
     S: OriginalSourceV1 + Send,
 {
-    pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
+    pub(super) fn setup_inner(&mut self, exchange_id: u64, input: Setup) -> Result<Response> {
         let bytes = match input {
             Setup::RequestFeeSelection => {
                 let (asset, fee) = self.wallet.request_fee_selection()?;
@@ -591,10 +596,14 @@ where
                     ..Response::default()
                 });
             }
-            Setup::ReviewCustodyDeletion => return self.review_deletion(),
-            Setup::ConfirmCustodyDeletion { token } => return self.confirm_deletion(token),
+            Setup::ReviewCustodyDeletion => return self.review_deletion(exchange_id),
+            Setup::ConfirmCustodyDeletion { token } => {
+                return self.confirm_deletion(exchange_id, token);
+            }
             Setup::ResumeCustodyDeletion => return self.resume_deletion(),
-            Setup::DiscardCustodyDeletion { token } => return self.discard_deletion(token),
+            Setup::DiscardCustodyDeletion { token } => {
+                return self.discard_deletion(exchange_id, token);
+            }
             Setup::Bootstrap => return completion(Some(self.wallet.bootstrap()?)),
             Setup::CloseLoads { id } => {
                 return Ok(Response {
@@ -615,45 +624,34 @@ where
                 self.wallet.request(id, amount, fee.as_ref())?
             }
             Setup::PaymentCompanion { payment } => self.wallet.payment_companion(&payment)?,
-            Setup::Credited(bytes) => {
-                return completion(Some(self.wallet.accept_credited(&bytes)?));
-            }
+            // These owner-level routes finish publication/fences before projecting errors.
+            Setup::ObserveCredited { .. }
+            | Setup::ResumeDeferredReceipt
+            | Setup::DrainDeferredArchive => return Err(Failure::code(INTERNAL)),
             Setup::BoundCredited {
                 send_request,
                 original,
-                query,
             } => {
-                return Ok(if query {
-                    match self
-                        .wallet
-                        .credited_status_for_send(&send_request, &original)?
-                    {
-                        state::RequestStatusV1::Unknown => Response::default(),
-                        state::RequestStatusV1::Preparing => Response {
-                            kind: 11,
-                            ..Response::default()
-                        },
-                        state::RequestStatusV1::Outcome(value) => completion(Some(value))?,
-                    }
-                } else {
-                    completion(Some(
-                        self.wallet
-                            .accept_credited_for_send(&send_request, &original)?,
-                    ))?
-                });
+                return match self
+                    .wallet
+                    .credited_status_for_send(&send_request, &original)?
+                {
+                    state::RequestStatusV1::Unknown => Ok(Response::default()),
+                    state::RequestStatusV1::Preparing => Ok(Response {
+                        kind: 11,
+                        ..Response::default()
+                    }),
+                    state::RequestStatusV1::Outcome(value) => completion(Some(value)),
+                };
             }
-            Setup::CreditProjection { id, anchor, newer } => {
+            Setup::CreditProjection { id, anchor } => {
                 return Ok(Response {
                     kind: 47,
-                    bytes: if anchor.is_empty() && newer.is_empty() {
+                    bytes: if anchor.is_empty() {
                         self.wallet.receive_credit_projection(&id)?.bytes()
-                    } else if anchor.is_empty() {
-                        self.wallet
-                            .verified_delivery_projection(&id, &newer)?
-                            .bytes()
                     } else {
                         self.wallet
-                            .delivery_credit_projection(&id, &anchor, &newer)?
+                            .delivery_credit_projection(&id, &anchor)?
                             .bytes()
                     },
                     ..Response::default()
@@ -666,7 +664,8 @@ where
                 let token = review::allocate_token()?;
                 let exchange = self.wallet.begin_direct_time_exchange()?;
                 let nonce = exchange.nonce().to_vec();
-                self.times.insert(token, exchange);
+                self.times
+                    .insert(token, review::OriginBound::new(exchange_id, exchange));
                 return Ok(Response {
                     kind: 13,
                     sequence: u128::from(token),
@@ -675,7 +674,7 @@ where
                 });
             }
             Setup::CancelTime { token } => {
-                take_time(&mut self.times, token)?;
+                take_time(&mut self.times, token, exchange_id)?;
                 return Ok(Response {
                     kind: 6,
                     ..Response::default()
@@ -687,7 +686,7 @@ where
                 certificate,
             } => {
                 let (exchange, anchor, certificate) =
-                    take_time_response(&mut self.times, token, &anchor, &certificate)?;
+                    take_time_response(&mut self.times, token, exchange_id, &anchor, &certificate)?;
                 self.wallet
                     .finish_direct_time_exchange(exchange, anchor, &certificate)?;
                 return Ok(Response {
@@ -774,11 +773,11 @@ mod tests {
             ),
             (
                 state::LedgerAttemptOutcomeV1::Rejected(commit),
-                (61, u128::from(u64::MAX), vec![9; 32]),
+                (69, u128::from(u64::MAX), vec![9; 32]),
             ),
             (
                 state::LedgerAttemptOutcomeV1::Confirmed(commit),
-                (62, u128::from(u64::MAX), vec![9; 32]),
+                (70, u128::from(u64::MAX), vec![9; 32]),
             ),
         ] {
             for output in [
@@ -796,16 +795,19 @@ mod tests {
         });
         assert_eq!(
             (output.kind, output.sequence, output.bytes, output.detail),
-            (60, 3_601, vec![], 0)
+            (68, 3_601, vec![], 0)
         );
-        // Kinds 60/61/62 are new: distinct from the enrollment kinds 58/59, the global tip 33/34,
+        // Ledger kinds 68/69/70 are distinct from exchange/review 60..67, enrollment 58/59,
+        // the global tip 33/34,
         // the retired 41/42/43/45 and the walk's retired Confirmed44/Rejected49. Those had the
-        // height-plus-hash shape of 61/62 with the Iroha header hash, so reusing them would let
+        // height-plus-hash shape of 69/70 with the Iroha header hash, so reusing them would let
         // an SDK and a Native from opposite sides of direct finality read each other's outcome.
         let rejected = ledger_outcome(state::LedgerAttemptOutcomeV1::Rejected(commit)).kind;
         let confirmed = ledger_outcome(state::LedgerAttemptOutcomeV1::Confirmed(commit)).kind;
         for kind in [output.kind, rejected, confirmed] {
-            for taken in [33, 34, 41, 42, 43, 44, 45, 46, 49, 57, 58, 59] {
+            for taken in [
+                33, 34, 41, 42, 43, 44, 45, 46, 49, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+            ] {
                 assert_ne!(kind, taken);
             }
         }
@@ -818,22 +820,22 @@ mod tests {
         let empty: &[u8] = &[];
         assert!(request(&id, 43, 0, 0, [empty; 3]).is_ok());
         assert!(request(&id, 44, 0, 0, [one, empty, empty]).is_ok());
-        assert!(request(&id, 44, 0, 0, [one, one, empty]).is_ok());
+        assert!(request(&id, 44, 0, 0, [one, one, empty]).is_err());
         assert!(matches!(
-            request(&id, 54, 0, 0, [one, empty, empty]).unwrap(),
-            Setup::CreditProjection { id: value, anchor, newer }
-                if value == id && anchor.is_empty() && newer == one
+            request(&id, 56, 0, 0, [one, empty, empty]).unwrap(),
+            Setup::ObserveCredited { send_request: value, original }
+                if value == id && original == one
         ));
         assert!(request(&id, 43, 0, 0, [one, empty, empty]).is_err());
         assert!(request(&id, 44, 0, 0, [empty, one, empty]).is_err());
         assert!(request(&id, 44, 0, 0, [one; 3]).is_err());
-        assert!(request(&id, 54, 0, 0, [empty; 3]).is_err());
-        assert!(request(&id, 54, 0, 0, [empty, one, empty]).is_err());
-        assert!(request(&id, 54, 0, 0, [one, one, empty]).is_err());
+        assert!(request(&id, 56, 0, 0, [empty; 3]).is_err());
+        assert!(request(&id, 56, 0, 0, [empty, one, empty]).is_err());
+        assert!(request(&id, 56, 0, 0, [one, one, empty]).is_err());
         for (selector, inputs) in [
             (43, [empty; 3]),
-            (44, [one, one, empty]),
-            (54, [one, empty, empty]),
+            (44, [one, empty, empty]),
+            (56, [one, empty, empty]),
         ] {
             assert!(request(&zero, selector, 0, 0, inputs).is_err());
             assert!(request(&id, selector, 1, 0, inputs).is_err());
@@ -846,7 +848,7 @@ mod tests {
             assert!(request(&id, 44, 0, 0, inputs).is_err());
         }
         let oversized = vec![0; 10_035];
-        assert!(request(&id, 54, 0, 0, [&oversized, empty, empty]).is_err());
+        assert!(request(&id, 56, 0, 0, [&oversized, empty, empty]).is_err());
     }
     #[test]
     fn bound_delivery_intake_requires_exact_send_identity_and_bounded_original() {
@@ -854,10 +856,11 @@ mod tests {
         let zero = [0; 32];
         let one: &[u8] = &[1];
         let empty: &[u8] = &[];
-        for selector in [41, 42] {
+        for selector in [56, 42] {
             let value = request(&id, selector, 0, 0, [one, empty, empty]).unwrap();
             assert!(
-                matches!(value, Setup::BoundCredited { send_request, original, query } if send_request == id && original == one && query == (selector == 42))
+                matches!(&value, Setup::BoundCredited { send_request, original } if selector == 42 && *send_request == id && original == one)
+                    || matches!(&value, Setup::ObserveCredited { send_request, original } if selector == 56 && *send_request == id && original == one)
             );
             assert!(request(&zero, selector, 0, 0, [one, empty, empty]).is_err());
             assert!(request(&id, selector, 0, 0, [empty; 3]).is_err());
@@ -988,19 +991,19 @@ mod tests {
                 assert!(request(&[0; 32], 47, sequence, 0, originals).is_err());
             }
         }
-        assert!(bounds(56).is_err());
+        assert!(bounds(59).is_err());
     }
 
     #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
-        for selector in [0, 2, 3, 4, 15, 18, 19] {
-            let id = if matches!(selector, 2 | 19) {
+        for selector in [0, 2, 56, 4, 15, 18, 19] {
+            let id = if matches!(selector, 2 | 19 | 56) {
                 [1; 32]
             } else {
                 [0; 32]
             };
             let amount = if selector == 2 { u128::MAX } else { 0 };
-            let first: &[u8] = if selector == 3 { &[7] } else { &[] };
+            let first: &[u8] = if selector == 56 { &[7] } else { &[] };
             assert!(request(&id, selector, amount, 0, [first, &[], &[]]).is_ok());
             assert!(request(&id, selector, amount, 1, [first, &[], &[]]).is_err());
             assert!(request(&id, selector, amount, 0, [first, &[7], &[]]).is_err());
@@ -1033,7 +1036,7 @@ mod tests {
             assert!(bounds(selector).is_err());
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_err());
         }
-        assert!(bounds(56).is_err());
+        assert!(bounds(59).is_err());
     }
     #[test]
     fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {
@@ -1199,7 +1202,11 @@ mod tests {
         let anchor = vector_object("KagemushaWalletTimeAnchorV1");
         let certificate = vector_object("KagemushaWalletSignerCertificateV1");
         let malformed = vec![7];
-        let mut times = BTreeMap::from([(1, [11; 32]), (2, [22; 32]), (3, [33; 32])]);
+        let mut times = BTreeMap::from([
+            (1, review::OriginBound::new(7, [11; 32])),
+            (2, review::OriginBound::new(7, [22; 32])),
+            (3, review::OriginBound::new(7, [33; 32])),
+        ]);
         for (token, first, second) in [(1, &malformed, &certificate), (2, &anchor, &malformed)] {
             let Setup::FinishTime {
                 token,
@@ -1210,23 +1217,23 @@ mod tests {
                 panic!("bounded time originals must reach their native owner");
             };
             assert_eq!(
-                take_time_response(&mut times, token, &anchor, &certificate)
+                take_time_response(&mut times, token, 7, &anchor, &certificate)
                     .unwrap_err()
                     .status,
                 INVALID,
             );
             assert!(!times.contains_key(&token));
-            assert_eq!(times.get(&3), Some(&[33; 32]));
+            assert_eq!(times.get(&3).map(|bound| &bound.value), Some(&[33; 32]));
         }
         assert_eq!(times.len(), 1);
         assert_eq!(
-            take_time_response(&mut times, 1, &anchor, &certificate)
+            take_time_response(&mut times, 1, 7, &anchor, &certificate)
                 .unwrap_err()
                 .status,
             INVALID,
         );
         let (exchange, decoded_anchor, decoded_certificate) =
-            take_time_response(&mut times, 3, &anchor, &certificate).unwrap();
+            take_time_response(&mut times, 3, 7, &anchor, &certificate).unwrap();
         assert_eq!(exchange, [33; 32]);
         assert_eq!(norito::encode_canonical(&decoded_anchor).unwrap(), anchor);
         assert_eq!(
@@ -1238,18 +1245,62 @@ mod tests {
 
     #[test]
     fn cancelling_time_discards_exact_token_once_without_replacing_other_exchanges() {
-        let mut times = BTreeMap::from([(1, [11; 32]), (2, [22; 32])]);
-        assert_eq!(take_time(&mut times, 1).unwrap(), [11; 32]);
-        assert_eq!(take_time(&mut times, 1).unwrap_err().status, INVALID);
+        let mut times = BTreeMap::from([
+            (1, review::OriginBound::new(7, [11; 32])),
+            (2, review::OriginBound::new(7, [22; 32])),
+        ]);
+        assert_eq!(take_time(&mut times, 1, 7).unwrap(), [11; 32]);
+        assert_eq!(take_time(&mut times, 1, 7).unwrap_err().status, INVALID);
         assert_eq!(times.len(), 1);
-        assert_eq!(take_time(&mut times, 2).unwrap(), [22; 32]);
+        assert_eq!(take_time(&mut times, 2, 7).unwrap(), [22; 32]);
         assert!(times.is_empty());
+    }
+    #[test]
+    fn foreign_exchange_cannot_consume_a_time_response_or_cancel_its_origin() {
+        let mut times = BTreeMap::from([(1, review::OriginBound::new(7, [11; 32]))]);
+        for origin in [0, 8, u64::MAX] {
+            assert_eq!(
+                take_time(&mut times, 1, origin).unwrap_err().status,
+                INVALID
+            );
+            assert_eq!(
+                take_time_response(&mut times, 1, origin, &[7], &[8])
+                    .unwrap_err()
+                    .status,
+                INVALID
+            );
+            assert_eq!(times.len(), 1);
+        }
+        assert_eq!(take_time(&mut times, 1, 7).unwrap(), [11; 32]);
+        assert!(times.is_empty());
+    }
+
+    #[test]
+    fn retired_receipt_bypasses_and_unused_queue_fields_are_rejected() {
+        for selector in [3, 41, 54] {
+            assert!(bounds(selector).is_err());
+            for id in [[0; 32], [1; 32]] {
+                assert!(request(&id, selector, 0, 0, [&[1], &[], &[]]).is_err());
+            }
+        }
+        for selector in [57, 58] {
+            assert_eq!(bounds(selector).unwrap(), [0; 3]);
+            assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_ok());
+            assert!(request(&[1; 32], selector, 0, 0, [&[]; 3]).is_err());
+            assert!(request(&[0; 32], selector, 1, 0, [&[]; 3]).is_err());
+            assert!(request(&[0; 32], selector, 0, 1, [&[]; 3]).is_err());
+            for index in 0..3 {
+                let mut bytes: [&[u8]; 3] = [&[]; 3];
+                bytes[index] = &[1];
+                assert!(request(&[0; 32], selector, 0, 0, bytes).is_err());
+            }
+        }
     }
     #[test]
     fn verified_delivery_and_payment_companion_share_ingest_admission() {
         let one: &[u8] = &[1];
         let empty: &[u8] = &[];
-        let verified = request(&[7; 32], 54, 0, 0, [one, empty, empty]).unwrap();
+        let verified = request(&[7; 32], 56, 0, 0, [one, empty, empty]).unwrap();
         let companion = request(&[0; 32], 55, 0, 0, [one, empty, empty]).unwrap();
         assert_eq!(
             super::super::setup_priority(&verified),
@@ -1259,6 +1310,6 @@ mod tests {
             super::super::setup_priority(&companion),
             super::super::Priority::Ingest
         );
-        assert!(bounds(56).is_err());
+        assert!(bounds(59).is_err());
     }
 }

@@ -197,13 +197,13 @@ mod tests {
 mod ecdsa_secp256k1 {
     use super::{PrivateKey, PublicKey};
     use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
-    use elliptic_curve::sec1::ToEncodedPoint as _;
+    use elliptic_curve::{Generate as _, sec1::ToSec1Point as _};
     use k256::ecdsa::{
         RecoveryId, Signature, SigningKey, VerifyingKey,
         signature::hazmat::{PrehashSigner as _, PrehashVerifier as _},
     };
     #[cfg(feature = "rand")]
-    use rand::rngs::OsRng;
+    use rand::rngs::SysRng;
     #[cfg(feature = "rand")]
     use rand_core::TryCryptoRng;
     use sha2::Digest as _;
@@ -229,7 +229,7 @@ mod ecdsa_secp256k1 {
                         ));
                     }
                     let mut rng = rng_from_seed(seed);
-                    PrivateKey::random(&mut rng)
+                    PrivateKey::generate_from_rng(&mut rng)
                 }
                 KeyGenOption::FromPrivateKey(ref s) => s.clone(),
             };
@@ -238,7 +238,7 @@ mod ecdsa_secp256k1 {
         }
         #[cfg(feature = "rand")]
         fn random_private_key() -> Result<PrivateKey, Error> {
-            Self::random_private_key_from_rng(&mut OsRng)
+            Self::random_private_key_from_rng(&mut SysRng)
         }
         #[cfg(feature = "rand")]
         pub(super) fn random_private_key_from_rng<R>(rng: &mut R) -> Result<PrivateKey, Error>
@@ -273,7 +273,7 @@ mod ecdsa_secp256k1 {
             let signature: Signature = signing_key
                 .sign_prehash(&digest)
                 .map_err(|err| Error::Signing(format!("{err:?}")))?;
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             Ok(signature.to_bytes().to_vec())
         }
         pub fn sign_prehash_recoverable(
@@ -281,10 +281,9 @@ mod ecdsa_secp256k1 {
             sk: &PrivateKey,
         ) -> Result<[u8; 65], Error> {
             let signing_key = SigningKey::from(sk);
-            let (mut signature, mut recovery_id) = signing_key
-                .sign_prehash_recoverable(prehash)
-                .map_err(|err| Error::Signing(format!("{err:?}")))?;
-            if let Some(normalized) = signature.normalize_s() {
+            let (mut signature, mut recovery_id) = signing_key.sign_prehash_recoverable(prehash);
+            let normalized = signature.normalize_s();
+            if normalized != signature {
                 signature = normalized;
                 recovery_id =
                     RecoveryId::from_byte(recovery_id.to_byte() ^ 1).ok_or_else(|| {
@@ -314,7 +313,7 @@ mod ecdsa_secp256k1 {
                     .ok_or(Error::BadSignature)?;
             let signature =
                 Signature::from_slice(&signature[..64]).map_err(|_| Error::BadSignature)?;
-            if signature.normalize_s().is_some() {
+            if signature.normalize_s() != signature {
                 return Err(Error::BadSignature);
             }
             VerifyingKey::recover_from_prehash(prehash, &signature, recovery_id)
@@ -322,7 +321,7 @@ mod ecdsa_secp256k1 {
                 .map_err(|_| Error::BadSignature)
         }
         pub fn evm_address(pk: &PublicKey) -> [u8; 20] {
-            let encoded = pk.to_encoded_point(false);
+            let encoded = pk.to_sec1_point(false);
             let mut keccak = Keccak256::new();
             keccak.update(&encoded.as_bytes()[1..]);
             let hash = keccak.finalize();
@@ -338,7 +337,7 @@ mod ecdsa_secp256k1 {
                 return Err(Error::BadSignature);
             }
             let signature = Signature::from_slice(signature).map_err(|_| Error::BadSignature)?;
-            if signature.normalize_s().is_some() {
+            if signature.normalize_s() != signature {
                 return Err(Error::BadSignature);
             }
             let verifying_key = VerifyingKey::from(pk);
@@ -349,12 +348,13 @@ mod ecdsa_secp256k1 {
         }
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
             if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
-                return Err(ParseError(
+                return Err(ParseError::Invalid(
                     "secp256k1 private key material must not be all zero".to_string(),
                 ));
             }
             let bytes = Zeroizing::new(payload.to_vec());
-            PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
+            PrivateKey::from_slice(bytes.as_ref())
+                .map_err(|err| ParseError::Invalid(err.to_string()))
         }
     }
     fn signature_payload_is_all_zero(signature: &[u8]) -> bool {
@@ -378,7 +378,7 @@ mod test {
     #[cfg(feature = "crypto-parity-tests")]
     use amcl::secp256k1::ecp;
     use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
     #[cfg(feature = "crypto-parity-tests")]
     use openssl::{
         bn::{BigNum, BigNumContext},
@@ -387,7 +387,7 @@ mod test {
         nid::Nid,
     };
     #[cfg(feature = "rand")]
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     use sha2::Digest;
     #[cfg(feature = "crypto-parity-tests")]
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
@@ -408,7 +408,7 @@ mod test {
         byte: u8,
     }
     #[cfg(feature = "rand")]
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
@@ -485,21 +485,24 @@ mod test {
     fn parse_public_key_rejects_non_canonical_encoding() {
         let pk = public_key();
         let canonical = pk.to_sec1_bytes();
-        let compressed = pk.to_encoded_point(true);
-        let uncompressed = pk.to_encoded_point(false);
+        let compressed = pk.to_sec1_point(true);
+        let uncompressed = pk.to_sec1_point(false);
         let non_canonical = if canonical.as_ref() == compressed.as_bytes() {
             uncompressed.as_bytes()
         } else {
             compressed.as_bytes()
         };
         let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
-        assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+        assert!(
+            err.to_string().contains("non-canonical"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
     fn typed_decode_rejections_preserve_backend_diagnostics_and_precedence() {
         let key = public_key();
-        let uncompressed = key.to_encoded_point(false);
+        let uncompressed = key.to_sec1_point(false);
         for payload in [
             &[][..],
             &[0; 1][..],
@@ -530,8 +533,8 @@ mod test {
     #[test]
     fn decode_validator_matches_public_parser_acceptance() {
         let key = public_key();
-        let canonical = key.to_encoded_point(true);
-        let uncompressed = key.to_encoded_point(false);
+        let canonical = key.to_sec1_point(true);
+        let uncompressed = key.to_sec1_point(false);
         let all_zero = [0_u8; 33];
         for payload in [
             canonical.as_bytes(),
@@ -604,7 +607,7 @@ mod test {
     fn secp256k1_compatibility() {
         let secret = private_key();
         let (p, s) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
-        let _sk = secp256k1::SecretKey::from_byte_array(s.to_bytes().into()).unwrap();
+        let _sk = secp256k1::SecretKey::from_secret_bytes(s.to_bytes().into()).unwrap();
         let _pk = secp256k1::PublicKey::from_slice(&p.to_sec1_bytes()).unwrap();
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
@@ -618,7 +621,6 @@ mod test {
         let p = public_key();
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, hex::decode(SIGNATURE_1).unwrap().as_slice(), &p)
             .unwrap();
-        let context = secp256k1::Secp256k1::new();
         let pk =
             secp256k1::PublicKey::from_slice(hex::decode(PUBLIC_KEY).unwrap().as_slice()).unwrap();
         let hash_bytes: [u8; 32] = sha2::Sha256::digest(MESSAGE_1).into();
@@ -627,7 +629,7 @@ mod test {
         let signature =
             secp256k1::ecdsa::Signature::from_compact(&hex::decode(SIGNATURE_1).unwrap()[..])
                 .unwrap();
-        context.verify_ecdsa(msg, &signature, &pk).unwrap();
+        secp256k1::ecdsa::verify(&signature, msg, &pk).unwrap();
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
         let openssl_point =
@@ -651,13 +653,12 @@ mod test {
         assert_eq!(sig.len(), 64);
         // Check if secp256k1 signs the message and this module still can verify it
         // And that private keys can sign with other libraries
-        let context = secp256k1::Secp256k1::new();
         let mut key_bytes = [0u8; 32];
         key_bytes.copy_from_slice(&hex::decode(PRIVATE_KEY).unwrap());
-        let sk = secp256k1::SecretKey::from_byte_array(key_bytes).unwrap();
+        let sk = secp256k1::SecretKey::from_secret_bytes(key_bytes).unwrap();
         let hash_bytes: [u8; 32] = sha2::Sha256::digest(MESSAGE_1).into();
         let msg = secp256k1::Message::from_digest(hash_bytes);
-        let sig_1 = context.sign_ecdsa(msg, &sk).serialize_compact();
+        let sig_1 = secp256k1::ecdsa::sign(msg, &sk).serialize_compact();
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &sig_1, &pk).unwrap();
         let openssl_group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let mut ctx = BigNumContext::new().unwrap();
@@ -709,21 +710,19 @@ mod test {
         let sig = EcdsaSecp256k1Sha256::sign(message, &sk);
         let signature = k256::ecdsa::Signature::from_slice(&sig).expect("signature parse");
         assert!(
-            signature.normalize_s().is_none(),
+            signature.normalize_s() == signature,
             "signatures must be low-S"
         );
-        let high_sig = if signature.normalize_s().is_some() {
+        let high_sig = if signature.normalize_s() != signature {
             signature
         } else {
             let (r, s) = signature.split_scalars();
             k256::ecdsa::Signature::from_scalars(r, -s).expect("high-s signature")
         };
-        assert!(high_sig.normalize_s().is_some());
+        assert!(high_sig.normalize_s() != high_sig);
         let digest = sha2::Sha256::digest(message);
         let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
-        let normalized = high_sig
-            .normalize_s()
-            .expect("high-S signature must normalize to low-S");
+        let normalized = high_sig.normalize_s();
         verifying_key
             .verify_prehash(&digest, &normalized)
             .expect("normalized low-S signature should verify");
@@ -742,7 +741,7 @@ mod test {
         let compact =
             k256::ecdsa::Signature::from_slice(&signature[..64]).expect("signature parse");
         assert!(
-            compact.normalize_s().is_none(),
+            compact.normalize_s() == compact,
             "recoverable signatures produced by iroha_crypto must be low-S"
         );
         let recovered = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature)
@@ -792,12 +791,12 @@ mod test {
             .expect("recoverable signature");
         let low = k256::ecdsa::Signature::from_slice(&signature[..64]).expect("signature parse");
         assert!(
-            low.normalize_s().is_none(),
+            low.normalize_s() == low,
             "test vector must start from canonical low-S form"
         );
         let (r, s) = low.split_scalars();
         let high = k256::ecdsa::Signature::from_scalars(r, -s).expect("high-S signature");
-        assert!(high.normalize_s().is_some());
+        assert!(high.normalize_s() != high);
         signature[..64].copy_from_slice(high.to_bytes().as_ref());
         signature[64] = match signature[64] {
             27 => 28,

@@ -48,7 +48,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Missing/corrupt source custody, changed admission, unavailable original keys or proof,
     /// and uncertain provider outcomes. Lost released bytes never cause a new signature.
     pub fn bootstrap(&mut self) -> Result<Completion, Error> {
-        let _payment = self.scheduler.payment();
         let marker = match self.status()? {
             SlotStatus::Enrollment(marker) => marker,
             SlotStatus::Pending(marker) => {
@@ -74,26 +73,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             }
             _ => return Err(Error::Invalid("Bootstrap requires enrolled custody")),
         };
+        self.scheduler.require_archive_clear()?;
+        let _payment = self.scheduler.payment();
         let marker_digest = *marker.marker_digest();
         let credential = self.proofs.enrollment.credential_digest();
         let manifest = self.proofs.installed.verifier().manifest_digest();
-        let plan: BootstrapPlanV1 = match self
+        let plan: BootstrapPlanV1 = if let Some(bytes) = self
             .archive
             .get(ArchiveKey::BootstrapPreparation, PLAN_MAX)?
         {
-            Some(bytes) => archive::decode(&bytes)?,
-            None => {
-                let plan = BootstrapPlanV1 {
-                    version: 1,
-                    marker: marker_digest,
-                    credential,
-                    manifest,
-                    nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
-                };
-                self.archive
-                    .put(ArchiveKey::BootstrapPreparation, &archive::encode(&plan)?)?;
-                plan
-            }
+            archive::decode(&bytes)?
+        } else {
+            let plan = BootstrapPlanV1 {
+                version: 1,
+                marker: marker_digest,
+                credential,
+                manifest,
+                nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
+            };
+            self.archive
+                .put(ArchiveKey::BootstrapPreparation, &archive::encode(&plan)?)?;
+            plan
         };
         let restoration = iroha_plonk::work_metrics::WorkTimer::start(
             iroha_plonk::work_metrics::WorkPhase::SourceRestore,

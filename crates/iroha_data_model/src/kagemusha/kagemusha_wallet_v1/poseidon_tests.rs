@@ -525,7 +525,11 @@ fn kagemusha_wallet_v1_indexed_tree_rejects_tampered_openings() {
         moved.slot ^= 1 << height;
         assert_invalid(
             kagemusha_wallet_indexed_verify_membership_v1(&root, &leaf, &moved),
-            "indexed_opening.root",
+            if moved.slot == 0 {
+                "indexed_opening.slot"
+            } else {
+                "indexed_opening.root"
+            },
         );
     }
     for forged in [
@@ -583,6 +587,173 @@ fn kagemusha_wallet_v1_indexed_tree_rejects_tampered_openings() {
         KagemushaWalletIndexedOpeningV1::from_sibling_bytes(opening.slot, &opening.sibling_bytes())
             .expect("round trip");
     assert_eq!(round_trip, opening);
+}
+
+/// Sentinel key and value are zero together; ordinary occupied leaves have neither zero.
+#[test]
+fn kagemusha_wallet_v1_indexed_leaf_rejects_mixed_zero_key_value() {
+    for leaf in [
+        KagemushaWalletIndexedLeafV1 {
+            value: int(1),
+            ..KagemushaWalletIndexedLeafV1::SENTINEL
+        },
+        KagemushaWalletIndexedLeafV1 {
+            key: int(1),
+            ..KagemushaWalletIndexedLeafV1::SENTINEL
+        },
+    ] {
+        assert_invalid(leaf.validate(), "indexed_leaf.value");
+        assert_invalid(leaf.hash(), "indexed_leaf.value");
+    }
+    let linked_sentinel = KagemushaWalletIndexedLeafV1 {
+        next_key: int(1),
+        ..KagemushaWalletIndexedLeafV1::SENTINEL
+    };
+    linked_sentinel.validate().expect("linked sentinel");
+    KagemushaWalletIndexedLeafV1 {
+        key: int(1),
+        value: int(2),
+        next_key: [0; 32],
+    }
+    .validate()
+    .expect("ordinary leaf");
+}
+
+/// A self-consistent insertion opening cannot admit a low leaf with a malformed sentinel value.
+#[test]
+fn kagemusha_wallet_v1_indexed_insert_rejects_malformed_low_leaf() {
+    let low = KagemushaWalletIndexedLeafV1 {
+        value: int(1),
+        ..KagemushaWalletIndexedLeafV1::SENTINEL
+    };
+    let key = kagemusha_wallet_pair_key_v1(1, 0);
+    let raw_hash = |next_key| {
+        kagemusha_wallet_poseidon_v1(
+            KAGEMUSHA_WALLET_INDEXED_LEAF_DOMAIN_V1,
+            &[low.key, low.value, next_key],
+        )
+        .expect("canonical raw leaf fields")
+    };
+    let low_opening = KagemushaWalletIndexedOpeningV1 {
+        slot: 0,
+        siblings: core::array::from_fn(empty),
+    };
+    let old_root = low_opening
+        .root_over(&raw_hash([0; 32]))
+        .expect("raw old root");
+    let linked_hash = raw_hash(key);
+    let intermediate = low_opening
+        .root_over(&linked_hash)
+        .expect("raw intermediate root");
+    let mut slot_opening = KagemushaWalletIndexedOpeningV1 {
+        slot: 1,
+        siblings: core::array::from_fn(empty),
+    };
+    slot_opening.siblings[0] = linked_hash;
+    assert_eq!(
+        slot_opening.empty_root().expect("empty destination"),
+        intermediate
+    );
+    let insertion = KagemushaWalletIndexedInsertV1 {
+        low,
+        low_opening,
+        slot_opening,
+    };
+    assert_invalid(
+        insertion.verify(&old_root, &key, &int(1)),
+        "indexed_leaf.value",
+    );
+}
+
+/// Recomputing a matching root cannot move the sentinel or put an ordinary leaf in slot zero.
+#[test]
+fn kagemusha_wallet_v1_indexed_leaf_roots_bind_sentinel_slot() {
+    let sentinel = KagemushaWalletIndexedLeafV1::SENTINEL;
+    let ordinary = KagemushaWalletIndexedLeafV1 {
+        key: int(1),
+        value: int(2),
+        next_key: [0; 32],
+    };
+    for (leaf, slot) in [(sentinel, 1), (ordinary, 0)] {
+        let opening = KagemushaWalletIndexedOpeningV1 {
+            slot,
+            siblings: [[0; 32]; 32],
+        };
+        let rebound = opening
+            .root_over(&leaf.hash().expect("valid leaf"))
+            .expect("raw root");
+        assert_invalid(opening.leaf_root(&leaf), "indexed_opening.slot");
+        if slot == 0 {
+            assert_invalid(
+                kagemusha_wallet_indexed_verify_membership_v1(&rebound, &leaf, &opening),
+                "indexed_opening.slot",
+            );
+        } else {
+            assert_invalid(
+                kagemusha_wallet_indexed_verify_non_membership_v1(
+                    &rebound,
+                    &int(1),
+                    &leaf,
+                    &opening,
+                ),
+                "indexed_opening.slot",
+            );
+        }
+        assert_eq!(
+            opening.empty_root().expect("empty root"),
+            opening.root_over(&[0; 32]).expect("raw empty root"),
+        );
+    }
+    for (leaf, slot) in [(sentinel, 0), (ordinary, u32::MAX)] {
+        let opening = KagemushaWalletIndexedOpeningV1 {
+            slot,
+            siblings: [[0; 32]; 32],
+        };
+        assert_eq!(
+            opening.leaf_root(&leaf).expect("valid leaf location"),
+            opening
+                .root_over(&leaf.hash().expect("leaf hash"))
+                .expect("raw root"),
+        );
+    }
+}
+
+/// Retained leaf transcripts reject invalid shape/location before becoming native inputs.
+#[test]
+fn kagemusha_wallet_v1_indexed_transcripts_reject_invalid_leaf_locations() {
+    let sentinel = KagemushaWalletIndexedLeafV1::SENTINEL;
+    let ordinary = KagemushaWalletIndexedLeafV1 {
+        key: int(1),
+        value: int(2),
+        next_key: [0; 32],
+    };
+    for (leaf, slot) in [(sentinel, 1), (ordinary, 0)] {
+        let opening = KagemushaWalletIndexedOpeningV1 {
+            slot,
+            siblings: [[0; 32]; 32],
+        };
+        assert_invalid(
+            KagemushaWalletIndexedOpeningV1::from_transcript(&opening.leaf_transcript(&leaf)),
+            "indexed_opening.slot",
+        );
+        assert_eq!(
+            KagemushaWalletIndexedOpeningV1::from_transcript(&opening.empty_transcript())
+                .expect("raw empty opening"),
+            (None, opening),
+        );
+    }
+    let opening = KagemushaWalletIndexedOpeningV1 {
+        slot: 0,
+        siblings: [[0; 32]; 32],
+    };
+    let forged = KagemushaWalletIndexedLeafV1 {
+        value: int(1),
+        ..sentinel
+    };
+    assert_invalid(
+        KagemushaWalletIndexedOpeningV1::from_transcript(&opening.leaf_transcript(&forged)),
+        "indexed_leaf.value",
+    );
 }
 
 /// Opening transcripts (§3.2, owner answer A2) parse back to their leaf and opening: a leaf

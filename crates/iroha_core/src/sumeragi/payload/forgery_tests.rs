@@ -29,7 +29,11 @@ fn carrier(
         &chain.network_id(),
         Duration::from_secs(1),
         chain.state().view().world().parameters().transaction(),
-        &iroha_config::parameters::actual::Crypto::default(),
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::Secp256k1,
+        ])
+        .expect("explicit current admission fixture policy"),
         &clock,
     )
     .unwrap()
@@ -140,6 +144,9 @@ fn malformed_signature_drops_only_its_carrier_and_quota_keeps_fifo_order() {
 
 #[test]
 fn original_pool_refusal_retains_selected_work_and_retries_after_release() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let (chain, keys) = active_member_chain();
     let view = chain.state().view();
     let parent = view.latest_block().unwrap().unwrap();

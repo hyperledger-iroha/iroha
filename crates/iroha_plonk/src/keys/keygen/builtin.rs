@@ -1,4 +1,4 @@
-//! Closed compiled source profiles, separate from ordinary strict source intake.
+//! Closed compiled mathematical profiles, separate from ordinary strict source intake.
 //!
 //! The generated table is immutable native code produced by a complete strict
 //! source traversal. Public inputs only select an exact existing profile/member;
@@ -11,10 +11,9 @@ use sha2::{Digest as _, Sha256};
 use super::{DescriptorBinding, SourceBoundVerifyingKeyV2, VerifyingKey, rebuild};
 use crate::{cs::CurveV1, keys::pk::artifact, pcs::ipa::PinnedParams};
 
+// Generated data with packaged byte identity; formatting it would change those bytes.
+#[rustfmt::skip]
 mod generated;
-mod source_identity {
-    include!(concat!(env!("OUT_DIR"), "/native_source_identity.rs"));
-}
 
 const MAX_PROFILE_BYTES: usize = 32 << 20;
 const MAX_ROLE_WORDS: usize = 8;
@@ -26,12 +25,10 @@ pub enum BuiltinSourceErrorV1 {
     Cancelled,
     /// Actual complete profile is outside this native binary's finite set.
     UnsupportedProfile,
-    /// Generated source identity differs from the actual compiled source closure.
-    StaleSource,
+    /// Generated profile and the compiled mathematical ABI contract differ.
+    ContractMismatch,
     /// The current target is outside the implemented native support set.
     UnsupportedTarget,
-    /// The build could not account for its complete required source closure.
-    IncompleteSourceClosure,
     /// This exact role path is absent or ambiguous within the selected profile.
     Member,
     /// Complete descriptor, VK or compact original identity differs.
@@ -52,9 +49,8 @@ impl core::fmt::Display for BuiltinSourceErrorV1 {
         match self {
             Self::Cancelled => f.write_str("built-in source admission cancelled"),
             Self::UnsupportedProfile => f.write_str("unsupported built-in source profile"),
-            Self::StaleSource => f.write_str("stale built-in source profile"),
+            Self::ContractMismatch => f.write_str("built-in mathematical ABI contract differs"),
             Self::UnsupportedTarget => f.write_str("unsupported built-in source target"),
-            Self::IncompleteSourceClosure => f.write_str("incomplete native source closure"),
             Self::Member => f.write_str("built-in source member differs"),
             Self::Original => f.write_str("built-in source original differs"),
             Self::Artifact(error) => write!(f, "built-in source: {error}"),
@@ -73,16 +69,12 @@ impl From<artifact::Error> for BuiltinSourceErrorV1 {
     }
 }
 
-/// Read the actual build-computed generator input identity as public DATA.
-/// This grants no profile, member or source authority and remains available when
-/// generated entries are empty or stale, so the strict generator can refresh them.
-/// # Errors
-/// The build could not account for its complete required source closure.
-pub fn builtin_source_identity_v1() -> Result<[u8; 32], BuiltinSourceErrorV1> {
-    if !source_identity::NATIVE_SOURCE_CLOSURE_COMPLETE {
-        return Err(BuiltinSourceErrorV1::IncompleteSourceClosure);
-    }
-    Ok(source_identity::CURRENT_NATIVE_SOURCE_DIGEST)
+/// The compiled mathematical ABI contract, independent of source-file provenance.
+/// This public digest grants no profile, member or proof authority. Generated
+/// entries pin it as a literal after strict original and source validation.
+#[must_use]
+pub fn builtin_contract_v1() -> [u8; 32] {
+    crate::contract::builtin_contract_v1()
 }
 
 #[derive(Debug)]
@@ -106,7 +98,7 @@ struct BuiltinMemberEntry {
 #[derive(Debug)]
 struct BuiltinProfileEntry {
     profile: BuiltinBlob,
-    source_identity: [u8; 32],
+    contract: [u8; 32],
     members: &'static [BuiltinMemberEntry],
 }
 
@@ -115,6 +107,7 @@ struct BuiltinProfileEntry {
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinSourceProfileV1 {
     entry: &'static BuiltinProfileEntry,
+    verify_sources: bool,
 }
 
 /// One role-specific member of a selected immutable compiled source graph.
@@ -122,6 +115,7 @@ pub struct BuiltinSourceProfileV1 {
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinSourceMemberV1 {
     entry: &'static BuiltinMemberEntry,
+    verify_source: bool,
 }
 
 // Only the all-original checks below construct this token. The separate seal
@@ -176,15 +170,11 @@ fn equal_bytes(
 fn select_profile(
     profiles: &'static [BuiltinProfileEntry],
     actual_profile: &[u8],
-    source_identity: &[u8; 32],
-    closure_complete: bool,
+    contract: &[u8; 32],
     target_supported: bool,
     cancellation: Option<&CancellationToken>,
 ) -> Result<BuiltinSourceProfileV1, BuiltinSourceErrorV1> {
     CancellationToken::checkpoint(cancellation)?;
-    if !closure_complete {
-        return Err(BuiltinSourceErrorV1::IncompleteSourceClosure);
-    }
     if !target_supported {
         return Err(BuiltinSourceErrorV1::UnsupportedTarget);
     }
@@ -201,11 +191,14 @@ fn select_profile(
     if matches.next().is_some() {
         return Err(BuiltinSourceErrorV1::UnsupportedProfile);
     }
-    if &entry.source_identity != source_identity {
-        return Err(BuiltinSourceErrorV1::StaleSource);
+    if &entry.contract != contract {
+        return Err(BuiltinSourceErrorV1::ContractMismatch);
     }
     CancellationToken::checkpoint(cancellation)?;
-    Ok(BuiltinSourceProfileV1 { entry })
+    Ok(BuiltinSourceProfileV1 {
+        entry,
+        verify_sources: false,
+    })
 }
 
 impl BuiltinSourceProfileV1 {
@@ -213,7 +206,7 @@ impl BuiltinSourceProfileV1 {
     /// The owning wallet must independently authenticate the installation and
     /// finish every graph/member check before granting monetary capabilities.
     /// # Errors
-    /// Unknown, ambiguous, stale or unsupported profile, incomplete build closure,
+    /// Unknown, ambiguous, incompatible or unsupported profile,
     /// oversized input or cooperative cancellation. There is no strict fallback.
     pub fn match_actual(
         actual_profile: &[u8],
@@ -222,11 +215,25 @@ impl BuiltinSourceProfileV1 {
         select_profile(
             generated::PROFILES,
             actual_profile,
-            &source_identity::CURRENT_NATIVE_SOURCE_DIGEST,
-            source_identity::NATIVE_SOURCE_CLOSURE_COMPLETE,
-            source_identity::BUILTIN_TARGET_SUPPORTED,
+            &builtin_contract_v1(),
+            crate::contract::BUILTIN_TARGET_SUPPORTED,
             cancellation,
         )
+    }
+
+    /// The same profile, whose members also require every actual source to
+    /// reconstruct their pinned source fingerprint when they are admitted.
+    ///
+    /// Phones skip this witnessless synthesis at admission because each proof
+    /// rebuild repeats it. A build or installation check selects it so that a
+    /// circuit which differs from its installed key fails before shipping
+    /// instead of at that circuit's first proof on a device.
+    #[must_use]
+    pub const fn verifying_sources(self) -> Self {
+        Self {
+            verify_sources: true,
+            ..self
+        }
     }
 
     /// Select an exact ordered role path within this profile only.
@@ -249,13 +256,29 @@ impl BuiltinSourceProfileV1 {
         if matches.next().is_some() {
             return Err(BuiltinSourceErrorV1::Member);
         }
-        Ok(BuiltinSourceMemberV1 { entry })
+        Ok(BuiltinSourceMemberV1 {
+            entry,
+            verify_source: self.verify_sources,
+        })
     }
 }
 
 impl BuiltinSourceMemberV1 {
+    /// Whether admission must also check the actual source against this member,
+    /// as selected by [`BuiltinSourceProfileV1::verifying_sources`].
+    #[must_use]
+    pub const fn verifies_source(self) -> bool {
+        self.verify_source
+    }
+
+    /// This member's exact ordered role path within its profile, for reports.
+    #[must_use]
+    pub const fn role_path(self) -> &'static [u32] {
+        self.entry.role_path
+    }
+
     /// Admit all three exact canonical originals against this compiled member.
-    /// This explicit build-qualified path performs no source synthesis or MSM.
+    /// This explicit contract-qualified path performs no source synthesis or MSM.
     /// Ordinary artifact import remains strict; later proving still reconstructs
     /// and checks the source fingerprint before constructing proving buffers.
     /// # Errors

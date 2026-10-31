@@ -9,7 +9,7 @@
     clippy::match_same_arms,
     clippy::unnecessary_debug_formatting
 )]
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
 use iroha_genesis::init_instruction_registry;
 use std::{
@@ -25,12 +25,14 @@ mod genesis;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
-mod network_bootstrap;
+mod network;
+mod node;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
 mod secure_fs;
 use iroha_deploy::shell;
+mod sora_network;
 mod swarm;
 mod tui;
 mod verify;
@@ -54,6 +56,9 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
+    "  kagami sora-network generate --profile nexus --out-dir ./nexus\n",
+    "  kagami node init --dir ./node --public-address 203.0.113.7:1337\n",
+    "  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -73,13 +78,28 @@ fn main() -> ExitCode {
 }
 fn run() -> Outcome {
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
-    color_eyre::install()?;
+    // Report the error chain only: source locations and the backtrace advert are noise for
+    // people using Kagami. Setting RUST_BACKTRACE still prints a backtrace.
+    color_eyre::config::HookBuilder::default()
+        .display_location_section(false)
+        .display_env_section(false)
+        .install()?;
     init_instruction_registry();
-    let cli = Cli::parse();
+    let matches = Cli::command().version(version_text()).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     cli.ui.install();
     let mut writer = BufWriter::new(stdout());
     let outcome = cli.command.run(&mut writer);
     finish_output(&mut writer, outcome)
+}
+
+/// Package version plus the source revision this build recorded, when it recorded one.
+fn version_text() -> &'static str {
+    let version = env!("CARGO_PKG_VERSION");
+    match BUILD_SOURCE_ID.or(option_env!("VERGEN_GIT_SHA")) {
+        Some(source) => Box::leak(format!("{version} (source {source})").into_boxed_str()),
+        None => version,
+    }
 }
 
 // Flush every ordinary command result, retaining its original error if output also fails.
@@ -120,6 +140,12 @@ enum Command {
     /// Start and manage a persistent localnet without supplying configuration
     #[command(subcommand)]
     Localnet(developer::LocalnetCommand),
+    /// Prepare one node directory (keys and starter config) for an existing or new network
+    #[command(subcommand)]
+    Node(node::NodeCommand),
+    /// Sign genesis for validators that hold their own keys and write the files nodes share
+    #[command(subcommand)]
+    Network(network::NetworkCommand),
     /// Run an owner-private local dataspace attached to an installed remote network
     #[command(subcommand)]
     Dataspace(developer::DataspaceCommand),
@@ -137,12 +163,15 @@ enum Command {
     ManagedWorker(developer::WorkerArgs),
     /// Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
     Docker(swarm::Args),
+    /// Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
+    #[command(subcommand)]
+    SoraNetwork(sora_network::Command),
     /// Generate cryptographic key pairs and optional validator Proofs-of-Possession
     Keys(Box<crypto::Args>),
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+    /// Inspect native privacy profiles and prepare reviewed Taira release inputs
     PrivacyBootstrap(privacy_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
@@ -152,9 +181,6 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum AdvancedCommand {
-    /// Prepare signed remote-network bootstrap and native installation authorities offline
-    #[command(subcommand)]
-    NetworkBootstrap(Box<network_bootstrap::Command>),
     /// Generate per-client CLI configs from a base client.toml
     #[command(name = "client-configs")]
     ClientConfigs(client_configs::Args),
@@ -170,7 +196,6 @@ enum AdvancedCommand {
 impl<T: Write> RunArgs<T> for AdvancedCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
-            Self::NetworkBootstrap(args) => args.run(writer),
             Self::ClientConfigs(args) => args.run(writer),
             Self::Codec(args) => args.run(writer),
             Self::Kura(args) => args.run(writer),
@@ -185,12 +210,15 @@ impl<T: Write> RunArgs<T> for Command {
         match self {
             Wizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Node(args) => args.run(writer),
+            Network(args) => args.run(writer),
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
             Package(args) => args.run(writer),
             ManagedWorker(args) => args.run(writer),
             Docker(args) => args.run(writer),
+            SoraNetwork(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             PrivacyBootstrap(args) => args.run(writer),
@@ -216,27 +244,19 @@ mod tests {
         Cli::try_parse_from(args.split(' '))
     }
     #[test]
+    fn version_text_starts_with_the_package_version() {
+        assert!(super::version_text().starts_with(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
     fn verify_args() {
         Cli::command().debug_assert();
     }
     #[test]
     fn privacy_bootstrap_commands_require_complete_exact_v1_artifact_paths() {
-        assert!(
-            parse(
-                "kagami privacy-bootstrap emit-taira-v1 \
-                 --instructions-output ./privacy-instructions.json \
-                 --report-output ./privacy-report.json"
-            )
-            .is_ok()
-        );
-        assert!(
-            parse(
-                "kagami privacy-bootstrap validate-taira-v1 \
-                 --instructions ./privacy-instructions.json \
-                 --report ./privacy-report.json"
-            )
-            .is_ok()
-        );
+        assert!(parse("kagami privacy-bootstrap catalog").is_ok());
+        assert!(parse("kagami privacy-bootstrap emit-taira-v1").is_err());
+        assert!(parse("kagami privacy-bootstrap validate-taira-v1").is_err());
         assert!(
             parse(
                 "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
@@ -248,8 +268,6 @@ mod tests {
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json \
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
@@ -262,11 +280,21 @@ mod tests {
             )
             .is_ok()
         );
+        for retired_flag in [
+            "--activation-instructions ./old.json",
+            "--activation-report ./old-report.json",
+        ] {
+            let command = format!(
+                "kagami privacy-bootstrap render-taira-release-v1 --broker-public-export ./broker.json --plan-template ./plan.json --config-template ./config.toml --genesis-template ./genesis.template.json --nevo-review ./review.json --plan-output ./out-plan.json --config-output ./out-config.toml --genesis-output ./out-genesis.template.json --broker-public-output ./out-broker.json {retired_flag}"
+            );
+            assert!(
+                parse(&command).is_err(),
+                "retired activation flags must not be accepted"
+            );
+        }
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json"
             )
             .is_err(),
@@ -286,7 +314,7 @@ mod tests {
                  --instructions-output ./privacy-instructions.json"
             )
             .is_err(),
-            "emission without its digest inventory must remain unavailable"
+            "retired activation emission commands must be rejected"
         );
         assert!(
             parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),
@@ -438,6 +466,27 @@ mod tests {
                 "kagami advanced client-configs --base-config ./client.toml --names alice --seed-prefix demo"
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn sora_network_bundles_are_separate_from_developer_localnets() {
+        const BEACON_LAUNCH: &str = "validate-beacon-launch --network-dir /run/network \
+             --peer-index 0 --beacon-config /run/beacon.toml --beacon-credential /run/beacon.cred";
+        assert!(parse("kagami sora-network generate --profile nexus --out-dir ./nexus").is_ok());
+        assert!(parse(&format!("kagami sora-network {BEACON_LAUNCH}")).is_ok());
+        assert!(
+            parse("kagami localnet generate --sora-profile nexus --out-dir ./localnet").is_err()
+        );
+        assert!(parse(&format!("kagami localnet {BEACON_LAUNCH}")).is_err());
+    }
+    #[test]
+    fn network_create_requires_a_roster_and_an_output_directory() {
+        assert!(parse("kagami network").is_err());
+        assert!(parse("kagami network create --out-dir ./network").is_err());
+        assert!(
+            parse("kagami network create --out-dir ./network --validator ea0130@host:1337=00")
+                .is_err(),
+            "roster entries are validated while parsing"
         );
     }
     #[test]

@@ -366,9 +366,9 @@ mod tests {
     fn authorization() -> KaigiAuthorizationContextV1 {
         KaigiAuthorizationContextV1 {
             network_id: [1; 32],
-            call_id: [2; 6],
-            host_id: [3; 6],
-            subject_id: [3; 6],
+            call_id: [2; 4],
+            host_id: [3; 4],
+            subject_id: [3; 4],
             participation_sequence: 0,
             action: KaigiAuthorizationActionV1::HostCreate,
             pre_roster_root: [4; 32],
@@ -449,6 +449,55 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn fresh_proofs_bind_all_four_roles_and_complete_native_identity_words() {
+        let relation = NativeRelationV1::Authorization;
+        let prover = relation.prover().unwrap();
+        let verifier = relation.verifier().unwrap();
+        for action in [
+            KaigiAuthorizationActionV1::HostCreate,
+            KaigiAuthorizationActionV1::Join,
+            KaigiAuthorizationActionV1::Leave,
+            KaigiAuthorizationActionV1::HostEnd,
+        ] {
+            let participant = matches!(
+                action,
+                KaigiAuthorizationActionV1::Join | KaigiAuthorizationActionV1::Leave
+            );
+            let context = KaigiAuthorizationContextV1 {
+                call_id: [u64::MAX; 4],
+                host_id: [u64::MAX; 4],
+                subject_id: if participant {
+                    [u64::MAX - 1; 4]
+                } else {
+                    [u64::MAX; 4]
+                },
+                participation_sequence: u64::from(participant),
+                action,
+                ..authorization()
+            };
+            let (public, proof) = prover
+                .prove_authorization(context, secret())
+                .unwrap()
+                .into_parts();
+            verifier.verify(&public, &proof).unwrap();
+            for row in 0..public.len() {
+                let mut changed = public.clone();
+                changed[row][0] ^= 1;
+                assert!(
+                    verifier.verify(&changed, &proof).is_err(),
+                    "{action:?} row={row}"
+                );
+            }
+            let mut old_shape = public.clone();
+            old_shape.resize(31, [0; 32]);
+            assert!(matches!(
+                verifier.verify(&old_shape, &proof),
+                Err(VerifyError::InstanceLength { .. })
+            ));
+        }
+    }
+
     #[test]
     fn wrong_proving_kind_and_invalid_context_are_rejected() {
         let auth = NativeRelationV1::Authorization.prover().unwrap();

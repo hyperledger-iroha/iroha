@@ -13,7 +13,7 @@
 //! the obligation ledger; this module checks each slot's selected claim.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{Fp, PastaCurve};
 use iroha_plonk::{
     frontend::{Error, Region},

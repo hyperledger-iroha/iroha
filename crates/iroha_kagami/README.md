@@ -6,13 +6,15 @@ use the shared `iroha_deploy` engine and Musubi deployment service.
 
 ## Build
 
-From anywhere in the repository, run:
+From anywhere in the repository, build `kagami` together with the daemon it starts:
 
 ```bash
-cargo build --bin kagami
+cargo build -p iroha_kagami -p irohad
 ```
 
-This places `kagami` in `target/debug/` from the repository root.
+This places both in `target/debug/` from the repository root. `kagami localnet up` runs the
+`iroha3d` beside it, so a `kagami` built on its own cannot start a network, and the two must
+come from the same source. `up` checks that before it starts anything.
 
 The native CLI package builds the matching `iroha` client, Kagami worker and
 standard daemon together in one locked Cargo invocation:
@@ -58,16 +60,36 @@ Start or resume a four-validator localnet without supplying configuration:
 
 ```bash
 kagami localnet up
-kagami contract deploy hello.ko
+kagami contract deploy examples/hello/hello.ko
+kagami contract call Hello::universal --entrypoint hajimari
+kagami contract call Hello::universal --entrypoint greet --readback count
+kagami contract view Hello::universal --entrypoint count
 kagami localnet down
 ```
 
 Install the native CLI package with `kagami` and `iroha3d` side by side.
-State and credentials live outside the project in a private workspace-scoped
-store. `down` retains the ledger; `localnet reset local` deliberately retires it.
-`contract deploy` also accepts `.to` or a Musubi package directory and starts the
-default localnet when no context has been selected. Use `context list`,
-`context show`, or `context use NAME` to inspect or select retained environments.
+State and credentials live outside the project in a private store for the enclosing git
+repository or Musubi workspace, so every subdirectory shares one network; `--workspace`
+selects a different one. `down` retains the ledger; `localnet reset local` deliberately
+retires it. `contract deploy` also accepts `.to` or a Musubi package directory and starts
+the default localnet when no context has been selected. Use `context list`, `context show`,
+or `context use NAME` to inspect or select retained environments. `up` and `context show`
+print the `client config` path to pass to `iroha --config`.
+
+`contract call` caps fees at 1000 units of the network's generated fee asset unless
+`--max-fee` says otherwise. `localnet logs --peer 0` reads a validator's output, and
+`--follow` keeps printing it.
+
+After a rebuild, `up` checks that the new `iroha3d` accepts the stopped network's signed
+genesis. If it does, the network moves to the new binaries and keeps its ledger; if not, `up`
+refuses and names `localnet reset`. A network that never became ready is simply replaced.
+Networks created with `--with-storage` and attached private data spaces stay bound to the
+binaries that created them.
+
+The default network starts four validators and funds a developer account.
+Local storage and package-registry services are explicit:
+`kagami localnet up registry --with-storage`. This creates and selects a separate
+network; an existing network always retains its original profile.
 
 For contracts declaring `hajimari`/`始まり`, the deployment result includes the
 canonical hook name and parameter types. Deployment does not invoke that hook;
@@ -75,7 +97,8 @@ run it before other calls or views if it has not already succeeded. Repeat and
 resume results do not infer its current state from the artifact.
 
 `kagami package publish .` explicitly publishes a Musubi package using the retained generated
-developer client and its `dev.universal` namespace intent. Begin may start the default localnet;
+developer client and its `dev.universal` namespace intent. Select a network created with
+`--with-storage` for local publication;
 `--resume OPERATION_ID` and `--recover OPERATION_ID` require its existing selected context.
 An explicit member manifest or directory selects that member; `--package dev.universal/NAME`
 must match it. A workspace-root input keeps declared defaults and explicit package selection.
@@ -88,9 +111,10 @@ a replacement client TOML, copies a manager key into a daemon, or changes contra
 The canonical publication outcome supplies human/JSON rendering and process status. Complete
 three-provider publication and cold-package runtime qualification remain acceptance gates.
 
-Private dataspaces use an independently pinned network profile installed with the
-native bundle. `kagami dataspace networks` lists the available names. With a
-qualified parent profile installed, the command surface is:
+Private data spaces use a network endpoint, chain identity and address prefix installed
+with the native bundle. The CLI discovers signed genesis and verifies native consensus
+certificates directly through that endpoint; it retains the exact network identity. `kagami dataspace networks` lists the available names. With a
+parent profile installed, the command surface is:
 
 ```bash
 kagami dataspace up privateapp --network taira
@@ -107,8 +131,8 @@ its owner's `admin@privateapp` alias without adding a parent execution lane.
 `--account-alias LABEL` selects another canonical owner label before first
 provisioning; changing it on retry is refused. The original two-lease rent quote
 and fee allowance survive interrupted preparation. A timeout leaves that work
-available for status and retry. Release installation, recurring Taira checkpoint publication
-and combined runtime qualification remain tracked acceptance gates; the CLI invents no release key.
+available for status and retry. No separately published checkpoint or server access is
+required. Combined live Taira attachment testing remains open.
 
 Views and calls use an existing selected context and the verified deployed alias.
 A call's positive `--max-fee` caps the combined self-grant and call in that private
@@ -120,6 +144,38 @@ view after local `Applied`; the separate parent observation remains historical.
 
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.
+
+A network of separate machines, with every validator key created on its own host:
+
+```bash
+# on each validator host
+kagami node init --dir ./node --public-address 203.0.113.7:1337
+# once, with the `validator:` line every host printed
+kagami network create --out-dir ./network \
+  --validator "$VALIDATOR_A" --validator "$VALIDATOR_B" \
+  --validator "$VALIDATOR_C" --validator "$VALIDATOR_D"
+# on each validator host, after copying network.toml, genesis.signed.nrt and
+# genesis.expected_hash and nexus-amx-context.v1.bin into ./node
+iroha3d --config node/config.toml --sumeragi-assert-fresh-key
+```
+
+`node init` writes the validator (BLS), SoraNet transport and streaming keys to
+`node/secrets/` in the layout `iroha3d` reads through `data_dir`, and a starter
+`node/config.toml` that names only this node's key and listeners and includes
+`network.toml` with `extends`. It prints `validator: PUBLIC_KEY@HOST:PORT=POP_HEX` for
+`network create`, and never replaces existing keys or config.
+
+`network create` checks that the roster is an exact `3f + 1` committee of BLS-normal keys
+with valid proofs of possession at distinct addresses, then signs genesis with a fresh
+genesis key. `network.toml` holds the chain, roster, `[genesis]` and every
+consensus-bound section the genesis was signed with; with `genesis.signed.nrt` and
+`genesis.expected_hash` it is all a node needs to start. Copy the generated
+`nexus-amx-context.v1.bin` alongside them so `--check-config` can name exact fields
+if the node's settings differ from signed genesis. `client.toml` signs as an operator
+account holding the network's XOR and administrative permissions; its key and the genesis
+key stay in the owner-only `secrets/` directory, which is never distributed. Pass
+`--sumeragi-assert-fresh-key` only on a brand-new network's first boot; see the
+[daemon guide](../irohad/README.md#configuration).
 
 Existing Sora network / observer peer config, guided:
 
@@ -137,6 +193,14 @@ Direct NPoS localnet:
 
 ```bash
 kagami localnet generate --consensus-mode npos --peers 4 --out-dir ./localnet-npos
+```
+
+Sora network bundles (Nexus, the public Taira chain and the private dataspace
+presets) are generated separately; localnets never take a Sora profile or a
+public chain identity:
+
+```bash
+kagami sora-network generate --profile nexus --peers 4 --out-dir ./nexus
 ```
 
 Docker Compose from one authoritative prepared bundle:
@@ -202,6 +266,30 @@ into the output directory.
   Applied evidence and artifact/alias readback before reporting completion.
 - `--resume JOURNAL` recovers the original operation without rebuilding or signing
   replacements. Identical repeated deployments reconcile their retained operation.
+- `kagami contract saved` lists each alias's resumable journal and whether it applied,
+  without starting validators or signing; Mochi's Resume card shows the same list.
+
+`kagami node init`
+- Creates `<dir>/secrets/{validator,transport,streaming}.key` (owner-only, published
+  atomically) and `<dir>/config.toml` with `data_dir = "."`
+- The config names only this node's key and listeners and includes `network.toml` with
+  `extends`; state paths, transport and streaming public keys, and the streaming codec
+  tables are derived defaults
+- Prints the node's `validator: PUBLIC_KEY@HOST:PORT=POP_HEX` roster entry
+- Refuses an existing `secrets/` or `config.toml`
+
+`kagami network create`
+- Takes one `--validator` per genesis validator and refuses anything but an exact
+  `3f + 1` committee of distinct BLS-normal keys with valid proofs of possession at
+  distinct, dialable addresses, before creating any output
+- Composes genesis with the localnet genesis helpers, signs it with a fresh genesis key,
+  and binds it to the shared `network.toml` (chain, `trusted_peers`, `trusted_peers_pop`,
+  `[genesis]`, `[nexus]`), which it validates as a node reads it
+- Writes `genesis.signed.nrt`, `genesis.expected_hash`, `genesis.public_key`,
+  `nexus-amx-context.v1.bin`,
+  `genesis.json` and an operator `client.toml` into a fresh owner-only directory; the
+  genesis and operator keys stay in its `secrets/`
+- `--chain-id` defaults to a fresh UUID; public SORA chain identities are refused
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use
@@ -215,10 +303,17 @@ into the output directory.
   launch step
 
 `kagami localnet generate`
-- Bare-metal local network generator
+- Bare-metal developer network generator
+- Refuses the public Taira and Nexus chain identities; Sora network bundles
+  come from `kagami sora-network generate`
 - Requires an exact `3f + 1` validator count in `4..=31`, the Sumeragi global
   committee geometry
-- Protects validator/client configs and runtime signer/token sidecars with
+- Writes node essentials only: validator configs, signed genesis, `client.toml`
+  for a funded client that pays fees in XOR (`xor#universal`), and the runtime
+  operator signer for node diagnostics. There is no faucet, account
+  onboarding, fee sponsorship, alias setup intent or SoraNet VPN operator, and
+  `start.sh`/`stop.sh` need only bash
+- Protects validator/client configs and the runtime operator signer with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.signed.nrt`, `genesis.public_key`, and
   `genesis.expected_hash` as a cross-checked runtime bundle. The latter contains
@@ -226,21 +321,33 @@ into the output directory.
   An owner-only `genesis.private_key` is never mounted by generated Compose files
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
-  logs and runtime state. Generic localnets retain pidfiles; Taira emits only
-  exact mode-`0600` process records and rejects legacy pidfiles.
-- Defaults to `permissioned` unless a Sora profile or perf preset requires
-  `npos`
-- `--sora-profile nexus` enforces public-dataspace rules and requires `npos`
-- `--sora-profile dataspace --private-dataspace bpng --consensus-mode npos`
-  generates the isolated BPNG physical dataspace `8648377547929788715` on local
-  lane `5`, its four-validator restricted manifest, and paid `bpng` and
-  `mibank.bpng` namespaces in genesis before signing. The preset assigns no
-  public Taira allocation. BPNG application contracts, fee sponsorship and
-  application service provisioning remain separate unfinished work.
+  logs and runtime state. Localnet start scripts retain pidfiles.
+- Generated startup scripts launch each validator from its own `state/peerN`
+  directory so relative default stores remain isolated across peers and restarts.
+- Defaults to `permissioned` unless a perf preset requires `npos`
+
+`kagami sora-network generate`
+- Bare-metal Sora network generator: `--profile nexus` enforces
+  public-dataspace rules, `--profile dataspace` selects dataspace defaults, and
+  every Sora network runs `npos`
+- The public Taira chain identity (`--chain-id
+  fc56984b-2be7-431d-840e-21514d1883f0`) selects the Taira layout. Taira start
+  scripts emit only exact mode-`0600` process records and reject legacy
+  pidfiles; `kagami sora-network validate-beacon-launch` validates one isolated
+  post-DKG Taira peer launch for them
+- `--profile dataspace --private-dataspace bpng` generates the isolated BPNG
+  physical dataspace `8648377547929788715` on local lane `5`, its
+  four-validator restricted manifest, and paid `bpng` and `mibank.bpng`
+  namespaces in genesis before signing. The preset assigns no public Taira
+  allocation. BPNG application contracts, fee sponsorship and application
+  service provisioning remain separate unfinished work.
+- Produces the same bundle layout as `kagami localnet generate`, so
+  `kagami docker` accepts either
 
 `kagami docker`
 - Docker Compose generator for an authoritative prepared bundle from
-  `kagami localnet generate` (or equivalent peer configs plus signed genesis artifacts)
+  `kagami localnet generate` or `kagami sora-network generate` (or equivalent
+  peer configs plus signed genesis artifacts)
 - Normal mode omits `--seed`: Kagami parses every `peerN.toml` without ambient
   environment overrides, rejects `extends`, and verifies the exact signed
   genesis, manifest, expected hash, verifier key, validator identities, trusted
@@ -249,9 +356,9 @@ into the output directory.
 - Kagami proves that each container-safe projection preserves the Sumeragi,
   execution-policy, and Nexus/AMX fingerprints, mounts the projected TOML as a
   file-backed Compose secret, and passes its BLAKE3 digest to `irohad` for a
-  read-hash-parse startup check. Validator keys and private onboarding/faucet
-  files are absent from Compose YAML and environment variables; the latter are
-  mounted as separate Compose secrets.
+  read-hash-parse startup check. Validator keys and the private onboarding/faucet
+  files of Sora network bundles are absent from Compose YAML and environment
+  variables; the latter are mounted as separate Compose secrets.
 - Byte-exact public policy assets are interned by digest as base64 Compose
   configs and decoded into `/config/runtime` before `iroha3d` starts. Prepared
   Compose accepts fresh state only, uses named validator storage volumes, never
@@ -326,9 +433,17 @@ target/debug/kagami genesis generate \
   --profile iroha3-dev \
   --ivm-dir ./ivm_libs \
   --genesis-public-key ed25519:... \
+  --allowed-signing ed25519 --allowed-signing secp256k1 --allowed-signing bls_normal \
   --consensus-mode permissioned \
   default
 ```
+
+`crypto_admission_policy` is required in each raw manifest. Its `allowed_algorithms`
+list is nonempty and follows canonical tag order without duplicates. The repeated
+`--allowed-signing` values select that exact list; the producer does not fill in
+algorithms from its local backend or genesis root key. Normalization signs one
+`crypto_admission_policy_v1` parameter and rejects any second assignment in source
+instructions. Curve membership is derived from the selected algorithms.
 
 Sign with topology and PoPs:
 
@@ -339,7 +454,7 @@ alias binding, global balance minting, ownership transfer and subsequent univers
 service bootstrap continue in the next global input. Routing authenticates that
 input against the original World before installing the asset alias. Normalization preserves authored
 boundaries and refuses sources above the 11-input FASTPQ bootstrap limit. Generated
-crypto and confidential parameters share one global metadata input. Structured
+the canonical crypto admission policy and confidential parameters share one global input. Structured
 parameter, topology, and IVM trigger batches cannot be partitioned.
 
 ```bash

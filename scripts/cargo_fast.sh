@@ -55,6 +55,7 @@ Options:
 
 Environment:
   CARGO_FAST_TARGET_ROOT  Override the root used by --target-slot
+  CARGO_FAST_TIMINGS=1    Report Cargo wall time for local build diagnostics
 
 Examples:
   scripts/cargo_fast.sh -- check -p irohad
@@ -631,4 +632,13 @@ printf ' %q' "${cargo_driver}" "${cargo_args[@]}"
 printf '\n'
 # Replace this shell so it never rereads a changed script after a long build.
 cd -- "${REPO_ROOT}"
+if [[ "${CARGO_FAST_TIMINGS:-0}" == 1 ]]; then
+	exec python3 -c '
+import json, subprocess, sys, time
+started = time.perf_counter()
+result = subprocess.run(sys.argv[1:])
+print("[cargo-fast-timings] " + json.dumps({"cargo_seconds": time.perf_counter() - started}), file=sys.stderr)
+sys.exit(result.returncode)
+' "${cargo_driver}" "${cargo_args[@]}"
+fi
 exec "${cargo_driver}" "${cargo_args[@]}"

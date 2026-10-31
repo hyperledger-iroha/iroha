@@ -44,7 +44,7 @@ use iroha_data_model::privacy::{
 };
 pub(crate) use issuance_store::BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1;
 pub(crate) use issuer::BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1;
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 pub(crate) use randomness::BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1;
 pub(crate) use scope::BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1;
 use thiserror::Error;
@@ -120,7 +120,7 @@ fn compile_bound_presentation_v1(
     )?;
     Ok((relation, transcript))
 }
-fn prove_bound_presentation_enabled_v1<R: CryptoRng + RngCore>(
+fn prove_bound_presentation_enabled_v1<R: TryCryptoRng + TryRng>(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
     canonical_genesis_hash: [u8; 32],
@@ -172,7 +172,7 @@ fn verify_bound_presentation_encoded_enabled_v1(
 /// This producer API inherits the native prover's bounded, variable-work rejection samplers. Invoke
 /// it only across a local authenticated boundary with process isolation; proof completion timing is
 /// not safe to expose to an untrusted remote observer or hostile co-tenant.
-pub fn prove_bound_presentation_v1<R: CryptoRng + RngCore>(
+pub fn prove_bound_presentation_v1<R: TryCryptoRng + TryRng>(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
     canonical_genesis_hash: [u8; 32],

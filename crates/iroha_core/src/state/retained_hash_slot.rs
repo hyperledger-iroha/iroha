@@ -18,7 +18,11 @@ enum Phase<'a> {
 
 /// This slot must be installed in the owner of all enclosing physical fences
 /// before `try_prepare` is called. Returning cleanup only on success is insufficient.
-pub(crate) struct RetainedHashSlot<'a, I> {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Retained hash publication tracks independent acquisition, completion and release facts"
+)]
+pub struct RetainedHashSlot<'a, I> {
     target: &'a BlockHashes,
     phase: Option<Phase<'a>>,
     mode: mv::BlockMode,
@@ -134,7 +138,9 @@ impl<'a, I> RetainedHashSlot<'a, I> {
         };
         // This native transition performs only pointer/poison checks and inert
         // moves. No cursor, allocation, user code or payload destructor runs.
-        let writer = match acquired.try_map_preserving_release(|owner| owner.validate()) {
+        let writer = match acquired
+            .try_map_preserving_release(concread::bptree::BptreeMapOwnedAcquisition::validate)
+        {
             Ok(writer) => writer,
             Err((acquired, error)) => {
                 self.phase = Some(Phase::Acquired(acquired));
@@ -142,7 +148,7 @@ impl<'a, I> RetainedHashSlot<'a, I> {
             }
         };
         self.phase = Some(Phase::Preparing(
-            writer.map_preserving_release(|w| w.commit_slot()),
+            writer.map_preserving_release(concread::bptree::BptreeMapWriteTxn::commit_slot),
         ));
         let wait = map.observe_reader_release();
         let Some(Phase::Preparing(slot)) = self.phase.as_mut() else {
@@ -179,7 +185,8 @@ impl<'a, I> RetainedHashSlot<'a, I> {
         match self.phase.take().expect("original retained hash") {
             Phase::Original(original) => original,
             Phase::Acquired(acquired) => {
-                let (work, release) = acquired.release_deferred(|a| a.abort());
+                let (work, release) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 self.writer_release = Some(release);
                 self.restore(work)
             }
@@ -212,7 +219,8 @@ impl<'a, I> RetainedHashSlot<'a, I> {
             owner: NativeLaneStateOwner {
                 _family: self.target.map().expect("original map").family(),
             },
-            prepared: slot.map_preserving_release(|slot| slot.into_prepared()),
+            prepared: slot
+                .map_preserving_release(concread::bptree::BptreeMapCommitSlot::into_prepared),
             mode: self.mode,
             visible_len: self.visible_len,
             height: self.height,
@@ -229,7 +237,8 @@ impl<'a, I> RetainedHashSlot<'a, I> {
         self.complete = false;
         self.phase = match self.phase.take() {
             Some(Phase::Acquired(acquired)) => {
-                let (work, release) = acquired.release_deferred(|a| a.abort());
+                let (work, release) =
+                    acquired.release_deferred(concread::bptree::BptreeMapOwnedAcquisition::abort);
                 self.writer_release = Some(release);
                 Some(Phase::Original(self.restore(work)))
             }

@@ -212,7 +212,7 @@ impl GeneratedProvider {
             .checked_add(VALIDITY_SECONDS)
             .ok_or_else(|| eyre!("provider validity overflow"))?;
         let label = format!("native-service-provider/{slot}/{ADVERT_KEY}");
-        let advert = localnet_ephemeral_identity(seed, label.as_bytes())?;
+        let advert = ephemeral_identity(seed, label.as_bytes())?;
         ensure!(
             unique.insert(advert.public_key.clone()),
             "provider advert key must be distinct"
@@ -445,7 +445,7 @@ impl ProviderServicePlanV1 {
             .max(self.declaration.stake.stake_amount.clone());
         principal
             .into_quantity()
-            .checked_add(&Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE))
+            .checked_add(&Quantity::from(SERVICE_FEE_BALANCE))
             .map_err(Into::into)
     }
 

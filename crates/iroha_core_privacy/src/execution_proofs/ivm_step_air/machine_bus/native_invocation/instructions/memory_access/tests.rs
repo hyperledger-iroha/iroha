@@ -102,14 +102,14 @@ impl Tuple {
             BOUNDS,
             64,
             &self.row.0,
-            self.selected,
-            self.load,
-            self.load_destination,
+            (self.selected, self.load, self.load_destination),
             &self.address,
-            &self.source.0,
-            &self.destination.0,
-            &self.memory.0,
-            &self.initialized.0,
+            (
+                &self.source.0,
+                &self.destination.0,
+                &self.memory.0,
+                &self.initialized.0,
+            ),
         );
         assert_eq!(out.len(), CONSTRAINTS);
         out
@@ -280,8 +280,10 @@ fn genuine_stack_edges_repeated_halves_and_unit_result_use_original_effects() {
         false,
     ));
     let plan = root(&native);
-    let first_pc =
-        u64::from_le_bytes(native.packets()[first(0)].before()[..8].try_into().unwrap()) as usize;
+    let first_pc = usize::try_from(u64::from_le_bytes(
+        native.packets()[first(0)].before()[..8].try_into().unwrap(),
+    ))
+    .expect("bounded fixture value");
     assert!(
         first_pc > 0,
         "canonical CNTR creates an absolute fetch prefix"
@@ -374,14 +376,14 @@ fn region_arithmetic_rejects_coherent_outside_crossing_misaligned_and_overflow_w
         [[0x2000, 0x2000], BOUNDS[1]],
         64,
         &original.row.0,
-        original.selected,
-        original.load,
-        original.load_destination,
+        (original.selected, original.load, original.load_destination),
         &original.address,
-        &original.source.0,
-        &original.destination.0,
-        &original.memory.0,
-        &original.initialized.0,
+        (
+            &original.source.0,
+            &original.destination.0,
+            &original.memory.0,
+            &original.initialized.0,
+        ),
     );
     assert!(out.iter().any(|x| *x != F::ZERO));
 }
@@ -507,18 +509,18 @@ fn memory_and_composed_instruction_degrees_include_all_private_fields() {
                 BOUNDS,
                 64,
                 row[..WIDTH].try_into().unwrap(),
-                row[WIDTH],
-                row[WIDTH + 1],
-                row[WIDTH + 2],
+                (row[WIDTH], row[WIDTH + 1], row[WIDTH + 2]),
                 row[WIDTH + 3..start].try_into().unwrap(),
-                row[start..start + packet::WIDTH].try_into().unwrap(),
-                row[start + packet::WIDTH..start + 2 * packet::WIDTH]
-                    .try_into()
-                    .unwrap(),
-                row[start + 2 * packet::WIDTH..start + 3 * packet::WIDTH]
-                    .try_into()
-                    .unwrap(),
-                row[start + 3 * packet::WIDTH..].try_into().unwrap(),
+                (
+                    row[start..start + packet::WIDTH].try_into().unwrap(),
+                    row[start + packet::WIDTH..start + 2 * packet::WIDTH]
+                        .try_into()
+                        .unwrap(),
+                    row[start + 2 * packet::WIDTH..start + 3 * packet::WIDTH]
+                        .try_into()
+                        .unwrap(),
+                    row[start + 3 * packet::WIDTH..].try_into().unwrap(),
+                ),
             );
             Ok::<_, core::convert::Infallible>(out)
         },
@@ -570,16 +572,16 @@ fn memory_and_composed_instruction_degrees_include_all_private_fields() {
                 bounds,
                 64,
                 row[dispatch_width..packet_start].try_into().unwrap(),
-                decoded.store,
-                decoded.load,
-                decoded.load_destination,
+                (decoded.store, decoded.load, decoded.load_destination),
                 &decoded.memory_address,
-                decoded.store_value,
-                decoded.destination,
-                row[effects..effects + packet::WIDTH].try_into().unwrap(),
-                row[effects + packet::WIDTH..effects + 2 * packet::WIDTH]
-                    .try_into()
-                    .unwrap(),
+                (
+                    decoded.store_value,
+                    decoded.destination,
+                    row[effects..effects + packet::WIDTH].try_into().unwrap(),
+                    row[effects + packet::WIDTH..effects + 2 * packet::WIDTH]
+                        .try_into()
+                        .unwrap(),
+                ),
             );
             for gap in 0..GAPS.len() {
                 let at = effects + (gap + 2) * packet::WIDTH;

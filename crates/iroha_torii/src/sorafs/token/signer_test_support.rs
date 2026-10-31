@@ -210,10 +210,10 @@ impl SignerFinalityV1 for SimulatedFinality {
         {
             return Err(StreamTokenIssuerError::SignerFinalityUnavailable);
         }
-        if let Some((at, clock, now)) = &*self.advance_clock.lock().unwrap() {
-            if *at == call {
-                clock.now.store(*now, Ordering::SeqCst);
-            }
+        if let Some((at, clock, now)) = &*self.advance_clock.lock().unwrap()
+            && *at == call
+        {
+            clock.now.store(*now, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -443,7 +443,7 @@ impl SignedFixture {
             },
         )
         .expect("new independently attested same-key renewal enrolls at sequence two");
-        let mut current = self.current.clone();
+        let mut current = self.current;
         current.current_anchor = anchor(101);
         current.active_head.record_digest = enrolled.record_digest();
         current.active_head.sequence = 2;

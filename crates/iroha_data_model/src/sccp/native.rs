@@ -197,7 +197,9 @@ pub struct SccpForgeryRecordV1 {
     pub generation: u64,
     /// Original generation's first height, used for penalty liability.
     pub start_height: u64,
-    /// Newly deduplicated slashable members, in increasing signer order.
+    /// Newly deduplicated slashable members, in increasing signer order. Empty when no
+    /// signer is slashable (G6 left every one unresolved) and no recorded evidence names
+    /// this generation yet: the record still engages the forgery hold (§4.9 step 7).
     pub offenders: Vec<SccpForgeryOffenderV1>,
 }
 
@@ -205,14 +207,14 @@ impl SccpForgeryRecordV1 {
     /// Check structural invariants without accepting a signature or inventing attribution.
     ///
     /// # Errors
-    /// Rejects zero generation coordinates, invalid offender count or ordering,
-    /// out-of-range signers, duplicate members and invalid activation heights.
+    /// Rejects zero generation coordinates, more than 31 offenders, invalid offender
+    /// ordering, out-of-range signers, duplicate members and invalid activation heights.
     pub fn validate_shape(&self) -> Result<(), SccpNativeDataError> {
         if self.generation == 0 || self.start_height == 0 {
             return Err(SccpNativeDataError::ZeroGenerationCoordinate);
         }
-        let maximum = crate::block::consensus::MAX_VALIDATORS_PER_HEIGHT;
-        if self.offenders.is_empty() || self.offenders.len() > maximum {
+        let maximum = iroha_model_base::topology::MAX_VALIDATORS_PER_HEIGHT;
+        if self.offenders.len() > maximum {
             return Err(SccpNativeDataError::OffenderCount);
         }
         for (index, offender) in self.offenders.iter().enumerate() {
@@ -273,8 +275,9 @@ pub enum SccpNativeDataError {
     /// Evidence must name a real generation and its first height.
     #[error("SCCP forgery record contains a zero generation or start height")]
     ZeroGenerationCoordinate,
-    /// A committed report has one to 31 newly slashable members.
-    #[error("SCCP forgery offender count is outside 1..=31")]
+    /// A committed report has at most 31 newly slashable members, and none when every
+    /// signer is unslashable.
+    #[error("SCCP forgery offender count exceeds 31")]
     OffenderCount,
     /// Signer index is outside every admitted committee.
     #[error("SCCP forgery signer index is outside 0..31")]

@@ -88,6 +88,10 @@ use std::{
     time::Duration,
 };
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+)]
 fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -98,6 +102,10 @@ fn ensure_confidential_features_match(
         Err(BlockValidationError::ConfidentialFeaturesMismatch { expected, actual })
     }
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+)]
 fn validate_external_entrypoint_count(
     actual: usize,
     configured_max: NonZeroU64,
@@ -394,6 +402,7 @@ use crate::{
     sumeragi::network_topology::Topology,
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
 };
+#[cfg(test)]
 use std::sync::Arc;
 use thiserror::Error;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
@@ -487,10 +496,10 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
         let has_global = aset.read_keys.contains(GLOBAL_WILDCARD_KEY)
             || aset.write_keys.contains(GLOBAL_WILDCARD_KEY);
         let add_state_wildcard = |key: &str, reads: &mut SmallVec<[u32; 8]>| {
-            if let Some(base) = state_map_entry_base(key) {
-                if let Some(wildcard_key) = wildcard_keys.get(base) {
-                    reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
-                }
+            if let Some(base) = state_map_entry_base(key)
+                && let Some(wildcard_key) = wildcard_keys.get(base)
+            {
+                reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
             }
             if wildcard_bases.contains("*") && key.starts_with(STATE_KEY_PREFIX) {
                 if state_wildcard_base(key) == Some("*") {
@@ -633,8 +642,8 @@ pub(crate) fn parse_asset_definition_literal_with_world(
         })
 }
 /// Resolve an exact fee selector against the network's committed XOR identity.
-/// Chains without NPoS use the canonical default identity, never an arbitrary
-/// locally configured token. Staking itself additionally requires signed NPoS.
+/// Chains without `NPoS` use the canonical default identity, never an arbitrary
+/// locally configured token. Staking itself additionally requires signed `NPoS`.
 pub(crate) fn resolve_network_xor_asset_definition(
     world: &impl WorldReadOnly,
     input: &str,
@@ -651,41 +660,38 @@ pub(crate) fn resolve_network_xor_asset_definition(
         return Ok(None);
     };
     let parameter_id = SumeragiNposParameters::parameter_id();
-    let pin = match world.parameters().custom().get(&parameter_id) {
-        Some(custom) => {
-            if custom.id() != &parameter_id {
-                return Ok(None);
-            }
-            let params =
-                match norito::json::from_str::<SumeragiNposParameters>(custom.payload().get()) {
-                    Ok(params) => params,
-                    Err(error) => {
-                        match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
-                            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                                if cfg!(all(test, sumeragi_core_mutation = "HC37")) {
-                                    return Ok(None);
-                                }
-                                return Err(reason);
-                            }
-                            crate::execution_attempt::ExecutionAttemptError::Rejected(()) => {
-                                return Ok(None);
-                            }
+    let pin = if let Some(custom) = world.parameters().custom().get(&parameter_id) {
+        if custom.id() != &parameter_id {
+            return Ok(None);
+        }
+        let params = match norito::json::from_str::<SumeragiNposParameters>(custom.payload().get())
+        {
+            Ok(params) => params,
+            Err(error) => {
+                match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        if cfg!(all(test, sumeragi_core_mutation = "HC37")) {
+                            return Ok(None);
                         }
+                        return Err(reason);
                     }
-                };
-            if params.validate().is_err() {
-                return Ok(None);
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(()) => {
+                        return Ok(None);
+                    }
+                }
             }
-            params.xor_asset_definition_id
+        };
+        if params.validate().is_err() {
+            return Ok(None);
         }
-        None => {
-            let Ok(default) = AssetDefinitionId::parse_address_literal(
-                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
-            ) else {
-                return Ok(None);
-            };
-            default
-        }
+        params.xor_asset_definition_id
+    } else {
+        let Ok(default) = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        ) else {
+            return Ok(None);
+        };
+        default
     };
     Ok((asset == pin).then_some(asset))
 }
@@ -709,17 +715,19 @@ fn network_xor_resolver_requires_exact_committed_identity() {
             .expect("completed pin read")
             .is_none()
     );
-    let mut parameters = world.parameters.block();
-    parameters
-        .get_mut()
-        .set_parameter(Parameter::Custom(
+    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        Parameter::Custom(
             SumeragiNposParameters {
                 xor_asset_definition_id: other.clone(),
                 ..Default::default()
             }
             .into_custom_parameter(),
-        ))
-        .expect("valid fixture parameters");
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("valid fixture parameters");
     parameters.commit();
     assert_eq!(
         resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0)
@@ -1651,6 +1659,10 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 #[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
     /// Native source publication changed; reacquire and authenticate before retrying ({authenticated_generation} -> {observed_generation})
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     NativeSourceChanged {
         /// State generation authenticated by the original acquisition.
         authenticated_generation: u64,
@@ -1731,7 +1743,11 @@ pub enum BlockValidationError {
     SignatureVerification(#[from] SignatureVerificationError),
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
-    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}
+    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}; this node's consensus-bound sections (`nexus`, `gov`, `oracle`, `content`, `settlement`) differ from the configuration the genesis was signed with, so copy them from the network's reference node configuration (`iroha3d --check-config` lists the differing Nexus fields when the network's `nexus-amx-context.v1.bin` sits beside the signed genesis file)
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     GenesisPolicyMismatch {
         /// Execution policy committed by the signed genesis body.
         expected_execution: Hash,
@@ -1741,12 +1757,19 @@ pub enum BlockValidationError {
         expected_nexus: Hash,
         /// Nexus/AMX context derived from the original staged genesis effects.
         actual_nexus: Hash,
+        /// The exact preimage of `actual_nexus`. Diagnostics compare it field by field
+        /// with a published preimage of `expected_nexus`; it carries no authority.
+        actual_nexus_preimage: iroha_data_model::nexus::NexusAmxContextPreimageV1,
     },
     /// Block's creation time is earlier than that of the previous block
     BlockInThePast,
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
     /// Sumeragi block creation time is below its required floor. Minimum: {minimum_ms} ms, actual: {actual_ms} ms
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc field placeholders must retain their exact format syntax"
+    )]
     BlockTimeBeforeRequiredFloor {
         /// Deterministic minimum derived from the parent, cadence, and authenticated inputs.
         minimum_ms: u64,
@@ -1812,8 +1835,16 @@ pub enum BlockValidationError {
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
     AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails),
-    /// NPoS consensus effects are invalid: {0}
+    /// `NPoS` consensus effects are invalid: {0}
     NposEffectsInvalid(String),
+}
+impl From<AcceptTransactionFail> for BlockValidationError {
+    fn from(error: AcceptTransactionFail) -> Self {
+        match error.into_execution_deferred() {
+            Ok(original) => Self::ExecutionDeferred(original),
+            Err(completed) => Self::TransactionAccept(completed),
+        }
+    }
 }
 impl BlockValidationError {
     /// Keep local autoscale observations out of deterministic block rejection.
@@ -1868,7 +1899,7 @@ impl BlockValidationError {
         }
     }
 
-    /// Keep local resource refusal outside the deterministic NPoS verdict channel.
+    /// Keep local resource refusal outside the deterministic `NPoS` verdict channel.
     pub(crate) fn from_npos_application_error(error: eyre::Report, stage: &str) -> Self {
         if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
             match local {
@@ -1963,18 +1994,6 @@ impl From<crate::execution_attempt::ExecutionAttemptError<crate::sumeragi::sched
     }
 }
 
-/// A missing ballot adapter is a local deferral, never a committed invalid verdict.
-impl From<AcceptTransactionFail> for BlockValidationError {
-    fn from(error: AcceptTransactionFail) -> Self {
-        match error {
-            AcceptTransactionFail::AnonymousBallotUnavailable => {
-                Self::ExecutionDeferred(crate::tx::anonymous_ballot_unavailable())
-            }
-            other => Self::TransactionAccept(other),
-        }
-    }
-}
-
 /// Preserve the original epoch-allocation refusal before any diagnostic formatting.
 impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
     fn from(error: crate::sumeragi::schedule::ScheduleError) -> Self {
@@ -2010,6 +2029,27 @@ fn anonymous_ballot_unavailable_has_no_block_rejection_reason() {
     );
 }
 
+#[cfg(test)]
+#[test]
+fn unavailable_crypto_admission_preserves_original_without_block_rejection() {
+    let original = iroha_crypto::UnsupportedImplementation {
+        algorithm: iroha_crypto::Algorithm::Secp256k1,
+        operation: iroha_crypto::CryptoOperation::VerifySignature,
+    };
+    let error = BlockValidationError::from(AcceptTransactionFail::CryptoImplementationUnavailable(
+        original,
+    ));
+    assert_eq!(event::map_block_err_to_reason(&error), None);
+    let BlockValidationError::ExecutionDeferred(retained) = error else {
+        panic!("local crypto implementation absence cannot reject a block");
+    };
+    assert_eq!(
+        retained.reason(),
+        ivm::error::ExecutionDeferral::CryptoImplementationUnavailable(original)
+    );
+    assert!(retained.decode_refusal().is_none());
+    assert!(retained.allocation_refusal().is_none());
+}
 #[cfg(test)]
 #[test]
 fn epoch_schedule_capacity_preserves_original_local_release() {
@@ -2148,6 +2188,10 @@ pub use genesis_output_rejection::GenesisOutputRejection;
 /// Errors occurred on genesis block validation
 #[derive(Debug, Clone, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum InvalidGenesisError {
+    /// The unique signed ordinary crypto policy is invalid: {0}
+    CryptoPolicy(String),
+    /// The unique signed staking monetary policy is invalid: {0}
+    StakingPolicy(String),
     /// Genesis block must be signed with genesis private key and not signed by any peer
     InvalidSignature,
     /// Every genesis transaction must carry a valid authorization proof for the genesis account
@@ -2233,6 +2277,10 @@ pub fn check_genesis_block(
     authenticate_genesis_block_intents(block, genesis_account)?;
     check_genesis_execution_results(block)
 }
+pub(crate) mod genesis_crypto_policy;
+pub(crate) mod genesis_policies;
+pub(crate) mod genesis_staking_policy;
+
 /// Authenticate the immutable genesis intent before any bootstrap instruction executes.
 ///
 /// Consensus proposals deliberately omit deterministic execution results. The configured
@@ -3137,7 +3185,9 @@ pub(crate) mod valid {
     #[cfg(test)]
     use super::event::{map_block_err_to_reason, map_sig_err_to_reason};
     use super::{event::emit_block_rejection, *};
-    use crate::state::{StateBlock, storage_transactions::TransactionsReadOnly};
+    use crate::state::{
+        StateBlock, WorldStateSnapshot, storage_transactions::TransactionsReadOnly,
+    };
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
     use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
@@ -3190,16 +3240,21 @@ pub(crate) mod valid {
     #[cfg(not(feature = "telemetry"))]
     type MetricsRef<'a> = ();
     #[derive(Debug)]
-    struct StaticValidationData {
+    struct StaticValidationData<'policy> {
         expected_block_height: usize,
         max_clock_drift: Duration,
         tx_params: iroha_data_model::parameter::TransactionParameters,
-        crypto_cfg: Arc<iroha_config::parameters::actual::Crypto>,
+        crypto_policy:
+            Option<&'policy iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1>,
         pipeline_cfg: iroha_config::parameters::actual::Pipeline,
         pipeline_parallelism: crate::state::PipelineParallelism,
         aggregate_lane: LaneId,
     }
     #[derive(Debug, PartialEq, Eq)]
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "The native validation profile retains its authenticated lane inputs inline without introducing an unbudgeted allocation"
+    )]
     enum ConsensusValidationProfile {
         /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
         /// core header binds the nonempty payload, so block signatures are not checked;
@@ -3224,21 +3279,12 @@ pub(crate) mod valid {
         },
     }
     impl ConsensusValidationProfile {
-        /// The genesis height when the block advances the Sumeragi schedule
-        /// (`specs/sumeragi.md` §10).
-        const fn sumeragi_schedule(&self) -> Option<u64> {
-            match self {
-                Self::Sumeragi { .. } | Self::SumeragiGenesis { .. } => {
-                    Some(crate::sumeragi::startup::GENESIS_HEIGHT)
-                }
-            }
-        }
         /// Lane lifecycle input committed by this global block.
-        fn take_sumeragi_lanes(&mut self) -> Option<crate::sumeragi::lanes::merge::LaneStepInput> {
+        fn take_sumeragi_lanes(&mut self) -> crate::sumeragi::lanes::merge::LaneStepInput {
             match self {
-                Self::Sumeragi { lanes, .. } => Some(std::mem::take(lanes)),
+                Self::Sumeragi { lanes, .. } => std::mem::take(lanes),
                 Self::SumeragiGenesis { .. } => {
-                    Some(crate::sumeragi::lanes::merge::LaneStepInput::default())
+                    crate::sumeragi::lanes::merge::LaneStepInput::default()
                 }
             }
         }
@@ -3286,17 +3332,14 @@ pub(crate) mod valid {
             &self,
         ) -> crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1 {
             use crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1;
-            self.sumeragi_schedule()
-                .map_or(SccpHeightSourceV1::Unauthenticated, |genesis_height| {
-                    SccpHeightSourceV1::SumeragiSchedule {
-                        genesis_height,
-                        mode: self.authoritative_consensus_mode(),
-                        root_scope: match self {
-                            Self::Sumeragi { root_scope, .. }
-                            | Self::SumeragiGenesis { root_scope, .. } => *root_scope,
-                        },
-                    }
-                })
+            SccpHeightSourceV1::SumeragiSchedule {
+                genesis_height: crate::sumeragi::startup::GENESIS_HEIGHT,
+                mode: self.authoritative_consensus_mode(),
+                root_scope: match self {
+                    Self::Sumeragi { root_scope, .. }
+                    | Self::SumeragiGenesis { root_scope, .. } => *root_scope,
+                },
+            }
         }
 
         const fn authoritative_consensus_mode(
@@ -3322,7 +3365,7 @@ pub(crate) mod valid {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(std::cell::Cell::get)
     }
     pub(super) fn map_axt_fastpq_error(
-        error: fastpq_prover::Error,
+        error: &fastpq_prover::Error,
         context: &str,
         snapshot_version: u64,
         dataspace: DataSpaceId,
@@ -3347,6 +3390,10 @@ pub(crate) mod valid {
         })
     }
     #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+    )]
     pub fn validate_axt_envelopes<'block>(
         block: &'block SignedBlock,
         state_block: &StateBlock<'_>,
@@ -3483,17 +3530,17 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    if let Some(min_expiry) = min_expiry_slot {
-                        if min_expiry > expiry_slot {
-                            return Err(make_axt_error_with(
-                                AxtRejectReason::Expiry,
-                                "proof expires before handle",
-                                Some(dsid),
-                                Some(policy.target_lane),
-                                None,
-                                None,
-                            ));
-                        }
+                    if let Some(min_expiry) = min_expiry_slot
+                        && min_expiry > expiry_slot
+                    {
+                        return Err(make_axt_error_with(
+                            AxtRejectReason::Expiry,
+                            "proof expires before handle",
+                            Some(dsid),
+                            Some(policy.target_lane),
+                            None,
+                            None,
+                        ));
                     }
                 }
                 Ok(())
@@ -3600,7 +3647,7 @@ pub(crate) mod valid {
                 })?;
                 fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
                     map_axt_fastpq_error(
-                        err,
+                        &(err),
                         "generic AXT proof admission requires a witnessed transfer claim",
                         snapshot_version,
                         dsid,
@@ -3617,7 +3664,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|err| {
                     map_axt_fastpq_error(
-                        err,
+                        &(err),
                         "FASTPQ verification failed",
                         snapshot_version,
                         dsid,
@@ -4017,19 +4064,18 @@ pub(crate) mod valid {
                 0,
                 iroha_data_model::nexus::AxtHandleCounterRecord::authorization_generation,
             );
-            if let Some(advertised_policy) = advertised_policy {
-                if expected_next != advertised_policy.next_handle_counter
-                    || expected_generation != advertised_policy.active_handle_era
-                {
-                    return Err(make_axt_error_with(
-                        AxtRejectReason::SubNonce,
-                        "authenticated AXT execution does not equal the committed permanent authorization-generation ratchet",
-                        Some(dsid),
-                        Some(advertised_policy.target_lane),
-                        Some(expected_generation),
-                        Some(expected_next),
-                    ));
-                }
+            if let Some(advertised_policy) = advertised_policy
+                && (expected_next != advertised_policy.next_handle_counter
+                    || expected_generation != advertised_policy.active_handle_era)
+            {
+                return Err(make_axt_error_with(
+                    AxtRejectReason::SubNonce,
+                    "authenticated AXT execution does not equal the committed permanent authorization-generation ratchet",
+                    Some(dsid),
+                    Some(advertised_policy.target_lane),
+                    Some(expected_generation),
+                    Some(expected_next),
+                ));
             }
             match (
                 state_block.world.axt_handle_counters.get(&dsid),
@@ -4133,6 +4179,10 @@ pub(crate) mod valid {
         fn clear_signatures_verified(&mut self) {
             self.signatures_verified = false;
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_advertised_axt_post_state(
             advertised: Option<&AxtPolicySnapshot>,
             computed: &AxtPolicySnapshot,
@@ -4156,6 +4206,10 @@ pub(crate) mod valid {
                 },
             ))
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_advertised_axt_transitions(
             advertised: Option<&BTreeSet<DataSpaceId>>,
             computed: &BTreeSet<DataSpaceId>,
@@ -4519,6 +4573,10 @@ pub(crate) mod valid {
         ) -> Result<(), SignatureVerificationError> {
             Self::enforce_consensus_key_lifecycle_world(block, topology, state.world())
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn ensure_genesis_transactions_clean(
             block: &SignedBlock,
             genesis_account: &AccountId,
@@ -4551,6 +4609,10 @@ pub(crate) mod valid {
         /// # Errors
         /// Refuses unavailable recording or failed block-start effects.
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         pub fn start_component_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
@@ -4612,13 +4674,17 @@ pub(crate) mod valid {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
             )
         }
         /// Execute the exact original nonempty proposal bound by its native consensus header.
         /// The source is verified before certified lane merges expand its execution inputs.
         /// Transaction validation, deterministic execution and original State generation checks
         /// remain mandatory; the native consensus certificate owns block authentication.
-        /// AMX legs and parent services borrow only the original Worker's completed owners.
+        /// AMX legs, UID binding preparations and parent services retain the original
+        /// Worker's owners across local refusals; current State authority is rechecked.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_block<'state>(
             block: SignedBlock,
@@ -4632,7 +4698,10 @@ pub(crate) mod valid {
             native_payload: &[u8],
             state: &'state State,
             amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+            uid_bindings: &crate::state::asset_uid::binding_custody::retry::BindingPreparations,
             parent_service: Option<&crate::sumeragi::certified_chain::ParentServicePreparation>,
+            successor_context: &mut crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            policy_decode_controls: &crate::execution_attempt::PolicyDecodeControls,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
@@ -4640,11 +4709,16 @@ pub(crate) mod valid {
                     Box::new(BlockValidationError::from(error)),
                 )));
             }
-            let source =
-                match Self::native_header_source(&block, state, native_header, native_payload) {
-                    Ok(source) => source,
-                    Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
-                };
+            let source = match Self::native_header_source(
+                &block,
+                state,
+                native_header,
+                native_payload,
+                successor_context,
+            ) {
+                Ok(source) => source,
+                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+            };
             // Completed AMX legs retain canonical byte custody only. The fresh native
             // source and pristine StateBlock authenticate current authority on every attempt.
             if !block.has_consensus_work() {
@@ -4691,7 +4765,10 @@ pub(crate) mod valid {
                 true,
                 None,
                 amx_legs,
+                Some(uid_bindings),
                 parent_service,
+                Some(successor_context),
+                Some(policy_decode_controls),
             )
             .with_authenticated_rejection(
                 authenticated_header,
@@ -4700,11 +4777,20 @@ pub(crate) mod valid {
             )
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
             source: PristineNativeSource<'state>,
             profile: &ConsensusValidationProfile,
+            genesis_policies: &mut Option<genesis_policies::GenesisPolicies>,
+            successor_context: Option<
+                &crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            >,
+            policy_decode_controls: Option<&crate::execution_attempt::PolicyDecodeControls>,
         ) -> Result<
             (
                 Box<StateBlock<'state>>,
@@ -4719,6 +4805,7 @@ pub(crate) mod valid {
                 .block_with_recorded_pristine_carrier_stage(
                     block,
                     |overlay| {
+                        overlay.world.policy_decode_controls = policy_decode_controls.cloned();
                         overlay
                             .validate_native_pristine_control_owner(
                                 source.state,
@@ -4726,13 +4813,23 @@ pub(crate) mod valid {
                                 &source.header,
                             )
                             .map_err(Self::execution_context_error)?;
-                        if let Some(genesis_height) = profile.sumeragi_schedule() {
+                        if genesis_policies.is_some() {
+                            genesis_policies::GenesisPolicies::install(
+                                genesis_policies,
+                                block,
+                                overlay,
+                                source.state,
+                                source.generation,
+                            )?;
+                        }
+                        {
                             overlay
-                                .request_sumeragi_schedule(
-                                    genesis_height,
+                                .request_sumeragi_schedule_with_preparation(
+                                    crate::sumeragi::startup::GENESIS_HEIGHT,
                                     block,
                                     profile.sumeragi_pulse(),
                                     profile.sumeragi_pulse_context(),
+                                    successor_context,
                                 )
                                 .map_err(BlockValidationError::from)?;
                         }
@@ -4752,6 +4849,10 @@ pub(crate) mod valid {
                 .map_err(BlockValidationError::from)
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_staged_execution_controls(
             block: &SignedBlock,
         ) -> Result<(), BlockValidationError> {
@@ -4774,7 +4875,14 @@ pub(crate) mod valid {
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
             amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+            uid_bindings: Option<
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations,
+            >,
             parent_service: Option<&crate::sumeragi::certified_chain::ParentServicePreparation>,
+            successor_context: Option<
+                &crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            >,
+            policy_decode_controls: Option<&crate::execution_attempt::PolicyDecodeControls>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4799,14 +4907,38 @@ pub(crate) mod valid {
                     }
                 };
 
+            // Authenticate and select the one initial policy before any transaction
+            // admission, original overlay construction, or block-start effect.
+            let genesis = if block.header().is_genesis() {
+                match authenticate_genesis_block_intents(&block, genesis_account) {
+                    Ok(original) => Some(original),
+                    Err(error) => {
+                        return WithEvents::new(Err((Box::new(block), Box::new(error.into()))));
+                    }
+                }
+            } else {
+                None
+            };
+            // Both original capabilities are selected before transaction admission.
+            // Their combined installer validates one pristine cut and publishes both
+            // projections only after every decoder succeeds.
+            let mut genesis_policies = match genesis
+                .as_ref()
+                .map(|original| original.initial_policies(&block))
+                .transpose()
+            {
+                Ok(original) => original,
+                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+            };
+
             let static_state_start = Instant::now();
+            let static_view = state.query_view();
             let static_data = {
-                let view = state.query_view();
                 match Self::validate_static_state_dependent(
                     &block,
                     topology,
                     genesis_account,
-                    &view,
+                    &static_view,
                     state.pipeline_parallelism(),
                     soft_fork,
                     time_source,
@@ -4851,7 +4983,9 @@ pub(crate) mod valid {
                     *state.network_id_ref(),
                     u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
                     static_data.tx_params,
-                    static_data.crypto_cfg.allowed_signing.clone(),
+                    static_data
+                        .crypto_policy
+                        .expect("ordinary static validation retains its original policy"),
                 ))
             } else {
                 None
@@ -4879,6 +5013,10 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            // Stateless checks borrow the original policy until all parallel workers finish.
+            // Release its generation-fenced read owner before starting execution custody.
+            drop(static_data);
+            drop(static_view);
             let consensus_effects =
                 Self::validate_sumeragi_consensus_effects(&block).and_then(|()| {
                     let generation = validation_profile
@@ -4949,11 +5087,12 @@ pub(crate) mod valid {
                 state,
                 penalty_index,
                 &validation_profile,
+                &mut genesis_policies,
+                successor_context,
+                policy_decode_controls,
             ) {
                 Ok((mut overlay, guard)) => {
-                    if let Some(lanes) = validation_profile.take_sumeragi_lanes() {
-                        overlay.request_sumeragi_lanes(lanes);
-                    }
+                    overlay.request_sumeragi_lanes(validation_profile.take_sumeragi_lanes());
                     (overlay, guard)
                 }
                 Err(error) => {
@@ -4964,6 +5103,23 @@ pub(crate) mod valid {
             };
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
+            }
+            if let Some(original) = uid_bindings {
+                match original.run(
+                    state_block
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                ) {
+                    Ok(run) => state_block.world.uid_binding_run = Some(run),
+                    Err(original) => {
+                        drop(state_block);
+                        return WithEvents::new(Err((
+                            Box::new(block),
+                            Box::new(BlockValidationError::ExecutionDeferred(original)),
+                        )));
+                    }
+                }
             }
             // `validate_static_with_snapshot` above verified (batched and in parallel)
             // the signature of every Network input of this exact block and rejects
@@ -4978,20 +5134,6 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let tx_start = Instant::now();
-            let genesis = if block.header().is_genesis() {
-                match authenticate_genesis_block_intents(&block, genesis_account) {
-                    Ok(genesis) => Some(genesis),
-                    Err(error) => {
-                        let error = BlockValidationError::from(error);
-                        drop(state_block);
-                        record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                        emit_rejection(&block, &error);
-                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
-                    }
-                }
-            } else {
-                None
-            };
             if let Err(error) = Self::execute_and_record_canonical_outputs_in_context(
                 &mut block,
                 &mut state_block,
@@ -5008,6 +5150,18 @@ pub(crate) mod valid {
             }
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_tx_ms = to_ms(tx_start.elapsed());
+            }
+            if let Some(initial) = state_block.genesis_crypto_policy.as_ref()
+                && let Err(error) = initial.require_unchanged(&state_block)
+            {
+                drop(state_block);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(initial) = state_block.genesis_staking_policy.as_ref()
+                && let Err(error) = initial.require_unchanged(&state_block)
+            {
+                drop(state_block);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let axt_start = Instant::now();
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
@@ -5073,6 +5227,10 @@ pub(crate) mod valid {
         }
 
         /// All static checks that require a state snapshot.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn block_time_floor(
             block: &SignedBlock,
             prev_block: &SignedBlock,
@@ -5090,6 +5248,10 @@ pub(crate) mod valid {
         ///
         /// # Errors
         /// The time overflows.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         pub(crate) fn sumeragi_block_time_floor(
             block: &SignedBlock,
             parent_creation_time: Duration,
@@ -5097,6 +5259,10 @@ pub(crate) mod valid {
         ) -> Result<Duration, BlockValidationError> {
             Self::block_time_floor_from_parent_time(block, parent_creation_time, block_cadence)
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn block_time_floor_from_parent_time(
             block: &SignedBlock,
             parent_creation_time: Duration,
@@ -5124,17 +5290,21 @@ pub(crate) mod valid {
             clippy::explicit_iter_loop,
             clippy::collapsible_else_if
         )]
-        fn validate_static_state_dependent(
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
+        fn validate_static_state_dependent<'policy>(
             block: &SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
-            state: &impl StateReadOnly,
+            state: &'policy crate::state::StateQueryView<'_>,
             pipeline_parallelism: &crate::state::PipelineParallelism,
             soft_fork: bool,
             time_source: &TimeSource,
             skip_block_signatures: bool,
             validation_profile: &ConsensusValidationProfile,
-        ) -> Result<StaticValidationData, BlockValidationError> {
+        ) -> Result<StaticValidationData<'policy>, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
                 state_height
@@ -5168,6 +5338,15 @@ pub(crate) mod valid {
                 });
             }
             let params = state.world().parameters();
+            let crypto_policy = if block.header().is_genesis() {
+                None // The configured-root signature path has its own authenticated capability.
+            } else {
+                Some(
+                    state
+                        .crypto_admission_policy_for_validation(soft_fork)
+                        .map_err(Self::execution_context_error)?,
+                )
+            };
             // Merged lane entrypoints are bounded by the lane merge rules
             // (`specs/sumeragi_lanes.md` §4.3); the cap applies to the block's own.
             validate_external_entrypoint_count(
@@ -5290,14 +5469,13 @@ pub(crate) mod valid {
                     Self::enforce_consensus_key_lifecycle(block, topology, state)?;
                 }
             }
-            let crypto_cfg = state.crypto();
             let pipeline_cfg = state.pipeline().clone();
             let aggregate_lane = nexus.routing_policy.default_lane;
             Ok(StaticValidationData {
                 expected_block_height,
                 max_clock_drift,
                 tx_params,
-                crypto_cfg,
+                crypto_policy,
                 pipeline_cfg,
                 pipeline_parallelism: pipeline_parallelism.clone(),
                 aggregate_lane,
@@ -5307,6 +5485,10 @@ pub(crate) mod valid {
             BlockValidationError::NposEffectsInvalid(message.into())
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let expected_policies = block.da_proof_policies().map(HashOf::new);
             let actual_policies = block.header().da_proof_policies_hash();
@@ -5350,6 +5532,10 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_da_pin_intent_bundle(
             block: &SignedBlock,
             state: &impl StateReadOnly,
@@ -5454,7 +5640,11 @@ pub(crate) mod valid {
         }
 
         /// Native control belongs to the authenticated header; the payload has no second
-        /// pulse owner. ScheduleStep validates and applies that witness exactly once.
+        /// pulse owner. `ScheduleStep` validates and applies that witness exactly once.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
         ) -> Result<(), BlockValidationError> {
@@ -5493,9 +5683,9 @@ pub(crate) mod valid {
             }
         }
         fn amx_deadline_error(
-            error: iroha_data_model::sumeragi_amx::AmxError,
+            error: &iroha_data_model::sumeragi_amx::AmxError,
         ) -> BlockValidationError {
-            match crate::sumeragi::amx::classified_decode_refusal(&error) {
+            match crate::sumeragi::amx::classified_decode_refusal(error) {
                 Some(original) if !cfg!(all(test, sumeragi_core_mutation = "HC162")) => {
                     BlockValidationError::StateStorageAdmission(
                         crate::state::StateStorageAdmissionError::AmxDecode(original),
@@ -5507,6 +5697,10 @@ pub(crate) mod valid {
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn checked_execution_context_header(
             block: &SignedBlock,
         ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
@@ -5539,6 +5733,10 @@ pub(crate) mod valid {
             }
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_execution_context_alignment(
             block: &SignedBlock,
             bundle: &BlockExecutionContextBundle,
@@ -5565,6 +5763,10 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_execution_context_with_state(
             block: &SignedBlock,
             _topology: &Topology,
@@ -5644,6 +5846,10 @@ pub(crate) mod valid {
         /// (`Queue::bounded_pending_snapshot`), so a block its proposer built always passes.
         /// Execution exempts with the same predicate against the same World, so every exempt
         /// transaction is counted. Without SCCP nothing is capped.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_sccp_exempt_cap(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
@@ -5691,6 +5897,10 @@ pub(crate) mod valid {
             Self::validate_sccp_exempt_cap_against(block, &parent, committed_time_ms)
         }
         /// Check the per-block SCCP exemption caps of `block` against the `parent` World.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_sccp_exempt_cap_against(
             block: &SignedBlock,
             parent: &(impl crate::smartcontracts::isi::sccp::eligibility::EligibilityRead + ?Sized),
@@ -5753,7 +5963,9 @@ pub(crate) mod valid {
             signed_txs: &[&SignedTransaction],
             prepared_txs: &[PreparedBlockTransaction],
             cap: usize,
-            prechecked_signature_results: &mut [Option<Result<(), SignatureVerificationFail>>],
+            prechecked_signature_results: &mut [Option<
+                Result<(), iroha_data_model::transaction::signed::TransactionSignatureError>,
+            >],
             metrics: MetricsRef<'_>,
             lane_id: LaneId,
         ) {
@@ -5977,11 +6189,15 @@ pub(crate) mod valid {
             clippy::option_if_let_else,
             clippy::manual_flatten
         )]
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validate_static_with_snapshot(
             block: &SignedBlock,
             network_id: &NetworkId,
             genesis_account: &AccountId,
-            static_data: &StaticValidationData,
+            static_data: &StaticValidationData<'_>,
             committed_heights: &[Option<NonZeroUsize>],
             committed_carrier_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
@@ -5999,7 +6215,6 @@ pub(crate) mod valid {
             let tx_params = static_data.tx_params;
             let expected_block_height = static_data.expected_block_height;
             let pipeline_cfg = &static_data.pipeline_cfg;
-            let crypto_cfg = &static_data.crypto_cfg;
             let block_creation_time = block.header().creation_time();
             debug_assert_eq!(
                 committed_heights.len(),
@@ -6030,7 +6245,9 @@ pub(crate) mod valid {
             }
             let is_genesis_block = block.header().is_genesis();
             let mut prechecked_signature_results: Vec<
-                Option<Result<(), SignatureVerificationFail>>,
+                Option<
+                    Result<(), iroha_data_model::transaction::signed::TransactionSignatureError>,
+                >,
             > = vec![None; prepared_txs.len()];
             // Genesis authenticates the ordered transaction intents once through the
             // genesis-authority block signature. Per-transaction proof bytes are not
@@ -6100,8 +6317,11 @@ pub(crate) mod valid {
                     TransactionEntrypoint::SealedCommitment(commitment) => {
                         crate::tx::validate_sealed_commitment_stateless(
                             commitment, network_id, tx_params,
+                            static_data.crypto_policy.ok_or_else(|| Self::execution_context_error(
+                                "ordinary sealed commitment validation has no original crypto policy",
+                            ))?,
                         )
-                        .map_err(BlockValidationError::TransactionAccept)?;
+                        .map_err(BlockValidationError::from)?;
                         if commitment.payload().reveal_after_height
                             <= u64::try_from(expected_block_height).unwrap_or(u64::MAX)
                         {
@@ -6225,24 +6445,28 @@ pub(crate) mod valid {
                 }
                 let prechecked_signature_result = prechecked_signature_results
                     .get(idx)
-                    .and_then(|result| result.clone());
+                    .and_then(std::clone::Clone::clone);
                 let validation_time = block_creation_time;
                 if is_genesis_block {
                     if let Some(Err(fail)) = prechecked_signature_result {
-                        return Some(BlockValidationError::TransactionAccept(
-                            AcceptTransactionFail::SignatureVerification(fail),
+                        return Some(BlockValidationError::from(
+                            AcceptedTransaction::signature_admission_failure(tx, fail),
                         ));
                     }
                     return AcceptedTransaction::validate_genesis_with_now(
                         tx,
                         max_clock_drift,
                         genesis_account,
-                        crypto_cfg.as_ref(),
                         block_creation_time,
                     )
                     .err()
-                    .map(BlockValidationError::TransactionAccept);
+                    .map(BlockValidationError::from);
                 }
+                let Some(crypto_policy) = static_data.crypto_policy else {
+                    return Some(Self::execution_context_error(
+                        "ordinary static validation has no original crypto policy",
+                    ));
+                };
                 let stateless = if let Some(prechecked_signature_result) =
                     prechecked_signature_result
                 {
@@ -6251,7 +6475,7 @@ pub(crate) mod valid {
                             network_id,
                             max_clock_drift,
                             tx_params,
-                            crypto_cfg.as_ref(),
+                            crypto_policy,
                             validation_time,
                             Some(prechecked_signature_result),
                             &prepared.metadata,
@@ -6262,7 +6486,7 @@ pub(crate) mod valid {
                             network_id,
                             max_clock_drift,
                             tx_params,
-                            crypto_cfg.as_ref(),
+                            crypto_policy,
                             validation_time,
                             &prepared.metadata,
                         )
@@ -6272,12 +6496,12 @@ pub(crate) mod valid {
                         network_id,
                         max_clock_drift,
                         tx_params,
-                        crypto_cfg.as_ref(),
+                        crypto_policy,
                         validation_time,
                         &prepared.metadata,
                     )
                 };
-                stateless.err().map(BlockValidationError::TransactionAccept)
+                stateless.err().map(BlockValidationError::from)
             };
             let static_pool = static_data.pipeline_parallelism.pool();
             let use_parallel = static_pool.is_some() && prepared_txs.len() > 1;
@@ -6326,6 +6550,10 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn validated_committed_fragment_count(
             state_block: &StateBlock<'_>,
             advertised_committed_fragments: Option<u64>,
@@ -6348,6 +6576,10 @@ pub(crate) mod valid {
         }
         /// Execute a component fixture without a consensus height context.
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn execute_and_record_canonical_outputs(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -6397,6 +6629,10 @@ pub(crate) mod valid {
         /// inputs of the block's height that the SCCP post-execution hook consumes
         /// (`specs/sccp.md` §4.3.2); `Unauthenticated` is reserved for component fixtures.
         /// Production genesis uses its independently authenticated native schedule.
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         fn execute_and_record_canonical_outputs_in_context(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -6633,7 +6869,7 @@ pub(crate) mod valid {
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
                     .advance_sumeragi_amx()
-                    .map_err(Self::amx_deadline_error)?;
+                    .map_err(|error| Self::amx_deadline_error(&error))?;
                 Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
@@ -6715,6 +6951,10 @@ pub(crate) mod valid {
         /// # Errors
         /// Refuses changed sources, execution controls, output ownership or witness capture.
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        #[expect(
+            clippy::result_large_err,
+            reason = "Block validation propagates original resource and execution refusal owners without allocating an error box"
+        )]
         pub(crate) fn execute_recorded_component_outputs(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -7125,7 +7365,7 @@ pub(crate) mod valid {
                 .unwrap_err(),
             ] {
                 let expected = original.local_refusal().unwrap();
-                let mapped = ValidBlock::amx_deadline_error(AmxError::Resource(original));
+                let mapped = ValidBlock::amx_deadline_error(&(AmxError::Resource(original)));
                 assert!(matches!(
                     &mapped,
                     BlockValidationError::StateStorageAdmission(
@@ -7143,7 +7383,7 @@ pub(crate) mod valid {
                 AmxError::Record("malformed decision"),
             ] {
                 let expected = semantic.to_string();
-                let mapped = ValidBlock::amx_deadline_error(semantic);
+                let mapped = ValidBlock::amx_deadline_error(&(semantic));
                 assert!(matches!(
                     &mapped,
                     BlockValidationError::ExecutionContextInvalid(retained) if *retained == expected
@@ -7435,7 +7675,7 @@ pub(crate) mod valid {
                 .expect("routing failure fixture has one entrypoint")
                 .hash();
             let (mut state_block, _state_block_recorder) =
-                crate::block::ValidBlock::start_component_execution(&block.clone().into(), state)
+                crate::block::ValidBlock::start_component_execution(&block.clone(), state)
                     .expect("original writer-first component execution");
             assert!(
                 state_block
@@ -8137,9 +8377,9 @@ pub(crate) mod valid {
             params.sumeragi.key_overlap_grace_blocks = 2;
             params.sumeragi.key_expiry_grace_blocks = 1;
             let mut world = World::new();
-            world.parameters = mv::cell::Cell::new(
-                crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-            );
+            world
+                .set_sumeragi_for_testing(params.sumeragi)
+                .expect("valid original consensus fixture");
             insert_consensus_key(
                 &mut world,
                 "leader",
@@ -8348,14 +8588,17 @@ pub(crate) mod valid {
             )
             .with_instructions([Log::new(Level::INFO, "test".to_string())])
             .sign(alice_keypair.private_key());
-            let crypto_cfg = state.crypto();
             let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
             let tx = AcceptedTransaction::accept_with_time_source(
                 tx,
                 &state.network_id,
                 max_clock_drift,
                 tx_limits,
-                crypto_cfg.as_ref(),
+                &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                    iroha_crypto::Algorithm::Ed25519,
+                    iroha_crypto::Algorithm::Secp256k1,
+                ])
+                .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
                 &time_source,
             )
             .expect("valid tx");
@@ -8372,11 +8615,8 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let mut first_block: SignedBlock = new_block.clone().into();
             let (mut state_block, state_block_recorder) =
-                crate::block::ValidBlock::start_component_execution(
-                    &first_block.clone().into(),
-                    state,
-                )
-                .expect("original writer-first component execution");
+                crate::block::ValidBlock::start_component_execution(&first_block.clone(), state)
+                    .expect("original writer-first component execution");
             ValidBlock::execute_and_record_canonical_outputs(
                 &mut first_block,
                 &mut state_block,
@@ -8392,11 +8632,8 @@ pub(crate) mod valid {
             drop(state_block_recorder);
             let mut second_block: SignedBlock = new_block.into();
             let (mut state_block, state_block_recorder) =
-                crate::block::ValidBlock::start_component_execution(
-                    &second_block.clone().into(),
-                    state,
-                )
-                .expect("original writer-first component execution");
+                crate::block::ValidBlock::start_component_execution(&second_block.clone(), state)
+                    .expect("original writer-first component execution");
             ValidBlock::execute_and_record_canonical_outputs(
                 &mut second_block,
                 &mut state_block,
@@ -8500,6 +8737,58 @@ pub(crate) mod valid {
                 }
             );
         }
+        #[test]
+        fn actual_attachment_reader_refusal_has_no_block_rejection_and_moves_original() {
+            use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+            use iroha_data_model::transaction::signed_attachments::{
+                PlannedActionV1, SignedAttachmentErrorV1, SignedAttachmentPlanV1,
+            };
+            let attachment = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                VerifyingKeyId::new("halo2/ipa", "original_block_admission"),
+            );
+            let mut plan = SignedAttachmentPlanV1::new();
+            plan.push_action(PlannedActionV1::transaction_proof_unvalidated(&attachment).unwrap());
+            let source = plan.declare();
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            let failed = norito::with_decode_limits_scope(limits, || {
+                source.proof_carrier_v1(&source.actions()[0])
+            })
+            .unwrap_err();
+            let original = failed.clone().into_local_refusal().unwrap();
+            let raw = BlockValidationError::TransactionAccept(
+                AcceptTransactionFail::SignedAttachments(failed),
+            );
+            assert_eq!(map_block_err_to_reason(&raw), None);
+            let BlockValidationError::TransactionAccept(failed) = raw else {
+                unreachable!()
+            };
+            let converted = BlockValidationError::from(failed);
+            assert_eq!(map_block_err_to_reason(&converted), None);
+            let BlockValidationError::ExecutionDeferred(retained) = converted else {
+                panic!("actual original must move to retry channel")
+            };
+            assert_eq!(retained.decode_refusal(), Some(&original));
+            source
+                .proof_carrier_v1(&source.actions()[0])
+                .expect("same original reader retries");
+            let completed = BlockValidationError::from(AcceptTransactionFail::SignedAttachments(
+                SignedAttachmentErrorV1::NoActions,
+            ));
+            assert_eq!(
+                map_block_err_to_reason(&completed),
+                Some(Reason::TransactionValidationFailed)
+            );
+            assert!(matches!(
+                completed,
+                BlockValidationError::TransactionAccept(AcceptTransactionFail::SignedAttachments(
+                    SignedAttachmentErrorV1::NoActions
+                ))
+            ));
+        }
+
         #[test]
         fn maps_block_validation_errors() {
             for reason in [
@@ -8774,10 +9063,10 @@ pub(crate) mod valid {
             use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
             use iroha_data_model::parameter::{Parameter, system::SumeragiParameter};
             let mut config = TestChainConfig::new(World::new(), 1_000);
-            config.genesis_parameters = vec![
+            config.genesis_parameters.extend([
                 Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
                 Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)),
-            ];
+            ]);
             let prepared = CertifiedTestChain::prepare(config)
                 .expect("ordered parameters are bound into original signed genesis");
             let genesis = prepared.genesis.block().clone();
@@ -8943,13 +9232,13 @@ mod event {
                     return self;
                 }
                 let observed_generation = state.state_view_generation();
-                if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
+                if crate::state::is_stable_state_view_generation(generation, observed_generation) {
+                    emit_block_rejection(header, error, |event| self.1 = Some(event));
+                } else {
                     **error = BlockValidationError::NativeSourceChanged {
                         authenticated_generation: generation,
                         observed_generation,
                     };
-                } else {
-                    emit_block_rejection(header, error, |event| self.1 = Some(event));
                 }
             }
             self
@@ -9121,18 +9410,23 @@ mod event {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions
-            | BlockValidationError::TooManyTransactions { .. } => {
-                Reason::TransactionValidationFailed
-            }
-            BlockValidationError::ExecutionContextInvalid(_)
-            | BlockValidationError::CommittedFragmentCountMismatch { .. } => {
+            | BlockValidationError::TooManyTransactions { .. }
+            | BlockValidationError::ExecutionContextInvalid(_)
+            | BlockValidationError::CommittedFragmentCountMismatch { .. }
+            | BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed
             }
             BlockValidationError::PrevBlockHashMismatch { .. } => Reason::PrevBlockHashMismatch,
             BlockValidationError::PrevBlockHeightMismatch { .. } => Reason::PrevBlockHeightMismatch,
             BlockValidationError::MerkleRootMismatch => Reason::MerkleRootMismatch,
+            // Direct construction is public; even that path must never certify
+            // an unfinished local read as a deterministic block rejection.
+            BlockValidationError::TransactionAccept(fail) if fail.local_refusal().is_some() => {
+                return None;
+            }
             BlockValidationError::TransactionAccept(fail) => match fail {
                 AcceptTransactionFail::AnonymousBallotUnavailable => return None,
+                AcceptTransactionFail::CryptoImplementationUnavailable(_) => return None,
                 AcceptTransactionFail::TransactionLimit(_)
                 | AcceptTransactionFail::SignedAttachments(_)
                 | AcceptTransactionFail::SignatureVerification(_)
@@ -9150,8 +9444,9 @@ mod event {
             | BlockValidationError::GenesisPolicyMismatch { .. } => Reason::InvalidGenesis,
             BlockValidationError::BlockInThePast
             | BlockValidationError::BlockTimeBeforeRequiredFloor { .. } => Reason::BlockInThePast,
-            BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
-            BlockValidationError::BlockTimeOverflow => Reason::BlockInTheFuture,
+            BlockValidationError::BlockInTheFuture | BlockValidationError::BlockTimeOverflow => {
+                Reason::BlockInTheFuture
+            }
             BlockValidationError::FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
             BlockValidationError::TransactionInTheFuture => Reason::TransactionInTheFuture,
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
@@ -9159,23 +9454,20 @@ mod event {
             }
             BlockValidationError::ProofPolicyHashMismatch { .. }
             | BlockValidationError::DaProofPolicySidecarHashMismatch { .. }
-            | BlockValidationError::DaProofPolicyBundleMismatch => Reason::DaProofPolicyMismatch,
+            | BlockValidationError::DaProofPolicyBundleMismatch
+            | BlockValidationError::DaCommitmentBundle(
+                crate::da::DaCommitmentValidationError::ProofPolicy(_),
+            ) => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentHashMismatch { .. }
             | BlockValidationError::NonCanonicalEmptyDaCommitmentBundle
             | BlockValidationError::DaPinIntentHashMismatch { .. }
             | BlockValidationError::NonCanonicalEmptyDaPinIntentBundle => {
                 Reason::DaShardCursorViolation
             }
-            BlockValidationError::DaCommitmentBundle(
-                crate::da::DaCommitmentValidationError::ProofPolicy(_),
-            ) => Reason::DaProofPolicyMismatch,
-            BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::DaReceiptCursor(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
-            BlockValidationError::AxtEnvelopeValidationFailed(_) => {
-                Reason::TransactionValidationFailed
-            }
+            BlockValidationError::DaCommitmentBundle(_)
+            | BlockValidationError::DaPinIntentBundle(_)
+            | BlockValidationError::DaReceiptCursor(_)
+            | BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::NposEffectsInvalid(_) => Reason::NposEffectsMismatch,
         })
     }
@@ -9225,9 +9517,9 @@ mod event {
 mod simd_parent_dedup {
     const LANES: usize = 8;
 
-    pub(super) fn dedup_sorted_slice(slice: &mut [usize]) -> Option<usize> {
+    pub(super) fn dedup_sorted_slice(slice: &mut [usize]) -> usize {
         if slice.len() <= 1 {
-            return Some(slice.len());
+            return slice.len();
         }
         let mut write = 1usize;
         let mut prev = slice[0];
@@ -9256,7 +9548,7 @@ mod simd_parent_dedup {
             }
             idx += 1;
         }
-        Some(write)
+        write
     }
 
     #[cfg(test)]
@@ -9266,7 +9558,7 @@ mod simd_parent_dedup {
         #[test]
         fn fixed_width_dedup_handles_chunk_boundaries() {
             let mut values = [1, 1, 2, 3, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9, 9, 10, 10];
-            let len = dedup_sorted_slice(&mut values).expect("fixed-width path is available");
+            let len = dedup_sorted_slice(&mut values);
             assert_eq!(&values[..len], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         }
     }
@@ -9570,7 +9862,7 @@ pub(crate) mod tests {
         network: &NetworkId,
         max_clock_drift: Duration,
         limits: iroha_data_model::parameter::TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
+        admission_policy: &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1,
         now: Duration,
     ) -> Result<AcceptedTransaction<'static>, crate::tx::AcceptTransactionFail> {
         AcceptedTransaction::accept_with_time_source(
@@ -9578,7 +9870,7 @@ pub(crate) mod tests {
             network,
             max_clock_drift,
             limits,
-            crypto,
+            admission_policy,
             &TimeSource::new_fixed(now),
         )
     }
@@ -9626,21 +9918,17 @@ pub(crate) mod tests {
     }
 
     fn configured_component_state(
-        world: World,
+        mut world: World,
         chain_id: ChainId,
         nexus: iroha_config::parameters::actual::Nexus,
+        fees: iroha_data_model::block::consensus::RootFeePolicy,
     ) -> State {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
-                nexus
-                    .fees
-                    .clone()
-                    .into_custom_parameter()
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter()
                     .expect("explicit fixture fee policy"),
             ))
             .expect("valid fixture fee policy");
-        parameters.commit();
         let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
             world,
             nexus.clone(),
@@ -9654,11 +9942,11 @@ pub(crate) mod tests {
         state
     }
 
-    pub(crate) fn component_chain(state: State) -> crate::sumeragi::test_chain::CertifiedTestChain {
+    pub fn component_chain(state: State) -> crate::sumeragi::test_chain::CertifiedTestChain {
         component_chain_with_genesis_parameters(state, Vec::new())
     }
 
-    pub(crate) fn component_chain_with_genesis_parameters(
+    pub fn component_chain_with_genesis_parameters(
         state: State,
         genesis_parameters: Vec<iroha_data_model::parameter::Parameter>,
     ) -> crate::sumeragi::test_chain::CertifiedTestChain {
@@ -9682,7 +9970,20 @@ pub(crate) mod tests {
         #[cfg(feature = "telemetry")]
         let telemetry = state.telemetry.clone();
         let mut config = crate::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
-        config.genesis_parameters = genesis_parameters;
+        // The producer caller may explicitly choose a different staking policy.
+        // Remove only the constructor's authored slot in that case; input duplicates
+        // remain duplicates and the canonical builder rejects them before signing.
+        let supplies_staking = genesis_parameters.iter().any(|parameter| {
+            matches!(parameter, iroha_data_model::parameter::Parameter::Custom(custom)
+                if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id())
+        });
+        if supplies_staking {
+            config.genesis_parameters.retain(|parameter| {
+                !matches!(parameter, iroha_data_model::parameter::Parameter::Custom(custom)
+                    if custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id())
+            });
+        }
+        config.genesis_parameters.extend(genesis_parameters);
         config.chain_id = chain_id;
         config.pipeline = pipeline;
         config.nexus = Some(nexus);
@@ -9701,6 +10002,43 @@ pub(crate) mod tests {
         crate::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
             .expect("original component World executes under its signed genesis policies")
     }
+    #[test]
+    fn component_fixture_preserves_explicit_staking_author_and_caller_override() {
+        use iroha_data_model::{block::consensus::PublicLaneStakingPolicy, parameter::Parameter};
+        for override_policy in [false, true] {
+            let fixture = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 0);
+            let Parameter::Custom(custom) = &fixture.genesis_parameters[0] else {
+                panic!("one original fixture staking parameter");
+            };
+            let mut expected = PublicLaneStakingPolicy::from_custom_parameter(custom).unwrap();
+            let parameters = if override_policy {
+                expected.min_validator_stake = "123.25".parse().unwrap();
+                vec![Parameter::Custom(
+                    expected.clone().into_custom_parameter().unwrap(),
+                )]
+            } else {
+                Vec::new()
+            };
+            // This fixture tests signed policy ownership, without claiming funded admission.
+            let nexus = iroha_config::parameters::actual::Nexus::default();
+            let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+            fees.base_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_byte_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_instruction_fee = iroha_primitives::numeric::Quantity::zero();
+            fees.per_gas_unit_fee = iroha_primitives::numeric::Quantity::zero();
+            let state = configured_component_state(
+                World::new(),
+                ChainId::from("component-staking-author"),
+                nexus,
+                fees,
+            );
+            let chain = component_chain_with_genesis_parameters(state, parameters);
+            let view = chain.state().view();
+            assert_eq!(view.height(), 1);
+            assert_eq!(view.world().parameters().staking_policy(), Some(&expected));
+        }
+    }
+
     fn state_with_transaction_policy(
         chain_id: &ChainId,
         authority: &AccountId,
@@ -9711,13 +10049,17 @@ pub(crate) mod tests {
         let domain = Domain::new(domain_id).build(authority);
         let account = Account::new(authority.clone()).build(authority);
         let mut world = World::with([domain], [account], []);
-        let mut params = iroha_data_model::parameter::system::Parameters::default();
-        params.transaction = params
-            .transaction
-            .with_ingress_enforcement(require_height_ttl, require_sequence);
-        world.parameters = mv::cell::Cell::new(
-            crate::state::StateParameters::try_from(params).expect("valid fixture parameters"),
-        );
+        use iroha_data_model::parameter::{Parameter, TransactionParameter};
+        world
+            .set_parameter_for_testing(Parameter::Transaction(
+                TransactionParameter::RequireHeightTtl(require_height_ttl),
+            ))
+            .expect("valid original transaction height fixture");
+        world
+            .set_parameter_for_testing(Parameter::Transaction(
+                TransactionParameter::RequireSequence(require_sequence),
+            ))
+            .expect("valid original transaction sequence fixture");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         State::new_with_chain_and_network_id_for_testing(
@@ -11344,41 +11686,52 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         )
         .expect("canonical network XOR identity");
-        let world = World::with(
+        // Seed the component's entities before signed genesis. Ordinary ISIs
+        // cannot register accounts before that genesis installs its policy.
+        let world = World::with_assets(
             [Domain::new(domain).build(&authority)],
-            [Account::new(authority.clone()).build(&authority)],
-            [],
-        );
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.fees.fee_asset_id = fee_asset.clone();
-        nexus.fees.fee_sink_account_id = fee_sink.clone();
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        let state = configured_component_state(world, chain_id, nexus);
-        {
-            let mut genesis = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-            let mut transaction = genesis.transaction();
-            Register::account(Account::new(fee_sink.clone()))
-                .execute(&authority, &mut transaction)
-                .unwrap();
-            Register::asset_definition(AssetDefinition::numeric(
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(fee_sink.clone()).build(&authority),
+            ],
+            [AssetDefinition::numeric(
                 fee_asset.clone(),
                 "sealed fee",
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
-            ))
-            .execute(&authority, &mut transaction)
-            .unwrap();
-            Mint::asset_quantity(1_u32, AssetId::new(fee_asset.clone(), authority.clone()))
-                .execute(&authority, &mut transaction)
-                .unwrap();
-            transaction.apply();
-            genesis.commit_world_overlay_for_testing().unwrap();
-        }
+            )
+            .build(&authority)],
+            [Asset::new(
+                AssetId::new(fee_asset.clone(), authority.clone()),
+                Quantity::from(1_u32),
+            )],
+            [],
+        );
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+        fees.fee_asset_id = fee_asset.clone();
+        fees.fee_sink_account_id = fee_sink.clone();
+        fees.base_fee = Quantity::zero();
+        fees.per_byte_fee = Quantity::zero();
+        fees.per_instruction_fee = Quantity::zero();
+        fees.per_gas_unit_fee = Quantity::zero();
+        let state = configured_component_state(world, chain_id, nexus, fees);
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .crypto_policy()
+                .is_none(),
+            "the original signed genesis must install the ordinary policy"
+        );
         let mut native_chain = component_chain(state);
         let state = Arc::clone(native_chain.state());
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .expect("signed genesis committed its ordinary policy")
+                .allows(keypair.public_key().algorithm())
+        );
         let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -11542,16 +11895,19 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         // Lane zero remains global/universal; the signed native policy authorizes DS7 separately.
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                iroha_data_model::parameter::Parameter::Custom(
                     nexus
                         .fees
                         .clone()
                         .into_custom_parameter()
                         .expect("signed zero-fee fixture policy"),
-                ))
-                .expect("valid committed fixture fee policy");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid committed fixture fee policy");
             parameters.commit();
         }
         let state = State::new_with_pre_genesis_nexus_for_testing(
@@ -12033,13 +12389,16 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         let first_tx = make_transaction(0);
         let second_tx = make_transaction(1);
         let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let crypto_cfg = state.crypto();
         let first_tx = AcceptedTransaction::accept_with_time_source(
             first_tx,
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            crypto_cfg.as_ref(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .expect("Valid");
@@ -12048,7 +12407,11 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            crypto_cfg.as_ref(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .expect("Valid");
@@ -12127,14 +12490,17 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         )
         .with_instructions::<InstructionBox>([create_account.clone().into(), fail_isi.into()])
         .sign(alice_keypair.private_key());
-        let crypto_cfg = state.crypto();
         let (_clock, time_source) = TimeSource::new_mock(tx_fail.creation_time());
         let tx_fail = AcceptedTransaction::accept_with_time_source(
             tx_fail,
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            crypto_cfg.as_ref(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .expect("Valid");
@@ -12151,7 +12517,11 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             &state.network_id,
             max_clock_drift,
             tx_limits,
-            crypto_cfg.as_ref(),
+            &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+                iroha_crypto::Algorithm::Ed25519,
+                iroha_crypto::Algorithm::Secp256k1,
+            ])
+            .expect("this stateless fixture explicitly selects Ed25519 and Secp256k1"),
             &time_source,
         )
         .expect("Valid");

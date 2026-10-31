@@ -1335,8 +1335,7 @@ fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, 
             state.clone(),
             kura.clone(),
             queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
+            (peers_rx.clone(), local_peer_id.clone()),
             ts,
             true,
         )
@@ -1358,12 +1357,15 @@ fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, 
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            iroha_torii::MaybeTelemetry::from_profile(
-                Some(telemetry),
-                iroha_config::parameters::actual::TelemetryProfile::Operator,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::from_profile(
+                    Some(telemetry),
+                    iroha_config::parameters::actual::TelemetryProfile::Operator,
+                ),
             ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid Torii address-parsing fixture")

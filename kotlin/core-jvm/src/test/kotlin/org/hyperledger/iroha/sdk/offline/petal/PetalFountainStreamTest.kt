@@ -13,7 +13,7 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.payload
 
 /** Ports of the reference `fountain` and `stream` unit tests plus loss, reorder and limit tests. */
 class PetalFountainStreamTest {
-    private val allLanes = listOf(PetalLane.D, PetalLane.P, PetalLane.K)
+    private val allLanes = PetalLane.ALL
 
     private fun reassemble(atoms: List<ByteArray>, length: Int): ByteArray {
         val bytes = ByteArray(atoms.size * PetalLanes.ATOM_LEN)
@@ -143,10 +143,11 @@ class PetalFountainStreamTest {
             assertEquals(expected, PetalStream.firstAtomId(frame), "frame $frame")
             expected += PetalStream.atomsInFrame(frame)
         }
-        assertEquals(6, PetalStream.atomsInFrame(0))
-        assertEquals(7, PetalStream.atomsInFrame(1))
-        assertEquals(PetalStream.firstAtomId(4) + 1, PetalStream.laneFirstId(PetalLane.K, 4))
-        assertEquals(PetalStream.firstAtomId(5) + 2, PetalStream.laneFirstId(PetalLane.K, 5))
+        assertEquals(20, PetalStream.atomsInFrame(0))
+        assertEquals(21, PetalStream.atomsInFrame(1))
+        assertEquals(PetalStream.firstAtomId(4), PetalStream.laneFirstId(PetalLane.F0, 4))
+        assertEquals(PetalStream.firstAtomId(5) + 15, PetalStream.laneFirstId(PetalLane.F3, 5))
+        assertEquals(PetalStream.firstAtomId(5) + 20, PetalStream.laneFirstId(PetalLane.D, 5))
         // the frame counter wraps on a beacon frame, so ids repeat cleanly
         assertTrue(PetalStream.isBeaconFrame(0) && 65_536 % PetalStream.BEACON_INTERVAL == 0)
         assertFailsWith<IllegalArgumentException> { PetalStream.firstAtomId(65_536) }
@@ -170,7 +171,7 @@ class PetalFountainStreamTest {
     fun anySingleLaneIsEnoughGivenABeacon() {
         val data = payload(400, 22)
         val encoder = PetalStreamEncoder(data, 1)
-        for (lane in listOf(PetalLane.P, PetalLane.K, PetalLane.D)) {
+        for (lane in PetalLane.ALL) {
             val assembler = PetalStreamAssembler()
             feedFrame(assembler, encoder, 0, listOf(PetalLane.D))
             for (frame in 0 until 400) {
@@ -187,11 +188,9 @@ class PetalFountainStreamTest {
         val encoder = PetalStreamEncoder(data, 1)
         val assembler = PetalStreamAssembler()
         // frames 1..3: no beacon among them until frame 4
-        for (frame in 1 until 4) feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+        for (frame in 1 until 4) feedFrame(assembler, encoder, frame, allLanes)
         assertNull(assembler.progress().meta)
-        for (frame in 4 until encoder.systematicFrames + 4) {
-            feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
-        }
+        for (frame in 4 until encoder.systematicFrames + 4) feedFrame(assembler, encoder, frame, allLanes)
         assertContentEquals(data, assertNotNull(assembler.takeCompleted()).payload)
     }
 
@@ -251,8 +250,8 @@ class PetalFountainStreamTest {
         val data = payload(64, 31) // 4 source atoms
         val encoder = PetalStreamEncoder(data, 1)
         val assembler = PetalStreamAssembler(PetalAssemblerLimits(maxPendingAtoms = 2))
-        // lane K of frame 1 carries repair atoms 8..12, seen before any beacon
-        feedFrame(assembler, encoder, 1, listOf(PetalLane.K))
+        // field lane 0 of frame 1 carries repair atoms 20..24, seen before any beacon
+        feedFrame(assembler, encoder, 1, listOf(PetalLane.F0))
         assertNull(assembler.progress().meta)
         feedFrame(assembler, encoder, 0, listOf(PetalLane.D))
         // only the two newest pending atoms were replayed
@@ -264,7 +263,7 @@ class PetalFountainStreamTest {
         val encoder = PetalStreamEncoder(payload(300, 41), 1)
         val assembler = PetalStreamAssembler(PetalAssemblerLimits(maxPendingAtoms = 0))
         // atoms before any beacon are dropped, not buffered
-        for (frame in 1 until 4) feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+        for (frame in 1 until 4) feedFrame(assembler, encoder, frame, allLanes)
         feedFrame(assembler, encoder, 4, listOf(PetalLane.D))
         assertEquals(0, assembler.progress().rank)
         assertEquals(0L, assembler.progress().atomsReceived)
@@ -278,7 +277,7 @@ class PetalFountainStreamTest {
         assertTrue(first.meta.tag != other.meta.tag)
         val assembler = PetalStreamAssembler()
         feedFrame(assembler, first, 0, listOf(PetalLane.D))
-        feedFrame(assembler, other, 1, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+        feedFrame(assembler, other, 1, allLanes)
         assertEquals(0L, assembler.progress().atomsReceived)
         assertEquals(0, assembler.progress().rank)
     }
@@ -299,22 +298,25 @@ class PetalFountainStreamTest {
 
     @Test
     fun corruptAtomsAreCaughtByThePayloadCrc() {
-        val data = payload(200, 25)
+        val data = payload(2_000, 25)
         val encoder = PetalStreamEncoder(data, 1)
         val assembler = PetalStreamAssembler()
-        feedFrame(assembler, encoder, 0, listOf(PetalLane.D, PetalLane.K))
+        feedFrame(assembler, encoder, 0, listOf(PetalLane.D, PetalLane.F1))
         // atom 0 arrives with a valid header but a wrong body
         assembler.pushAtoms(
             PetalAtomPacket(PetalLaneHeader(encoder.meta.tag, 0), 0, listOf(ByteArray(PetalLanes.ATOM_LEN) { 0xEE.toByte() })),
         )
-        for (frame in 1 until encoder.systematicFrames) {
-            feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+        var frame = 1
+        while (assembler.progress().integrityFailures == 0L) {
+            feedFrame(assembler, encoder, frame, allLanes)
+            frame += 1
+            assertTrue(frame < 100, "the corrupt atom was never caught")
         }
         assertNull(assembler.takeCompleted())
         assertEquals(1L, assembler.progress().integrityFailures)
         // clean repair frames after the reset recover the payload
-        for (frame in 100 until 600) {
-            feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+        for (repair in 100 until 600) {
+            feedFrame(assembler, encoder, repair, allLanes)
             if (assembler.progress().complete) break
         }
         assertContentEquals(data, assertNotNull(assembler.takeCompleted(), "recovered").payload)
@@ -337,10 +339,10 @@ class PetalFountainStreamTest {
             val encoder = PetalStreamEncoder(data, kind)
             val lossPercent = (next() % 70).toInt()
             val lanes = when ((next() % 5).toInt()) {
-                0 -> listOf(PetalLane.P)
-                1 -> listOf(PetalLane.D, PetalLane.P)
-                2 -> listOf(PetalLane.K, PetalLane.D)
-                else -> listOf(PetalLane.P, PetalLane.K, PetalLane.D)
+                0 -> listOf(PetalLane.F2)
+                1 -> listOf(PetalLane.D, PetalLane.F0)
+                2 -> listOf(PetalLane.F1, PetalLane.F3, PetalLane.D)
+                else -> PetalLane.ALL
             }
             val assembler = PetalStreamAssembler()
             var frame = (next() and 0xFFFF).toInt()
@@ -376,7 +378,7 @@ class PetalFountainStreamTest {
         var frame = 65_530
         repeat(200) {
             if (!assembler.progress().complete) {
-                feedFrame(assembler, encoder, frame, listOf(PetalLane.P, PetalLane.K, PetalLane.D))
+                feedFrame(assembler, encoder, frame, allLanes)
                 frame = (frame + 1) and PetalStream.MAX_FRAME
             }
         }
@@ -405,14 +407,21 @@ class PetalFountainStreamTest {
         assertEquals(encoder.meta, beacon.meta)
         assertEquals(512, beacon.header.frame)
         assertNull(PetalStream.parseDLane(d.copyOf(11)))
-        val bad = d.copyOf()
-        bad[3] = 0x20
-        assertNull(PetalStream.parseDLane(bad))
+        assertEquals(0x50, d[3].toInt())
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are refused
+        for (retired in intArrayOf(0x10, 0x20, 0x30)) {
+            val bad = d.copyOf()
+            bad[3] = retired.toByte()
+            assertNull(PetalStream.parseDLane(bad))
+        }
         // non-beacon frames carry an atom instead
         val atoms = assertNotNull(PetalStream.parseDLane(encoder.laneData(513).d())).atoms
         assertNotNull(atoms)
         assertEquals(PetalStream.laneFirstId(PetalLane.D, 513), atoms.firstId)
         assertNull(PetalStream.parseAtomLane(PetalLane.D, d))
-        assertNull(PetalStream.parseAtomLane(PetalLane.P, ByteArray(18)))
+        assertNull(PetalStream.parseAtomLane(PetalLane.F0, ByteArray(82)))
+        val field = assertNotNull(PetalStream.parseAtomLane(PetalLane.F2, encoder.laneData(513).field(2)))
+        assertEquals(PetalStream.firstAtomId(513) + 10, field.firstId)
+        assertEquals(PetalLanes.FIELD_ATOMS, field.atomCount)
     }
 }

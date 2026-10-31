@@ -5,49 +5,76 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Ports of the Rust decoder and session tests plus robustness and platform-glue coverage.</summary>
 public sealed class PetalDecoderTests
 {
-    private static readonly byte[] SetupPayload = Enumerable.Range(0, 300)
+    /// <summary>The 3000-byte payload of the reference decoder tests.</summary>
+    private static readonly byte[] SetupPayload = Enumerable.Range(0, 3000)
         .Select(static i => (byte)(unchecked((uint)i * 2_654_435_761u) >> 11))
         .ToArray();
 
     private static readonly PetalStreamEncoder SetupEncoder = new(SetupPayload, 2);
 
-    private const int Cells = PetalGlyphs.TemplateSize * PetalGlyphs.TemplateSize;
-    private const int PatchValues = PetalLayout.TileCount * Cells;
+    /// <summary>A 768-pixel render of the square of frame <paramref name="frame"/> of the reference test stream (2× supersampling).</summary>
+    private static PetalLuma Setup(ushort frame) => PetalTestSupport.SquareLuma(SetupEncoder, frame, 768, 2);
+
+    /// <summary>A 768-pixel square of frame <paramref name="frame"/> with the blossom of canonical corner <paramref name="corner"/> painted over.</summary>
+    private static PetalLuma HiddenBlossom(ushort frame, int corner) => PetalTestSupport.HideBlossom(Setup(frame), corner);
+
+    /// <summary>The exact canvas-to-pixel pose of the 768-pixel test renders.</summary>
+    private static PetalPose RenderPose()
+    {
+        var canonical = PetalLayout.FinderCenters.ToArray();
+        const double scale = 768.0 / 1024.0;
+        var pixels = canonical.Select(static point => new PetalPoint(point.X * scale, point.Y * scale)).ToArray();
+        return PetalPose.Plain(PetalHomography.FromPoints(canonical, pixels) ?? throw new InvalidOperationException("render homography"));
+    }
+
+    private static PetalDecodedFrame WithLanes(PetalDecodedFrame frame, PetalLaneResult? d, PetalLaneResult?[] fields, int? inferred) =>
+        new(frame.Pose, frame.Rotation, frame.Mirrored, d, fields, inferred);
 
     [Fact]
     public void CleanRenderDecodesEveryLane()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 5, 768, 2);
+        var luma = Setup(5);
         var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
         Assert.Null(decoded.Error);
-        var (p, k, d) = SetupEncoder.LaneData(5);
-        Assert.Equal(p, decoded.Frame.P?.Data);
-        Assert.Equal(k, decoded.Frame.K?.Data);
-        Assert.Equal(d, decoded.Frame.D?.Data);
+        PetalTestSupport.AssertAllLanes(decoded.Frame, SetupEncoder.LaneData(5), "clean");
         Assert.Equal((0, false), (decoded.Frame.Rotation, decoded.Frame.Mirrored));
-        Assert.Equal(3, decoded.Frame.LanesOk);
-        Assert.Equal("PKD", decoded.Frame.Lanes);
+        Assert.Equal("D0123", decoded.Frame.Lanes);
+        Assert.Equal(5, decoded.Frame.LanesOk);
+        Assert.Equal(BitConverter.DoubleToInt64Bits(0.0), BitConverter.DoubleToInt64Bits(decoded.Frame.Pose.Distortion));
         Assert.Null(decoded.Frame.Beacon());
-        Assert.Equal(3, decoded.Frame.AtomPackets().Count);
+        Assert.Equal(5, decoded.Frame.AtomPackets().Count);
+        Assert.Equal(PetalStream.LaneFirstId(PetalLane.F0, 5), decoded.Frame.AtomPackets()[0].FirstId);
+        Assert.Equal(PetalStream.LaneFirstId(PetalLane.D, 5), decoded.Frame.AtomPackets()[4].FirstId);
+        Assert.Equal(decoded.Frame.Fields[2], decoded.Frame.Lane(PetalLane.F2));
+    }
+
+    [Fact]
+    public void ObservedCellsMatchTheDrawnCellsOfACleanRender()
+    {
+        var luma = Setup(3);
+        var decoded = PetalDecoder.Decode(luma);
+        Assert.True(decoded.Success, decoded.Error.ToString());
         var observed = PetalDecoder.ObservedCells(luma, decoded.Frame);
-        Assert.Equal(SetupEncoder.Cells(5), observed);
-        var error = PetalDecoder.TileMatchError(luma, decoded.Frame);
-        Assert.NotNull(error);
-        Assert.InRange(error.Value, 0.0, 1.0);
+        Assert.NotNull(observed);
+        var drawn = SetupEncoder.Cells(3);
+        Assert.Equal(drawn.Dots, observed.Dots);
+        Assert.Equal(drawn.Petals, observed.Petals);
+        // the petals are left unturned
+        Assert.All(observed.Turns, static turn => Assert.Equal(0, turn));
     }
 
     [Fact]
     public void BeaconFramesExposeTheBeacon()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 8, 600, 2);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 8, 600, 2);
         var decoded = PetalDecoder.Decode(luma);
-        Assert.True(decoded.Success);
+        Assert.True(decoded.Success, decoded.Error.ToString());
         var beacon = decoded.Frame.Beacon();
         Assert.NotNull(beacon);
         Assert.Equal(SetupEncoder.Meta, beacon.Value.Meta);
         Assert.Equal(8, beacon.Value.Header.Frame);
-        Assert.Equal(2, decoded.Frame.AtomPackets().Count);
+        Assert.Equal(4, decoded.Frame.AtomPackets().Count);
     }
 
     [Theory]
@@ -60,7 +87,7 @@ public sealed class PetalDecoderTests
     [InlineData("mirror-rot90", -1, true)]
     public void RotatedAndMirroredRendersDecodeWithTheRightOrientation(string name, int rotation, bool mirrored)
     {
-        var source = PetalTestSupport.RenderLuma(SetupEncoder, 7, 768, 2);
+        var source = Setup(7);
         var n = source.Width;
         Func<int, int, (int, int)> map = name switch
         {
@@ -76,51 +103,111 @@ public sealed class PetalDecoderTests
         Assert.Equal(mirrored, decoded.Frame.Mirrored);
         if (rotation >= 0)
             Assert.Equal(rotation, decoded.Frame.Rotation);
-        var (p, _, d) = SetupEncoder.LaneData(7);
-        Assert.Equal(d, decoded.Frame.D?.Data);
-        Assert.Equal(p, decoded.Frame.P?.Data);
+        PetalTestSupport.AssertAllLanes(decoded.Frame, SetupEncoder.LaneData(7), name);
         // without mirror hypotheses a mirrored picture cannot be read
         if (mirrored)
             Assert.False(PetalDecoder.Decode(image, PetalDecodeOptions.Default with { TryMirrored = false }).Success);
     }
 
     [Fact]
+    public void TheFieldAloneTellsTheOrientationWhenTheRingsAreGone()
+    {
+        // black out the ring band: no gates, no lane D; a wrong quarter turn reads
+        // permuted petals that no field codeword accepts
+        var luma = Setup(9);
+        var n = luma.Width;
+        var scale = n / 1024.0;
+        for (var y = 0; y < n; y++)
+        {
+            for (var x = 0; x < n; x++)
+            {
+                var (dx, dy) = ((x + 0.5) / scale - 512.0, (y + 0.5) / scale - 512.0);
+                var r = Math.Sqrt(dx * dx + dy * dy);
+                if (r is >= 392.0 and <= 490.0)
+                    luma.Data[y * n + x] = 0;
+            }
+        }
+
+        var rotated = PetalTestSupport.Transform(luma, (x, y) => (y, n - 1 - x));
+        var decoded = PetalDecoder.Decode(rotated);
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        Assert.Null(decoded.Frame.D);
+        Assert.Equal(1, decoded.Frame.Rotation);
+        var truth = SetupEncoder.LaneData(9);
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+            Assert.Equal(truth.Fields[sector], decoded.Frame.Fields[sector]?.Data);
+    }
+
+    [Fact]
+    public void AFieldLaneAloneIsEnoughToAcceptAnOrientation()
+    {
+        var cells = SetupEncoder.Cells(5).Clone();
+        // sixteen flips in sixteen different bytes of sectors 1-3: no choice of erasures lets their
+        // 22 parity bytes repair that, while sector 0 is intact
+        for (var sector = 1; sector < PetalLayout.Sectors; sector++)
+        {
+            var order = PetalLayout.SectorCellOrder(sector);
+            for (var j = 0; j < 16; j++)
+            {
+                var cell = order[8 * (5 * j + 2) + 3];
+                cells.Petals[cell] = !cells.Petals[cell];
+            }
+        }
+
+        // scramble the data dots: lane D fails its code while the gates and guards stay put
+        var rng = new PetalXorshift32(5);
+        var roles = PetalLayout.SlotRoleTable;
+        for (var slot = 0; slot < roles.Length; slot++)
+        {
+            if (roles[slot].Kind == PetalSlotKind.Data)
+                cells.Dots[slot] = rng.NextUInt32() % 2 == 0;
+        }
+
+        var luma = PetalTestSupport.Square(cells, 768, 2).ToLuma();
+        var result = PetalDecoder.Decode(luma);
+        Assert.True(result.Success, result.Error.ToString());
+        Assert.Equal("0", result.Frame.Lanes);
+        Assert.Equal(SetupEncoder.LaneData(5).Fields[0], result.Frame.Fields[0]?.Data);
+        Assert.Equal((0, false), (result.Frame.Rotation, result.Frame.Mirrored));
+    }
+
+    [Fact]
     public void CorrectedCountsRewrittenBytesNotJustErasures()
     {
-        var data = Enumerable.Range(0, PetalLanes.PDataLength).Select(static b => (byte)b).ToArray();
-        var word = PetalLanes.EncodeLane(PetalLane.P, data);
-        foreach (var position in new[] { 2, 11, 30 })
+        var data = Enumerable.Range(0, PetalLanes.FieldDataLength).Select(static b => (byte)b).ToArray();
+        var lane = PetalLane.F1;
+        var word = PetalLanes.EncodeLane(lane, data);
+        foreach (var position in new[] { 2, 11, 30, 77 })
             word[position] ^= 0x5A;
         var confidence = Enumerable.Repeat(1.0, word.Length).ToArray();
-        var result = PetalDecoder.DecodeWithErasures(PetalLane.P, word, confidence);
+        var result = PetalDecoder.DecodeWithErasures(lane, word, confidence);
         Assert.NotNull(result);
         Assert.Equal(data, result.Data);
         Assert.Equal(0, result.Erasures);
-        Assert.Equal(3, result.Corrected);
+        Assert.Equal(4, result.Corrected);
         // with the damaged bytes flagged as least confident, they become erasures
         var flagged = Enumerable.Repeat(1.0, word.Length).ToArray();
-        foreach (var position in new[] { 2, 11, 30 })
+        foreach (var position in new[] { 2, 11, 30, 77 })
             flagged[position] = 0.0;
-        result = PetalDecoder.DecodeWithErasures(PetalLane.P, word, flagged);
+        result = PetalDecoder.DecodeWithErasures(lane, word, flagged);
         Assert.NotNull(result);
         Assert.Equal(data, result.Data);
-        Assert.True(result.Corrected >= 3);
+        Assert.True(result.Corrected >= 4);
     }
 
     [Fact]
     public void RandomWordsAreAlmostNeverAccepted()
     {
         // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
-        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about
-        // one random word in 250 (150 of these 40 000). Lane P stops at six for the same reason.
-        // The counts are exact so that every port, fed the same xorshift32 words and byte-valued
-        // confidences, reproduces the decoder bit for bit. They do not prove the ranking is
-        // stable (a reversed tie-break gives the same counts): see the two tie tests below.
+        // 11 parity bytes, so its schedule stops at five erasures; a field lane has 22 and stops at
+        // eleven. The counts are exact so that every port, fed the same xorshift32 words and
+        // byte-valued confidences (many ties, so the ranking must be stable), reproduces the
+        // decoder bit for bit.
         var rng = new PetalXorshift32(0x5EED);
         const int trials = 40_000;
-        foreach (var (lane, expected) in new[] { (PetalLane.D, 3), (PetalLane.P, 0) })
+        foreach (var (lane, expected) in new[] { (PetalLane.D, 3), (PetalLane.F0, 0) })
         {
-            var length = PetalLanes.DataLength(lane) + PetalLanes.ParityLength(lane);
+            var length = PetalLanes.WordLength(lane);
             var word = new byte[length];
             var confidence = new double[length];
             var accepted = 0;
@@ -139,12 +226,11 @@ public sealed class PetalDecoderTests
     }
 
     [Fact]
-    public void OnlyLaneKUsesTwoThirdsOfItsParityAsErasures()
+    public void ErasuresStopAtHalfTheParity()
     {
-        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
-        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
-        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
-        foreach (var (lane, flagged) in new[] { (PetalLane.D, 7), (PetalLane.P, 8) })
+        // damaged bytes: `flagged` of them marked least confident, two more hidden: beyond half the
+        // parity the decoder must refuse instead of risking a wrong codeword
+        foreach (var (lane, flagged) in new[] { (PetalLane.D, 7), (PetalLane.F2, 16) })
         {
             var data = Enumerable.Range(0, PetalLanes.DataLength(lane)).Select(static b => (byte)b).ToArray();
             var word = PetalLanes.EncodeLane(lane, data);
@@ -169,40 +255,20 @@ public sealed class PetalDecoderTests
                 confidence[position] = 0.0;
             }
 
-            damaged[20] ^= 0x3C;
+            damaged[24] ^= 0x3C;
             var result = PetalDecoder.DecodeWithErasures(lane, damaged, confidence);
             Assert.True(result is not null, $"lane {lane}");
             Assert.Equal(data, result.Data);
             Assert.True(result.Erasures <= PetalLanes.ParityLength(lane) / 2, $"lane {lane}");
         }
-
-        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
-        // (2·7 + 30 = 44 of 45 parity bytes)
-        var kData = Enumerable.Range(0, PetalLanes.KDataLength).Select(static i => (byte)i).ToArray();
-        var kDamaged = PetalLanes.EncodeLane(PetalLane.K, kData);
-        var kConfidence = Enumerable.Repeat(1.0, kDamaged.Length).ToArray();
-        for (var position = 0; position < 30; position++)
-        {
-            kDamaged[position] ^= 0xA5;
-            kConfidence[position] = 0.0;
-        }
-
-        for (var position = 60; position < 67; position++)
-            kDamaged[position] ^= 0x3C;
-        var kResult = PetalDecoder.DecodeWithErasures(PetalLane.K, kDamaged, kConfidence);
-        Assert.NotNull(kResult);
-        Assert.Equal(kData, kResult.Data);
-        Assert.Equal(30, kResult.Erasures);
     }
 
     [Fact]
     public void EqualConfidencesAreErasedInPositionOrder()
     {
-        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
-        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
-        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
-        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
-        // the last positions instead would see seven errors.
+        // Ties must be broken by position or ports disagree about which bytes are erased. Three
+        // damaged bytes at the front plus four hidden ones fit lane D only if exactly the first
+        // three positions are erased (3 erasures + 4 errors = all 11 parity bytes).
         var data = Enumerable.Range(0, PetalLanes.DDataLength).Select(static b => (byte)b).ToArray();
         var word = PetalLanes.EncodeLane(PetalLane.D, data);
         foreach (var position in Enumerable.Range(0, 3).Concat(Enumerable.Range(20, 4)))
@@ -217,14 +283,14 @@ public sealed class PetalDecoderTests
 
     [Theory]
     [InlineData(PetalLane.D, 6)]
-    [InlineData(PetalLane.P, 7)]
-    [InlineData(PetalLane.K, 23)]
+    [InlineData(PetalLane.F0, 12)]
+    [InlineData(PetalLane.F3, 12)]
     public void FirstErasureStepFollowsByteOrderWhenConfidencesTie(PetalLane lane, int damagedBytes)
     {
         // One more damaged byte than the code corrects unaided, all at the front of the word and
         // all equally confident. Only the first erasure step can repair it, and only if the tie is
-        // resolved in byte order: that step erases byte 0, one of the damaged ones. A ranking that
-        // reorders ties erases an intact byte instead and every later step is out of budget.
+        // resolved in byte order: that step erases the first bytes, damaged ones. A ranking that
+        // reorders ties erases intact bytes instead and every later step is out of budget.
         var nsym = PetalLanes.ParityLength(lane);
         Assert.True(2 * damagedBytes > nsym && 2 * damagedBytes - nsym / 8 <= nsym);
         var data = Enumerable.Range(0, PetalLanes.DataLength(lane)).Select(static b => (byte)(b * 7 + 1)).ToArray();
@@ -245,7 +311,7 @@ public sealed class PetalDecoderTests
         // byte-valued confidences tie everywhere, so the ranking must be a stable sort like
         // Rust's sort_by: Array.Sort would reorder the ties and change which bytes get erased
         var rng = new PetalXorshift32(0x71E5);
-        foreach (var length in new[] { PetalLanes.DWordLength, PetalLanes.PWordLength, PetalLanes.KWordLength })
+        foreach (var length in new[] { PetalLanes.DWordLength, PetalLanes.FieldWordLength })
         {
             for (var trial = 0; trial < 200; trial++)
             {
@@ -260,268 +326,17 @@ public sealed class PetalDecoderTests
         }
     }
 
-    /// <summary>The exact canvas-to-pixel homography of the 768-pixel test renders.</summary>
-    private static PetalHomography RenderHomography()
-    {
-        var canonical = PetalLayout.FinderCenters.ToArray();
-        const double scale = 768.0 / 1024.0;
-        var pixels = canonical.Select(static point => new PetalPoint(point.X * scale, point.Y * scale)).ToArray();
-        return PetalHomography.FromPoints(canonical, pixels) ?? throw new InvalidOperationException("render homography");
-    }
-
-    /// <summary>A clean 768-pixel render with the exact canvas-to-pixel homography and its raw patches.</summary>
-    private static (PetalLuma Luma, PetalHomography Pose, double[] Patches) CleanPatches(ushort frame)
-    {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, frame, 768, 2);
-        var pose = RenderHomography();
-        var patches = new double[PatchValues];
-        PetalDecoder.SamplePatches(luma, pose, patches);
-        return (luma, pose, patches);
-    }
-
-    private static PetalDecoder.Reference LevelsOf(PetalLuma luma, PetalHomography pose)
-    {
-        var reference = PetalDecoder.ReferenceLevels(luma, pose, null);
-        Assert.NotNull(reference);
-        return reference.Value;
-    }
-
-    /// <summary>Lane <c>P</c> or <c>K</c> as the reads of one tile pass rank it, or <see langword="null"/>.</summary>
-    private static PetalLaneResult? LaneOf(PetalLane lane, PetalDecoder.TileRead[] reads)
-    {
-        var (p, pConfidence, k, kConfidence) = PetalDecoder.TileWords(reads);
-        return lane == PetalLane.P
-            ? PetalDecoder.DecodeWithErasures(PetalLane.P, p, pConfidence)
-            : PetalDecoder.DecodeWithErasures(PetalLane.K, k, kConfidence);
-    }
-
     [Fact]
-    public void LevelAndNormalisedReadsAgreeOnACleanRender()
+    public void TwoMeansSplitsTwoClustersAndSurvivesOne()
     {
-        var (luma, pose, patches) = CleanPatches(5);
-        var (pData, kData, _) = SetupEncoder.LaneData(5);
-        var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
-        var reference = LevelsOf(luma, pose);
-        foreach (var (name, reads) in new[]
-        {
-            ("level", PetalDecoder.ReadTiles(patches, reference, sigmas)),
-            ("normalised", PetalDecoder.ReadTilesNormalised(patches, sigmas)),
-        })
-        {
-            var p = LaneOf(PetalLane.P, reads);
-            var k = LaneOf(PetalLane.K, reads);
-            Assert.True(p is not null && k is not null, name);
-            Assert.Equal(pData, p.Data);
-            Assert.Equal(0, p.Corrected);
-            Assert.Equal(kData, k.Data);
-            Assert.Equal(0, k.Corrected);
-        }
-    }
-
-    [Fact]
-    public void NormalisedReadCancelsGainAndOffsetPerTile()
-    {
-        var (luma, pose, patches) = CleanPatches(5);
-        var (pData, kData, _) = SetupEncoder.LaneData(5);
-        var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
-        // every tile gets its own gain and offset, as under glare, shadows and saturation
-        var distorted = new double[patches.Length];
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-        {
-            var gain = 0.35 + 0.65 * (tile * 37 % 101 / 100.0);
-            var offset = 5.0 + tile * 53 % 61;
-            for (var cell = 0; cell < Cells; cell++)
-                distorted[tile * Cells + cell] = gain * patches[tile * Cells + cell] + offset;
-        }
-
-        var reads = PetalDecoder.ReadTiles(distorted, LevelsOf(luma, pose), sigmas);
-        Assert.Null(LaneOf(PetalLane.P, reads));
-        reads = PetalDecoder.ReadTilesNormalised(distorted, sigmas);
-        Assert.Equal(pData, LaneOf(PetalLane.P, reads)?.Data);
-        Assert.Equal(kData, LaneOf(PetalLane.K, reads)?.Data);
-    }
-
-    [Fact]
-    public void NormalisedReadErasesTilesThatLostTheirContrast()
-    {
-        var (_, _, patches) = CleanPatches(5);
-        Array.Fill(patches, 100.0, 5 * Cells, Cells);
-        Array.Fill(patches, 30.0, 9 * Cells, Cells);
-        var reads = PetalDecoder.ReadTilesNormalised(patches, PetalDecodeOptions.Default.TemplateSigmas);
-        foreach (var tile in new[] { 5, 9 })
-        {
-            Assert.True(Math.Abs(reads[tile].PolarityMargin) < 1e-12, $"tile {tile}");
-            Assert.True(Math.Abs(reads[tile].GlyphMargin) < 1e-12, $"tile {tile}");
-        }
-
-        Assert.True(reads[6].PolarityMargin > 0.0 && reads[6].GlyphMargin > 0.0);
-    }
-
-    [Fact]
-    public void PatchLevelsIgnoreTheExtremeCells()
-    {
-        var values = new double[Cells];
-        Array.Fill(values, 10.0);
-        for (var i = 0; i < Cells / 2; i++)
-            values[i] = 200.0 + i % 3;
-        values[0] = 255.0; // one hot cell
-        values[Cells - 1] = 0.0; // one dead cell
-        var (low, high) = PetalDecoder.PatchLevels(values);
-        Assert.True(Math.Abs(low - 10.0) < 1e-12);
-        Assert.InRange(high, 200.0, 202.0);
-        var scaled = new double[Cells];
-        PetalDecoder.Rescale(values, 1.0, scaled);
-        Assert.All(scaled, static value => Assert.InRange(value, -0.25, 1.25));
-        // a flat patch stays flat instead of dividing by nothing
-        var flat = new double[Cells];
-        Array.Fill(flat, 7.0);
-        PetalDecoder.Rescale(flat, 1.0, scaled);
-        Assert.All(scaled, static value => Assert.True(Math.Abs(value) < 1e-12));
-        Assert.Throws<ArgumentException>(() => PetalDecoder.PatchLevels(new double[Cells - 1]));
-    }
-
-    [Fact]
-    public void ShadowedPartOfARenderDecodesThroughTheNormalisedRead()
-    {
-        var luma = ShadowedRender(5, out var pData, out var kData);
-        // the finder levels cannot describe a step in the light: the level read loses lane K
-        var pose = RenderHomography();
-        var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
-        var patches = new double[PatchValues];
-        PetalDecoder.SamplePatches(luma, pose, patches);
-        var levelReads = PetalDecoder.ReadTiles(patches, LevelsOf(luma, pose), sigmas);
-        Assert.Null(LaneOf(PetalLane.K, levelReads));
-        var decoded = PetalDecoder.Decode(luma);
-        Assert.True(decoded.Success, decoded.Error.ToString());
-        Assert.Equal(pData, decoded.Frame.P?.Data);
-        Assert.Equal(kData, decoded.Frame.K?.Data);
-    }
-
-    /// <summary>A 768-pixel render with a vertical band of the picture at 30 % light.</summary>
-    private static PetalLuma ShadowedRender(ushort frame, out byte[] pData, out byte[] kData)
-    {
-        (pData, kData, _) = SetupEncoder.LaneData(frame);
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, frame, 768, 2);
-        var width = luma.Width;
-        for (var row = 0; row < luma.Height; row++)
-        {
-            for (var x = width * 7 / 20; x < width * 3 / 5; x++)
-            {
-                var at = row * width + x;
-                luma.Data[at] = (byte)PetalMath.RoundHalfAwayFromZero(luma.Data[at] * 0.3);
-            }
-        }
-
-        return luma;
-    }
-
-    [Fact]
-    public void TheNormalisedReadOnlyFillsInTheLanesTheLevelReadMissed()
-    {
-        var luma = ShadowedRender(5, out var pData, out var kData);
-        var pose = RenderHomography();
-        var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
-        var patches = new double[PatchValues];
-        PetalDecoder.SamplePatches(luma, pose, patches);
-        var reference = LevelsOf(luma, pose);
-        var levelReads = PetalDecoder.ReadTiles(patches, reference, sigmas);
-        var (p, k) = PetalDecoder.ReadTileLanes(patches, reference, sigmas);
-        Assert.Equal(kData, k?.Data);
-        // a lane the level read decoded is kept exactly as the level read left it
-        if (LaneOf(PetalLane.P, levelReads) is { } levelP)
-            Assert.Equal(levelP, p);
-        else
-            Assert.Equal(pData, p?.Data);
-
-        // on a clean render the level read decodes both lanes and is the final answer
-        var (cleanLuma, cleanPose, cleanPatches) = CleanPatches(5);
-        var cleanReference = LevelsOf(cleanLuma, cleanPose);
-        var (cleanP, cleanK) = PetalDecoder.ReadTileLanes(cleanPatches, cleanReference, sigmas);
-        var cleanReads = PetalDecoder.ReadTiles(cleanPatches, cleanReference, sigmas);
-        Assert.Equal(LaneOf(PetalLane.P, cleanReads), cleanP);
-        Assert.Equal(LaneOf(PetalLane.K, cleanReads), cleanK);
-    }
-
-    [Fact]
-    public void DecodeAtReadsTheShadowedRenderThroughTheNormalisedRead()
-    {
-        var luma = ShadowedRender(5, out var pData, out var kData);
-        var (_, _, dData) = SetupEncoder.LaneData(5);
-        var frame = PetalDecoder.DecodeAt(luma, RenderHomography());
-        Assert.NotNull(frame);
-        Assert.Equal(pData, frame.P?.Data);
-        Assert.Equal(kData, frame.K?.Data);
-        Assert.Equal(dData, frame.D?.Data);
-    }
-
-    [Fact]
-    public void ATileLaneAloneIsEnoughToAcceptAnOrientation()
-    {
-        var cells = SetupEncoder.Cells(5).Clone();
-        // fourteen polarity flips in fourteen different bytes of lane P: no choice of erasures
-        // lets its 13 parity bytes repair that, yet every glyph is still drawn, so lane K is intact
-        for (var j = 0; j < 14; j++)
-        {
-            var tile = 8 * j + 3;
-            cells.Light[tile] = !cells.Light[tile];
-        }
-
-        // scramble the data dots: lane D fails its code while the gates and guards stay put
-        var rng = new PetalXorshift32(5);
-        var roles = PetalLayout.SlotRoleTable;
-        for (var slot = 0; slot < roles.Length; slot++)
-        {
-            if (roles[slot].Kind == PetalSlotKind.Data)
-                cells.Dots[slot] = rng.NextUInt32() % 2 == 0;
-        }
-
-        var luma = PetalRenderer.Render(cells, new PetalRenderOptions { Size = 768, Supersample = 2 }).ToLuma();
-        var result = PetalDecoder.Decode(luma);
-        Assert.True(result.Success, result.Error.ToString());
-        Assert.Equal("K", result.Frame.Lanes);
-        Assert.Equal(SetupEncoder.LaneData(5).K, result.Frame.K?.Data);
-    }
-
-    [Fact]
-    public void NormalisedReadWorksWithEveryTemplateBlurList()
-    {
-        var (_, _, patches) = CleanPatches(5);
-        var (pData, kData, _) = SetupEncoder.LaneData(5);
-        foreach (var sigmas in new double[][] { [0.0], [0.8], [1.5, 1.1, 0.8, 0.5, 0.0], [0.3, 0.6, 0.9, 1.2, 1.5, 1.8] })
-        {
-            var reads = PetalDecoder.ReadTilesNormalised(patches, sigmas);
-            Assert.Equal(pData, LaneOf(PetalLane.P, reads)?.Data);
-            Assert.Equal(kData, LaneOf(PetalLane.K, reads)?.Data);
-        }
-    }
-
-    [Fact]
-    public void GarbagePatchesNeverDecodeThroughEitherRead()
-    {
-        var reference = new PetalDecoder.Reference();
-        for (var corner = 0; corner < 4; corner++)
-            reference.Set(corner, 230.0 - corner, 12.0 + corner);
-        var rng = new PetalXorshift32(31);
-        var sigmas = PetalDecodeOptions.Default.TemplateSigmas;
-        for (var style = 0; style < 6; style++)
-        {
-            var patches = new double[PatchValues];
-            for (var i = 0; i < patches.Length; i++)
-            {
-                patches[i] = style switch
-                {
-                    0 => rng.NextByte(), // white noise
-                    1 => 100.0, // flat
-                    2 => i % Cells < Cells / 2 ? 240.0 : 5.0, // identical stripes in every tile
-                    3 => double.NaN,
-                    4 => rng.NextUInt32() % 7 == 0 ? 255.0 : 0.0, // sparse specks
-                    _ => i * 0.37 % 255.0, // slowly varying ramp
-                };
-            }
-
-            var (p, k) = PetalDecoder.ReadTileLanes(patches, reference, sigmas);
-            Assert.True(p is null && k is null, $"style {style}");
-        }
+        var values = Enumerable.Repeat(0.05, 40).Concat(Enumerable.Repeat(0.9, 60)).ToArray();
+        var t = PetalDecoder.TwoMeans(values);
+        Assert.True(t > 0.3 && t < 0.6, $"{t}");
+        var flat = Enumerable.Repeat(0.4, 10).ToArray();
+        Assert.True(Math.Abs(PetalDecoder.TwoMeans(flat) - 0.4) < 1e-12);
+        // the threshold starts at the mean, not the median, and splits strictly above it
+        Assert.Equal(0.5 * (0.0 + 1.0), PetalDecoder.TwoMeans([0.0, 1.0]));
+        Assert.Equal(0.5 * (0.0 + (1.0 + 1.0 + 1.0) / 3.0), PetalDecoder.TwoMeans([0.0, 1.0, 1.0, 1.0]));
     }
 
     [Fact]
@@ -570,10 +385,15 @@ public sealed class PetalDecoderTests
         var smallBudget = PetalDecodeOptions.Default with { MaxPixels = 1_000 };
         Assert.Equal(PetalDecodeError.UnsupportedImage, PetalDecoder.Decode(new PetalLuma(100, 100), smallBudget).Error);
         Assert.Equal(PetalDecodeError.UnsupportedImage, PetalDecoder.Decode(new PetalLuma(4_000, 3_001)).Error);
-        Assert.Null(PetalDecoder.DecodeAt(new PetalLuma(8, 8), PetalHomography.Identity));
+        var identity = PetalPose.Plain(PetalHomography.Identity);
+        Assert.Null(PetalDecoder.DecodeAt(new PetalLuma(8, 8), identity));
+        var decoded = PetalDecoder.Decode(Setup(5));
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        // an image the decoder would refuse never reaches the sampler
+        Assert.Null(PetalDecoder.ObservedCells(new PetalLuma(20, 20), decoded.Frame));
+        Assert.Null(PetalDecoder.FieldEvidence(new PetalLuma(20, 20), decoded.Frame));
+        Assert.Null(PetalDecoder.Track(new PetalLuma(47, 47), decoded.Frame));
         Assert.Throws<ArgumentOutOfRangeException>(() => PetalDecodeOptions.Default with { MaxPixels = -1 });
-        Assert.Throws<ArgumentException>(() => PetalDecodeOptions.Default with { TemplateSigmas = [] });
-        Assert.Throws<ArgumentException>(() => PetalDecodeOptions.Default with { TemplateSigmas = [double.NaN] });
     }
 
     [Fact]
@@ -647,7 +467,7 @@ public sealed class PetalDecoderTests
     public void RandomBlobScenesNeverThrow()
     {
         // Scenes with several random bright ellipses (some finder-sized) on noise:
-        // exercises the locator, quad selection and homography on degenerate layouts.
+        // exercises the locator, quad selection and pose fitting on degenerate layouts.
         var rng = new PetalXorshift32(2024);
         for (var scene = 0; scene < 60; scene++)
         {
@@ -678,25 +498,27 @@ public sealed class PetalDecoderTests
             // a lucky layout may locate finders but cannot yield lanes
             var result = PetalDecoder.Decode(new PetalLuma(w, h, data));
             if (result.Success)
-                Assert.Equal(0, result.Frame.LanesOk);
+                Assert.True(result.Frame.LanesOk == 0, $"scene {scene} produced lane data from blobs");
         }
     }
 
     [Fact]
-    public void DecodeAtSurvivesHostileHomographies()
+    public void DecodeAtSurvivesHostilePoses()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 3, 300, 1);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 3, 300, 1);
         var hostile = new[]
         {
-            new PetalHomography(new double[9]),
-            new PetalHomography(double.NaN, 0, 0, 0, double.NaN, 0, 0, 0, 1),
-            new PetalHomography(double.PositiveInfinity, 0, 0, 0, 1, 0, 0, 0, 1),
-            new PetalHomography(1, 0, 0, 0, 1, 0, 1, 1, -600),
-            new PetalHomography(1e300, 1e300, 1e300, -1e300, 1e300, 1, 0, 0, 1e-300),
+            PetalPose.Plain(new PetalHomography(new double[9])),
+            PetalPose.Plain(new PetalHomography(double.NaN, 0, 0, 0, double.NaN, 0, 0, 0, 1)),
+            PetalPose.Plain(new PetalHomography(double.PositiveInfinity, 0, 0, 0, 1, 0, 0, 0, 1)),
+            PetalPose.Plain(new PetalHomography(1, 0, 0, 0, 1, 0, 1, 1, -600)),
+            PetalPose.Plain(new PetalHomography(1e300, 1e300, 1e300, -1e300, 1e300, 1, 0, 0, 1e-300)),
+            new PetalPose(PetalHomography.Identity, double.NaN, new PetalPoint(150, 150), 1.0),
+            new PetalPose(PetalHomography.Identity, -1e300, new PetalPoint(150, 150), 0.0),
         };
-        foreach (var h in hostile)
+        foreach (var pose in hostile)
         {
-            var frame = PetalDecoder.DecodeAt(luma, h);
+            var frame = PetalDecoder.DecodeAt(luma, pose);
             if (frame is not null)
                 Assert.Equal(0, frame.LanesOk);
         }
@@ -705,31 +527,32 @@ public sealed class PetalDecoderTests
     [Fact]
     public void DecodeAtWithTheTruePoseReadsEveryLane()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 6, 512, 2);
-        var pose = new PetalHomography(0.5, 0, 0, 0, 0.5, 0, 0, 0, 1);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 6, 512, 2);
+        var pose = PetalPose.Plain(new PetalHomography(0.5, 0, 0, 0, 0.5, 0, 0, 0, 1));
         var frame = PetalDecoder.DecodeAt(luma, pose);
         Assert.NotNull(frame);
-        var (p, k, d) = SetupEncoder.LaneData(6);
-        Assert.Equal(p, frame.P?.Data);
-        Assert.Equal(k, frame.K?.Data);
-        Assert.Equal(d, frame.D?.Data);
-        Assert.Equal(pose, frame.Homography);
+        PetalTestSupport.AssertAllLanes(frame, SetupEncoder.LaneData(6), "true pose");
+        Assert.Equal(pose, frame.Pose);
+        // on the card the square starts 161 pixels down: its pose places the bands' tiles too
+        var card = PetalTestSupport.RenderLuma(SetupEncoder, 6, 512, 2);
+        var cardPose = PetalPose.Plain(new PetalHomography(0.5, 0, 0, 0, 0.5, 161, 0, 0, 1));
+        var onCard = PetalDecoder.DecodeAt(card, cardPose);
+        Assert.NotNull(onCard);
+        PetalTestSupport.AssertAllLanes(onCard, SetupEncoder.LaneData(6), "true card pose");
+        var kana = PetalKana.ReadKana(card, onCard, new PetalLaneHeader(SetupEncoder.Meta.Tag, 6));
+        Assert.All(kana, static lane => Assert.NotNull(lane));
     }
 
     [Fact]
     public void AHiddenBlossomIsInferredAndEveryLaneStillReads()
     {
-        var render = PetalTestSupport.RenderLuma(SetupEncoder, 2, 768, 2);
-        var (p, k, d) = SetupEncoder.LaneData(2);
         for (var corner = 0; corner < 4; corner++)
         {
-            var decoded = PetalDecoder.Decode(PetalTestSupport.HideBlossom(render, corner));
+            var decoded = PetalDecoder.Decode(HiddenBlossom(2, corner));
             Assert.True(decoded.Success, $"corner {corner}: {decoded.Error}");
             Assert.True(corner == decoded.Frame.InferredCorner, $"corner {corner}: inferred {decoded.Frame.InferredCorner}");
             Assert.Equal((0, false), (decoded.Frame.Rotation, decoded.Frame.Mirrored));
-            Assert.Equal(p, decoded.Frame.P?.Data);
-            Assert.Equal(k, decoded.Frame.K?.Data);
-            Assert.Equal(d, decoded.Frame.D?.Data);
+            PetalTestSupport.AssertAllLanes(decoded.Frame, SetupEncoder.LaneData(2), $"corner {corner}");
         }
     }
 
@@ -738,8 +561,7 @@ public sealed class PetalDecoderTests
     {
         // hide the top-right blossom of the code, then mirror the picture: the hidden
         // blossom appears top-left in the image but is still corner 1 of the code
-        var hidden = PetalTestSupport.HideBlossom(PetalTestSupport.RenderLuma(SetupEncoder, 3, 768, 2), 1);
-        var decoded = PetalDecoder.Decode(PetalTestSupport.Mirror(hidden));
+        var decoded = PetalDecoder.Decode(PetalTestSupport.Mirror(HiddenBlossom(3, 1)));
         Assert.True(decoded.Success, decoded.Error.ToString());
         Assert.True(decoded.Frame.Mirrored);
         Assert.Equal(1, decoded.Frame.InferredCorner);
@@ -749,8 +571,8 @@ public sealed class PetalDecoderTests
     [Fact]
     public void ALargeHiddenRegionNeverReadsWrongData()
     {
-        // the whole bottom-right quarter is gone: rings and tiles with it
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 2, 768, 2);
+        // the whole bottom-right quarter is gone: rings and petals with it
+        var luma = Setup(2);
         var n = luma.Width;
         for (var y = n * 3 / 4; y < n; y++)
         {
@@ -758,67 +580,91 @@ public sealed class PetalDecoderTests
                 luma.Data[y * n + x] = 0;
         }
 
-        var (p, k, d) = SetupEncoder.LaneData(2);
+        var truth = SetupEncoder.LaneData(2);
         var result = PetalDecoder.Decode(luma);
         if (!result.Success)
             return;
-        foreach (var (lane, truth) in new[] { (result.Frame.P, p), (result.Frame.K, k), (result.Frame.D, d) })
+        foreach (var lane in PetalLanes.DecodeOrder)
         {
-            if (lane is not null)
-                Assert.Equal(truth, lane.Data);
+            if (result.Frame.Lane(lane) is { } decoded)
+                Assert.Equal(truth.Lane(lane), decoded.Data);
         }
+    }
+
+    [Fact]
+    public void LensDistortionIsFoundWhenThePlainPoseMissesThePetals()
+    {
+        // a small, strongly distorted picture: 384 px of code with the corner blossoms far out
+        var luma = Setup(6);
+        var small = new PetalLuma(640, 480);
+        // downscale 768 → 384 by averaging 2×2 blocks, then frame it in 640×480
+        for (var y = 0; y < 384; y++)
+        {
+            for (var x = 0; x < 384; x++)
+            {
+                var sum = luma.Data[2 * y * 768 + 2 * x] + luma.Data[2 * y * 768 + 2 * x + 1]
+                    + luma.Data[(2 * y + 1) * 768 + 2 * x] + luma.Data[(2 * y + 1) * 768 + 2 * x + 1];
+                small.Data[(y + 48) * 640 + x + 128] = (byte)((sum + 2) / 4);
+            }
+        }
+
+        var distorted = PetalTestSupport.Barrel(small, -0.12);
+        // the plain pose misses petals at the edge of the field
+        var quad = PetalLocator.Locate(distorted);
+        Assert.NotNull(quad);
+        var corners = quad.Select(static f => new PetalPoint(f.X, f.Y)).ToArray();
+        var pose = PetalDecoder.FitPose(distorted, corners, 0.0);
+        Assert.NotNull(pose);
+        var plain = PetalDecoder.DecodeAt(distorted, pose.Value);
+        Assert.NotNull(plain);
+        Assert.True(plain.Fields.Any(static f => f is null), plain.Lanes);
+        var decoded = PetalDecoder.Decode(distorted);
+        Assert.True(decoded.Success, decoded.Error.ToString());
+        Assert.True(decoded.Frame.Pose.Distortion < 0.0, $"{decoded.Frame.Pose.Distortion}");
+        PetalTestSupport.AssertAllLanes(decoded.Frame, SetupEncoder.LaneData(6), "barrel");
     }
 
     [Fact]
     public void TrackingFollowsASmallMovementAndGivesUpOnAJump()
     {
-        var luma = PetalTestSupport.Padded(PetalTestSupport.RenderLuma(SetupEncoder, 6, 768, 2), 100);
+        var luma = PetalTestSupport.Padded(Setup(6), 100);
         var first = PetalDecoder.Decode(luma);
         Assert.True(first.Success, first.Error.ToString());
-        var (p, k, d) = SetupEncoder.LaneData(6);
         var followed = PetalDecoder.Track(PetalTestSupport.Shifted(luma, 9, -6), first.Frame);
         Assert.NotNull(followed);
-        Assert.Equal(p, followed.P?.Data);
-        Assert.Equal(k, followed.K?.Data);
-        Assert.Equal(d, followed.D?.Data);
+        PetalTestSupport.AssertAllLanes(followed, SetupEncoder.LaneData(6), "tracked");
         Assert.Null(followed.InferredCorner);
         // more than a finder diameter: tracking refuses, a full decode is needed
         var jumped = PetalTestSupport.Shifted(luma, 95, 0);
         Assert.Null(PetalDecoder.Track(jumped, first.Frame));
         Assert.True(PetalDecoder.Decode(jumped).Success);
-        // an unusable image is refused like by the full decoder
-        Assert.Null(PetalDecoder.Track(new PetalLuma(47, 47), first.Frame));
     }
 
     [Fact]
     public void BrokenPosesAreRefusedWithoutThrowing()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
+        var luma = Setup(4);
         var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
         var previous = decoded.Frame;
-        // a good pose that names a corner that does not exist
         Assert.NotNull(PetalDecoder.Track(luma, previous));
+        // a good pose that names a corner that does not exist
         foreach (var corner in new[] { 4, 255, -1 })
-        {
-            var named = new PetalDecodedFrame(previous.Homography, previous.Rotation, previous.Mirrored, previous.P, previous.K, previous.D, corner);
-            Assert.Null(PetalDecoder.Track(luma, named));
-        }
-
+            Assert.Null(PetalDecoder.Track(luma, WithLanes(previous, previous.D, previous.Fields.ToArray(), corner)));
         var nonFinite = new[]
         {
             new PetalHomography(Enumerable.Repeat(double.NaN, 9).ToArray()),
             new PetalHomography(double.PositiveInfinity, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
         };
         foreach (var broken in nonFinite)
-            Assert.Null(PetalDecoder.DecodeAt(luma, broken));
+            Assert.Null(PetalDecoder.DecodeAt(luma, PetalPose.Plain(broken)));
         // the last one makes every finder far larger than the image
         var huge = new PetalHomography(50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0);
         foreach (var broken in nonFinite.Append(huge))
         {
             foreach (var inferred in new int?[] { null, 2 })
             {
-                var frame = new PetalDecodedFrame(broken, previous.Rotation, previous.Mirrored, previous.P, previous.K, previous.D, inferred);
+                var frame = new PetalDecodedFrame(PetalPose.Plain(broken), previous.Rotation, previous.Mirrored, previous.D, previous.Fields.ToArray(), inferred);
                 Assert.Null(PetalDecoder.Track(luma, frame));
             }
         }
@@ -827,11 +673,10 @@ public sealed class PetalDecoderTests
     [Fact]
     public void TrackingSurvivesABlossomThatDisappears()
     {
-        var render = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
-        var first = PetalDecoder.Decode(render);
+        var first = PetalDecoder.Decode(Setup(4));
         Assert.True(first.Success, first.Error.ToString());
         // the same code, slightly moved, now with the bottom-left blossom covered
-        var moved = PetalTestSupport.Shifted(PetalTestSupport.HideBlossom(render, 3), -5, 4);
+        var moved = PetalTestSupport.Shifted(HiddenBlossom(4, 3), -5, 4);
         var followed = PetalDecoder.Track(moved, first.Frame);
         Assert.NotNull(followed);
         Assert.Equal(3, followed.InferredCorner);
@@ -841,13 +686,12 @@ public sealed class PetalDecoderTests
     [Fact]
     public void ABlossomThatReappearsIsSeenAgain()
     {
-        var render = PetalTestSupport.RenderLuma(SetupEncoder, 4, 768, 2);
-        var covered = PetalTestSupport.HideBlossom(render, 3);
+        var covered = HiddenBlossom(4, 3);
         var first = PetalDecoder.Decode(covered);
         Assert.True(first.Success, first.Error.ToString());
         Assert.Equal(3, first.Frame.InferredCorner);
         // the thumb moves away and the hand moves a little
-        var followed = PetalDecoder.Track(PetalTestSupport.Shifted(render, 4, -3), first.Frame);
+        var followed = PetalDecoder.Track(PetalTestSupport.Shifted(Setup(4), 4, -3), first.Frame);
         Assert.NotNull(followed);
         Assert.Null(followed.InferredCorner);
         Assert.Equal(SetupEncoder.LaneData(4).D, followed.D?.Data);
@@ -855,26 +699,6 @@ public sealed class PetalDecoderTests
         followed = PetalDecoder.Track(PetalTestSupport.Shifted(covered, 4, -3), first.Frame);
         Assert.NotNull(followed);
         Assert.Equal(3, followed.InferredCorner);
-    }
-
-    [Fact]
-    public void TheTianMaskTellsTheQuarterTurnsApart()
-    {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 5, 768, 2);
-        var quad = PetalLocator.Locate(luma);
-        Assert.NotNull(quad);
-        var byRotation = new[] { double.MinValue, double.MinValue, double.MinValue, double.MinValue };
-        foreach (var (rotation, mirrored, h) in PetalDecoder.HypothesesFor(quad, true))
-        {
-            var reference = PetalDecoder.ReferenceLevels(luma, h, null);
-            Assert.NotNull(reference);
-            if (!mirrored)
-                byRotation[rotation] = PetalDecoder.MaskScore(luma, h, reference.Value);
-        }
-
-        // upright wins clearly over the three other quarter turns
-        for (var rotation = 1; rotation < 4; rotation++)
-            Assert.True(byRotation[0] > byRotation[rotation] + 0.1, string.Join(", ", byRotation));
     }
 
     [Fact]
@@ -888,6 +712,19 @@ public sealed class PetalDecoderTests
             {
                 Assert.Equal(i, PetalDecoder.CanonicalCorner((i + rotation) % 4, rotation, false));
                 Assert.Equal(i, PetalDecoder.CanonicalCorner((rotation + 4 - i) % 4, rotation, true));
+            }
+        }
+
+        var quad = Enumerable.Range(0, 4).Select(static i => new PetalFinder(10.0 * i, 0.0, 1.0)).ToArray();
+        var hypotheses = PetalDecoder.Hypotheses(quad, true);
+        Assert.Equal(8, hypotheses.Count);
+        Assert.Equal(4, PetalDecoder.Hypotheses(quad, false).Count);
+        foreach (var (rotation, mirrored, destination) in hypotheses)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                var q = mirrored ? (rotation + 4 - i) % 4 : (i + rotation) % 4;
+                Assert.Equal(10.0 * q, destination[i].X);
             }
         }
     }
@@ -919,23 +756,24 @@ public sealed class PetalDecoderTests
     [Fact]
     public void AnInferredCornerNeedsContrastToo()
     {
-        var h = PetalHomography.Identity;
+        var pose = PetalPose.Plain(PetalHomography.Identity);
         // even light: the hidden corner (3) gets levels between the others'
-        var even = PetalDecoder.ReferenceLevels(LevelCard([(230, 30), (220, 25), (210, 20), (0, 0)]), h, 3);
+        var even = PetalDecoder.ReferenceLevels(LevelCard([(230, 30), (220, 25), (210, 20), (0, 0)]), pose, 3);
         Assert.NotNull(even);
         Assert.True(even.Value.Lit(3) - even.Value.Dark(3) >= 12.0);
         // the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
-        Assert.Null(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (0, 0)]), h, 3));
+        Assert.Null(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (0, 0)]), pose, 3));
         // with every corner seen, the same light is fine
-        Assert.NotNull(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (240, 20)]), h, null));
+        Assert.NotNull(PetalDecoder.ReferenceLevels(LevelCard([(60, 45), (250, 20), (200, 185), (240, 20)]), pose, null));
     }
 
     [Fact]
     public void AnInferredCornerTakesItsLevelsFromTheOtherThree()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 5, 768, 2);
-        var pose = RenderHomography();
-        var seen = LevelsOf(luma, pose);
+        var luma = Setup(5);
+        var pose = RenderPose();
+        var seen = PetalDecoder.ReferenceLevels(luma, pose, null);
+        Assert.NotNull(seen);
         for (var corner = 0; corner < 4; corner++)
         {
             var hidden = PetalTestSupport.HideBlossom(luma, corner);
@@ -945,11 +783,11 @@ public sealed class PetalDecoderTests
             Assert.NotNull(inferred);
             var (n1, opposite, n2) = ((corner + 1) % 4, (corner + 2) % 4, (corner + 3) % 4);
             var expected = Math.Clamp(
-                seen.Lit(n1) + seen.Lit(n2) - seen.Lit(opposite),
-                Math.Min(Math.Min(seen.Lit(n1), seen.Lit(opposite)), seen.Lit(n2)),
-                Math.Max(Math.Max(seen.Lit(n1), seen.Lit(opposite)), seen.Lit(n2)));
+                seen.Value.Lit(n1) + seen.Value.Lit(n2) - seen.Value.Lit(opposite),
+                Math.Min(Math.Min(seen.Value.Lit(n1), seen.Value.Lit(opposite)), seen.Value.Lit(n2)),
+                Math.Max(Math.Max(seen.Value.Lit(n1), seen.Value.Lit(opposite)), seen.Value.Lit(n2)));
             Assert.Equal(expected, inferred.Value.Lit(corner));
-            Assert.Equal(seen.Dark(opposite), inferred.Value.Dark(opposite));
+            Assert.Equal(seen.Value.Dark(opposite), inferred.Value.Dark(opposite));
         }
     }
 
@@ -968,41 +806,75 @@ public sealed class PetalDecoderTests
         {
             var frame = (ushort)(11 + index);
             var source = PetalRenderer.Render(encoder.Cells(frame), new PetalRenderOptions { Size = 768, Supersample = 2 });
-            var image = PetalCaptureSimulator.Capture(source, PetalCaptureSimulator.FitToFrame(config, 4.0));
+            var fitted = PetalCaptureSimulator.FitToFrame(config, 4.0);
+            var image = PetalCaptureSimulator.Capture(source, fitted);
             var result = PetalDecoder.Decode(image);
             Assert.True(result.Success, $"config {index}: {result.Error}");
-            var (p, k, d) = encoder.LaneData(frame);
-            if (result.Frame.P is { } lp)
-                Assert.Equal(p, lp.Data);
-            if (result.Frame.K is { } lk)
-                Assert.Equal(k, lk.Data);
-            if (result.Frame.D is { } ld)
-                Assert.Equal(d, ld.Data);
+            var truth = encoder.LaneData(frame);
+            foreach (var lane in PetalLanes.DecodeOrder)
+            {
+                if (result.Frame.Lane(lane) is { } decoded)
+                    Assert.Equal(truth.Lane(lane), decoded.Data);
+            }
+
             decodedLanes += result.Frame.LanesOk;
-            // the decoder's homography maps the canvas centre near the simulated one
-            var expected = PetalCaptureSimulator.CameraHomography(PetalCaptureSimulator.FitToFrame(config, 4.0)).Apply(512, 512);
-            var actual = result.Frame.Homography.Apply(512, 512);
+            // the decoder's pose maps the canvas centre near the simulated one
+            var expected = PetalCaptureSimulator.CameraHomography(fitted).Apply(512, 512);
+            var actual = result.Frame.Pose.Apply(512, 512);
             if (config.LensK1 == 0.0)
                 Assert.True(Math.Abs(expected.X - actual.X) < 3.0 && Math.Abs(expected.Y - actual.Y) < 3.0, $"config {index}");
         }
 
-        Assert.True(decodedLanes >= 6);
+        Assert.True(decodedLanes >= 10, $"{decodedLanes} lanes");
+    }
+
+    /// <summary>The simulated 640×480 camera of the reference session tests at <paramref name="rotationDeg"/>.</summary>
+    private static PetalCaptureConfig Camera(double rotationDeg) => PetalCaptureSimulator.FitToFrame(
+        PetalCaptureConfig.Modern() with { Width = 640, Height = 480, RotationDeg = rotationDeg },
+        4.0);
+
+    /// <summary>The 512-pixel render a simulated camera films in the reference session tests.</summary>
+    private static PetalRgbImage Source(PetalStreamEncoder encoder, ushort frame) =>
+        PetalRenderer.Render(encoder.Cells(frame), new PetalRenderOptions { Size = 512, Supersample = 2 });
+
+    [Fact]
+    public void ASteadyCameraIsTrackedAfterTheFirstFrame()
+    {
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(3000, 3), 2);
+        var config = Camera(8.0);
+        PetalLuma Shot(int frame) => PetalCaptureSimulator.Capture(Source(encoder, (ushort)frame), config);
+        var session = new PetalScanSession();
+        for (var frame = 0; frame < 6; frame++)
+        {
+            var outcome = session.Push(Shot(frame), frame * 100L);
+            Assert.True(outcome.Error is null, $"frame {frame}: {outcome.Error}");
+        }
+
+        Assert.Equal(6u, session.Stats.Readable);
+        // every frame after the first follows the pose
+        Assert.Equal(5u, session.Stats.Tracked);
+        // a pause longer than the tracking window forces a full search again
+        session.Push(Shot(6), 5 * 100L + PetalScanSession.TrackWindowMilliseconds + 1);
+        Assert.Equal(5u, session.Stats.Tracked);
+        Assert.Equal(7u, session.Stats.Readable);
+        // so does a reset, which forgets the pose
+        session.Reset();
+        session.Push(Shot(7), 5 * 100L + PetalScanSession.TrackWindowMilliseconds + 100);
+        Assert.Equal(5u, session.Stats.Tracked);
+        Assert.Equal(8u, session.Stats.Readable);
     }
 
     [Fact]
     public void ASessionReceivesAPayloadFromSimulatedCaptures()
     {
-        var data = PetalTestSupport.Payload(500, 3);
+        var data = PetalTestSupport.Payload(5000, 3);
         var encoder = new PetalStreamEncoder(data, 2);
-        var config = PetalCaptureSimulator.FitToFrame(
-            PetalCaptureConfig.Modern() with { Width = 640, Height = 480, RotationDeg = 20.0 },
-            4.0);
+        var config = Camera(20.0);
         var session = new PetalScanSession();
         PetalCompletedPayload? done = null;
         for (var frame = 0; frame < 40; frame++)
         {
-            var source = PetalRenderer.Render(encoder.Cells((ushort)frame), new PetalRenderOptions { Size = 512, Supersample = 2 });
-            var outcome = session.Push(PetalCaptureSimulator.Capture(source, config), frame * 125L);
+            var outcome = session.Push(PetalCaptureSimulator.Capture(Source(encoder, (ushort)frame), config), frame * 100L);
             if (outcome.Completed is not null)
             {
                 done = outcome.Completed;
@@ -1013,39 +885,73 @@ public sealed class PetalDecoderTests
         Assert.NotNull(done);
         Assert.Equal(data, done.ToArray());
         Assert.Equal(2, done.Meta.Kind);
-        Assert.True(session.Stats.Readable > 0 && session.Stats.LaneD > 0);
+        var stats = session.Stats;
+        Assert.True(stats.Readable > 0 && stats.LaneD > 0 && stats.FieldLanes > 0);
+        Assert.True(stats.TurnLanes > 0, $"{stats}");
+        // 5,000 bytes need 313 atoms: the field lanes and lane D alone carry them in 15 or 16
+        // frames, the turn lanes on top in 9 or 10
+        Assert.True(stats.Frames <= 11, $"{stats}");
         Assert.True(session.Progress.Complete);
     }
 
     [Fact]
-    public void ASteadyCameraIsTrackedAfterTheFirstFrame()
+    public void ATurnLaneIsReadOncePerShownFrame()
     {
-        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(300, 3), 2);
-        var config = PetalCaptureSimulator.FitToFrame(
-            PetalCaptureConfig.Modern() with { Width = 640, Height = 480, RotationDeg = 8.0 },
-            4.0);
-        PetalLuma Shot(int frame) => PetalCaptureSimulator.Capture(
-            PetalRenderer.Render(encoder.Cells((ushort)frame), new PetalRenderOptions { Size = 512, Supersample = 2 }),
-            config);
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(3000, 3), 2);
+        var config = Camera(12.0);
         var session = new PetalScanSession();
-        for (var frame = 0; frame < 6; frame++)
+        var shown = Source(encoder, 5);
+        var first = session.Push(PetalCaptureSimulator.Capture(shown, config with { Seed = 1 }), 0);
+        Assert.Equal("D0123", first.Lanes);
+        Assert.Equal("0123", first.Turned);
+        var again = session.Push(PetalCaptureSimulator.Capture(shown, config with { Seed = 2 }), 33);
+        Assert.Equal(("D0123", string.Empty), (again.Lanes, again.Turned));
+        Assert.Equal(4u, session.Stats.TurnLanes);
+        // the next shown frame's turn lanes are new
+        var next = session.Push(PetalCaptureSimulator.Capture(Source(encoder, 6), config with { Seed = 3 }), 83);
+        Assert.Equal("0123", next.Turned);
+        Assert.Equal((8u, 8u), (session.Stats.TurnTries, session.Stats.TurnLanes));
+        Assert.Equal(8, session.TriedLanes.Count);
+        session.Reset();
+        Assert.Empty(session.TriedLanes);
+    }
+
+    [Fact]
+    public void TriesThatReadNothingBackOff()
+    {
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(3000, 3), 2);
+        // unturned petals: every field lane reads, no turn lane ever does
+        PetalRgbImage Unturned(ushort frame)
         {
-            var outcome = session.Push(Shot(frame), frame * 125L);
-            Assert.True(outcome.Error is null, $"frame {frame}: {outcome.Error}");
+            var cells = encoder.Cells(frame);
+            Array.Clear(cells.Turns);
+            return PetalRenderer.Render(cells, new PetalRenderOptions { Size = 512, Supersample = 2 });
         }
 
-        Assert.Equal(6u, session.Stats.Readable);
-        // every frame after the first follows the pose
-        Assert.Equal(5u, session.Stats.Tracked);
-        // a pause longer than the tracking window forces a full search again
-        session.Push(Shot(6), 5 * 125L + PetalScanSession.TrackWindowMilliseconds + 1);
-        Assert.Equal(5u, session.Stats.Tracked);
-        Assert.Equal(7u, session.Stats.Readable);
-        // so does a reset, which forgets the pose
-        session.Reset();
-        session.Push(Shot(7), 5 * 125L + PetalScanSession.TrackWindowMilliseconds + 100);
-        Assert.Equal(5u, session.Stats.Tracked);
-        Assert.Equal(8u, session.Stats.Readable);
+        var config = Camera(12.0);
+        var session = new PetalScanSession();
+        var triedAt = new List<int>();
+        for (ushort frame = 1; frame <= 30; frame++)
+        {
+            var before = session.Stats.TurnTries;
+            var image = PetalCaptureSimulator.Capture(Unturned(frame), config with { Seed = frame });
+            var outcome = session.Push(image, frame * 83L);
+            Assert.True(outcome.Lanes.EndsWith("0123", StringComparison.Ordinal), $"frame {frame}: {outcome.Lanes}");
+            Assert.Equal(string.Empty, outcome.Turned);
+            if (session.Stats.TurnTries > before)
+                triedAt.Add(frame);
+        }
+
+        // after the n-th try that reads nothing, the next min(n, 8) captures that would try are
+        // passed over
+        Assert.Equal([1, 3, 6, 10, 15, 21, 28], triedAt);
+        // a try that reads a lane ends the back-off
+        session.TurnWait = 0;
+        var turned = PetalCaptureSimulator.Capture(Source(encoder, 31), config with { Seed = 31 });
+        Assert.Equal("0123", session.Push(turned, 31 * 83L).Turned);
+        Assert.Equal(0, session.TurnMisses);
+        turned = PetalCaptureSimulator.Capture(Source(encoder, 32), config with { Seed = 32 });
+        Assert.Equal("0123", session.Push(turned, 32 * 83L).Turned);
     }
 
     [Fact]
@@ -1054,30 +960,30 @@ public sealed class PetalDecoderTests
         var session = new PetalScanSession();
         PetalLuma Frame(int frame, bool covered)
         {
-            var render = PetalTestSupport.RenderLuma(SetupEncoder, (ushort)frame, 600, 2);
+            var render = PetalTestSupport.SquareLuma(SetupEncoder, (ushort)frame, 600, 2);
             return covered ? PetalTestSupport.HideBlossom(render, 1) : render;
         }
 
         session.Push(Frame(0, false), 0);
         // the thumb arrives: tracked, with the top-right corner inferred
-        Assert.Equal("PKD", session.Push(Frame(1, true), 125).Lanes);
+        Assert.Equal("D0123", session.Push(Frame(1, true), 125).Lanes);
         Assert.Equal((1u, 1u), (session.Stats.Tracked, session.Stats.Inferred));
-        Assert.Equal("PKD", session.Push(Frame(2, true), 250).Lanes);
+        Assert.Equal("D0123", session.Push(Frame(2, true), 250).Lanes);
         Assert.Equal((2u, 2u), (session.Stats.Tracked, session.Stats.Inferred));
         // the thumb leaves: the blossom is seen again
-        Assert.Equal("PKD", session.Push(Frame(3, false), 375).Lanes);
+        Assert.Equal("D0123", session.Push(Frame(3, false), 375).Lanes);
         Assert.Equal((3u, 2u), (session.Stats.Tracked, session.Stats.Inferred));
         Assert.Equal(4u, session.Stats.Readable);
+        Assert.Equal(4u, session.Stats.LaneD);
+        Assert.Equal(16u, session.Stats.FieldLanes);
     }
 
     [Fact]
     public void IdleSessionsForgetPartialStreams()
     {
-        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(4_000, 3), 1);
-        var config = PetalCaptureSimulator.FitToFrame(PetalCaptureConfig.Modern() with { Width = 640, Height = 480 }, 4.0);
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(12_000, 3), 1);
         var session = new PetalScanSession(PetalScanLimits.Default with { IdleTimeout = TimeSpan.FromSeconds(1) });
-        var source = PetalRenderer.Render(encoder.Cells(0), new PetalRenderOptions { Size = 512, Supersample = 2 });
-        session.Push(PetalCaptureSimulator.Capture(source, config), 0);
+        session.Push(PetalCaptureSimulator.Capture(Source(encoder, 0), Camera(0.0)), 0);
         Assert.True(session.Progress.Rank > 0);
         // a frame much later with nothing readable resets the session first
         var outcome = session.Push(new PetalLuma(640, 480), 60_000);
@@ -1089,7 +995,7 @@ public sealed class PetalDecoderTests
     [Fact]
     public void AbsoluteTimeoutForgetsSlowStreams()
     {
-        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(4_000, 3), 1);
+        var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(12_000, 3), 1);
         var session = new PetalScanSession(PetalScanLimits.Default with { AbsoluteTimeout = TimeSpan.FromSeconds(2) });
         session.Push(PetalTestSupport.RenderLuma(encoder, 0, 400, 1), 0);
         var rank = session.Progress.Rank;
@@ -1106,7 +1012,7 @@ public sealed class PetalDecoderTests
     public void LocatedCountsCodesThatWereSeenButCouldNotBeRead()
     {
         var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(100, 3), 1);
-        var frame = PetalRenderer.Render(encoder.Cells(1), new PetalRenderOptions { Size = 512, Supersample = 2 });
+        var frame = PetalTestSupport.Square(encoder.Cells(1), 512, 2);
         // keep only the four blossoms: finders are located, no lane can be read
         const double scale = 512.0 / 1024.0;
         for (var y = 0; y < 512; y++)
@@ -1143,9 +1049,11 @@ public sealed class PetalDecoderTests
     }
 
     [Fact]
-    public void FramePlayerAdvancesAndWrapsTheFrameCounter()
+    public void FramePlayerDefaultsToTwelveFramesPerSecondAdvancesAtItsRateAndWrapsTheFrameCounter()
     {
         var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(100, 1), 1);
+        Assert.Equal(12.0, PetalFramePlayer.DefaultFramesPerSecond);
+        Assert.Equal(12.0, new PetalFramePlayer(encoder).FramesPerSecond);
         var player = new PetalFramePlayer(encoder, 8.0, 65_534);
         Assert.Equal(65_534, player.FrameAt(TimeSpan.Zero));
         Assert.Equal(65_534, player.FrameAt(TimeSpan.FromSeconds(-3)));
@@ -1157,12 +1065,19 @@ public sealed class PetalDecoderTests
         Assert.Same(first, player.DrawListAt(TimeSpan.FromMilliseconds(100)));
         Assert.NotSame(first, player.DrawListAt(TimeSpan.FromMilliseconds(130)));
         var image = player.RenderAt(TimeSpan.Zero, new PetalRenderOptions { Size = 128, Supersample = 1 });
-        Assert.Equal(128, image.Width);
+        Assert.Equal((128, 209), (image.Width, image.Height));
         var canvas = new CountingCanvas();
         player.Draw(canvas, TimeSpan.Zero, 512.0);
-        Assert.Equal(1, canvas.Rectangles);
-        Assert.Equal(PetalLayout.TileCount, canvas.Clips);
+        var list = player.DrawListAt(TimeSpan.Zero);
+        Assert.Equal(1 + list.BackdropCells.Count, canvas.Rectangles);
+        Assert.Equal(list.Petals.Count, canvas.Petals);
+        Assert.Equal(4 * 11 + list.Dots.Count, canvas.Circles);
+        Assert.Equal(1, canvas.Clips);
         Assert.Equal(0, canvas.OpenClips);
+        // the card's bands: light tiles are filled, every tile's glyph is stroked
+        Assert.Equal(list.Tiles.Count(static tile => tile.Light), canvas.RoundedRectangles);
+        Assert.Equal(list.Tiles.Sum(static tile => PetalDrawList.KanaGlyphStrokes(tile.Glyph).Count), canvas.Strokes);
+        Assert.Equal(PetalLayout.KanaTileCount, list.Tiles.Count);
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFramePlayer(encoder, 0.0));
     }
 
@@ -1177,24 +1092,25 @@ public sealed class PetalDecoderTests
         analyzer.PayloadCompleted += (_, payload) => completed = payload;
         const int side = 512;
         const int stride = side + 40;
-        var plane = new byte[stride * side];
+        var height = PetalRenderer.CardHeightPx(side);
+        var plane = new byte[stride * height];
         var cache = new Dictionary<ushort, PetalLuma>();
         for (var tick = 0; tick < 200 && completed is null; tick++)
         {
-            // a 30 fps camera watching an 8 fps display
+            // a 30 fps camera watching the default 12 fps display
             var elapsed = TimeSpan.FromSeconds(tick / 30.0);
             var frame = player.FrameAt(elapsed);
             if (!cache.TryGetValue(frame, out var luma))
                 cache[frame] = luma = PetalTestSupport.RenderLuma(encoder, frame, side, 1);
-            for (var row = 0; row < side; row++)
+            for (var row = 0; row < height; row++)
                 luma.Data.AsSpan(row * side, side).CopyTo(plane.AsSpan(row * stride));
-            var outcome = analyzer.AnalyzeYPlane(plane, side, side, stride, 1, (long)elapsed.TotalMilliseconds);
+            var outcome = analyzer.AnalyzeYPlane(plane, side, height, stride, 1, (long)elapsed.TotalMilliseconds);
             Assert.NotNull(outcome);
         }
 
         Assert.NotNull(completed);
         Assert.Equal(data, completed.ToArray());
-        Assert.True(analyzer.Session.Stats.LaneK > 0);
+        Assert.True(analyzer.Session.Stats.FieldLanes > 0);
     }
 
     [Fact]
@@ -1217,25 +1133,63 @@ public sealed class PetalDecoderTests
     {
         public int Rectangles { get; private set; }
 
+        public int Circles { get; private set; }
+
+        public int Petals { get; private set; }
+
+        public int RoundedRectangles { get; private set; }
+
+        public int Strokes { get; private set; }
+
         public int Clips { get; private set; }
 
         public int OpenClips { get; private set; }
 
         public void FillRectangle(double x, double y, double width, double height, PetalColor color) => Rectangles++;
 
-        public void FillRoundedRectangle(double x, double y, double width, double height, double cornerRadius, PetalColor color)
+        public void FillCircle(double centerX, double centerY, double radius, PetalColor color) => Circles++;
+
+        public void FillRoundedRectangle(double x, double y, double width, double height, double radius, PetalColor color)
         {
+            // a 512-pixel width is half the canvas; the tiles are drawn last
+            Assert.Equal((12.5, 12.5, 1.5), (width, height, radius));
+            Assert.Equal(PetalPalette.Default.Light, color);
+            Assert.Equal(0, OpenClips);
+            RoundedRectangles++;
         }
 
-        public void FillCircle(double centerX, double centerY, double radius, PetalColor color)
+        public void StrokePolyline(ReadOnlySpan<PetalPoint> points, double width, PetalColor color)
         {
+            Assert.True(points.Length >= 2);
+            Assert.True(Math.Abs(width - 0.5 * PetalDrawList.KanaStrokeWidth) < 1e-12);
+            Assert.True(color == PetalPalette.Default.Ink || color == PetalPalette.Default.Pink);
+            Strokes++;
         }
 
-        public void StrokePolyline(ReadOnlySpan<PetalPoint> points, double strokeWidth, PetalColor color) =>
-            Assert.True(points.Length >= 2 && Math.Abs(strokeWidth - 6.5 / 32.0 * 23.0 * 0.5) < 1e-9);
-
-        public void PushClip(double x, double y, double width, double height)
+        public void FillPetal(
+            double centerX,
+            double centerY,
+            double radiusAlong,
+            double radiusAcross,
+            double angle,
+            double notchDistance,
+            double notchRadius,
+            PetalColor color)
         {
+            // a 512-pixel side is half the canvas
+            Assert.True(Math.Abs(radiusAlong - 0.5 * PetalLayout.PetalHalfLength) < 1e-12);
+            Assert.True(Math.Abs(radiusAcross - 0.5 * PetalLayout.PetalHalfWidth) < 1e-12);
+            Assert.True(Math.Abs(notchDistance - 0.5 * PetalLayout.PetalNotchDistance) < 1e-12);
+            Assert.True(Math.Abs(notchRadius - 0.5 * PetalLayout.PetalNotchRadius) < 1e-12);
+            // petals are drawn after the backdrop's clip is popped
+            Assert.Equal(0, OpenClips);
+            Petals++;
+        }
+
+        public void PushCircleClip(double centerX, double centerY, double radius)
+        {
+            // the square starts 161 pixels (322 units) below the card's top edge
+            Assert.Equal((256.0, 256.0 + 161.0, 195.0), (centerX, centerY, radius));
             Clips++;
             OpenClips++;
         }

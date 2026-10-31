@@ -11,7 +11,7 @@ use crate::fastpq::{FastpqSourceStatementBuildLimits, FastpqSourceTranscriptUsag
 
 /// Shape, codec, arithmetic or local construction-bound failure before publication.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EntryFrameLengthError {
+pub enum EntryFrameLengthError {
     /// All original occurrences must belong to the selected logical entry.
     #[error("source transcript belongs to a different logical entry")]
     EntryIdentity,
@@ -33,7 +33,7 @@ pub(crate) enum EntryFrameLengthError {
 /// or reservation ownership. Every occurrence must be appended once in entry order;
 /// changing an earlier occurrence requires remeasurement of the complete bundle.
 #[derive(Clone)]
-pub(crate) struct SourceEntryFrameSizer {
+pub struct SourceEntryFrameSizer {
     entry_hash: Hash,
     limits: FastpqSourceStatementBuildLimits,
     flags: u8,
@@ -103,11 +103,11 @@ impl SourceEntryFrameSizer {
             transcript.authority_digest,
             PrefixLengthLimits {
                 max_deltas: subtract(self.limits.max_deltas, self.usage.deltas)?,
-                max_input_frame_bytes: subtract(
+                input_frame_ceiling_bytes: subtract(
                     self.limits.max_input_transcript_bytes,
                     self.usage.input_transcript_bytes,
                 )?,
-                max_public_statement_frame_bytes: self
+                public_statement_ceiling_bytes: self
                     .limits
                     .max_statement_bytes
                     .min(self.limits.max_total_statement_bytes),
@@ -165,7 +165,7 @@ impl SourceEntryFrameSizer {
 /// E is checked as one logical entry but remains owned separately by the reservation
 /// ledger. No result escapes a failed traversal. This function does not validate
 /// transfer semantics or grant execution, manifest, proof or finality authority.
-pub(crate) fn measure_fastpq_source_entry_frame_usage<'a, I>(
+pub fn measure_fastpq_source_entry_frame_usage<'a, I>(
     entry_hash: Hash,
     transcripts: I,
     limits: FastpqSourceStatementBuildLimits,

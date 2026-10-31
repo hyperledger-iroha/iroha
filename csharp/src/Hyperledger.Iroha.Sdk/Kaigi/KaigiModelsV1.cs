@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -108,6 +109,33 @@ public sealed record KaigiId
 public enum KaigiPrivacyMode { Transparent, ZkRosterV1 }
 public enum KaigiRoomPolicy { Public, Authenticated }
 public enum KaigiStatus { Active, Ended }
+public enum KaigiRelayHealthStatus { Healthy, Degraded, Unavailable }
+
+/// <summary>HPKE suite of a relay key, using the transport's suite identifiers.</summary>
+public enum KaigiRelayHpkeSuite : ushort { MlKem768AuthPsk = 0x0001, MlKem1024AuthPsk = 0x0002 }
+
+/// <summary>Frames relay keys as the descriptor a relay registers and a hop carries.</summary>
+public static class KaigiRelayHpkeKey
+{
+    /// <summary>
+    /// Prefix a raw public key with its little-endian suite identifier. The ledger rejects
+    /// anything else, and the relay fingerprint commits to the suite this way.
+    /// </summary>
+    public static byte[] Descriptor(KaigiRelayHpkeSuite suite, ReadOnlySpan<byte> publicKey)
+    {
+        var length = suite switch
+        {
+            KaigiRelayHpkeSuite.MlKem768AuthPsk => 1184,
+            KaigiRelayHpkeSuite.MlKem1024AuthPsk => 1568,
+            _ => throw new ArgumentOutOfRangeException(nameof(suite)),
+        };
+        if (publicKey.Length != length) throw new ArgumentException($"Kaigi relay key for {suite} requires exactly {length} bytes.", nameof(publicKey));
+        var descriptor = new byte[2 + length];
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor, (ushort)suite);
+        publicKey.CopyTo(descriptor.AsSpan(2));
+        return descriptor;
+    }
+}
 
 /// <summary>A pinned relay descriptor in a call's onion route.</summary>
 public sealed class KaigiRelayHop

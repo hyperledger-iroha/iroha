@@ -19,8 +19,8 @@ namespace Hyperledger.Iroha.Petal;
 /// </remarks>
 public sealed class PetalFramePlayer
 {
-    /// <summary>Default display rate, the rate used by the reference stream simulation.</summary>
-    public const double DefaultFramesPerSecond = 8.0;
+    /// <summary>Default display rate: 12 frames a second, of which a 30 fps camera reads practically every frame.</summary>
+    public const double DefaultFramesPerSecond = 12.0;
 
     private readonly object gate = new();
     private int cachedFrame = -1;
@@ -90,16 +90,19 @@ public sealed class PetalFramePlayer
         }
     }
 
-    /// <summary>Draws the frame shown at <paramref name="elapsed"/> into a square of side <paramref name="side"/>.</summary>
+    /// <summary>
+    /// Draws the card of the frame shown at <paramref name="elapsed"/>, <paramref name="width"/> wide and
+    /// <c>width · CardHeight / Canvas</c> tall (see <see cref="PetalLayout.CardHeight"/>).
+    /// </summary>
     /// <param name="canvas">Adapter over the native canvas.</param>
     /// <param name="elapsed">Time since playback started.</param>
-    /// <param name="side">Side of the target square in the canvas's units.</param>
-    /// <param name="offsetX">Left edge of the target square.</param>
-    /// <param name="offsetY">Top edge of the target square.</param>
-    public void Draw(IPetalCanvas canvas, TimeSpan elapsed, double side, double offsetX = 0.0, double offsetY = 0.0)
+    /// <param name="width">Width of the card in the canvas's units.</param>
+    /// <param name="offsetX">Left edge of the card.</param>
+    /// <param name="offsetY">Top edge of the card.</param>
+    public void Draw(IPetalCanvas canvas, TimeSpan elapsed, double width, double offsetX = 0.0, double offsetY = 0.0)
     {
         ArgumentNullException.ThrowIfNull(canvas);
-        DrawListAt(elapsed).Draw(canvas, side / PetalLayout.Canvas, offsetX, offsetY);
+        DrawListAt(elapsed).Draw(canvas, width / PetalLayout.Canvas, offsetX, offsetY);
     }
 
     /// <summary>Software-renders the frame shown at <paramref name="elapsed"/> (for bitmap-only surfaces).</summary>
@@ -182,7 +185,8 @@ public sealed class PetalCameraAnalyzer
         {
             if (!ValidGeometry(plane.Length, width, height, rowStride, pixelStride, Session.Limits.Decode.MaxPixels))
             {
-                outcome = new PetalScanOutcome(PetalDecodeError.UnsupportedImage, string.Empty, string.Empty, Session.Progress, null);
+                outcome = new PetalScanOutcome(
+                    PetalDecodeError.UnsupportedImage, string.Empty, string.Empty, string.Empty, string.Empty, Session.Progress, null);
             }
             else
             {

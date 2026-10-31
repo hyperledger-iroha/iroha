@@ -45,7 +45,7 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         execution_policy_hash: [0xB4; 32],
         nexus_policy_digest: [0xA5; 32],
         native_config_fingerprint: [0xC3; 32],
-        ivm_gas_schedule_hash: [0xE7; 32],
+        host_profiles: iroha_p2p::HostProfileSet::new([[0xE7; 32]]).expect("one profile"),
     }
 }
 #[test]
@@ -62,7 +62,7 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.execution_policy_hash, [0xB4; 32]);
     assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
     assert_eq!(decoded.native_config_fingerprint, [0xC3; 32]);
-    assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
+    assert_eq!(decoded.host_profiles.as_slice(), &[[0xE7; 32]]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
     // Keep admission inexpensive so these tests continue to measure consensus
@@ -186,6 +186,7 @@ async fn consensus_caps_match_connects() {
         proto_version: 2,
         consensus_fingerprint: [1u8; 32],
         config: config_caps.clone(),
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),
@@ -213,7 +214,7 @@ async fn consensus_caps_match_connects() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -235,12 +236,14 @@ async fn consensus_caps_mismatch_rejected() {
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps.clone(),
+        required_host_profiles: None,
     };
     let caps_bad = ConsensusHandshakeCaps {
         mode: ConsensusMode::Npos, // mismatch
         proto_version: 2,
         consensus_fingerprint: [2u8; 32],
         config: config_caps,
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),
@@ -268,7 +271,7 @@ async fn consensus_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -292,12 +295,14 @@ async fn consensus_config_caps_mismatch_rejected() {
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: config_caps,
+        required_host_profiles: None,
     };
     let caps_bad = ConsensusHandshakeCaps {
         mode: ConsensusMode::Permissioned,
         proto_version: 2,
         consensus_fingerprint: [3u8; 32],
         config: mismatched,
+        required_host_profiles: None,
     };
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp1.clone()),
@@ -325,7 +330,7 @@ async fn consensus_config_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -380,7 +385,7 @@ async fn confidential_caps_match_connects() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -441,7 +446,7 @@ async fn confidential_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -502,7 +507,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -570,7 +575,7 @@ async fn confidential_caps_features_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -646,7 +651,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
         validator_kp.public_key().clone(),
     )])));
     let stale_peer =
-        iroha_data_model::peer::Peer::new(addr_stale.clone(), peer_kp.public_key().clone());
+        iroha_model_base::peer::Peer::new(addr_stale.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
         [stale_peer.id().clone()].into_iter().collect(),
     ));
@@ -688,7 +693,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
         validator_kp.public_key().clone(),
     )])));
     let fresh_peer =
-        iroha_data_model::peer::Peer::new(addr_fresh.clone(), peer_kp.public_key().clone());
+        iroha_model_base::peer::Peer::new(addr_fresh.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
         [fresh_peer.id().clone()].into_iter().collect(),
     ));
@@ -765,7 +770,7 @@ async fn crypto_caps_match_connects() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -825,7 +830,7 @@ async fn crypto_caps_mismatch_rejected() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),
@@ -885,7 +890,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         Ok(ok) => ok,
         Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    let p2 = iroha_model_base::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
     // Authorize the actual dialer independently of the capability under test.
     net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
         kp1.public_key().clone(),

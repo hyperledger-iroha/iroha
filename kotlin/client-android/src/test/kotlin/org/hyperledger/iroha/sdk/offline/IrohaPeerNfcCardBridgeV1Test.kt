@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -68,7 +69,7 @@ class IrohaPeerNfcCardBridgeV1Test {
         endpoint: IrohaPeerNfcCardEndpointV1,
         callbacks: Callbacks,
         deadline: Long = IrohaPeerNfcCardApduBridgeV1.DEFAULT_DURABLE_DEADLINE_MILLIS,
-    ) = IrohaPeerNfcCardApduBridgeV1(endpoint, callbacks, { events += it }, deadline, callbackExecutor, scheduler)
+    ) = IrohaPeerNfcCardApduBridgeV1(endpoint, callbacks, { event, _ -> events += event }, deadline, callbackExecutor, scheduler)
 
     private fun IrohaPeerNfcCardApduBridgeV1.send(command: IrohaPeerNfcCommandV1): Replies =
         Replies().also { handle(command, it.handler) }
@@ -137,7 +138,8 @@ class IrohaPeerNfcCardBridgeV1Test {
         assertEquals(IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING, receiver.phase)
         assertNull(receiver.durableAcknowledgement)
 
-        // The reader's exact replay re-stages the same context.
+        // A new SELECT reactivates the same receiver, and exact replay re-stages its context.
+        bridge.onActivated()
         val replay = bridge.send(commit)
         runCallbacks()
         assertEquals(2, callbacks.commits.size)
@@ -215,13 +217,93 @@ class IrohaPeerNfcCardBridgeV1Test {
         IrohaPeerNfcCardApduBridgeV1(
             IrohaPeerNfcCardEndpointV1.direct(aid, receiver),
             throwing,
-            { events += it },
+            { event, _ -> events += event },
             50,
             callbackExecutor,
             scheduler,
         ).handle(begin, thrown.handler)
         runCallbacks()
         assertEquals(IrohaPeerNfcStatusWordV1.STORAGE_FAILURE, thrown.responses.single().statusWord)
+    }
+
+    @Test
+    fun `a rejected direct SELECT does not publish an active contact`() {
+        val receiver = IrohaPeerNfcReceiverSessionV1(session, Fixtures.message(IrohaPeerPayloadKind.REQUEST).encode())
+        val bridge = bridge(IrohaPeerNfcCardEndpointV1.direct(aid, receiver), Callbacks())
+        val wrongAid = IrohaPeerNfcApplicationIdentifierV1.PROTOCOL
+        assertTrue(wrongAid != aid)
+        val reply = bridge.send(IrohaPeerNfcCommandV1.SelectApplication(wrongAid))
+        assertEquals(IrohaPeerNfcStatusWordV1.NOT_FOUND, reply.responses.single().statusWord)
+        assertTrue(events.none { it == IrohaPeerNfcCardEventV1.Activated })
+        val accepted = bridge.send(IrohaPeerNfcCommandV1.SelectApplication(aid))
+        assertEquals(IrohaPeerNfcStatusWordV1.SUCCESS, accepted.responses.single().statusWord)
+        assertEquals(1, events.count { it == IrohaPeerNfcCardEventV1.Activated })
+    }
+
+    @Test
+    fun `retired queued callback cannot start inside the next activation`() {
+        val receiver = IrohaPeerNfcReceiverSessionV1(session, Fixtures.message(IrohaPeerPayloadKind.REQUEST).encode())
+        val callbacks = Callbacks()
+        val bridge = bridge(IrohaPeerNfcCardEndpointV1.direct(aid, receiver), callbacks)
+        val payment = Fixtures.message(IrohaPeerPayloadKind.PAYMENT)
+        val begin = IrohaPeerNfcCommandV1.BeginPayment(session, receiver.identity.requestCanonicalHash,
+            payment.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH))
+        val retired = bridge.send(begin)
+        bridge.onDeactivated(0)
+        bridge.onActivated()
+        runCallbacks()
+        assertTrue(callbacks.admissions.isEmpty())
+        assertTrue(retired.responses.isEmpty())
+        assertEquals(IrohaPeerNfcPhaseV1.REQUEST_READY, receiver.phase)
+        val current = bridge.send(begin)
+        runCallbacks()
+        val (context, completion) = callbacks.admissions.single()
+        assertTrue(completion.isActive)
+        completion.complete(IrohaPeerNfcDurablePaymentAdmissionV1(context))
+        assertFalse(completion.isActive)
+        assertEquals(IrohaPeerNfcStatusWordV1.SUCCESS, current.responses.single().statusWord)
+    }
+
+    @Test
+    fun `invalidation cannot interleave durable response and its epoch event`() {
+        val receiver = IrohaPeerNfcReceiverSessionV1(session, Fixtures.message(IrohaPeerPayloadKind.REQUEST).encode())
+        val callbacks = Callbacks()
+        val observations = CopyOnWriteArrayList<Pair<IrohaPeerNfcCardEventV1, Long>>()
+        val deactivated = CountDownLatch(1)
+        val bridge = IrohaPeerNfcCardApduBridgeV1(IrohaPeerNfcCardEndpointV1.direct(aid, receiver), callbacks,
+            { event, epoch -> observations += event to epoch; if (event is IrohaPeerNfcCardEventV1.Deactivated) deactivated.countDown() },
+            5_000, callbackExecutor, scheduler)
+        val payment = Fixtures.message(IrohaPeerPayloadKind.PAYMENT)
+        val begin = IrohaPeerNfcCommandV1.BeginPayment(session, receiver.identity.requestCanonicalHash,
+            payment.encode().copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH))
+        val responseEntered = CountDownLatch(1)
+        val releaseResponse = CountDownLatch(1)
+        bridge.handle(begin) {
+            responseEntered.countDown()
+            check(releaseResponse.await(5, TimeUnit.SECONDS))
+        }
+        runCallbacks()
+        val (context, completion) = callbacks.admissions.single()
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val completing = workers.submit { completion.complete(IrohaPeerNfcDurablePaymentAdmissionV1(context)) }
+            assertTrue(responseEntered.await(5, TimeUnit.SECONDS))
+            val invalidating = workers.submit { bridge.onDeactivated(0) }
+            assertFalse(deactivated.await(100, TimeUnit.MILLISECONDS), "Deactivation must wait for the paired response/event publication")
+            releaseResponse.countDown()
+            completing.get(5, TimeUnit.SECONDS)
+            invalidating.get(5, TimeUnit.SECONDS)
+            assertEquals(2, observations.size)
+            assertTrue(observations[0].first is IrohaPeerNfcCardEventV1.PaymentAdmitted)
+            assertTrue(observations[1].first is IrohaPeerNfcCardEventV1.Deactivated)
+            assertFalse(bridge.isCurrentActivation(observations[0].second))
+            assertTrue(bridge.isCurrentActivation(observations[1].second))
+            bridge.onActivated()
+            assertFalse(bridge.isCurrentActivation(observations[1].second), "A queued old link-loss event cannot own a new SELECT")
+        } finally {
+            releaseResponse.countDown()
+            workers.shutdownNow()
+        }
     }
 
     @Test
@@ -247,9 +329,9 @@ class IrohaPeerNfcCardBridgeV1Test {
         val receiver = IrohaPeerNfcReceiverSessionV1(session, Fixtures.message(IrohaPeerPayloadKind.REQUEST).encode())
         val endpoint = IrohaPeerNfcCardEndpointV1.direct(aid, receiver)
         assertFailsWith<IllegalArgumentException> { bridge(endpoint, Callbacks(), deadline = 0) }
-        assertFailsWith<IllegalArgumentException> { bridge(endpoint, Callbacks(), deadline = 15_001) }
-        assertEquals(15_000L, bridge(endpoint, Callbacks(), deadline = 15_000).durableDeadlineMillis)
-        assertEquals(5_000L, IrohaPeerNfcCardApduBridgeV1(endpoint, Callbacks()).durableDeadlineMillis)
+        assertFailsWith<IllegalArgumentException> { bridge(endpoint, Callbacks(), deadline = 30_001) }
+        assertEquals(30_000L, bridge(endpoint, Callbacks(), deadline = 30_000).durableDeadlineMillis)
+        assertEquals(30_000L, IrohaPeerNfcCardApduBridgeV1(endpoint, Callbacks()).durableDeadlineMillis)
     }
 
     @Test

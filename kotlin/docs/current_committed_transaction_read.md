@@ -18,7 +18,9 @@ selective `CommittedTransaction` against native Sumeragi finality.
    `application/x-norito` for both `Content-Type` and `Accept`. Pin application
    dataspace and tenant headers independently. Reconcile an ambiguous response
    before creating another nonce-bearing query. The Kotlin transport enforces
-   HTTPS, the URL prefix, one-shot dispatch, response provenance and bounds.
+   HTTPS by default (or the explicit `setAllowLocalDevelopmentHttp(true)`
+   exception for loopback/private IPv4 nodes), the URL prefix, one-shot dispatch,
+   response provenance and bounds.
 4. `candidateBlockHash(responseBytes, transactionHash)` returns `null` for a
    canonical empty page. A one-row response returns an **untrusted** routing
    hint. Fetch native `SumeragiFinalityProof` values through
@@ -36,7 +38,7 @@ selective `CommittedTransaction` against native Sumeragi finality.
    application result, atomically retain `promotedCheckpointBytes` with that
    result for subsequent verification. Swift returns `promotedCheckpoint`.
 
-The bridge requires ABI 30 and returns the row and promoted checkpoint in
+The bridge requires ABI 33 and returns the row and promoted checkpoint in
 separately owned native buffers. The application owns authenticated transport,
 checkpoint selection and persistence, its device signer, nonce store and retry
 journal. SDK source or syntax checks do not qualify rebuilt native artifacts.

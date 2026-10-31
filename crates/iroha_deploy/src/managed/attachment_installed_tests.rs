@@ -1,6 +1,6 @@
 //! Explicit eight-process attachment regression through the installed native CLI.
 //!
-//! All authority and TLS material is independently generated in owner-private temporary
+//! All authority material is independently generated in owner-private temporary
 //! custody. The parent is a disposable native Global root, never public Taira. This fixture
 //! establishes no release, native-platform matrix or reference-host latency qualification.
 
@@ -10,8 +10,7 @@ mod timing;
 use super::super::*;
 use crate::{
     bootstrap::{
-        InstalledNetworkProfile, InstalledNetworkProfiles, NetworkRelease, ReleaseCheckpointStore,
-        ReleaseFaucet, ReleasePeer, SignedNetworkCheckpoint,
+        BootstrapError, BootstrapStore, InstalledNetworkProfile, InstalledNetworkProfiles,
     },
     verify::{
         finality::{FinalitySource, FinalityVerifier, GenesisAnchor},
@@ -21,12 +20,12 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use color_eyre::eyre::{Result as TestResult, WrapErr, ensure, eyre};
 use iroha::{client::Client, config::Config};
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     account::address::ChainDiscriminantGuard,
     private_dataspace::PrivateDataspaceRecordProof,
-    smart_contract::{ContractAddress, ContractArtifactId},
+    smart_contract::{ContractAddress, ContractAlias, ContractArtifactId},
     sumeragi_finality::{FinalityValidator, genesis_registrations},
     transaction::SignedTransaction,
 };
@@ -40,7 +39,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const CANARY: &str = "OWNER_PRIVATE_ATTACHMENT_CANARY_7f26d359";
@@ -71,65 +70,9 @@ impl Ingress {
         );
         root.write_atomic(
             "ingress.py",
-            include_bytes!("attachment_installed_tests/tls_proxy.py"),
+            include_bytes!("attachment_installed_tests/loopback_proxy.py"),
             PublishMode::CreateNew,
         )?;
-        root.write_atomic(
-            "certificate.cnf",
-            b"[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=disposable-native-attachment\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost\n",
-            PublishMode::CreateNew,
-        )?;
-        let output = Command::new("openssl")
-            .args([
-                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            ])
-            .arg("-config")
-            .arg(root.path().join("certificate.cnf"))
-            .arg("-keyout")
-            .arg(root.path().join("authority-key.pem"))
-            .arg("-out")
-            .arg(root.path().join("authority.pem"))
-            .stdin(Stdio::null())
-            .output()
-            .wrap_err("test controller requires openssl")?;
-        ensure!(
-            output.status.success(),
-            "disposable TLS authority generation failed"
-        );
-        let request = Command::new("openssl")
-            .args(["req", "-new", "-newkey", "rsa:2048", "-nodes"])
-            .args(["-subj", "/CN=disposable-native-attachment-server"])
-            .arg("-config")
-            .arg(root.path().join("certificate.cnf"))
-            .arg("-keyout")
-            .arg(root.path().join("private-key.pem"))
-            .arg("-out")
-            .arg(root.path().join("server.csr"))
-            .stdin(Stdio::null())
-            .output()?;
-        ensure!(
-            request.status.success(),
-            "disposable TLS leaf request failed"
-        );
-        let certificate = Command::new("openssl")
-            .args(["x509", "-req", "-days", "1", "-CAcreateserial"])
-            .arg("-in")
-            .arg(root.path().join("server.csr"))
-            .arg("-CA")
-            .arg(root.path().join("authority.pem"))
-            .arg("-CAkey")
-            .arg(root.path().join("authority-key.pem"))
-            .arg("-extfile")
-            .arg(root.path().join("certificate.cnf"))
-            .args(["-extensions", "server"])
-            .arg("-out")
-            .arg(root.path().join("certificate.pem"))
-            .stdin(Stdio::null())
-            .output()?;
-        ensure!(
-            certificate.status.success(),
-            "disposable TLS leaf certification failed"
-        );
         let python = [
             "python3",
             "python",
@@ -142,14 +85,14 @@ impl Ingress {
         .into_iter()
         .find(|name| {
             Command::new(name)
-                .args(["-c", "import ssl,sys; assert sys.version_info >= (3,10)"])
+                .args(["-c", "import sys; assert sys.version_info >= (3,10)"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
                 .is_ok_and(|status| status.success())
         })
-        .ok_or_else(|| eyre!("test controller requires Python 3.10+ with standard ssl"))?;
+        .ok_or_else(|| eyre!("test controller requires Python 3.10+"))?;
         let child = Command::new(python)
             .arg(root.path().join("ingress.py"))
             .arg(root.path())
@@ -173,9 +116,12 @@ impl Ingress {
             }
             ensure!(
                 self.child.try_wait()?.is_none(),
-                "disposable TLS ingress exited"
+                "disposable loopback ingress exited"
             );
-            ensure!(Instant::now() < deadline, "TLS ingress readiness timed out");
+            ensure!(
+                Instant::now() < deadline,
+                "loopback ingress readiness timed out"
+            );
             thread::sleep(Duration::from_millis(25));
         };
         let ports = ports
@@ -188,7 +134,7 @@ impl Ingress {
         );
         self.roots = ports
             .into_iter()
-            .map(|port| format!("https://127.0.0.1:{port}/"))
+            .map(|port| format!("http://127.0.0.1:{port}/"))
             .collect();
         Ok(())
     }
@@ -344,16 +290,10 @@ impl Harness {
 
     fn command(&mut self, args: &[&str]) -> TestResult<Value> {
         let state = self.child.root().to_path_buf();
-        let authority = self.root.path().join("tls/authority.pem");
-        self.command_for_state(args, &state, Some(&authority))
+        self.command_for_state(args, &state)
     }
 
-    fn command_for_state(
-        &mut self,
-        args: &[&str],
-        state: &Path,
-        tls_authority: Option<&Path>,
-    ) -> TestResult<Value> {
+    fn command_for_state(&mut self, args: &[&str], state: &Path) -> TestResult<Value> {
         self.sequence += 1;
         let output = format!("cli-{}.stdout", self.sequence);
         let error = format!("cli-{}.stderr", self.sequence);
@@ -368,10 +308,6 @@ impl Harness {
             .stdin(Stdio::null())
             .stdout(self.root.open_append(&output)?)
             .stderr(self.root.open_append(&error)?);
-        if let Some(authority) = tls_authority {
-            // Standard rustls-native-certs input, confined to the fixture's HTTPS caller.
-            command.env("SSL_CERT_FILE", authority);
-        }
         let mut child = command.spawn()?;
         let deadline = Instant::now() + COMMAND_TIMEOUT;
         let status = loop {
@@ -399,15 +335,53 @@ impl Harness {
         )?)
     }
 
+    fn initialize_private_program(
+        &mut self,
+        prepared: &PreparedLocalnet,
+        deployment: &Value,
+    ) -> TestResult<u64> {
+        let address: ContractAddress = json::from_value(
+            deployment
+                .get("receipt")
+                .and_then(|receipt| receipt.get("contract_address"))
+                .cloned()
+                .ok_or_else(|| eyre!("private deployment omitted its initialization target"))?,
+        )?;
+        let alias: ContractAlias = json::from_value(
+            deployment
+                .get("receipt")
+                .and_then(|receipt| receipt.get("contract_alias"))
+                .cloned()
+                .ok_or_else(|| eyre!("private deployment omitted its initialization alias"))?,
+        )?;
+        let initialized = self.command(&[
+            "contract",
+            "call",
+            alias.as_ref(),
+            "--entrypoint",
+            "hajimari",
+            "--max-fee",
+            "1000",
+            "--readback",
+            "current",
+        ])?;
+        ensure!(
+            initialized
+                .get("receipt")
+                .and_then(|receipt| receipt.get("contract_address"))
+                == Some(&json::to_value(&address)?),
+            "initialization changed the exact deployed contract"
+        );
+        verify_private_call(prepared, &initialized, "0")
+    }
+
     fn exercise(&mut self) -> TestResult<()> {
         let parent_state = self.parent.root().to_path_buf();
         // Both roots start through the copied installed frontend. The parent keeps
-        // its normal thirty-second readiness budget and needs no fixture CA.
-        let ready = parse_parent_ready(self.command_for_state(
-            &["localnet", "up", "parent"],
-            &parent_state,
-            None,
-        )?)?;
+        // its normal thirty-second readiness budget over its numeric-loopback listeners.
+        let ready = parse_parent_ready(
+            self.command_for_state(&["localnet", "up", "parent"], &parent_state)?,
+        )?;
         let prepared = self.parent.prepared("parent")?;
         ensure!(
             ready.context == prepared.context && prepared.peers.len() == 4,
@@ -423,58 +397,21 @@ impl Harness {
             verifier.checkpoint().height()
         );
         let initial = verifier.clone();
-        let tls = self.root.create_child("tls")?;
-        ensure!(self.ingress.is_none(), "TLS controller is already owned");
-        let ingress = self.ingress.insert(Ingress::spawn(&tls, &prepared.peers)?);
-        ingress.wait_ready(&tls)?;
+        let ingress_directory = self.root.create_child("ingress")?;
+        ensure!(
+            self.ingress.is_none(),
+            "loopback controller is already owned"
+        );
+        let ingress = self
+            .ingress
+            .insert(Ingress::spawn(&ingress_directory, &prepared.peers)?);
+        ingress.wait_ready(&ingress_directory)?;
         let ingress_roots = ingress.roots.clone();
-        let release_key = KeyPair::random();
-        let now = unix_ms()?;
-        let checkpoint = verifier.checkpoint();
-        let release = NetworkRelease {
-            network_name: "fixture".into(),
-            serial: 1,
-            generation: 1,
-            network_id: anchor.network_id,
-            chain_id: anchor.chain_id.clone(),
-            account_chain_discriminant: parent_config.account_chain_discriminant,
-            native_world_schema: iroha_core::state::State::native_world_schema_hash_v1()
-                .map_err(|e| eyre!(e))?,
-            issued_at_ms: now.saturating_sub(1_000),
-            expires_at_ms: now + 60 * 60 * 1_000,
-            torii_roots: ingress_roots.clone(),
-            peers: node_peers
-                .iter()
-                .zip(&ingress_roots)
-                .map(|(peer, root)| ReleasePeer {
-                    node_id: peer.clone(),
-                    torii_root: root.clone(),
-                })
-                .collect(),
-            faucet: Some(ReleaseFaucet {
-                torii_root: ingress_roots[0].clone(),
-                issuer: faucet.authority,
-                asset_definition_id: faucet.asset_definition_id.parse()?,
-                amount: faucet.amount,
-                max_operation_fee: "1000".parse()?,
-                max_namespace_rent: "1000".parse()?,
-            }),
-            build_registry: None,
-            checkpoint_hash: Hash::new(checkpoint.encode_canonical()?),
-            checkpoint_height: checkpoint.height(),
-            checkpoint_block_hash: checkpoint.block_hash().into(),
-        };
-        let signed = SignedNetworkCheckpoint::sign(release, checkpoint, release_key.private_key())?;
-        tls.write_atomic(
-            "checkpoint.nrt",
-            &signed.encode_canonical()?,
-            PublishMode::CreateNew,
-        )?;
         let profiles = InstalledNetworkProfiles::new(vec![InstalledNetworkProfile::new(
             "fixture".into(),
-            release_key.public_key().clone(),
-            1,
-            &format!("{}fixture/checkpoint.nrt", ingress_roots[0]),
+            &ingress_roots[0],
+            anchor.chain_id.clone(),
+            parent_config.account_chain_discriminant,
         )?])?;
         let profile_path = &self.profiles;
         PrivateDirectory::open(profile_path.parent().unwrap())?.write_atomic(
@@ -482,7 +419,7 @@ impl Harness {
             &profiles.encode_installation()?,
             PublishMode::CreateNew,
         )?;
-        eprintln!("ATTACHMENT_PARENT_HTTPS_READY roots=4");
+        eprintln!("ATTACHMENT_PARENT_LOOPBACK_READY roots=4");
 
         // This one call owns real funding, paid SNS, authenticated generation binding,
         // owner-private genesis, registration and independently verified parent inclusion.
@@ -527,20 +464,44 @@ impl Harness {
         );
         // Read both paid leases and resolve the owner label through native account
         // authentication. This parent has no physical `dpn` catalog or execution lane.
-        let read_bootstrap =
-            ReleaseCheckpointStore::open(&self.root.path().join("namespace-read-bootstrap"))?
-                .authenticate(
-                    profiles.select("fixture")?.release_trust(),
-                    &signed.encode_canonical()?,
-                    unix_ms()?,
-                )?;
+        // The installed CLI has already discovered this exact network through its explicit loopback profile
+        // and retained its native verified checkpoint. Reopen that original owner here.
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
+        let bootstrap_store = loop {
+            match BootstrapStore::open(&self.child.root().join("parents/dpn")) {
+                Ok(store) => break store,
+                Err(BootstrapError::Busy) if Instant::now() < bootstrap_deadline => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let read_bootstrap = bootstrap_store
+            .load(profiles.select("fixture")?)?
+            .ok_or_else(|| eyre!("installed CLI did not retain its discovered native network"))?;
+        drop(bootstrap_store);
+        ensure!(
+            read_bootstrap.metadata().network_id == anchor.network_id,
+            "native loopback discovery selected another parent genesis"
+        );
+        let discovered_faucet = read_bootstrap
+            .metadata()
+            .faucet
+            .as_ref()
+            .ok_or_else(|| eyre!("native loopback discovery omitted the parent faucet"))?;
+        ensure!(
+            discovered_faucet.issuer == faucet.authority
+                && discovered_faucet.asset_definition_id.to_string() == faucet.asset_definition_id
+                && discovered_faucet.amount == faucet.amount,
+            "native loopback discovery changed the original parent faucet policy"
+        );
         let mut owner_parent = crate::provisioning::RemoteProvisioning::load_parent_config(
             &self.child.root().join("attachments/dpn/provisioning"),
             &read_bootstrap,
             &child_prepared,
             "admin",
         )?;
-        // The disposable fixture's exact parent loopback listener needs no fixture CA.
+        // Read directly from the independently selected original parent listener.
         owner_parent.torii_api_url = parent_config.torii_api_url.clone();
         let owner_client = Client::builder(owner_parent)
             .build()?
@@ -604,6 +565,9 @@ impl Harness {
             timing.command_finished(source.is_ok());
         }
         let source = source?;
+        // These programs declare scalar state and a once-only lifecycle hook. Native views
+        // become callable only after that exact deployed instance completes its initializer.
+        let initialization_height = self.initialize_private_program(&child_prepared, &source)?;
         let source_artifact =
             verify_private_deployment(&child_prepared, &source, &source_fixture.result())?;
         ensure!(
@@ -631,6 +595,8 @@ impl Harness {
             timing.command_finished(to.is_ok());
         }
         let to = to?;
+        let bytecode_initialization_height =
+            self.initialize_private_program(&child_prepared, &to)?;
         let bytecode_artifact =
             verify_private_deployment(&child_prepared, &to, &bytecode_fixture.result())?;
         ensure!(
@@ -658,6 +624,8 @@ impl Harness {
             timing.command_finished(packaged.is_ok());
         }
         let packaged = packaged?;
+        let package_initialization_height =
+            self.initialize_private_program(&child_prepared, &packaged)?;
         let package_artifact =
             verify_private_deployment(&child_prepared, &packaged, &package_fixture.result())?;
         require_distinct_artifacts(&[&source_artifact, &bytecode_artifact, &package_artifact])?;
@@ -676,18 +644,6 @@ impl Harness {
                 "identical private deployment changed receipt or journal"
             );
         }
-        let initialized = self.command(&[
-            "contract",
-            "call",
-            "PrivateSecret::dpn",
-            "--entrypoint",
-            "hajimari",
-            "--max-fee",
-            "1000",
-            "--readback",
-            "current",
-        ])?;
-        let initialization_height = verify_private_call(&child_prepared, &initialized, "0")?;
         let mutated = self.command(&[
             "contract",
             "call",
@@ -742,6 +698,8 @@ impl Harness {
             .max()
             .unwrap()
             .max(initialization_height)
+            .max(bytecode_initialization_height)
+            .max(package_initialization_height)
             .max(mutation_height);
         let deadline = Instant::now() + Duration::from_secs(120);
         let anchored = loop {
@@ -797,7 +755,10 @@ impl Harness {
             listener_token.as_slice(),
         ]);
         let needles: Vec<&[u8]> = needles.iter().map(std::vec::Vec::as_slice).collect();
-        let captured = assert_absent(&self.root.path().join("tls/public-requests.bin"), &needles)?;
+        let captured = assert_absent(
+            &self.root.path().join("ingress/public-requests.bin"),
+            &needles,
+        )?;
         ensure!(
             captured > 0,
             "no original parent request capture was retained"
@@ -869,7 +830,7 @@ impl Harness {
         if let Some(ingress) = self.ingress.as_mut()
             && ingress.stop().is_err()
         {
-            failures.push("TLS controller shutdown was not confirmed".into());
+            failures.push("loopback controller shutdown was not confirmed".into());
         }
         ensure!(
             failures.is_empty(),
@@ -1084,7 +1045,51 @@ fn independently_observed_parent(
         &source.finality_proof(NonZeroU64::new(1).unwrap())?,
     )?;
     let challenge: [u8; 32] = rand::random();
-    let quorum = verifier.observe(&source, &challenge)?;
+    let quorum = match verifier.observe(&source, &challenge) {
+        Ok(quorum) => quorum,
+        Err(failure) => {
+            // The production source deliberately bounds its transport diagnostics. Keep
+            // the exact SDK failure in this disposable fixture without printing configs,
+            // signing material or request headers. These reads establish no readiness.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut diagnostics = Vec::new();
+            for (index, (endpoint, peer)) in prepared.peers.iter().zip(peers).enumerate() {
+                let mut selected = config.clone();
+                selected.torii_api_url = endpoint.torii_url.parse()?;
+                let client = Client::builder(selected)
+                    .build()?
+                    .with_request_deadline(deadline);
+                let scope = iroha_genesis::signed_genesis_consensus_metadata(&anchor.genesis)?
+                    .sumeragi_context
+                    .root_scope;
+                let mut height = NonZeroU64::new(1).unwrap();
+                for _ in 0..4 {
+                    match client.get_sumeragi_finality_attestation(height, challenge, peer, scope) {
+                        Ok(_) => {
+                            diagnostics
+                                .push(format!("peer {index}: authenticated height {height}"));
+                            break;
+                        }
+                        Err(error) => {
+                            let detail: String = format!("{error:#}").chars().take(2_048).collect();
+                            diagnostics.push(format!("peer {index}, height {height}: {detail}"));
+                            let Some(next) = error
+                                .downcast_ref::<iroha::client::BridgeFinalityAttestationTipMismatch>()
+                                .and_then(|progress| NonZeroU64::new(progress.response().applied_height))
+                            else {
+                                break;
+                            };
+                            height = next;
+                        }
+                    }
+                }
+            }
+            return Err(eyre!(
+                "parent finality observation failed: {failure:?}; direct SDK diagnostics: {}",
+                diagnostics.join("; ")
+            ));
+        }
+    };
     ensure!(
         quorum.verified() == 4,
         "independent parent release needs all four actual HTTP attestations"
@@ -1108,8 +1113,11 @@ impl PrivateProgram {
     }
 
     fn source(&self) -> String {
+        // Exercise the ordinary counter policy through authenticated private listeners.
+        // Custom application-token administration has separate executor coverage; the
+        // lifecycle initializer still requires its exact native entrypoint permission.
         format!(
-            "seiyaku {} {{ state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(\"CanInvokeContractEntrypoint\") {{ value = next; }} view fn current() -> int {{ return value; }} view fn secret() -> string {{ return \"{}\"; }} }}",
+            "seiyaku {} {{ state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(anyone) {{ value = next; }} view fn current() authorize(anyone) -> int {{ return value; }} view fn secret() authorize(anyone) -> string {{ return \"{}\"; }} }}",
             self.name,
             self.result()
         )
@@ -1554,13 +1562,6 @@ fn inspect_parent_files(root: &Path, needles: &[&[u8]]) -> TestResult<()> {
     Ok(())
 }
 
-fn unix_ms() -> TestResult<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()?)
-}
-
 #[test]
 fn fixture_temporary_custody_is_retained_unless_explicitly_closed() {
     let retained = RetainedTemporary(Some(tempfile::tempdir().unwrap()));
@@ -1833,6 +1834,12 @@ fn parent_cli_status_requires_exact_ready_global_context() {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: (0..4)
+            .map(|index| ManagedValidatorStatus {
+                index,
+                state: ManagedValidatorState::Running,
+            })
+            .collect(),
     };
     let value = json::to_value(&status).unwrap();
     assert_eq!(parse_parent_ready(value.clone()).unwrap(), status);
@@ -1915,7 +1922,7 @@ fn deployment_evidence_requires_state_applied_height_and_exact_journal() {
 
 /// Explicit eight-validator installed-runtime regression; no public network is contacted.
 #[test]
-#[ignore = "requires matching IROHA_TEST_RUNTIME_DIRECTORY, Python/OpenSSL controller tools, and resources for eight native validators"]
+#[ignore = "requires matching IROHA_TEST_RUNTIME_DIRECTORY, Python controller tools, and resources for eight native validators"]
 fn installed_parent_attachment_private_contracts_and_payload_isolation() {
     let _resources = super::super::native_test_guard();
     let installed = PathBuf::from(

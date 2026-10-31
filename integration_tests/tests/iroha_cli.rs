@@ -157,13 +157,6 @@ fn assert_soracloud_hf_lease_asset_ready(
 }
 const SORACLOUD_LIVE_HF_TEST_REPO_ID: &str = "hf-internal-testing/tiny-random-gpt2";
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
-fn soracloud_live_hf_allowed_signing() -> toml::Value {
-    toml::Value::Array(vec![
-        toml::Value::String("ed25519".to_owned()),
-        toml::Value::String("secp256k1".to_owned()),
-        toml::Value::String("bls_normal".to_owned()),
-    ])
-}
 #[test]
 fn find_existing_cli_binary_path_from_roots_returns_first_match() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -892,10 +885,8 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -950,10 +941,8 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1203,10 +1192,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1346,10 +1333,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1661,10 +1646,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1963,10 +1946,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2234,10 +2215,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(move |layer| {
-            layer.write("telemetry_profile", "full").write(
-                ["crypto", "allowed_signing"],
-                soracloud_live_hf_allowed_signing(),
-            );
+            // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
+            layer.write("telemetry_profile", "full");
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),

@@ -1,24 +1,59 @@
-//! Structural release preset controls; fixture keys establish no official Taira authority.
+//! Structural release preset controls and exact installed discovery selections.
 
 use super::*;
-use iroha_crypto::{Algorithm, KeyPair};
 use iroha_deploy::{bootstrap::InstalledNetworkProfile, managed::NativeBundleLayout};
 
 fn image(name: &str) -> Vec<u8> {
     InstalledNetworkProfiles::new(vec![
         InstalledNetworkProfile::new(
             name.into(),
-            KeyPair::from_seed(vec![27; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-            7,
-            "https://fixture.invalid/checkpoint.nrt",
+            "https://fixture.invalid/",
+            "fixture-chain".into(),
+            369,
         )
         .unwrap(),
     ])
     .unwrap()
     .encode_installation()
     .unwrap()
+}
+
+fn taira_image() -> Vec<u8> {
+    InstalledNetworkProfiles::new(vec![
+        InstalledNetworkProfile::new(
+            "taira".into(),
+            "https://taira.sora.org/",
+            "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+            369,
+        )
+        .unwrap(),
+    ])
+    .unwrap()
+    .encode_installation()
+    .unwrap()
+}
+
+#[test]
+fn checked_in_taira_profile_selects_native_discovery() {
+    let bytes = std::fs::read(crate::workspace_root().join(RELEASE_PROFILES)).unwrap();
+    assert_eq!(bytes, taira_image());
+    let profiles = InstalledNetworkProfiles::from_installation_bytes(&bytes).unwrap();
+    let taira = profiles.select("taira").unwrap();
+    assert_eq!(taira.torii_root().as_str(), "https://taira.sora.org/");
+    assert_eq!(taira.chain_id(), "fc56984b-2be7-431d-840e-21514d1883f0");
+    assert_eq!(taira.account_chain_discriminant(), 369);
+    assert_eq!(profiles.names().collect::<Vec<_>>(), ["taira"]);
+}
+
+#[test]
+#[ignore = "explicit maintenance command: regenerate the checked-in native discovery preset"]
+fn regenerate_developer_network_profiles() {
+    std::fs::write(
+        crate::workspace_root().join(RELEASE_PROFILES),
+        taira_image(),
+    )
+    .unwrap();
+    checked_in_taira_profile_selects_native_discovery();
 }
 
 #[test]
@@ -75,7 +110,7 @@ fn an_uncommitted_taira_named_artifact_cannot_establish_release_provenance() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let bytes = image("taira");
     std::fs::write(&path, &bytes).unwrap();
-    // These fixture bytes are not the approved committed artifact. A valid label/key alone refuses.
+    // These fixture bytes are not the committed source artifact. A matching label alone refuses.
     assert!(select(root.path(), "release", None).is_err());
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }

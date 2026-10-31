@@ -78,6 +78,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "NftView",
   "QueryPage",
   "AssetUidHoldingQuote",
+  "PendingAction",
   "AxtDescriptor",
   "AxtAnchoredSpendV1",
   "ProofBlob",

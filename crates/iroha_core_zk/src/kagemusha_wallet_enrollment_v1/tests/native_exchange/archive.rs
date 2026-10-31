@@ -5,6 +5,33 @@
 
 use super::*;
 
+/// Read the exact retained Archive completion without attempting another monetary operation.
+pub(super) fn completed(wallet: &mut Wallet, send: &[u8; 32], credited: &[u8]) -> Vec<u8> {
+    let state::RequestStatusV1::Outcome(Completion::Complete(original)) =
+        wallet.credited_status_for_send(send, credited).unwrap()
+    else {
+        panic!("exact Send-bound Archive must already be complete");
+    };
+    original
+}
+
+/// Exercise one genuine installed Archive through retained intake and the shared idle gate.
+pub(super) fn drain(wallet: &mut Wallet, send: &[u8; 32], credited: &[u8]) -> Vec<u8> {
+    // This host fixture explicitly models a charging device; it is not phone evidence.
+    wallet.scheduler().set_activity(true, true);
+    wallet.observe_credited_for_send(send, credited).unwrap();
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 1);
+    let turn = wallet.scheduler().prepare_archive_turn().unwrap();
+    let state::DeferredArchiveDrainV1::Executed(Completion::Complete(original)) =
+        wallet.drain_deferred_archive(turn).unwrap()
+    else {
+        panic!("one eligible first anchor must complete its genuine Archive");
+    };
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
+    assert_eq!(completed(wallet, send, credited), original);
+    original
+}
+
 /// Commit and fold the exact delivery evidence, then reopen the same payer custody.
 /// Retry must return the identical Archive package without another signature or debit.
 pub(super) fn exercise(
@@ -13,6 +40,7 @@ pub(super) fn exercise(
     sources: &Sources,
     fixture: &Fixture,
     frames: &[Vec<u8>; 4],
+    send: &[u8; 32],
     credited: &[u8],
 ) -> (Wallet, Vec<u8>) {
     let evidence: KagemushaWalletCreditedV1 = decode(credited);
@@ -28,8 +56,9 @@ pub(super) fn exercise(
             (status.opening.credit_id, "ArchiveStatus")
         }
     };
+    fold(&mut wallet);
     let before = wallet.snapshot().unwrap();
-    let original = complete(wallet.accept_credited(credited).unwrap());
+    let original = drain(&mut wallet, send, credited);
     let package: KagemushaWalletPackageV1 = decode(&original);
     let credential = KagemushaWalletCredentialV1::decode_canonical(
         &frames[0],
@@ -54,10 +83,9 @@ pub(super) fn exercise(
     assert!(committed.fold_backlog > 0);
 
     let signatures = device.platform.with(|state| state.sign_calls);
-    assert_eq!(
-        complete(wallet.accept_credited(credited).unwrap()),
-        original
-    );
+    wallet.observe_credited_for_send(send, credited).unwrap();
+    assert_eq!(completed(&mut wallet, send, credited), original);
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
     assert_eq!(wallet.snapshot().unwrap(), committed);
     fold(&mut wallet);
     let folded = wallet.snapshot().unwrap();
@@ -70,10 +98,9 @@ pub(super) fn exercise(
     drop(wallet);
     let mut wallet = sources.open(device, fixture, frames);
     assert_eq!(wallet.snapshot().unwrap(), folded);
-    assert_eq!(
-        complete(wallet.accept_credited(credited).unwrap()),
-        original
-    );
+    wallet.observe_credited_for_send(send, credited).unwrap();
+    assert_eq!(completed(&mut wallet, send, credited), original);
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
     assert_eq!(wallet.snapshot().unwrap(), folded);
     assert_eq!(device.platform.with(|state| state.sign_calls), signatures);
     eprintln!(

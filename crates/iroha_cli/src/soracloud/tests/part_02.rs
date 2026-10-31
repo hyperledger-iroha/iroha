@@ -288,7 +288,10 @@ fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
             .expect("generated contract metadata")
             .contract_interface
             .expect("generated contract interface");
-        assert!(!interface.entrypoints.is_empty(), "{name} has no entrypoints");
+        assert!(
+            !interface.entrypoints.is_empty(),
+            "{name} has no entrypoints"
+        );
         for entrypoint in interface.entrypoints {
             assert_eq!(
                 entrypoint.authorization,
@@ -544,9 +547,7 @@ fn app_infra_status_fixture_for_name(app_name: &str) -> AppInfraStatusResponseV1
         app_version: "1.0.0".to_owned(),
         public_url: "https://test.invalid".to_owned(),
         static_site: None,
-        services: vec![
-            build_app_infra_service_ref(&bundle).expect("canonical app service reference"),
-        ],
+        services: vec![build_app_infra_service_ref(&bundle)],
     };
     let manifest_hash = manifest.manifest_hash();
     let app_name = manifest.app_name.clone();
@@ -781,7 +782,7 @@ fn mailbox_status_v1_selects_exactly_one_new_matching_message() {
     let key_pair = soracloud_fixture_key_pair(0x74);
     let authority = AccountId::new(key_pair.public_key().clone());
     let output = build_message_send_output(
-        mock_soracloud_submission_receipt(&authority, &key_pair),
+        &mock_soracloud_submission_receipt(&authority, &key_pair),
         &after,
         &known,
         "ops_agent",
@@ -833,14 +834,14 @@ fn mailbox_status_v1_is_closed_and_ack_requires_exact_removal() {
     let key_pair = soracloud_fixture_key_pair(0x75);
     let authority = AccountId::new(key_pair.public_key().clone());
     let _ = build_message_ack_output(
-        mock_soracloud_submission_receipt(&authority, &key_pair),
+        &mock_soracloud_submission_receipt(&authority, &key_pair),
         &before,
         &after,
         "worker_agent:mail:7",
     )
     .expect("acknowledged message must be absent after mutation");
     let _ = build_message_ack_output(
-        mock_soracloud_submission_receipt(&authority, &key_pair),
+        &mock_soracloud_submission_receipt(&authority, &key_pair),
         &before,
         &before,
         "worker_agent:mail:7",
@@ -1179,7 +1180,7 @@ fn wallet_spend_v1_requires_and_emits_the_caller_request_id() {
     let key_pair = soracloud_fixture_key_pair(0x76);
     let authority = AccountId::new(key_pair.public_key().clone());
     let output = build_wallet_spend_output(
-        mock_soracloud_submission_receipt(&authority, &key_pair),
+        &mock_soracloud_submission_receipt(&authority, &key_pair),
         &status,
         "ops_agent",
         "wallet-spend-fixture-1",
@@ -1339,7 +1340,7 @@ fn sample_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
         plaintext_bytes: 48,
         ciphertext_bytes: 64,
         chunk_manifest_root: Hash::new(b"sorafs-chunk-manifest"),
-        pricing_policy: Default::default(),
+        pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1::default(),
     }
 }
 fn uploaded_model_status_fixture(
@@ -1389,7 +1390,7 @@ fn sample_uploaded_model_finalize_payload() -> UploadedModelFinalizePayload {
 }
 fn uploaded_model_register_validation_error(
     bundle: SoraUploadedModelBundleV1,
-    finalize: UploadedModelFinalizePayload,
+    finalize: &UploadedModelFinalizePayload,
 ) -> String {
     let key_pair = soracloud_fixture_key_pair(0x12);
     let authority = AccountId::new(key_pair.public_key().clone());
@@ -2304,12 +2305,12 @@ fn inrou_preseed_cli_client_interoperates_with_real_sorafs_node() {
         .ensure_alive()
         .expect("real sorafs-node must retain every lock after readiness");
     assert_eq!(
-        fs::read(session._stage.path().join("artifact-0.manifest.norito"))
+        fs::read(session.stage.path().join("artifact-0.manifest.norito"))
             .expect("read staged exact manifest"),
         artifact.built.bytes,
     );
     assert_eq!(
-        fs::read(session._stage.path().join("artifact-0.payload"))
+        fs::read(session.stage.path().join("artifact-0.payload"))
             .expect("read staged exact payload"),
         artifact.payload,
     );
@@ -2522,7 +2523,7 @@ impl MockHttpServer {
                         let pin_registration_response = configured_response
                             .as_ref()
                             .filter(|_| is_pin_registration)
-                            .and_then(|_| pin_registration.as_ref())
+                            .and(pin_registration.as_ref())
                             .map(mock_sorafs_pin_registration_response);
                         let pin_registry_response = if configured_response.is_none()
                             && fee_quote_response.is_none()
@@ -2532,37 +2533,40 @@ impl MockHttpServer {
                         } else {
                             None
                         };
-                        let (response, status) = if let Some(response) = pin_registration_response {
-                            (response, "202 Accepted")
-                        } else if configured_response.is_some()
-                            && is_pin_registration
-                            && pin_registration.is_none()
-                        {
-                            (
-                                MockHttpResponse {
-                                    status: "200 OK",
-                                    content_type: "text/plain",
-                                    body: b"invalid pin registration transaction".to_vec(),
-                                },
-                                "400 Bad Request",
-                            )
-                        } else if let Some(response) = configured_response {
-                            let status = response.status;
-                            (response, status)
-                        } else if let Some(response) = fee_quote_response {
-                            (response, "200 OK")
-                        } else if let Some(response) = pin_registry_response {
-                            (response, "200 OK")
-                        } else {
-                            (
-                                MockHttpResponse {
-                                    status: "200 OK",
-                                    content_type: "text/plain",
-                                    body: b"not found".to_vec(),
-                                },
-                                "404 Not Found",
-                            )
-                        };
+                        let (response, status) = pin_registration_response.map_or_else(
+                            || {
+                                if configured_response.is_some()
+                                    && is_pin_registration
+                                    && pin_registration.is_none()
+                                {
+                                    (
+                                        MockHttpResponse {
+                                            status: "200 OK",
+                                            content_type: "text/plain",
+                                            body: b"invalid pin registration transaction".to_vec(),
+                                        },
+                                        "400 Bad Request",
+                                    )
+                                } else if let Some(response) = configured_response {
+                                    let status = response.status;
+                                    (response, status)
+                                } else if let Some(response) = fee_quote_response {
+                                    (response, "200 OK")
+                                } else if let Some(response) = pin_registry_response {
+                                    (response, "200 OK")
+                                } else {
+                                    (
+                                        MockHttpResponse {
+                                            status: "200 OK",
+                                            content_type: "text/plain",
+                                            body: b"not found".to_vec(),
+                                        },
+                                        "404 Not Found",
+                                    )
+                                }
+                            },
+                            |response| (response, "202 Accepted"),
+                        );
                         if status == "202 Accepted" {
                             let registration =
                                 pin_registration.expect("accepted pin registration was decoded");

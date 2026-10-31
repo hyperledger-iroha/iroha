@@ -60,7 +60,7 @@ pub struct CanonicalKuraEvidenceLimits {
     pub max_committed_blocks: u64,
     /// Maximum underlying blocks.data length, including unrequested committed heights.
     pub max_store_data_bytes: u64,
-    /// Maximum canonical SignedBlockWire bytes for one requested carrier (at most 32 MiB).
+    /// Maximum canonical `SignedBlockWire` bytes for one requested carrier (at most 32 MiB).
     pub max_carrier_bytes: usize,
     /// Cumulative returned complete native carrier bytes (at most 256 MiB).
     pub max_output_bytes: u64,
@@ -632,7 +632,7 @@ mod canonical_evidence_read_only_fs {
                 mode: value.st_mode,
                 uid: value.st_uid,
                 gid: value.st_gid,
-                links: value.st_nlink as u64,
+                links: u64::from(value.st_nlink),
                 size: u64::try_from(value.st_size)
                     .map_err(|_| Error::Invalid("negative file size"))?,
                 modified: (value.st_mtime, i128::from(value.st_mtime_nsec)),

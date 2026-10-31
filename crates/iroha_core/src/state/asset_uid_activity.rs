@@ -5,7 +5,7 @@ use super::*;
 /// Internal source provenance selected by the sealed numeric movement kernel.
 /// This is never an instruction argument or a contract-selectable exemption.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MovementActivity {
+pub enum MovementActivity {
     /// Owner payment or first funding of a native reserve: consume both ceilings.
     Payment,
     /// Exact FI-attested and owner-approved off-ramp: consume gross outgoing only.
@@ -20,16 +20,18 @@ pub(super) fn charge_activity(
     movement: &Movement<'_>,
     now_ms: u64,
     activities: &mut BTreeMap<StatePath, AssetUidUsageV1>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<(), Error> {
     if movement.activity == MovementActivity::RetainedCustody {
         return Ok(());
     }
     // A retained custody account has beneficial ownership, but no wallet
     // membership. Only exact wallet sources can create new UID usage here.
-    let Some(policy) = member_policy(
+    let Some(policy) = member_policy_with_owner(
         world,
         movement.source.definition(),
         movement.source.account(),
+        owner,
     )?
     else {
         return Ok(());
@@ -37,7 +39,7 @@ pub(super) fn charge_activity(
     let day = policy.daily_window.day_start_ms(now_ms).map_err(reject)?;
     let key = usage_key(&policy.asset_definition_id, &policy.uid, day);
     if !activities.contains_key(&key) {
-        activities.insert(key.clone(), usage(world, &policy, day)?);
+        activities.insert(key.clone(), usage_with_owner(world, &policy, day, owner)?);
     }
     let current = activities.get_mut(&key).expect("usage inserted above");
     current.outgoing_amount = current

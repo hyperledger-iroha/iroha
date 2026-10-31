@@ -6,7 +6,7 @@
 //! published World at H: the latter is bound by H+1's parent World root.
 //! TODO: consume this original-source check only after complete State authority,
 //! bounded capture work, allocation custody and durable witness-node ownership
-//! are implemented. It must never promote an IvmCompleteStateRootClaimV1.
+//! are implemented. It must never promote an `IvmCompleteStateRootClaimV1`.
 
 use super::*;
 use crate::state::world_projection::WorldStateAccumulator;
@@ -146,11 +146,14 @@ impl State {
             .map_err(PredecessorWorldError::Acquisition)?;
         let captured =
             WorldStateAccumulator::capture(&world).map_err(PredecessorWorldError::Capture)?;
-        let world_root = captured.root().map_err(PredecessorWorldError::Capture)?;
+        let selection = world.runtime_selection.get();
+        let world_root = captured
+            .root(selection)
+            .map_err(PredecessorWorldError::Capture)?;
         let stored_root = world
             .state_accumulator
             .get()
-            .root()
+            .root(selection)
             .map_err(PredecessorWorldError::Capture)?;
         drop(world);
         if !is_stable_state_view_generation(generation, self.state_view_generation()) {

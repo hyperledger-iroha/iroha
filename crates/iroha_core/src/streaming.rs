@@ -31,14 +31,13 @@ use iroha_data_model::{
         EventBox,
         data::{DataEvent, prelude as data_events},
     },
-    peer::Peer,
     soranet::ticket::TicketCommitmentError,
 };
 use iroha_logger::warn;
-use iroha_model_base::domain::DomainId;
 #[cfg(test)]
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::{domain::DomainId, peer::Peer};
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};
@@ -55,7 +54,7 @@ use norito::{
         EncryptionSuite, EntropyMode, FeedbackHintFrame, Hash, KeyUpdate, ManifestAnnounceFrame,
         ManifestV1, PrivacyRelay, PrivacyRoute, PrivacyRouteUpdate, ReceiverReport,
         SyncDiagnostics, TransportCapabilityResolution, crypto::TransportKeys,
-        default_bundle_tables, load_bundle_tables_from_toml,
+        default_bundle_tables, load_bundle_tables_from_toml, parse_bundle_tables_from_toml,
     },
 };
 use soranet_pq::MlKemSuite;
@@ -661,6 +660,9 @@ pub enum StreamingCodecConfigError {
         #[source]
         source: BundleTableError,
     },
+    /// The canonical `SignedRansTablesV1` artefact compiled into this build failed validation.
+    #[error("the compiled-in canonical rANS tables are invalid: {0}")]
+    CanonicalTables(#[source] BundleTableError),
     /// Configured bundle width exceeds what the artefact provides.
     #[error("configured bundle width {requested} exceeds the available table width {available}")]
     BundleWidth {
@@ -892,12 +894,18 @@ impl StreamingHandle {
                 requested: self.bundle_accel,
             });
         }
-        let tables = load_bundle_tables_from_toml(&config.rans_tables_path).map_err(|source| {
-            StreamingCodecConfigError::BundleTables {
-                path: config.rans_tables_path.clone(),
-                source,
-            }
-        })?;
+        let tables = match &config.rans_tables_path {
+            Some(path) => load_bundle_tables_from_toml(path).map_err(|source| {
+                StreamingCodecConfigError::BundleTables {
+                    path: path.clone(),
+                    source,
+                }
+            })?,
+            None => parse_bundle_tables_from_toml(
+                config_defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML,
+            )
+            .map_err(StreamingCodecConfigError::CanonicalTables)?,
+        };
         if config.bundle_width > tables.max_width() {
             return Err(StreamingCodecConfigError::BundleWidth {
                 requested: config.bundle_width,
@@ -1028,23 +1036,16 @@ impl StreamingHandle {
         }
         Ok(())
     }
-    /// Apply crypto configuration gating to the advertised capability mask.
-    pub fn apply_crypto_config(&mut self, crypto: &actual::Crypto) {
-        #[cfg(feature = "sm")]
+    /// Advertise the actual local verification implementation, independently of chain policy.
+    pub fn apply_crypto_capabilities(&mut self) {
+        if iroha_crypto::Algorithm::Sm2
+            .require_implementation(iroha_crypto::CryptoOperation::VerifySignature)
+            .is_ok()
         {
-            if crypto.sm_helpers_enabled() {
-                self.capabilities = self
-                    .capabilities
-                    .insert(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
-            } else {
-                self.capabilities = self
-                    .capabilities
-                    .remove(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
-            }
-        }
-        #[cfg(not(feature = "sm"))]
-        {
-            let _ = crypto;
+            self.capabilities = self
+                .capabilities
+                .insert(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
+        } else {
             self.capabilities = self
                 .capabilities
                 .remove(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
@@ -1333,22 +1334,22 @@ impl StreamingHandle {
             .ticket_nullifiers
             .write()
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
-        if let Some(existing_stream) = nullifiers.get(&ticket_nullifier) {
-            if *existing_stream != stream_id {
-                return Err(StreamingProcessError::DuplicateTicketNullifier {
-                    nullifier: ticket_nullifier,
-                    stream: *existing_stream,
-                });
-            }
+        if let Some(existing_stream) = nullifiers.get(&ticket_nullifier)
+            && *existing_stream != stream_id
+        {
+            return Err(StreamingProcessError::DuplicateTicketNullifier {
+                nullifier: ticket_nullifier,
+                stream: *existing_stream,
+            });
         }
         for route_id in &order {
-            if let Some(owner) = route_index.get(route_id) {
-                if *owner != stream_id {
-                    return Err(StreamingProcessError::DuplicatePrivacyRoute {
-                        route_id: *route_id,
-                        stream: *owner,
-                    });
-                }
+            if let Some(owner) = route_index.get(route_id)
+                && *owner != stream_id
+            {
+                return Err(StreamingProcessError::DuplicatePrivacyRoute {
+                    route_id: *route_id,
+                    stream: *owner,
+                });
             }
         }
         if let Some(previous) = tickets.remove(&stream_id) {
@@ -2031,10 +2032,10 @@ impl StreamingHandle {
             SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
         )?;
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let tmp_path = snapshot_temp_path(path);
         {
@@ -2050,10 +2051,10 @@ impl StreamingHandle {
                 return Err(err.into());
             }
         }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                sync_dir(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent)?;
         }
         Ok(())
     }
@@ -2161,12 +2162,10 @@ impl StreamingHandle {
             let session = guard
                 .entry(entry.peer.clone())
                 .or_insert_with(|| StreamingSession::new(entry.role));
-            if needs_install {
-                if let Some(material) = &self.key_material {
-                    material
-                        .install_into_session(session)
-                        .map_err(StreamingProcessError::from)?;
-                }
+            if needs_install && let Some(material) = &self.key_material {
+                material
+                    .install_into_session(session)
+                    .map_err(StreamingProcessError::from)?;
             }
             session
                 .restore_from_snapshot(entry.snapshot)
@@ -2255,21 +2254,21 @@ impl StreamingHandle {
         }
         #[cfg(not(feature = "telemetry"))]
         let _ = parity;
-        if let Some(diagnostics) = &report.sync_diagnostics {
-            if let Some(violation) = self.sync_policy.violation(diagnostics) {
-                if self.sync_policy.observe_only() {
-                    warn!(
-                        peer = %peer.id(),
-                        ?diagnostics,
-                        %violation,
-                        "observed streaming A/V sync violation (observe-only)"
-                    );
-                } else {
-                    return Err(StreamingProcessError::AudioSyncViolation {
-                        peer: peer.id().clone(),
-                        reason: violation,
-                    });
-                }
+        if let Some(diagnostics) = &report.sync_diagnostics
+            && let Some(violation) = self.sync_policy.violation(diagnostics)
+        {
+            if self.sync_policy.observe_only() {
+                warn!(
+                    peer = %peer.id(),
+                    ?diagnostics,
+                    %violation,
+                    "observed streaming A/V sync violation (observe-only)"
+                );
+            } else {
+                return Err(StreamingProcessError::AudioSyncViolation {
+                    peer: peer.id().clone(),
+                    reason: violation,
+                });
             }
         }
         Ok(())
@@ -2331,13 +2330,12 @@ impl StreamingHandle {
         hint.latency_gradient_q16 = snapshot.latency_gradient_q16;
         hint.observed_rtt_ms = snapshot.observed_rtt_ms;
         hint.parity_chunks = snapshot.parity_chunks;
-        if hint.report_interval_ms == 0 {
-            if let Some(resolution) = self
+        if hint.report_interval_ms == 0
+            && let Some(resolution) = self
                 .transport_capabilities_for_role(CapabilityRole::Publisher, peer_id)
                 .or_else(|| self.transport_capabilities_for_role(CapabilityRole::Viewer, peer_id))
-            {
-                hint.report_interval_ms = resolution.fec_feedback_interval_ms;
-            }
+        {
+            hint.report_interval_ms = resolution.fec_feedback_interval_ms;
         }
         Ok(())
     }
@@ -2648,18 +2646,16 @@ fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
             false
         }
     };
-    if promoted {
-        if let Some(parent) = main_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(err) = sync_dir(parent) {
-                    warn!(
-                        ?err,
-                        path = %parent.display(),
-                        "failed to sync streaming snapshot directory"
-                    );
-                }
-            }
-        }
+    if promoted
+        && let Some(parent) = main_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(err) = sync_dir(parent)
+    {
+        warn!(
+            ?err,
+            path = %parent.display(),
+            "failed to sync streaming snapshot directory"
+        );
     }
 }
 fn decode_snapshot_plaintext(
@@ -3132,7 +3128,7 @@ mod tests {
     fn codec_config_loads_default_bundle_tables() {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("default bundle tables must load");
@@ -3141,7 +3137,7 @@ mod tests {
             "codec config must update entropy mode"
         );
         let expected_tables =
-            load_bundle_tables_from_toml(&codec.rans_tables_path).expect("bundle tables");
+            load_bundle_tables_from_toml(repo_rans_tables_path()).expect("bundle tables");
         assert_eq!(
             handle.bundle_tables.precision_bits(),
             default_bundle_tables().precision_bits(),
@@ -3154,17 +3150,29 @@ mod tests {
         );
     }
     #[test]
+    fn codec_config_defaults_to_compiled_in_canonical_tables() {
+        let mut handle = StreamingHandle::new();
+        let codec = actual::StreamingCodec::from_defaults();
+        assert_eq!(codec.rans_tables_path, None);
+        handle
+            .apply_codec_config(&codec)
+            .expect("compiled-in canonical tables must load without a file");
+        let repository =
+            load_bundle_tables_from_toml(repo_rans_tables_path()).expect("repository tables");
+        assert_eq!(handle.bundle_tables_checksum(), repository.checksum());
+    }
+    #[test]
     fn codec_config_reports_missing_bundle_tables() {
         let mut handle = StreamingHandle::new();
         let dir = tempdir().expect("tempdir");
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = dir.path().join("missing_tables.toml");
+        codec.rans_tables_path = Some(dir.path().join("missing_tables.toml"));
         let err = handle
             .apply_codec_config(&codec)
             .expect_err("should error for missing tables");
         match err {
             StreamingCodecConfigError::BundleTables { path, .. } => {
-                assert_eq!(path, codec.rans_tables_path);
+                assert_eq!(Some(path), codec.rans_tables_path);
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -3173,7 +3181,7 @@ mod tests {
     fn codec_config_rejects_bundle_width_above_tables() {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 5;
         let err = handle
@@ -3194,7 +3202,7 @@ mod tests {
     fn codec_config_sets_cpu_bundle_acceleration_capabilities() {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
         handle
@@ -3223,7 +3231,7 @@ mod tests {
     fn codec_config_sets_gpu_bundle_acceleration_capabilities() {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_accel = actual::BundleAcceleration::Gpu;
         let result = handle.apply_codec_config(&codec);
@@ -4943,7 +4951,7 @@ mod tests {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
         codec.bundle_width = 2;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
@@ -4977,7 +4985,7 @@ mod tests {
         let mut handle = StreamingHandle::new();
         let mut codec = actual::StreamingCodec::from_defaults();
         codec.bundle_width = 2;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
@@ -5013,7 +5021,7 @@ mod tests {
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 2;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
@@ -5050,7 +5058,7 @@ mod tests {
         let mut handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b111));
         let mut codec = actual::StreamingCodec::from_defaults();
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 2;
         handle
@@ -5090,7 +5098,7 @@ mod tests {
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 2;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("bundled codec config should load");
@@ -5167,7 +5175,7 @@ mod tests {
         let mut codec = actual::StreamingCodec::from_defaults();
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 2;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
@@ -5210,7 +5218,7 @@ mod tests {
         let mut codec = actual::StreamingCodec::from_defaults();
         codec.bundle_width = 2;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         bundled
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
@@ -5228,7 +5236,7 @@ mod tests {
         gpu_codec.entropy_mode = EntropyMode::RansBundled;
         gpu_codec.bundle_width = 2;
         gpu_codec.bundle_accel = actual::BundleAcceleration::Gpu;
-        gpu_codec.rans_tables_path = repo_rans_tables_path();
+        gpu_codec.rans_tables_path = Some(repo_rans_tables_path());
         let gpu_result = gpu.apply_codec_config(&gpu_codec);
         if !norito::streaming::BUNDLED_RANS_GPU_BUILD_AVAILABLE {
             let err = gpu_result.expect_err("cpu-only builds must reject GPU bundle acceleration");
@@ -5254,7 +5262,7 @@ mod tests {
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_width = 2;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
+        codec.rans_tables_path = Some(repo_rans_tables_path());
         cpu_handle
             .apply_codec_config(&codec)
             .expect("CPU bundler config should load");

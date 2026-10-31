@@ -100,7 +100,7 @@ impl BlockProofLimits {
     }
 }
 
-fn invalid_outputs(block_height: NonZeroU64, reason: impl ToString) -> BlockProofError {
+fn invalid_outputs(block_height: NonZeroU64, reason: &(impl ToString + ?Sized)) -> BlockProofError {
     BlockProofError::InvalidOutputs {
         block_height,
         reason: reason.to_string(),
@@ -299,12 +299,12 @@ fn admit_body(
     {
         return Err(invalid_outputs(
             block_height,
-            "retired merge carrier is not a canonical Network source",
+            &("retired merge carrier is not a canonical Network source"),
         ));
     }
     block
         .validate_output_merkle_cache()
-        .map_err(|error| invalid_outputs(block_height, error))
+        .map_err(|error| invalid_outputs(block_height, &(error)))
 }
 
 /// Read one committed body for an off-chain, account-scoped read through the
@@ -433,28 +433,28 @@ pub(super) fn block_proofs_for_entry_from_kura(
             block_height,
         })?;
     let input_index = u32::try_from(input_index)
-        .map_err(|_| invalid_outputs(block_height, "Network input index exceeds proof width"))?;
-    let (output_index, _) = block
-        .network_output_at(input_index)
-        .ok_or_else(|| invalid_outputs(block_height, "Network input has no exact output join"))?;
+        .map_err(|_| invalid_outputs(block_height, &("Network input index exceeds proof width")))?;
+    let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
+        invalid_outputs(block_height, &("Network input has no exact output join"))
+    })?;
     let output = block
         .execution_outputs()
         .get(output_index as usize)
-        .ok_or_else(|| invalid_outputs(block_height, "joined output is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("joined output is absent")))?;
     let inputs = block.network_input_merkle_tree();
     let entry_commitment = inputs
         .commitment()
-        .ok_or_else(|| invalid_outputs(block_height, "Network input commitment is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("Network input commitment is absent")))?;
     let input_path = inputs
         .get_proof(input_index)
-        .ok_or_else(|| invalid_outputs(block_height, "Network input proof is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("Network input proof is absent")))?;
     let entry_proof = BlockReceiptProof::new(entry_hash, input_path);
     let output_commitment = block
         .output_merkle_commitment()
-        .ok_or_else(|| invalid_outputs(block_height, "output commitment is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("output commitment is absent")))?;
     let output_path = block
         .output_proof(output_index)
-        .ok_or_else(|| invalid_outputs(block_height, "output proof is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("output proof is absent")))?;
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let output_fields: [&dyn norito::core::SerializePayload; 2] = [output, &output_path];
     let borrowed_output = BorrowedSingularStruct::new(output_fields);
@@ -484,7 +484,7 @@ pub(super) fn block_proofs_for_entry_from_kura(
                 limit: limits.max_response_bytes,
             }
         } else {
-            invalid_outputs(block_height, error)
+            invalid_outputs(block_height, &(error))
         }
     })?;
     let proofs = BlockProofs {
@@ -499,11 +499,11 @@ pub(super) fn block_proofs_for_entry_from_kura(
         fastpq_transcripts: block.fastpq_transcripts().clone(),
     };
     let actual = norito::canonical_frame_len(&proofs)
-        .map_err(|error| invalid_outputs(block_height, error))? as u64;
+        .map_err(|error| invalid_outputs(block_height, &(error)))? as u64;
     if actual != overhead + payload_len {
         return Err(invalid_outputs(
             block_height,
-            "borrowed and owned proof lengths differ",
+            &("borrowed and owned proof lengths differ"),
         ));
     }
     Ok(proofs)
@@ -711,12 +711,12 @@ fn kagemusha_ledger_entry(
         return Err(not_found());
     };
     let input_index = u32::try_from(index)
-        .map_err(|_| invalid_outputs(block_height, "Network input index exceeds proof width"))?;
+        .map_err(|_| invalid_outputs(block_height, &("Network input index exceeds proof width")))?;
     // The Network row sits at the output position equal to its input index, so both leaf
     // indices equal `input_index`. The join is explicit, never inferred from a result index.
-    let (output_index, _) = block
-        .network_output_at(input_index)
-        .ok_or_else(|| invalid_outputs(block_height, "Network input has no exact output join"))?;
+    let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
+        invalid_outputs(block_height, &("Network input has no exact output join"))
+    })?;
     let owner = KagemushaLedgerEntryOwnerV1::from_signed(signed)?;
     Ok((input_index, output_index, owner))
 }
@@ -748,13 +748,13 @@ pub(super) fn kagemusha_ledger_inclusion_for_entry_from_body(
     let output = block
         .execution_outputs()
         .get(output_index as usize)
-        .ok_or_else(|| invalid_outputs(block_height, "joined output is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("joined output is absent")))?;
     let entry_proof = block
         .network_input_proof(input_index)
-        .ok_or_else(|| invalid_outputs(block_height, "Network input proof is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("Network input proof is absent")))?;
     let output_proof = block
         .output_proof(output_index)
-        .ok_or_else(|| invalid_outputs(block_height, "output proof is absent"))?;
+        .ok_or_else(|| invalid_outputs(block_height, &("output proof is absent")))?;
     #[cfg(test)]
     KAGEMUSHA_LEDGER_PATHS_BUILT.with(|built| built.set(built.get() + 2));
     // Measure the complete inclusion frame before copying its output row, which may reach
@@ -776,7 +776,7 @@ pub(super) fn kagemusha_ledger_inclusion_for_entry_from_body(
                 limit: limits.max_response_bytes,
             }
         } else {
-            invalid_outputs(block_height, error)
+            invalid_outputs(block_height, &(error))
         }
     })?;
     let inclusion = CertifiedTransactionInclusionV1 {
@@ -785,11 +785,11 @@ pub(super) fn kagemusha_ledger_inclusion_for_entry_from_body(
         output_proof,
     };
     let actual = norito::canonical_frame_len(&inclusion)
-        .map_err(|error| invalid_outputs(block_height, error))? as u64;
+        .map_err(|error| invalid_outputs(block_height, &(error)))? as u64;
     if actual != overhead + payload_len {
         return Err(invalid_outputs(
             block_height,
-            "borrowed and owned inclusion lengths differ",
+            &("borrowed and owned inclusion lengths differ"),
         ));
     }
     Ok(Some(KagemushaLedgerEntryInclusionV1 { owner, inclusion }))
@@ -806,6 +806,9 @@ mod native_proof_reader_tests {
     #[test]
     fn native_block_proof_preserves_original_cumulative_metadata_refusal() {
         use ivm::error::ExecutionDeferral;
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         chain.commit(Vec::new());

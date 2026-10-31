@@ -606,7 +606,7 @@ describe("SCCP v1 fixtures: the JavaScript model reproduces the reference", () =
     assert.equal(outside.length, 2);
     for (const key of outside) {
       // The curve implementation finds the point on the curve and refuses it for its subgroup only.
-      const point = m.bls.G1.ProjectivePoint.fromAffine(m.decompressG1(key));
+      const point = m.bls.G1.Point.fromAffine(m.decompressG1(key));
       assert.throws(() => point.assertValidity(), /not in prime-order subgroup/);
       assert.equal(point.isTorsionFree(), false, "a shifted key is outside G1");
     }
@@ -788,7 +788,7 @@ describe("SCCP v1 fixtures: the JavaScript model reproduces the reference", () =
       assert.deepEqual(certificate.committee, keys);
       assert.equal(header.committeeRoot, m.committeeRoot(keys));
       assert.equal(certificate.signer_ys, m.signerYs(keys, [0, 1, 2]));
-      assert.equal(certificate.signature_evm, m.g2Evm192(m.bls.G2.ProjectivePoint.fromHex(ethers.getBytes(certificate.aggregate_signature))));
+      assert.equal(certificate.signature_evm, m.g2Evm192(m.bls.G2.Point.fromBytes(ethers.getBytes(certificate.aggregate_signature))));
     }
     assert.equal(scenario.pin.committee_root, m.committeeRoot(scenario.committee_g7));
     for (const row of scenario.payloads) {

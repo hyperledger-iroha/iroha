@@ -1,0 +1,10 @@
+# It's the default. But here for visibility.
+comment_width = 80
+# Makes code docs & examples easier to write.
+format_code_in_doc_comments = true
+# Group imports by crate.
+imports_granularity = "Crate"
+# This is a standard almost
+wrap_comments = true
+# Rustlang core team is migrating to this
+group_imports = "StdExternalCrate"

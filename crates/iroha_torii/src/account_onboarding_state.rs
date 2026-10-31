@@ -114,7 +114,7 @@ pub fn execute_account_onboarding_current_state_local_read(
     request: &AccountOnboardingCurrentStateRequestV1,
     expected_route: Option<RoutingDecision>,
 ) -> Result<AxResponse, Error> {
-    super::json_ok(read_account_onboarding_current_state(
+    super::json_ok(&read_account_onboarding_current_state(
         app,
         request,
         expected_route,
@@ -175,7 +175,8 @@ pub async fn handler_account_onboarding_current_state(
         &uri,
         body.as_ref(),
         "account_onboarding_current_state",
-    )?;
+    )
+    .await?;
     if !super::torii_public_dataspace_ids(app.as_ref()).contains(&alias.label.dataspace) {
         let Some(caller) = visibility.caller() else {
             return Err(Error::AppUnauthorized {
@@ -234,7 +235,7 @@ mod tests {
     use super::*;
     use crate::tests_runtime_handlers::{
         bind_account_alias_for_test, checked_torii_test_ed25519_keypair,
-        mk_app_state_for_tests_with_world,
+        mk_app_state_for_tests_with_pre_genesis_world,
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -251,7 +252,11 @@ mod tests {
             .map(|account_id| Account::new(account_id.clone()).build(account_id))
             .into_iter()
             .collect::<Vec<_>>();
-        mk_app_state_for_tests_with_world(iroha_core::state::World::with([], accounts, []))
+        mk_app_state_for_tests_with_pre_genesis_world(iroha_core::state::World::with(
+            [],
+            accounts,
+            [],
+        ))
     }
 
     fn anchor_state(app: &mut SharedAppState, creation_time_ms: u64) -> HashOf<BlockHeader> {

@@ -35,6 +35,10 @@ const MAX_FINALITY_BYTES: usize = 64 * 1024 * 1024;
 
 // Different predicates at the same height remain different targets. Only the same exact
 // policy revision or admission sequence is shared by its multiple consumers.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Historical targets retain their original bounded records without adding allocations outside the target budget"
+)]
 enum ExpectedAction {
     RecorderPolicy(iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1),
     ReputationAppend(crate::smartcontracts::isi::sorafs_reputation::stream_token_delivery::Source),
@@ -65,7 +69,7 @@ struct Targets {
     admissions: BTreeSet<u64>,
     delivery_sources: BTreeSet<u64>,
     acknowledgements: BTreeSet<u64>,
-    targets: Vec<Target>,
+    entries: Vec<Target>,
     bytes: usize,
 }
 impl Targets {
@@ -76,7 +80,7 @@ impl Targets {
             admissions: BTreeSet::new(),
             delivery_sources: BTreeSet::new(),
             acknowledgements: BTreeSet::new(),
-            targets: Vec::new(),
+            entries: Vec::new(),
             bytes: 0,
         }
     }
@@ -86,7 +90,7 @@ impl Targets {
             .checked_add(norito::canonical_frame_len(value).map_err(|_| Error::Execution)?)
             .filter(|size| *size <= MAX_TARGET_BYTES)
             .ok_or(Error::Execution)?;
-        if self.targets.len() >= MAX_TARGETS {
+        if self.entries.len() >= MAX_TARGETS {
             return Err(Error::Execution);
         }
         Ok(())
@@ -108,7 +112,7 @@ impl Targets {
         )
         .map_err(|_| Error::Execution)?;
         self.charge(&record)?;
-        self.targets.push(Target {
+        self.entries.push(Target {
             execution: record.execution.clone(),
             policy_revision: revision,
             action: ExpectedAction::Configure(record.clone()),
@@ -129,7 +133,7 @@ impl Targets {
         }
         record.validate().map_err(|_| Error::Execution)?;
         self.charge(record)?;
-        self.targets.push(Target {
+        self.entries.push(Target {
             execution: record.origin.execution().clone(),
             policy_revision: 0,
             action: ExpectedAction::RecorderPolicy(record.clone()),
@@ -170,7 +174,7 @@ impl Targets {
         }
         if self.admissions.insert(sequence) {
             self.charge(&row)?;
-            self.targets.push(Target {
+            self.entries.push(Target {
                 execution: row.execution.clone(),
                 policy_revision: revision,
                 action: ExpectedAction::Admit(row.clone()),
@@ -205,7 +209,7 @@ impl Targets {
         match &delivery.disposition {
             Disposition::Delivered { execution, .. } => {
                 self.charge(&source)?;
-                self.targets.push(Target {
+                self.entries.push(Target {
                     execution: execution.clone(),
                     policy_revision: original.admitted_under.revision,
                     action: ExpectedAction::ReputationAppend(source),
@@ -232,11 +236,11 @@ impl Targets {
                     return Err(Error::Execution);
                 }
                 self.charge(&delivery)?;
-                self.targets.push(Target {
+                self.entries.push(Target {
                     execution: execution.clone(),
                     policy_revision: gateway_qualification.revision,
                     action: ExpectedAction::ReputationCancellation {
-                        original: original.clone(),
+                        original: *original,
                         recorder_policy_digest: *recorder_policy_digest,
                         reason: *reason,
                     },
@@ -318,7 +322,7 @@ impl Targets {
         }
         self.policy(view, prepared, row.policy_revision)?;
         self.charge(&row)?;
-        self.targets.push(Target {
+        self.entries.push(Target {
             execution: row.execution.clone(),
             policy_revision: row.policy_revision,
             action: ExpectedAction::Acknowledge(row),
@@ -492,7 +496,7 @@ fn prepare_targets(
             }
             targets.policy(view, prepared, terminal.policy_revision)?;
             targets.charge(&terminal)?;
-            targets.targets.push(Target {
+            targets.entries.push(Target {
                 execution: terminal.execution.clone(),
                 policy_revision: terminal.policy_revision,
                 action: ExpectedAction::Terminal {
@@ -503,12 +507,12 @@ fn prepare_targets(
         }
     }
     // Every historical claim must already belong to the pre-challenge captured floor.
-    if targets.targets.iter().any(|target| {
+    if targets.entries.iter().any(|target| {
         target.execution.height == 0 || target.execution.height > check_claim.floor.height
     }) {
         return Err(Error::Execution.into());
     }
-    targets.targets.sort_by_key(|target| {
+    targets.entries.sort_by_key(|target| {
         (
             target.execution.height,
             target.execution.entry_index,
@@ -693,7 +697,7 @@ fn authenticate_target(
         || view
             .transactions
             .get(&entry_hash)
-            .map(|height| height.get())
+            .map(std::num::NonZero::get)
             != usize::try_from(execution.height).ok()
     {
         return Err(Error::Execution.into());
@@ -740,10 +744,9 @@ pub(super) fn authenticate<'view, 'state, 'bound>(
         .map_err(|error| error.map_rejection(Error::from))?;
         let targets = prepare_targets(view, prepared)?;
         let start = targets
-            .targets
+            .entries
             .first()
-            .map(|target| target.execution.height)
-            .unwrap_or_else(|| check.floor_height())
+            .map_or_else(|| check.floor_height(), |target| target.execution.height)
             .min(check.floor_height());
         let through = if start == 1 {
             check.applied_height().max(2)
@@ -775,7 +778,7 @@ pub(super) fn authenticate<'view, 'state, 'bound>(
                         ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
                     )
                 })?;
-            while let Some(target) = targets.targets.get(cursor)
+            while let Some(target) = targets.entries.get(cursor)
                 && target.execution.height == block.height()
             {
                 authenticate_target(view, prepared, target, &targets.policies, block)?;
@@ -792,7 +795,7 @@ pub(super) fn authenticate<'view, 'state, 'bound>(
                 block.height().checked_add(1)
             };
         }
-        if next_height.is_some() || cursor != targets.targets.len() {
+        if next_height.is_some() || cursor != targets.entries.len() {
             return Err(Error::Finality.into());
         }
         prepared.round.ensure_live().map_err(Error::from)?;

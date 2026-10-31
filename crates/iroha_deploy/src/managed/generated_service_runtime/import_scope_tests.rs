@@ -203,6 +203,7 @@ fn genuine_selection_scope_keeps_exact_epoch_projections_lexical_lifetime_and_ac
     let Genuine {
         owner,
         prepared,
+        ports: _ports,
         _temporary: temporary,
         native,
         selection,
@@ -336,6 +337,7 @@ fn genuine_selection_scope_keeps_changed_sources_and_ordinary_error_exit_precede
     let Genuine {
         _temporary: temporary,
         prepared,
+        ports: _ports,
         owner,
         native,
         selection,

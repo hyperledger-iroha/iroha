@@ -89,7 +89,7 @@ where
 fn torii_bounded_routed_read_payload_response<T>(
     payload: ToriiBoundedNoritoPayload<T>,
     format: ResponseFormat,
-    budget: ToriiRoutedReadMemoryBudget,
+    budget: &ToriiRoutedReadMemoryBudget,
 ) -> Result<Response, Response>
 where
     T: JsonSerialize,
@@ -144,7 +144,7 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     let payload = torii_bounded_routed_read_source_payload::<T, S>(source, &mut budget)?;
-    torii_bounded_routed_read_payload_response(payload, format, budget)
+    torii_bounded_routed_read_payload_response(payload, format, &(budget))
 }
 #[expect(
     clippy::result_large_err,
@@ -844,10 +844,13 @@ fn execute_torii_contract_alias_local_source_read_admitted(
             ResponseFormat::Json,
         );
     };
-    let observation_time_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let observation_time_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     let state_view = app.state.view();
     let world = state_view.world();
     let Some(contract_address) = world.contract_aliases().get(&contract_alias) else {
@@ -890,11 +893,10 @@ fn execute_torii_contract_alias_local_source_read_admitted(
             ResponseFormat::Json,
         );
     };
-    let dataspace_alias = world
-        .dataspace_catalog()
-        .by_id(dataspace_id)
-        .map(|entry| entry.alias.as_str())
-        .unwrap_or_else(|| contract_alias.dataspace_segment());
+    let dataspace_alias = world.dataspace_catalog().by_id(dataspace_id).map_or_else(
+        || contract_alias.dataspace_segment(),
+        |entry| entry.alias.as_str(),
+    );
     let source = ToriiContractAliasJsonSource {
         contract_alias: &contract_alias,
         contract_address,
@@ -989,8 +991,10 @@ fn execute_torii_explorer_asset_definition_local_source_read_admitted(
             ResponseFormat::Json,
         );
     };
-    let assets =
-        crate::explorer::definition_instance_count_from_world(&world, definition_id, visibility);
+    let assets = crate::explorer::definition_instance_count_from_world(
+        &visibility.in_world(&world),
+        definition_id,
+    );
     let zero_locked_quantity = iroha_primitives::numeric::Quantity::zero();
     let (locked_quantity, circulating_quantity) = if definition_id == &app.state.gov.voting_asset_id
     {
@@ -1082,7 +1086,7 @@ fn execute_torii_proof_record_local_source_read_admitted(
         }
         Err(response) => return response,
     };
-    torii_bounded_routed_read_payload_response(payload, format, budget)
+    torii_bounded_routed_read_payload_response(payload, format, &(budget))
         .unwrap_or_else(|response| response)
 }
 #[cfg(test)]

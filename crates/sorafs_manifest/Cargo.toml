@@ -8,8 +8,9 @@ license = "Apache-2.0"
 description = "Norito-encoded manifest types for SoraFS artifacts."
 
 [features]
-# No `default` feature: consumers request `pqc` explicitly, so focused and
-# node builds resolve the same feature tokens and share one artifact.
+# No `default` feature. This local `pqc` feature enables hybrid-envelope support.
+# The unconditional crypto `application` dependency below already supplies ML-DSA
+# for PoTR and governance signature verification, including focused builds.
 dev-tools = []
 pqc = ["iroha_crypto/pqc", "soranet_pq/pqc"]
 
@@ -46,23 +47,23 @@ norito = { workspace = true, default-features = false, features = ["base-codec"]
 thiserror = "2.0.17"
 url = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
-ed25519-dalek = "2.2.0"
+ed25519-dalek = "3.0.0"
 iroha_crypto = { workspace = true, default-features = false, features = ["application", "bls"] }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
 soranet_pq = { path = "../soranet_pq", default-features = false }
-chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
 rand = { workspace = true }
 
 iroha_pasta = { workspace = true }
 iroha_plonk = { workspace = true }
-ff = "0.13.1"
+ff = "0.14.0"
 
 [dev-dependencies]
 iroha_plonk_gadgets = { workspace = true }
 tempfile = "3.23.0"
 assert_cmd = "2.1.1"
-rand_chacha = "0.9"
+rand_chacha = "0.10.0"
 
 [[test]]
 name = "sorafs_manifest_integration"

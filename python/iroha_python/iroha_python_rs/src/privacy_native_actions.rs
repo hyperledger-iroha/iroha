@@ -46,7 +46,6 @@ use iroha_core_privacy::{
             derive_pq_masp_note_encryption_keys_digest_v1, encrypt_pq_masp_note_v1,
             prove_pq_masp_v1,
         },
-        validate_zk_x509_credential_proof_container_v1,
         vega::{
             VegaPrivacyActionPublicInputV1, VegaPrivacyActionTransactionContextV1,
             VegaPrivacyActionWitnessMaterialV1, build_signed_vega_privacy_action_v1,
@@ -78,17 +77,17 @@ use iroha_data_model::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
         IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
-        MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1,
-        PrivacyActionDigestV1, PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1,
-        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1,
-        PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1, PrivacyP256CiphertextV1,
-        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
-        PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1,
+        OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyActionDigestV1,
+        PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
+        PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyNoteEncryptionKeyDigestV1,
+        PrivacyOrchardActionV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+        PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
         PrivacyVeRangeBitLengthV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
         PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1,
@@ -104,7 +103,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_version::codec::EncodeVersioned;
 use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
-use rand_core_06::OsRng;
+use rand::rngs::SysRng;
 use zeroize::Zeroizing;
 use zk_ace_prover::{
     ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
@@ -120,8 +119,6 @@ pub const PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1: usize = 1024 * 10
 /// wallet must never spend prover work constructing a response that the target
 /// network will reject solely for its canonical wire size.
 pub const PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1: usize = 10 * 1024 * 1024;
-/// Maximum canonical typed ZK-X509 statement archive accepted from a worker.
-pub const PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1: usize = 256 * 1024;
 /// Exact maximum X5S1 proof returned by the profile-owned worker.
 ///
 /// Public proof bytes cross their own boundary and are not wallet-local secret
@@ -383,38 +380,6 @@ pub struct VegaCredentialPresentationActionRequestV1 {
     /// Trusted block time used by the closed presentation-validity policy.
     pub trusted_block_timestamp_ms: u64,
 }
-/// One fixed-capacity ZK-X509 proof returned by the isolated worker.
-///
-/// The private certificate, CRL, and accumulator witness never cross this
-/// boundary. This wrapper makes the nonempty exact first-release byte ceiling
-/// a type invariant before any action can be dispatched.
-pub struct ZkX509CredentialProofBytesV1(Vec<u8>);
-impl ZkX509CredentialProofBytesV1 {
-    /// Accept one nonempty proof no larger than the exact first-release ceiling.
-    pub fn try_new(encoded: Vec<u8>) -> Result<Self, PrivacyNativeActionErrorV1> {
-        if encoded.is_empty() || encoded.len() > PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1 {
-            return Err(PrivacyNativeActionErrorV1::at("zk-x509-proof-cap"));
-        }
-        Ok(Self(encoded))
-    }
-    /// Borrow the exact worker response without copying it.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-    /// Consume the bounded wrapper into the exact proof bytes.
-    #[must_use]
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.0
-    }
-}
-/// One intent-bound ZK-X509 identity presentation returned by the isolated worker.
-pub struct ZkX509IdentityPresentationActionRequestV1 {
-    /// Exact intent-bound public statement.
-    pub statement: IrohaZkX509StarkP256StatementV1,
-    /// Sole canonical two-record `X5S1` proof container.
-    pub proof: ZkX509CredentialProofBytesV1,
-}
 /// One canonical Jindo polynomial-evaluation action.
 pub struct JindoPolynomialEvaluationActionRequestV1 {
     /// Complete canonical private polynomial batch and evaluation point.
@@ -656,8 +621,6 @@ pub enum PrivacyNativeActionRequestV1 {
     ZkAms(ZkAmsActionRequestV1),
     /// Vega mDL credential presentation.
     Vega(VegaCredentialPresentationActionRequestV1),
-    /// ZK-X509 identity presentation returned by the profile-owned worker.
-    ZkX509(ZkX509IdentityPresentationActionRequestV1),
     /// Jindo polynomial-evaluation relation.
     Jindo(JindoPolynomialEvaluationActionRequestV1),
     /// Bootle/Lantern anonymous-credential presentation.
@@ -681,7 +644,6 @@ impl PrivacyNativeActionRequestV1 {
             Self::VeRange(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
             Self::ZkAms(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
             Self::Vega(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-            Self::ZkX509(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::Jindo(_) => PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             Self::BootleLantern(_) => PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             Self::Orchard(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
@@ -1193,7 +1155,7 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
         metadata: context.metadata,
     };
     let signed = build_signed_jindo_privacy_action_v1(
-        native_context,
+        &native_context,
         request.witness,
         canonical_genesis_hash,
         private_key,
@@ -1222,7 +1184,7 @@ pub fn build_signed_vega_credential_presentation_action_v1(
         metadata: context.metadata,
     };
     let signed = build_signed_vega_privacy_action_v1(
-        native_context,
+        &native_context,
         request.input,
         request.witness_material,
         &request.device_signing_key,
@@ -1234,121 +1196,6 @@ pub fn build_signed_vega_credential_presentation_action_v1(
     wrap_canonical_signed_transaction_v1(
         signed.into_signed_transaction(),
         PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-    )
-}
-fn validate_zk_x509_action_statement_v1(
-    context: &PrivacyActionTransactionContextV1,
-    profile: CompiledPrivacyProfileV1,
-    statement: &IrohaZkX509StarkP256StatementV1,
-    require_bound_intent: bool,
-) -> Result<(), PrivacyNativeActionErrorV1> {
-    let mut expected_context = statement_context(context, profile);
-    expected_context.transaction_intent_digest = statement.context.transaction_intent_digest;
-    if statement.context != expected_context {
-        return Err(PrivacyNativeActionErrorV1::at("zk-x509-statement-context"));
-    }
-    if statement.wallet_account != context.authority {
-        return Err(PrivacyNativeActionErrorV1::at("zk-x509-wallet-authority"));
-    }
-    let intent_is_zero = statement
-        .context
-        .transaction_intent_digest
-        .as_bytes()
-        .iter()
-        .all(|byte| *byte == 0);
-    if intent_is_zero == require_bound_intent {
-        return Err(PrivacyNativeActionErrorV1::at("zk-x509-intent-state"));
-    }
-    // Structural statement validation requires a nonzero intent. During the
-    // prepare pass, substitute only that erased derived field; every public
-    // governance, window, usage, disclosure, and account field remains exact.
-    let mut structural = statement.clone();
-    if intent_is_zero {
-        structural.context.transaction_intent_digest =
-            PrivacyTransactionIntentDigestV1::new([1; 32]);
-    }
-    PrivacyStatementV1::IrohaZkX509StarkP256V1(structural)
-        .validate(&PrivacyConsensusLimitsV1::taira_default())
-        .map_err(|_| PrivacyNativeActionErrorV1::at("zk-x509-statement"))
-}
-/// Derive the sole transaction intent that a profile-owned ZK-X509 worker must bind.
-///
-/// The supplied draft statement must carry the exact transaction/profile
-/// context with an all-zero intent. Proof bytes and the intent itself are
-/// erased by the canonical intent projection, so this pass performs no prover
-/// work and has fixed memory use. The same production-qualified compiled
-/// profile used for signing is required before an intent can be prepared.
-pub fn prepare_zk_x509_identity_presentation_action_intent_v1(
-    context: &PrivacyActionTransactionContextV1,
-    canonical_genesis_hash: [u8; 32],
-    statement: &IrohaZkX509StarkP256StatementV1,
-) -> Result<PrivacyTransactionIntentDigestV1, PrivacyNativeActionErrorV1> {
-    require_genesis(canonical_genesis_hash)?;
-    validate_context(context)?;
-    if context.network_id.as_bytes() != &canonical_genesis_hash {
-        return Err(PrivacyNativeActionErrorV1::at("transaction-network-id"));
-    }
-    let profile = compiled_profile(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)?;
-    validate_zk_x509_action_statement_v1(context, profile, statement, false)?;
-    derive_intent(
-        context,
-        profile,
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone()),
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(Vec::new())),
-    )
-}
-/// Validate and sign one profile-owned ZK-X509 identity presentation.
-///
-/// Like unsigned preparation, this path accepts only the production profile
-/// returned by [`compiled_privacy_profile_v1`]. It fails at `compiled-profile`
-/// while release captures or verifier readiness remain unavailable.
-pub fn build_signed_zk_x509_identity_presentation_action_v1(
-    context: PrivacyActionTransactionContextV1,
-    request: ZkX509IdentityPresentationActionRequestV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
-    validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
-    let profile = compiled_profile(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)?;
-    build_signed_zk_x509_identity_presentation_action_after_preflight_v1(
-        context,
-        request,
-        canonical_genesis_hash,
-        private_key,
-        profile,
-    )
-}
-fn build_signed_zk_x509_identity_presentation_action_after_preflight_v1(
-    context: PrivacyActionTransactionContextV1,
-    request: ZkX509IdentityPresentationActionRequestV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-    profile: CompiledPrivacyProfileV1,
-) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
-    validate_zk_x509_action_statement_v1(&context, profile, &request.statement, true)?;
-    let expected_intent = derive_intent(
-        &context,
-        profile,
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(request.statement.clone()),
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(Vec::new())),
-    )?;
-    if request.statement.context.transaction_intent_digest != expected_intent {
-        return Err(PrivacyNativeActionErrorV1::at("zk-x509-intent-binding"));
-    }
-    validate_zk_x509_credential_proof_container_v1(
-        &request.statement,
-        canonical_genesis_hash,
-        request.proof.as_bytes(),
-    )
-    .map_err(|_| PrivacyNativeActionErrorV1::at("zk-x509-proof-container"))?;
-    finalize(
-        &context,
-        profile,
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(request.statement),
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(
-            request.proof.into_bytes(),
-        )),
-        private_key,
     )
 }
 /// Build and sign one canonical VeRange transparent-setup range action.
@@ -1421,9 +1268,9 @@ pub fn build_signed_verange_action_v1(
         generator_digest: parameters.generator_digest(),
     };
     let native_statement =
-        VeRangeType1BatchStatementV1::new(request.bit_length, commitments, transcript)
+        VeRangeType1BatchStatementV1::new(request.bit_length, commitments, &transcript)
             .map_err(|_| PrivacyNativeActionErrorV1::at("verange-native-statement"))?;
-    let proof = prove_batch(&native_statement, &values, &request.blindings, &mut OsRng)
+    let proof = prove_batch(&native_statement, &values, &request.blindings, &mut SysRng)
         .map_err(|_| PrivacyNativeActionErrorV1::at("verange-proving"))?
         .encode();
     finalize(
@@ -1491,7 +1338,7 @@ pub fn build_signed_bootle_lantern_presentation_action_v1(
         &request.policy,
         canonical_genesis_hash,
         &request.witness,
-        &mut OsRng,
+        &mut SysRng,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("bootle-proving"))?
     .encode();
@@ -1611,7 +1458,7 @@ pub fn build_signed_zk_ams_batch_admission_action_v1(
     let config = ZkAmsMaskedProverConfigV1::new(1)
         .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-admission-config"))?;
     let proof =
-        prove_zk_ams_batch_admission_v1(&statement, &binding, &witnesses, config, &mut OsRng)
+        prove_zk_ams_batch_admission_v1(&statement, &binding, &witnesses, config, &mut SysRng)
             .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-admission-proving"))?;
     finalize(
         &context,
@@ -1676,7 +1523,7 @@ pub fn build_signed_zk_ams_provision_account_action_v1(
         &binding,
         signer_index,
         &request.seed_secret,
-        &mut OsRng,
+        &mut SysRng,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-provision-proving"))?;
     finalize(
@@ -1879,7 +1726,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
         &current_balances,
         recipient_count,
         invariant,
-        transcript,
+        &transcript,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-native-statement"))?;
     let native_witness = AnonymousPgcPaymentWitnessV1 {
@@ -1888,7 +1735,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
         sender_index: request.sender_index,
         sender_secret: &request.sender_secret,
     };
-    let proof = prove_payment(&native_statement, &native_witness, &mut OsRng)
+    let proof = prove_payment(&native_statement, &native_witness, &mut SysRng)
         .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-proving"))?
         .encode();
     finalize(
@@ -1993,7 +1840,10 @@ pub(crate) fn validate_orchard_ordered_context(
 ) -> Result<(), PrivacyNativeActionErrorV1> {
     validate_context(context)?;
     // The signed model stores milliseconds; never silently round an independently fixed plan.
-    if context.creation_time.subsec_nanos() % 1_000_000 != 0
+    if !context
+        .creation_time
+        .subsec_nanos()
+        .is_multiple_of(1_000_000)
         || context
             .time_to_live
             .is_some_and(|ttl| ttl.subsec_nanos() % 1_000_000 != 0)
@@ -2074,7 +1924,7 @@ fn build_signed_orchard_action_v1(
         &consensus_limits,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("orchard-consensus-binding"))?;
-    let proved = authorize_orchard_bundle_v1(prepared, binding, &consensus_limits)
+    let proved = authorize_orchard_bundle_v1(prepared, &binding, &consensus_limits)
         .map_err(|_| PrivacyNativeActionErrorV1::at("orchard-authorization"))?;
     if proved.public.anchor != draft.anchor
         || proved.public.value_balance != draft.value_balance
@@ -2186,7 +2036,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
         .zip(&outputs)
         .map(|(output, model)| {
             encrypt_fcmp_wallet_note_v1(
-                &mut OsRng,
+                &mut SysRng,
                 request.pool_id,
                 *model,
                 &output.note,
@@ -2225,7 +2075,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
         .map_err(|_| PrivacyNativeActionErrorV1::at("fcmp-statement-digest"))?;
     let runtime_context = fcmp_runtime_context_hash(&context, statement_digest, profile);
     let proved = prove_fcmp_plus_plus_v1(
-        &mut OsRng,
+        &mut SysRng,
         runtime_context,
         &request.inputs,
         &output_openings,
@@ -2512,14 +2362,6 @@ pub fn build_signed_privacy_native_action_v1(
                 private_key,
             )
         }
-        PrivacyNativeActionRequestV1::ZkX509(request) => {
-            build_signed_zk_x509_identity_presentation_action_v1(
-                context,
-                request,
-                canonical_genesis_hash,
-                private_key,
-            )
-        }
         PrivacyNativeActionRequestV1::Jindo(request) => {
             build_signed_jindo_polynomial_evaluation_action_v1(
                 context,
@@ -2726,28 +2568,6 @@ pub fn inspect_signed_privacy_vega_credential_presentation_action_v1(
     }
     Ok(inspected)
 }
-/// Authenticate and inspect one exact ZK-X509 identity presentation.
-pub fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
-    signed: &SignedTransaction,
-    canonical_genesis_hash: [u8; 32],
-) -> Result<InspectedPrivacyActionV1, PrivacyNativeActionErrorV1> {
-    require_genesis(canonical_genesis_hash)?;
-    let inspected = inspect_signed(signed, PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)?;
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = inspected.statement() else {
-        return Err(PrivacyNativeActionErrorV1::at("inspect-zk-x509-statement"));
-    };
-    let (_, submission) = signed
-        .privacy_transaction_intent_binding_if_present_v1()
-        .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-zk-x509-intent"))?
-        .ok_or_else(|| PrivacyNativeActionErrorV1::at("inspect-missing-action"))?;
-    validate_zk_x509_credential_proof_container_v1(
-        statement,
-        canonical_genesis_hash,
-        submission.envelope.proof.bytes().as_bytes(),
-    )
-    .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-zk-x509-proof-container"))?;
-    Ok(inspected)
-}
 /// Authenticate and inspect one exact Jindo polynomial-evaluation action.
 pub fn inspect_signed_privacy_jindo_polynomial_evaluation_action_v1(
     signed: &SignedTransaction,
@@ -2877,13 +2697,9 @@ mod tests {
     use super::*;
     include!("privacy_native_actions_orchard_ordered_tests.rs");
     use iroha_data_model::privacy::{
-        PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyChallengeV1,
         PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyNullifierV1,
         PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyStatementSchemaDigestV1,
-        PrivacyVerifierDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1,
-        PrivacyX509KeyUsageV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
-        PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509DisclosedAttributeV1,
-        PrivacyZkX509TrustAnchorRecordDigestV1,
+        PrivacyVerifierDigestV1,
     };
     use std::collections::BTreeSet;
     fn signing_key() -> PrivateKey {
@@ -2906,54 +2722,6 @@ mod tests {
             nonce: NonZeroU32::new(7),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
-        }
-    }
-    fn x509_draft_statement(
-        context: &PrivacyActionTransactionContextV1,
-    ) -> IrohaZkX509StarkP256StatementV1 {
-        IrohaZkX509StarkP256StatementV1 {
-            context: PrivacyStatementContextV1 {
-                network_id: context.network_id,
-                action_index: 0,
-                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
-                parameter_id: PrivacyParameterIdV1::new([0x21; 32]),
-                parameter_digest: PrivacyParameterDigestV1::new([0x22; 32]),
-                verifier_digest: PrivacyVerifierDigestV1::new([0x23; 32]),
-                statement_schema_digest: PrivacyStatementSchemaDigestV1::new([0x24; 32]),
-                engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x25; 32]),
-            },
-            trust_anchor_id: PrivacyIssuerIdV1::new([0x11; 32]),
-            certificate_policy_id: PrivacyPolicyIdV1::new([0x12; 32]),
-            trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1::new([0x13; 32]),
-            trust_anchor_record_epoch: 3,
-            certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1::new(
-                [0x14; 32],
-            ),
-            certificate_policy_record_epoch: 4,
-            crl_record_digest: PrivacyZkX509CrlRecordDigestV1::new([0x15; 32]),
-            crl_record_epoch: 5,
-            subject_public_key_digest: PrivacyCertificateKeyDigestV1::new([0x16; 32]),
-            ca_membership_root: PrivacyRootV1::new([0x17; 32]),
-            ca_membership_root_epoch: 6,
-            key_usage: PrivacyX509KeyUsageV1 {
-                digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
-                content_commitment: PrivacyX509KeyUsageRequirementV1::new(false),
-                key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
-                key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
-            },
-            extended_key_usages: vec![
-                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
-                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
-            ],
-            disclosed_attributes: vec![PrivacyZkX509DisclosedAttributeV1 {
-                index: 0,
-                attribute_digest: PrivacyAttributeDigestV1::new([0x18; 32]),
-            }],
-            presentation_not_before_unix_seconds: 1_800_000_000,
-            presentation_not_after_unix_seconds: 1_800_000_300,
-            wallet_account: context.authority.clone(),
-            wallet_challenge: PrivacyChallengeV1::new([0x19; 32]),
-            certificate_nullifier: PrivacyNullifierV1::new([0x1A; 32]),
         }
     }
     #[test]
@@ -3151,10 +2919,6 @@ mod tests {
         const {
             assert!(PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1 > 0);
             assert!(
-                PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1
-                    < PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
-            );
-            assert!(
                 PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1
                     < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
             );
@@ -3262,90 +3026,6 @@ mod tests {
         );
     }
     #[test]
-    fn x509_intent_and_signing_require_the_production_compiled_profile() {
-        let genesis = [0xA5; 32];
-        let mut context = action_context();
-        context.network_id = network_id_from_genesis_hash_bytes(genesis);
-        let statement = x509_draft_statement(&context);
-        assert_eq!(
-            prepare_zk_x509_identity_presentation_action_intent_v1(&context, [0; 32], &statement)
-                .expect_err("reserved genesis must fail before profile lookup")
-                .stage(),
-            "canonical-genesis-hash"
-        );
-        assert_eq!(
-            prepare_zk_x509_identity_presentation_action_intent_v1(
-                &context, [0xA6; 32], &statement,
-            )
-            .expect_err("foreign transaction network must fail before profile lookup")
-            .stage(),
-            "transaction-network-id"
-        );
-        assert_eq!(
-            prepare_zk_x509_identity_presentation_action_intent_v1(&context, genesis, &statement)
-                .expect_err("intent preparation must remain closed before qualification")
-                .stage(),
-            "compiled-profile"
-        );
-
-        assert_eq!(
-            build_signed_zk_x509_identity_presentation_action_v1(
-                context.clone(),
-                ZkX509IdentityPresentationActionRequestV1 {
-                    statement: statement.clone(),
-                    proof: ZkX509CredentialProofBytesV1::try_new(vec![1])
-                        .expect("nonempty bounded proof reaches only the profile gate"),
-                },
-                genesis,
-                &signing_key(),
-            )
-            .expect_err("signing must remain closed before qualification")
-            .stage(),
-            "compiled-profile"
-        );
-        assert_eq!(
-            build_signed_zk_x509_identity_presentation_action_v1(
-                context,
-                ZkX509IdentityPresentationActionRequestV1 {
-                    statement,
-                    proof: ZkX509CredentialProofBytesV1::try_new(vec![1])
-                        .expect("nonempty bounded proof reaches only preflight"),
-                },
-                genesis,
-                &foreign_signing_key(),
-            )
-            .expect_err("a foreign transaction key is rejected before profile lookup")
-            .stage(),
-            "authority-key-mismatch"
-        );
-    }
-    #[test]
-    fn x509_public_proof_boundary_accepts_its_ceiling_beyond_secret_bundle_capacity() {
-        let bytes = vec![0xA5; PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1];
-        assert!(bytes.len() > PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1);
-        let proof = ZkX509CredentialProofBytesV1::try_new(bytes.clone())
-            .expect("public proof capacity is independent of the secret bundle boundary");
-        assert_eq!(proof.as_bytes(), bytes.as_slice());
-        assert_eq!(proof.into_bytes(), bytes);
-        assert_eq!(
-            ZkX509CredentialProofBytesV1::try_new(Vec::new())
-                .err()
-                .expect("empty X5S1 must fail at the typed boundary")
-                .stage(),
-            "zk-x509-proof-cap"
-        );
-        assert_eq!(
-            ZkX509CredentialProofBytesV1::try_new(vec![
-                0xA5;
-                PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1 + 1
-            ])
-            .err()
-            .expect("oversized X5S1 must fail at the typed boundary")
-            .stage(),
-            "zk-x509-proof-cap"
-        );
-    }
-    #[test]
     fn every_exact_inspector_rejects_a_validly_signed_transaction_without_an_action() {
         let context = action_context();
         let signed = TransactionBuilder::from_payload(
@@ -3385,11 +3065,5 @@ mod tests {
                 "inspect-missing-action"
             );
         }
-        assert_eq!(
-            inspect_signed_privacy_zk_x509_identity_presentation_action_v1(&signed, [1; 32])
-                .expect_err("X509 inspector must require one native action")
-                .stage(),
-            "inspect-missing-action"
-        );
     }
 }

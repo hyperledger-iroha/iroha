@@ -1021,7 +1021,7 @@ mod tests {
     use iroha_data_model::{account::AccountId, block::BlockHeader};
     use iroha_model_base::domain::DomainId;
     use norito::core::Error;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,

@@ -857,7 +857,7 @@ fn sanitize_pin_intents_with_lane_check(
     let bounded_intents = intents
         .into_iter()
         .filter_map(|intent| {
-            let alias_len = intent.alias.as_ref().map_or(0, |alias| alias.len());
+            let alias_len = intent.alias.as_ref().map_or(0, std::string::String::len);
             if alias_len <= MAX_DA_PIN_INTENT_ALIAS_BYTES {
                 Some(intent)
             } else {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record and verify fail-closed ABI-31 native SDK artifact evidence.
+"""Record and verify fail-closed ABI-33 native SDK artifact evidence.
 
 This checker is intentionally host-only.  It authenticates the exact native
 artifact exercised by a Node, Python, C/JNI, or C# test lane, calls that
@@ -55,8 +55,8 @@ else:
     )
 
 
-SCHEMA = "iroha.native-sdk-abi31-artifact.v1"
-REQUIRED_BRIDGE_ABI_VERSION = 31
+SCHEMA = "iroha.native-sdk-abi33-artifact.v1"
+REQUIRED_BRIDGE_ABI_VERSION = 33
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_SYMBOL_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_ABI_PROBE_OUTPUT_BYTES = 4096
@@ -77,6 +77,7 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_capability_manifest_v1",
+    "iroha_privacy_validate_exact12_submit_proof_construction_v1",
     "iroha_privacy_free_buffer",
 )
 KAGEMUSHA_WALLET_C_EXPORTS = (
@@ -86,6 +87,8 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_open_cancel_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
+    "connect_norito_kagemusha_wallet_begin_exchange_v1",
+    "connect_norito_kagemusha_wallet_end_exchange_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_load_original_validate_v1",
@@ -115,6 +118,8 @@ KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openCancel",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_beginExchange",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_endExchange",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_enrollment",
@@ -180,6 +185,9 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
     "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_" + method
     for method in (
         "nativeSubmitProofIntentProjectionV1",
+        "nativeCreateZkX509RequestV1",
+        "nativeInspectZkX509RequestV1",
+        "nativeMaterializeZkX509StatementV1",
         "nativeBridgeAbiVersion",
         "nativeConfidentialDerivationContractRevisionV3",
         "nativeDefaultConfidentialDiversifierV3",
@@ -202,8 +210,17 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
     )
 )
 
+ZK_X509_TRANSACTION_C_EXPORTS = (
+    "connect_norito_zk_x509_transaction_prepare_v1",
+    "connect_norito_zk_x509_transaction_projection_v1",
+    "connect_norito_zk_x509_transaction_sign_v1",
+    "connect_norito_zk_x509_transaction_close_v1",
+)
+
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
+        "connect_norito_zk_x509_prepare_ownership_signing_v1",
+        "Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPreparationNative_prepare",
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
@@ -232,6 +249,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
+        *ZK_X509_TRANSACTION_C_EXPORTS,
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *KAGEMUSHA_WALLET_C_EXPORTS,
         "connect_norito_confidential_note_derivation_revision_v3",
@@ -913,7 +931,7 @@ def probe_node_abi(
     forbidden_symbols: Sequence[str] = (),
     node: str = "node",
 ) -> int:
-    """Load one Node addon and call its exact ABI-31 probe."""
+    """Load one Node addon and call its exact ABI-33 probe."""
 
     source = r"""
 const artifact = process.argv[1];
@@ -967,7 +985,7 @@ def probe_python_abi(
     forbidden_symbols: Sequence[str] = (),
     python: str = sys.executable,
 ) -> int:
-    """Load one Python extension directly and call its exact ABI-31 probe."""
+    """Load one Python extension directly and call its exact ABI-33 probe."""
 
     source = r"""
 import importlib.machinery
@@ -980,7 +998,7 @@ path = pathlib.Path(sys.argv[1])
 required = json.loads(sys.argv[2])
 forbidden = json.loads(sys.argv[3])
 if path.suffix == ".py":
-    name = "_iroha_native_abi31_fixture"
+    name = "_iroha_native_abi33_fixture"
     loader = importlib.machinery.SourceFileLoader(name, str(path))
 else:
     name = "iroha_native._crypto"
@@ -1133,7 +1151,7 @@ def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
 
 
 def validate_manifest(value: object) -> dict[str, object]:
-    """Validate the exact ABI-31 artifact evidence schema."""
+    """Validate the exact ABI-33 artifact evidence schema."""
 
     manifest = _plain_object(value, "native artifact manifest")
     expected_keys = {
@@ -1710,7 +1728,7 @@ def retain_verified_manifest(
             or (created.st_dev, created.st_ino) != (current.st_dev, current.st_ino)
         ):
             fail("native artifact evidence directory changed while it was created")
-        output_name = f"{validated['sdk']}-native-abi31.json"
+        output_name = f"{validated['sdk']}-native-abi33.json"
         _exclusive_write_at(
             directory_descriptor,
             output_name,
@@ -1728,7 +1746,7 @@ def retain_verified_manifest(
             os.close(directory_descriptor)
         os.close(parent_descriptor)
 
-    retained_path = canonical_output / f"{validated['sdk']}-native-abi31.json"
+    retained_path = canonical_output / f"{validated['sdk']}-native-abi33.json"
     if load_manifest(retained_path) != validated:
         fail("retained native artifact manifest does not match verified evidence")
     return retained_path
@@ -1838,5 +1856,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ArtifactContractError as error:
-        print(f"native SDK ABI-31 artifact check failed: {error}", file=sys.stderr)
+        print(f"native SDK ABI-33 artifact check failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error

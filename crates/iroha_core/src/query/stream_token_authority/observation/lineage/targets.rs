@@ -15,7 +15,7 @@ struct Target {
 }
 
 pub(super) struct Targets {
-    targets: [Target; 5],
+    entries: [Target; 5],
     len: usize,
     cursor: usize,
     next_height: Option<u64>,
@@ -26,7 +26,7 @@ pub(super) struct Targets {
 impl Targets {
     pub(super) fn new(input: [Option<(u64, u8)>; 5]) -> Result<Self, Error> {
         let mut this = Self {
-            targets: [Target::default(); 5],
+            entries: [Target::default(); 5],
             len: 0,
             cursor: 0,
             next_height: None,
@@ -39,12 +39,12 @@ impl Targets {
                 return Err(Error::Finality);
             }
             this.expected |= kind;
-            let offset = this.targets[..this.len].partition_point(|target| target.height < height);
-            if offset < this.len && this.targets[offset].height == height {
-                this.targets[offset].kinds |= kind;
+            let offset = this.entries[..this.len].partition_point(|target| target.height < height);
+            if offset < this.len && this.entries[offset].height == height {
+                this.entries[offset].kinds |= kind;
             } else {
-                this.targets.copy_within(offset..this.len, offset + 1);
-                this.targets[offset] = Target {
+                this.entries.copy_within(offset..this.len, offset + 1);
+                this.entries[offset] = Target {
                     height,
                     kinds: kind,
                 };
@@ -58,18 +58,18 @@ impl Targets {
         Ok(this)
     }
     pub(super) fn start(&self) -> u64 {
-        self.targets[0].height
+        self.entries[0].height
     }
     pub(super) fn end(&self) -> u64 {
-        self.targets[self.len - 1].height
+        self.entries[self.len - 1].height
     }
     pub(super) fn consume(&mut self, height: u64) -> Result<(), Error> {
         if self.failed || self.next_height != Some(height) {
             self.failed = true;
             return Err(Error::Finality);
         }
-        if self.cursor < self.len && height == self.targets[self.cursor].height {
-            self.seen |= self.targets[self.cursor].kinds;
+        if self.cursor < self.len && height == self.entries[self.cursor].height {
+            self.seen |= self.entries[self.cursor].kinds;
             self.cursor += 1;
         }
         self.next_height = if height == self.end() {

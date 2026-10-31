@@ -67,7 +67,10 @@ impl Fixture {
             [Register::trigger(Trigger::new("fixture".parse().unwrap(), action)).into()],
             registration_ms - 1,
         );
-        assert_eq!(chain.commit_at(registration_ms, vec![original.clone()]), vec![true]);
+        assert_eq!(
+            chain.commit_at(registration_ms, vec![original.clone()]),
+            vec![true]
+        );
         assert_eq!(chain.committed(3).block_time_ms(), registration_ms);
         let first_ms = registration_ms.checked_add(1).unwrap();
         chain.commit_at(first_ms, vec![]);
@@ -81,16 +84,28 @@ impl Fixture {
         let proofs: Vec<_> = (2..=last)
             .map(|height| build_proof(&chain.state().view(), height).unwrap())
             .collect();
-        let actual = proofs.iter().flat_map(|proof| {
-            let block = decode_framed_signed_block(&proof.block_wire).unwrap();
-            block.execution_outputs().iter().filter_map(|output| {
-                let ExecutionOutputV1::Time(row) = output else { return None; };
-                assert_eq!(row.result.is_ok(), !reject, "actual callback disposition");
-                Some(block.header().height().get())
-            }).collect::<Vec<_>>()
-        }).collect::<Vec<_>>();
-        assert_eq!(actual, if reject { vec![4, 6] } else { vec![4] },
-            "fixture must execute the selected schedule, not merely observe an idle prefix");
+        let actual = proofs
+            .iter()
+            .flat_map(|proof| {
+                let block = decode_framed_signed_block(&proof.block_wire).unwrap();
+                block
+                    .execution_outputs()
+                    .iter()
+                    .filter_map(|output| {
+                        let ExecutionOutputV1::Time(row) = output else {
+                            return None;
+                        };
+                        assert_eq!(row.result.is_ok(), !reject, "actual callback disposition");
+                        Some(block.header().height().get())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            if reject { vec![4, 6] } else { vec![4] },
+            "fixture must execute the selected schedule, not merely observe an idle prefix"
+        );
         Self {
             chain,
             original,
@@ -150,8 +165,10 @@ fn genuine_scheduled_output_binds_original_activation_authority_and_internal_rou
     assert_eq!(result["proof_kind"].as_str(), Some("scheduled-time-v1"));
     assert_eq!(result["terminal"].as_str(), Some("applied"));
     assert_eq!(result["registered_at_height"].as_u64(), Some(3));
-    assert_eq!(result["registered_at_ms"].as_u64(),
-        Some(fixture.chain.committed(3).block_time_ms()));
+    assert_eq!(
+        result["registered_at_ms"].as_u64(),
+        Some(fixture.chain.committed(3).block_time_ms())
+    );
     assert_eq!(
         result["authority"],
         json::to_value(fixture.original.authority()).unwrap()
@@ -401,7 +418,6 @@ fn opaque_roots_and_nested_native_execution_cannot_hide_lifecycle_changes() {
     );
 }
 
-
 impl Fixture {
     /// Genuine certified Core execution with a bounded output policy in genesis.
     /// The same oversized body succeeds or fails after its large Log instruction.
@@ -430,9 +446,8 @@ impl Fixture {
         chain.commit_at(1_001, vec![]);
         let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
         let registration_ms = chain.committed(2).block_time_ms().checked_add(1).unwrap();
-        let mut body: Vec<InstructionBox> = vec![
-            Log::new(iroha_data_model::Level::INFO, "x".repeat(16_384)).into(),
-        ];
+        let mut body: Vec<InstructionBox> =
+            vec![Log::new(iroha_data_model::Level::INFO, "x".repeat(16_384)).into()];
         if reject {
             body.push(Unregister::trigger("absent_bounded_scheduled".parse().unwrap()).into());
         }
@@ -444,16 +459,22 @@ impl Fixture {
                 TimeSchedule::starting_at(Duration::from_millis(registration_ms))
                     .with_period(Duration::from_millis(5)),
             )),
-        ).unwrap().with_retry_policy(TimeTriggerRetryPolicy {
+        )
+        .unwrap()
+        .with_retry_policy(TimeTriggerRetryPolicy {
             max_retries: NonZeroU32::new(1).unwrap(),
             retry_after_ms: NonZeroU64::new(5).unwrap(),
-        }).unwrap();
+        })
+        .unwrap();
         let original = chain.sign(
             &key,
             [Register::trigger(Trigger::new("fixture".parse().unwrap(), action)).into()],
             registration_ms - 1,
         );
-        assert_eq!(chain.commit_at(registration_ms, vec![original.clone()]), vec![true]);
+        assert_eq!(
+            chain.commit_at(registration_ms, vec![original.clone()]),
+            vec![true]
+        );
         assert_eq!(chain.committed(3).block_time_ms(), registration_ms);
         let first_ms = registration_ms.checked_add(1).unwrap();
         chain.commit_at(first_ms, vec![]);
@@ -462,24 +483,36 @@ impl Fixture {
             // The selected action is unchanged. Make its final Unregister succeed
             // for one attempt by adding an unrelated, far-future trigger.
             let temporary = TriggerAction::new(
-                vec![InstructionBox::from(Log::new(iroha_data_model::Level::INFO, "unused".into()))],
+                vec![InstructionBox::from(Log::new(
+                    iroha_data_model::Level::INFO,
+                    "unused".into(),
+                ))],
                 Repeats::Exactly(1),
                 original.authority().clone(),
-                TimeEventFilter::new(ExecutionTime::Schedule(
-                    TimeSchedule::starting_at(Duration::from_millis(registration_ms + 1_000_000)),
-                )),
-            ).unwrap();
-            let install = chain.sign(&key, [Register::trigger(Trigger::new(
-                "absent_bounded_scheduled".parse().unwrap(), temporary,
-            )).into()], first_ms);
+                TimeEventFilter::new(ExecutionTime::Schedule(TimeSchedule::starting_at(
+                    Duration::from_millis(registration_ms + 1_000_000),
+                ))),
+            )
+            .unwrap();
+            let install = chain.sign(
+                &key,
+                [Register::trigger(Trigger::new(
+                    "absent_bounded_scheduled".parse().unwrap(),
+                    temporary,
+                ))
+                .into()],
+                first_ms,
+            );
             assert_eq!(chain.commit_at(first_ms + 4, vec![install]), vec![true]);
             chain.commit_at(first_ms + 5, vec![]);
             assert_eq!(chain.committed(6).block_time_ms(), first_ms + 5);
             // The healthy callback's unregister rolled back with its large output.
             // This independent Network removal must therefore still succeed.
-            let remove = chain.sign(&key, [Unregister::trigger(
-                "absent_bounded_scheduled".parse().unwrap(),
-            ).into()], first_ms + 5);
+            let remove = chain.sign(
+                &key,
+                [Unregister::trigger("absent_bounded_scheduled".parse().unwrap()).into()],
+                first_ms + 5,
+            );
             assert_eq!(chain.commit_at(first_ms + 6, vec![remove]), vec![true]);
             assert_eq!(chain.committed(7).block_time_ms(), first_ms + 6);
             7
@@ -492,8 +525,14 @@ impl Fixture {
             8
         };
         let proofs = (2..=last)
-            .map(|height| build_proof(&chain.state().view(), height).unwrap()).collect();
-        Self { chain, original, checkpoint, proofs }
+            .map(|height| build_proof(&chain.state().view(), height).unwrap())
+            .collect();
+        Self {
+            chain,
+            original,
+            checkpoint,
+            proofs,
+        }
     }
 }
 
@@ -501,7 +540,9 @@ impl Fixture {
 fn certified_output_rollback_preserves_prior_retry_state_until_exact_exhaustion() {
     let fixture = Fixture::bounded_output_sequence(true, true);
     let original = fixture.original.encode_versioned();
-    let after_overflow = fixture.verify(&original, "fixture", &fixture.proofs[..5]).unwrap();
+    let after_overflow = fixture
+        .verify(&original, "fixture", &fixture.proofs[..5])
+        .unwrap();
     assert_eq!(after_overflow["terminal"].as_str(), Some("retrying"));
     let earlier = after_overflow["outcomes"].as_array().unwrap();
     assert_eq!(earlier.len(), 2);
@@ -524,8 +565,14 @@ fn certified_output_rollback_preserves_prior_retry_state_until_exact_exhaustion(
         }
     }
     assert_eq!(heights, vec![4, 6, 7]);
-    assert_ne!(native_hashes[0], native_hashes[1], "real failure advances native retry tuple");
-    assert_eq!(native_hashes[1], native_hashes[2], "capacity rollback must preserve the prior retry tuple");
+    assert_ne!(
+        native_hashes[0], native_hashes[1],
+        "real failure advances native retry tuple"
+    );
+    assert_eq!(
+        native_hashes[1], native_hashes[2],
+        "capacity rollback must preserve the prior retry tuple"
+    );
 }
 
 #[test]
@@ -534,7 +581,11 @@ fn certified_healthy_output_rollbacks_do_not_consume_retry_budget_or_change_acti
     let result = fixture.result();
     assert_eq!(result["terminal"].as_str(), Some("pending"));
     let rows = result["outcomes"].as_array().unwrap();
-    assert_eq!(rows.len(), 3, "capacity rollbacks may outnumber the failure retry budget");
+    assert_eq!(
+        rows.len(),
+        3,
+        "capacity rollbacks may outnumber the failure retry budget"
+    );
     let mut actual_hash = None;
     for proof in &fixture.proofs {
         let block = decode_framed_signed_block(&proof.block_wire).unwrap();
@@ -544,8 +595,10 @@ fn certified_healthy_output_rollbacks_do_not_consume_retry_budget_or_change_acti
                 assert!(!output.is_internal_rejection_diagnostic_omitted());
                 assert_eq!(scheduled_disposition(output).unwrap(), "output_limit");
                 if let Some(previous) = actual_hash {
-                    assert_eq!(row.invocation.trigger.action_hash, previous,
-                        "native retry state must remain unchanged after healthy output rollback");
+                    assert_eq!(
+                        row.invocation.trigger.action_hash, previous,
+                        "native retry state must remain unchanged after healthy output rollback"
+                    );
                 }
                 actual_hash = Some(row.invocation.trigger.action_hash);
             }
@@ -585,18 +638,26 @@ fn time_disposition_uses_the_typed_root_and_complete_terminal_not_error_text() {
     use iroha_data_model::block::execution_output::TriggerFailureRootV1;
     let fixture = Fixture::bounded_output(false);
     let block = decode_framed_signed_block(&fixture.proofs[2].block_wire).unwrap();
-    let actual = block.execution_outputs().iter()
-        .find(|output| matches!(output, ExecutionOutputV1::Time(_))).unwrap();
+    let actual = block
+        .execution_outputs()
+        .iter()
+        .find(|output| matches!(output, ExecutionOutputV1::Time(_)))
+        .unwrap();
     assert_eq!(scheduled_disposition(actual).unwrap(), "output_limit");
     for mutation in ["root", "completion", "absent"] {
         let mut changed = actual.clone();
-        let ExecutionOutputV1::Time(row) = &mut changed else { unreachable!() };
+        let ExecutionOutputV1::Time(row) = &mut changed else {
+            unreachable!()
+        };
         match mutation {
             "root" => row.failure_root = Some(TriggerFailureRootV1::OmittedAfterRejection),
             "completion" => row.completions.clear(),
             "absent" => row.failure_root = None,
             _ => unreachable!(),
         }
-        assert!(scheduled_disposition(&changed).is_err(), "accepted altered {mutation}");
+        assert!(
+            scheduled_disposition(&changed).is_err(),
+            "accepted altered {mutation}"
+        );
     }
 }

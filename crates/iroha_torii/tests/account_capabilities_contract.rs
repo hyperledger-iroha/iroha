@@ -26,8 +26,18 @@ use tower::ServiceExt as _;
 fn bootstrap_router(cfg: &Root) -> (TestApiRouterRuntime, Arc<State>) {
     let kura = Kura::blank_kura_for_testing();
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let world = World::default();
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Secp256k1,
+    ])
+    .expect("explicit no-Ed25519 bootstrap fixture policy");
+    let mut block = world.block();
+    block
+        .set_parameter_for_testing(policy.into_parameter().unwrap())
+        .unwrap();
+    block.commit();
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        World::default(),
+        world,
         kura.clone(),
         LiveQueryStore::start_test(),
         cfg.common.chain.clone(),
@@ -51,9 +61,12 @@ fn bootstrap_router(cfg: &Root) -> (TestApiRouterRuntime, Arc<State>) {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid empty-ledger bootstrap fixture");
@@ -71,12 +84,16 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (runtime, state) = bootstrap_router(&cfg);
     assert_eq!(state.view().world().accounts_iter().count(), 0);
-    let expected = AccountCapabilitiesV1::from_admission(
-        *state.network_id_ref(),
-        iroha_data_model::account::address::chain_discriminant(),
-        &state.crypto().allowed_signing,
-    )
-    .expect("valid bootstrap admission");
+    let expected = {
+        let parameters = state.transaction_admission_parameters();
+        AccountCapabilitiesV1::from_policy(
+            *state.network_id_ref(),
+            iroha_data_model::account::address::chain_discriminant(),
+            parameters
+                .require_crypto_policy()
+                .expect("initialized fixture"),
+        )
+    };
     let response = runtime
         .router()
         .oneshot(
@@ -111,14 +128,13 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
         keys,
         [
             "allowed_signing",
-            "default_signing",
             "network_id",
             "network_prefix",
             "schema_version",
         ],
-        "bootstrap must expose only the five public V1 fields"
+        "bootstrap must expose only the four public V1 fields"
     );
-    assert_eq!(actual.default_signing, "ed25519");
+    assert_eq!(actual.allowed_signing, ["secp256k1"]);
 
     for (method, path, body, expected_status) in [
         (
@@ -213,15 +229,18 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
                 .is_some_and(std::collections::BTreeMap::is_empty))
     );
     let schema = &document["components"]["schemas"]["AccountCapabilitiesV1"];
-    assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(schema["additionalProperties"].as_bool(), Some(true));
     assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
     assert_eq!(
         schema["properties"]["schema_version"]["const"].as_u64(),
         Some(1)
     );
-    assert_eq!(
-        schema["properties"]["default_signing"]["const"].as_str(),
-        Some("ed25519")
+    assert!(
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .get("default_signing")
+            .is_none()
     );
     assert_eq!(
         schema["properties"]["network_prefix"]["maximum"].as_u64(),
@@ -232,7 +251,7 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
             .as_array()
             .expect("required fields")
             .len(),
-        5
+        4
     );
     assert!(
         document["paths"]["/v1/node/capabilities"]["get"]["security"]

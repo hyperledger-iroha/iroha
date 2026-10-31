@@ -34,8 +34,7 @@ pub fn parse_tags(bytes: &[u8]) -> Result<Vec<String>, String> {
             .expect("bounded four-byte ZK1 tag slice");
         let tag = core::str::from_utf8(tag_bytes)
             .ok()
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{tag_bytes:02X?}"));
+            .map_or_else(|| format!("{tag_bytes:02X?}"), ToOwned::to_owned);
         if !tags.contains(&tag) {
             tags.push(tag);
         }

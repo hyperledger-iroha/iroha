@@ -441,6 +441,7 @@ pub enum Instr {
         name: Temp,
         spec: Temp,
         mintable: Temp,
+        owning_domain: Temp,
     },
     /// Call the scoped `transfer_asset` syscall with from, to, asset, amount and dataspace parameters.
     TransferAsset {
@@ -901,6 +902,11 @@ pub enum Instr {
     },
     /// Generic OpenVerify proof verification returning r10 = 0/1.
     VerifyProof {
+        dest: Temp,
+        payload: Temp,
+    },
+    /// Queue one X509 instruction; the returned ordinal has no effect authority.
+    PresentX509 {
         dest: Temp,
         payload: Temp,
     },
@@ -4979,13 +4985,17 @@ fn lower_surface_builtin_call(
             // The native boundary takes two full u64 revisions, not Int handles.
             // Evaluate in source order once, then retain each checked scalar.
             let revision_start = args.len() - 2;
-            let lowered = args.iter().enumerate().map(|(index, argument)| {
-                if index >= revision_start {
-                    lower_expr_as_u64(ctx, argument, vars)
-                } else {
-                    lower_expr(ctx, argument, vars)
-                }
-            }).collect();
+            let lowered = args
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    if index >= revision_start {
+                        lower_expr_as_u64(ctx, argument, vars)
+                    } else {
+                        lower_expr(ctx, argument, vars)
+                    }
+                })
+                .collect();
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::DirectHelperSyscall {
                 dest,
@@ -5623,6 +5633,12 @@ fn lower_surface_builtin_call(
             });
             dest
         }
+        Builtin::PresentX509 => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PresentX509 { dest, payload });
+            dest
+        }
         Builtin::ScExecuteSubmitBallot => {
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::VendorExecuteInstruction {
@@ -5859,11 +5875,13 @@ fn lower_surface_builtin_call(
             let name = lower_expr(ctx, &args[1], vars);
             let spec = lower_expr_as_u64(ctx, &args[2], vars);
             let mintable = lower_expr_as_u64(ctx, &args[3], vars);
+            let owning_domain = lower_expr(ctx, &args[4], vars);
             ctx.current_instr(Instr::RegisterAsset {
                 asset,
                 name,
                 spec,
                 mintable,
+                owning_domain,
             });
             emit_i64_const(ctx, 0)
         }
@@ -7619,6 +7637,7 @@ impl LowerCtx {
                 | Instr::ExpectRejectAs { .. }
                 | Instr::DirectHelperSyscall { .. }
                 | Instr::VendorExecuteInstruction { .. }
+                | Instr::PresentX509 { .. }
                 | Instr::SmartContractLifecycle { .. }
                 | Instr::SoracloudHostCall { .. }
         ) {

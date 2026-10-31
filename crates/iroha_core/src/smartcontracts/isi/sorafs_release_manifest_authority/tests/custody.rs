@@ -70,7 +70,7 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
         now,
         0,
     );
-    let mut block = state.block(header.clone());
+    let mut block = state.block(header);
     let mut tx = block.transaction();
     call(&mut tx);
     tx.apply();
@@ -97,7 +97,7 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
         )
         .expect("complete fixture block outputs");
     let hash = signed.hash();
-    let header = signed.header().clone();
+    let header = signed.header();
     state
         .kura()
         .store_block(

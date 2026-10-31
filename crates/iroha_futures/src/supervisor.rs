@@ -336,11 +336,13 @@ impl SupervisorLoop {
         report.map_or(Ok(()), Err)
     }
     fn handle_child_exit(&mut self, result: ChildExitResult) {
-        iroha_logger::warn!(
-            ?result,
-            shutdown_sent = self.shutdown_signal.is_sent(),
-            "Supervisor observed child exit"
-        );
+        let shutdown_sent = self.shutdown_signal.is_sent();
+        // Children finishing because shutdown was requested is the normal path out.
+        if shutdown_sent && matches!(result, ChildExitResult::Ok | ChildExitResult::Cancel) {
+            iroha_logger::debug!(?result, "Supervisor observed child exit during shutdown");
+        } else {
+            iroha_logger::warn!(?result, shutdown_sent, "Supervisor observed child exit");
+        }
         match result {
             ChildExitResult::Ok | ChildExitResult::Cancel if !self.shutdown_signal.is_sent() => {
                 iroha_logger::error!("Some task exited unexpectedly, shutting down everything...");

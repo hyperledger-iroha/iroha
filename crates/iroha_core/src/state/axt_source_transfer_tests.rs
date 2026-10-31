@@ -296,6 +296,8 @@ fn finalized_source_capacity_refusal_retains_original_owner_and_exact_claim() {
         task::{Context, Poll, Waker},
     };
 
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let fixture = finalized_fixture(false, true);
     let state = source_state(&fixture);
     let claim = source_claim(fixture.target());
@@ -324,7 +326,7 @@ fn finalized_source_capacity_refusal_retains_original_owner_and_exact_claim() {
     let mut context = Context::from_waker(Waker::noop());
     assert!(matches!(retry.as_mut().poll(&mut context), Poll::Pending));
     drop(retained);
-    assert!(matches!(retry.as_mut().poll(&mut context), Poll::Ready(_)));
+    assert!(matches!(retry.as_mut().poll(&mut context), Poll::Ready(())));
     assert_eq!(
         state
             .resolve_finalized_axt_source_transfer_v1(2, &claim, MAX_WORK, MAX_BYTES)

@@ -112,8 +112,8 @@ fn bootle_lantern_issuer_policy(
 }
 fn validate_persisted_commitments(
     commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
-) -> Result<(), String> {
-    let activations = Storage::<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>::new();
+) -> Result<(), PrivacyStateValidationErrorV1> {
+    let protocol_policies = Storage::<PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1>::new();
     let pgc_accounts = Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new();
     let pgc_pool_invariants =
         Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new();
@@ -122,7 +122,7 @@ fn validate_persisted_commitments(
     let root_heads = Storage::<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>::new();
     validate_privacy_persisted_state_v1(
         &PrivacyConsensusPolicyV1::taira_default(),
-        &activations.view(),
+        &protocol_policies.view(),
         PrivacyPgcStateReadV1 {
             accounts: &pgc_accounts.view(),
             pool_invariants: &pgc_pool_invariants.view(),
@@ -433,19 +433,8 @@ fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
         })
         .collect()
 }
-fn activation_proposal() -> PrivacyProtocolActivationRecordV1 {
-    crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-    )
-    .expect("compiled VeRange profile")
-    .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height: 1_000,
-        },
-    ))
-}
 struct PgcPersistedFixture {
-    activations: Storage<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    protocol_policies: Storage<PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1>,
     pgc_accounts: Storage<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
     pgc_pool_invariants: Storage<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
     nullifiers: Storage<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>,
@@ -463,10 +452,10 @@ struct PgcPersistedFixture {
     provenance: PrivacyRootProvenanceV1,
 }
 impl PgcPersistedFixture {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), PrivacyStateValidationErrorV1> {
         validate_privacy_persisted_state_v1(
             &PrivacyConsensusPolicyV1::taira_default(),
-            &self.activations.view(),
+            &self.protocol_policies.view(),
             PrivacyPgcStateReadV1 {
                 accounts: &self.pgc_accounts.view(),
                 pool_invariants: &self.pgc_pool_invariants.view(),
@@ -495,7 +484,7 @@ impl PgcPersistedFixture {
         self.root_heads = Storage::new();
         self.root_heads.insert(
             self.head_key,
-            PrivacyRootHeadRecordV1::new(epoch, root, provenance, None)
+            PrivacyRootHeadRecordV1::new(epoch, root, provenance, None, 1)
                 .expect("replacement root head"),
         );
     }
@@ -521,7 +510,8 @@ impl PgcPersistedFixture {
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture current head").clone();
+            .expect("fixture current head")
+            .clone();
         let next_epoch = head.epoch().checked_add(1).expect("fixture epoch advance");
         let mut statement_bytes = [0xD0; 32];
         statement_bytes[..8].copy_from_slice(&next_epoch.to_be_bytes());
@@ -531,7 +521,7 @@ impl PgcPersistedFixture {
                 .expect("successor account provenance");
         let invariant = self.invariant();
         let account_table = self.account_table();
-        let next_root = compute_privacy_pgc_account_state_root_v1(
+        let next_root = derive_privacy_pgc_account_state_root_v1(
             self.namespace,
             next_epoch,
             invariant.total_supply(),
@@ -568,7 +558,7 @@ impl PgcPersistedFixture {
                 PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root())
                     .expect("pruned root anchor")
             })
-            .or(head.retention_anchor());
+            .or_else(|| head.retention_anchor());
         let retained_roots = self
             .roots
             .view()
@@ -593,8 +583,15 @@ impl PgcPersistedFixture {
         self.roots.insert(next_key, root_provenance.clone());
         self.root_heads.insert(
             self.head_key,
-            PrivacyRootHeadRecordV1::new(next_epoch, next_root, root_provenance.clone(), retention_anchor)
-                .expect("successor head"),
+            PrivacyRootHeadRecordV1::new(
+                next_epoch,
+                next_root,
+                root_provenance.clone(),
+                retention_anchor,
+                head.retained_count_after_append(removals.len())
+                    .expect("attained append count"),
+            )
+            .expect("successor head"),
         );
         self.root_key = next_key;
         self.root = next_root;
@@ -605,7 +602,8 @@ impl PgcPersistedFixture {
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture current head").clone();
+            .expect("fixture current head")
+            .clone();
         let plans = plan_privacy_root_retention_reduction_v1(
             &self.roots.view(),
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -633,6 +631,8 @@ impl PgcPersistedFixture {
                 head.root(),
                 head.provenance().clone(),
                 Some(plan.new_anchor),
+                head.retained_count_after_pruning(plan.removal_keys.len())
+                    .expect("attained pruned count"),
             )
             .expect("retention-tightened head"),
         );
@@ -640,7 +640,7 @@ impl PgcPersistedFixture {
     fn load_with_retention(
         &self,
         retained_root_count: u32,
-    ) -> Result<PrivacyPgcPoolSnapshotV1, String> {
+    ) -> Result<PrivacyPgcPoolSnapshotV1, PrivacyStateValidationErrorV1> {
         load_privacy_pgc_pool_snapshot_v1(
             self.namespace,
             retained_root_count,
@@ -659,7 +659,7 @@ fn pgc_persisted_fixture() -> PgcPersistedFixture {
     let epoch = PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1;
     let account_table = pgc_accounts(16);
     let root =
-        compute_privacy_pgc_account_state_root_v1(namespace, epoch, total_supply, &account_table)
+        derive_privacy_pgc_account_state_root_v1(namespace, epoch, total_supply, &account_table)
             .expect("canonical fixture root");
     let account_provenance =
         PrivacyPgcAccountProvenanceV1::bootstrap(bootstrap_digest, bootstrap_proof_digest, 9)
@@ -667,21 +667,12 @@ fn pgc_persisted_fixture() -> PgcPersistedFixture {
     let provenance =
         PrivacyRootProvenanceV1::verified_bootstrap(bootstrap_digest, bootstrap_proof_digest, 9)
             .expect("bootstrap root provenance");
-    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-    )
-    .expect("compiled Anonymous PGC profile");
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
-    let mut activations = Storage::new();
-    activations.insert(
-        PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
-        activation,
+    let policy =
+        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
+    let mut protocol_policies = Storage::new();
+    protocol_policies.insert(
+        PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
+        policy,
     );
     let mut pgc_accounts = Storage::new();
     let mut account_keys = Vec::with_capacity(account_table.len());
@@ -716,10 +707,10 @@ fn pgc_persisted_fixture() -> PgcPersistedFixture {
     let mut root_heads = Storage::new();
     root_heads.insert(
         head_key,
-        PrivacyRootHeadRecordV1::new(epoch, root, provenance.clone(), None).expect("root head"),
+        PrivacyRootHeadRecordV1::new(epoch, root, provenance.clone(), None, 1).expect("root head"),
     );
     PgcPersistedFixture {
-        activations,
+        protocol_policies,
         pgc_accounts,
         pgc_pool_invariants,
         nullifiers: Storage::new(),
@@ -744,12 +735,12 @@ fn expect_pgc_persisted_error(mutate: impl FnOnce(&mut PgcPersistedFixture), exp
         .validate()
         .expect_err("adversarial persisted state must reject");
     assert!(
-        error.contains(expected),
+        error.to_string().contains(expected),
         "expected `{expected}` in persisted-state rejection, got `{error}`"
     );
 }
 struct OrchardPersistedFixture {
-    activations: Storage<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    protocol_policies: Storage<PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1>,
     pgc_accounts: Storage<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
     pgc_pool_invariants: Storage<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
     nullifiers: Storage<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>,
@@ -762,10 +753,10 @@ struct OrchardPersistedFixture {
     head_key: PrivacyRootHeadKeyV1,
 }
 impl OrchardPersistedFixture {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), PrivacyStateValidationErrorV1> {
         validate_privacy_persisted_state_v1(
             &PrivacyConsensusPolicyV1::taira_default(),
-            &self.activations.view(),
+            &self.protocol_policies.view(),
             PrivacyPgcStateReadV1 {
                 accounts: &self.pgc_accounts.view(),
                 pool_invariants: &self.pgc_pool_invariants.view(),
@@ -836,11 +827,19 @@ impl OrchardPersistedFixture {
             retained_root_count,
         )
         .expect("successor history plan");
+        let successor_retained_root_count = self
+            .root_heads
+            .view()
+            .get(&self.head_key)
+            .expect("fixture predecessor head")
+            .retained_count_after_append(removals.len())
+            .expect("attained append count");
         let predecessor_anchor = self
             .root_heads
             .view()
             .get(&self.head_key)
-            .expect("fixture predecessor head").retention_anchor();
+            .expect("fixture predecessor head")
+            .retention_anchor();
         let retention_anchor = removals
             .last()
             .map(|key| {
@@ -864,6 +863,7 @@ impl OrchardPersistedFixture {
                 successor.root(),
                 root_provenance,
                 retention_anchor,
+                successor_retained_root_count,
             )
             .expect("successor root head"),
         );
@@ -904,21 +904,12 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         .expect("Orchard head key");
     let state_key =
         PrivacyCommitmentKeyV1::orchard_pool_state(namespace).expect("Orchard state key");
-    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-    )
-    .expect("compiled Orchard profile");
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
-    let mut activations = Storage::new();
-    activations.insert(
-        PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1),
-        activation,
+    let policy =
+        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+    let mut protocol_policies = Storage::new();
+    protocol_policies.insert(
+        PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1),
+        policy,
     );
     let mut commitments = Storage::new();
     let reserve_asset = AssetId::with_scope(
@@ -950,11 +941,12 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
             root,
             provenance,
             None,
+            1,
         )
         .expect("Orchard bootstrap head"),
     );
     OrchardPersistedFixture {
-        activations,
+        protocol_policies,
         pgc_accounts: Storage::new(),
         pgc_pool_invariants: Storage::new(),
         nullifiers: Storage::new(),
@@ -977,7 +969,7 @@ fn expect_orchard_persisted_error(
         .validate()
         .expect_err("adversarial Orchard state must reject");
     assert!(
-        error.contains(expected),
+        error.to_string().contains(expected),
         "expected `{expected}` in Orchard persisted-state rejection, got `{error}`"
     );
 }
@@ -994,9 +986,17 @@ struct ProofManagedPersistedFixture {
 }
 impl ProofManagedPersistedFixture {
     fn load(&self) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
+        self.load_with_retention(
+            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+        )
+    }
+    fn load_with_retention(
+        &self,
+        retained_root_count: u32,
+    ) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
         load_privacy_proof_managed_pool_snapshot_v1(
             self.namespace,
-            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+            retained_root_count,
             &self.commitments.view(),
             &self.roots.view(),
             &self.root_heads.view(),
@@ -1012,7 +1012,19 @@ impl ProofManagedPersistedFixture {
             .collect();
     }
     fn advance(&mut self, outputs: &[PrivacyCommitmentV1]) {
-        let snapshot = self.load().expect("coherent proof-managed predecessor");
+        self.advance_with_retention(
+            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+            outputs,
+        );
+    }
+    fn advance_with_retention(
+        &mut self,
+        retained_root_count: u32,
+        outputs: &[PrivacyCommitmentV1],
+    ) {
+        let snapshot = self
+            .load_with_retention(retained_root_count)
+            .expect("coherent proof-managed predecessor");
         let successor = snapshot
             .derive_note_successor(outputs)
             .expect("canonical proof-managed append");
@@ -1073,11 +1085,45 @@ impl ProofManagedPersistedFixture {
             successor.root(),
         )
         .expect("successor root key");
+        let predecessor = self
+            .root_heads
+            .view()
+            .get(&self.head_key)
+            .expect("predecessor head")
+            .clone();
+        let removals = plan_privacy_root_history_update_v1(
+            &self.roots.view(),
+            &[root_key],
+            retained_root_count,
+        )
+        .expect("proof-managed append retention plan");
+        let retained_root_count = predecessor
+            .retained_count_after_append(removals.len())
+            .expect("attained append count");
+        let retention_anchor = removals
+            .last()
+            .map(|key| {
+                PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()).expect("removed anchor")
+            })
+            .or_else(|| predecessor.retention_anchor());
+        self.roots = self
+            .roots
+            .view()
+            .iter()
+            .filter(|(key, _)| !removals.contains(key))
+            .map(|(key, provenance)| (*key, provenance.clone()))
+            .collect();
         self.roots.insert(root_key, provenance.clone());
         self.root_heads.insert(
             self.head_key,
-            PrivacyRootHeadRecordV1::new(successor.epoch(), successor.root(), provenance, None)
-                .expect("successor head"),
+            PrivacyRootHeadRecordV1::new(
+                successor.epoch(),
+                successor.root(),
+                provenance,
+                retention_anchor,
+                retained_root_count,
+            )
+            .expect("successor head"),
         );
     }
 }
@@ -1183,7 +1229,7 @@ fn proof_managed_note_persisted_fixture(
     let mut root_heads = Storage::new();
     root_heads.insert(
         head_key,
-        PrivacyRootHeadRecordV1::new(1, initial_root, provenance, None).expect("bootstrap head"),
+        PrivacyRootHeadRecordV1::new(1, initial_root, provenance, None, 1).expect("bootstrap head"),
     );
     ProofManagedPersistedFixture {
         commitments,
@@ -1216,9 +1262,17 @@ struct FcmpPersistedFixture {
 }
 impl FcmpPersistedFixture {
     fn load(&self) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
+        self.load_with_retention(
+            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+        )
+    }
+    fn load_with_retention(
+        &self,
+        retained_root_count: u32,
+    ) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
         load_privacy_proof_managed_pool_snapshot_v1(
             self.namespace,
-            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+            retained_root_count,
             &self.commitments.view(),
             &self.roots.view(),
             &self.root_heads.view(),
@@ -1236,7 +1290,19 @@ impl FcmpPersistedFixture {
             .collect();
     }
     fn advance(&mut self, outputs: &[PrivacyFcmpOutputTupleV1]) {
-        let snapshot = self.load().expect("coherent FCMP++ predecessor");
+        self.advance_with_retention(
+            PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+            outputs,
+        );
+    }
+    fn advance_with_retention(
+        &mut self,
+        retained_root_count: u32,
+        outputs: &[PrivacyFcmpOutputTupleV1],
+    ) {
+        let snapshot = self
+            .load_with_retention(retained_root_count)
+            .expect("coherent FCMP++ predecessor");
         let successor = snapshot
             .derive_fcmp_successor(outputs)
             .expect("canonical FCMP++ append");
@@ -1298,11 +1364,45 @@ impl FcmpPersistedFixture {
             root,
         )
         .expect("FCMP++ successor root key");
+        let predecessor = self
+            .root_heads
+            .view()
+            .get(&self.head_key)
+            .expect("predecessor head")
+            .clone();
+        let removals = plan_privacy_root_history_update_v1(
+            &self.roots.view(),
+            &[root_key],
+            retained_root_count,
+        )
+        .expect("FCMP append retention plan");
+        let retained_root_count = predecessor
+            .retained_count_after_append(removals.len())
+            .expect("attained append count");
+        let retention_anchor = removals
+            .last()
+            .map(|key| {
+                PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()).expect("removed anchor")
+            })
+            .or_else(|| predecessor.retention_anchor());
+        self.roots = self
+            .roots
+            .view()
+            .iter()
+            .filter(|(key, _)| !removals.contains(key))
+            .map(|(key, provenance)| (*key, provenance.clone()))
+            .collect();
         self.roots.insert(root_key, provenance.clone());
         self.root_heads.insert(
             self.head_key,
-            PrivacyRootHeadRecordV1::new(successor.epoch(), root, provenance, None)
-                .expect("FCMP++ successor head"),
+            PrivacyRootHeadRecordV1::new(
+                successor.epoch(),
+                root,
+                provenance,
+                retention_anchor,
+                retained_root_count,
+            )
+            .expect("FCMP++ successor head"),
         );
     }
 }
@@ -1371,7 +1471,7 @@ fn fcmp_persisted_fixture() -> FcmpPersistedFixture {
     let mut root_heads = Storage::new();
     root_heads.insert(
         head_key,
-        PrivacyRootHeadRecordV1::new(1, initial_root, provenance, None)
+        PrivacyRootHeadRecordV1::new(1, initial_root, provenance, None, 1)
             .expect("FCMP++ bootstrap head"),
     );
     FcmpPersistedFixture {
@@ -1392,24 +1492,17 @@ fn validate_proof_managed_fixture_maps(
     commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
-) -> Result<(), String> {
-    let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
-        .expect("compiled proof-managed profile")
-        .activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 2,
-                state_since_height: 2,
-            },
-        ));
-    let mut activations = Storage::new();
-    activations.insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+) -> Result<(), PrivacyStateValidationErrorV1> {
+    let policy = PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id);
+    let mut protocol_policies = Storage::new();
+    protocol_policies.insert(PrivacyProtocolPolicyKeyV1::new(protocol_id), policy);
     validate_privacy_persisted_state_v1(
         &PrivacyConsensusPolicyV1::taira_default(),
-        &activations.view(),
+        &protocol_policies.view(),
         PrivacyPgcStateReadV1 {
             accounts: &Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new().view(),
-            pool_invariants: &Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new().view(),
+            pool_invariants:
+                &Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new().view(),
         },
         &nullifiers.view(),
         &commitments.view(),

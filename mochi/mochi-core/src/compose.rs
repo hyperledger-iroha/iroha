@@ -23,6 +23,7 @@ use iroha_data_model::{
     transaction::{Executable, ExecutableBatchItem, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::{MultisigProposalNonce, MultisigPropose};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 #[cfg(any(test, feature = "test"))]
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
@@ -183,6 +184,14 @@ pub enum ComposeError {
     InvalidAssetDefinitionName {
         /// Human-readable name that failed validation.
         name: String,
+        /// Human readable failure reason.
+        reason: String,
+    },
+    /// The provided domain identifier or label could not be parsed.
+    #[error("invalid domain `{domain}`: {reason}")]
+    InvalidDomainId {
+        /// Text entered by the user.
+        domain: String,
         /// Human readable failure reason.
         reason: String,
     },
@@ -400,9 +409,56 @@ pub struct TransactionPreview {
     signed: SignedTransaction,
     encoded_hex: String,
     instructions: Vec<String>,
+    drafts: Vec<InstructionDraft>,
     summaries: Vec<String>,
+    fees: Vec<FeeLimit>,
+    lease: Option<DomainLease>,
     hash: String,
     authority: String,
+}
+/// A name-service domain lease a transaction takes out ahead of its drafts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DomainLease {
+    /// Leased domain, such as `coffee.universal`.
+    pub domain: String,
+    /// Paid term in years.
+    pub years: u8,
+    /// Exact quoted charge, or `None` when the lease only restores derived state for free.
+    pub amount: Option<String>,
+    /// Canonical literal of the asset definition the lease is paid in.
+    pub asset_definition: String,
+}
+impl fmt::Display for DomainLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let years = if self.years == 1 { "year" } else { "years" };
+        match &self.amount {
+            Some(amount) => write!(
+                formatter,
+                "Lease domain {} for {} {years} at {amount} {}",
+                self.domain, self.years, self.asset_definition
+            ),
+            None => write!(formatter, "Restore domain {} at no charge", self.domain),
+        }
+    }
+}
+/// One quoted fee limit signed into a transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeeLimit {
+    /// What the component pays for: `Network fee` or `Execution gas`.
+    pub label: &'static str,
+    /// Most this component can charge, as a canonical decimal literal.
+    pub max_amount: String,
+    /// Canonical literal of the asset definition the component is charged in.
+    pub asset_definition: String,
+}
+impl fmt::Display for FeeLimit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} up to {} {}",
+            self.label, self.max_amount, self.asset_definition
+        )
+    }
 }
 impl TransactionPreview {
     /// Canonical transaction hash derived from the signed payload.
@@ -425,12 +481,32 @@ impl TransactionPreview {
     pub fn instructions(&self) -> &[String] {
         &self.instructions
     }
-    /// Summaries of the drafts this transaction was composed from, in instruction order.
+    /// The drafts this transaction was composed from: its trailing signed instructions, after
+    /// any planner-made lease that only [`Self::lease`] and [`Self::summaries`] describe.
+    ///
+    /// Empty when the preview was not built from drafts.
+    #[must_use]
+    pub fn drafts(&self) -> &[InstructionDraft] {
+        &self.drafts
+    }
+    /// One summary per signed instruction, in instruction order, when built from drafts.
     ///
     /// Empty when the preview was not built from drafts.
     #[must_use]
     pub fn summaries(&self) -> &[String] {
         &self.summaries
+    }
+    /// The domain lease this transaction takes out before its drafts, if any.
+    #[must_use]
+    pub fn lease(&self) -> Option<&DomainLease> {
+        self.lease.as_ref()
+    }
+    /// Quoted maximum charges signed into this transaction, one per fee component.
+    ///
+    /// Empty when the preview was composed offline without a fee quote.
+    #[must_use]
+    pub fn fees(&self) -> &[FeeLimit] {
+        &self.fees
     }
     /// Authority account recorded in the transaction payload.
     #[must_use]
@@ -490,18 +566,45 @@ impl TransactionPreview {
             signed,
             encoded_hex,
             instructions,
+            drafts: Vec::new(),
             summaries: Vec::new(),
+            fees: Vec::new(),
+            lease: None,
             hash,
             authority,
         }
     }
 
-    fn with_summaries(mut self, drafts: &[InstructionDraft]) -> Self {
+    /// A preview of a transaction signed with the fee limits a validator quoted for it.
+    pub(crate) fn quoted(
+        signed: SignedTransaction,
+        drafts: &[InstructionDraft],
+        components: &[iroha_torii_shared::FeeQuoteComponent],
+    ) -> Self {
+        let mut preview = Self::new(signed).with_drafts(drafts);
+        preview.fees = components.iter().map(fee_limit).collect();
+        preview
+    }
+
+    fn with_drafts(mut self, drafts: &[InstructionDraft]) -> Self {
         self.summaries = drafts.iter().map(InstructionDraft::summary).collect();
+        self.drafts = drafts.to_vec();
+        self
+    }
+
+    /// Record the lease that the signed transaction's first instruction takes out.
+    pub(crate) fn with_lease(mut self, lease: DomainLease) -> Self {
+        self.summaries.insert(0, lease.to_string());
+        self.lease = Some(lease);
         self
     }
 }
-/// Compose an exact-network preview while applying the supplied [`TransactionComposeOptions`].
+/// Compose an exact-network preview offline while applying the supplied
+/// [`TransactionComposeOptions`].
+///
+/// The payload carries no fee limits, so admission rejects it on any network that charges
+/// fees. Submit through [`crate::developer::ManagedNetwork::preview`], which signs the limits
+/// a validator quotes; this offline form serves fixtures and signature inspection.
 ///
 /// # Errors
 ///
@@ -540,7 +643,19 @@ pub fn compose_preview_with_options(
         .map_err(|err| ComposeError::Signing {
             reason: err.to_string(),
         })?;
-    Ok(TransactionPreview::new(signed).with_summaries(drafts))
+    Ok(TransactionPreview::new(signed).with_drafts(drafts))
+}
+/// The reviewable limit of one quoted fee component, such as `Network fee up to 0.003 xor`.
+fn fee_limit(component: &iroha_torii_shared::FeeQuoteComponent) -> FeeLimit {
+    let label = match component.kind {
+        iroha_data_model::transaction::FeeChargeKind::Nexus => "Network fee",
+        iroha_data_model::transaction::FeeChargeKind::PipelineGas => "Execution gas",
+    };
+    FeeLimit {
+        label,
+        max_amount: component.max_amount.to_string(),
+        asset_definition: component.asset_definition_id.to_string(),
+    }
 }
 /// Declarative specification for a high-level instruction created in the UI.
 #[derive(Debug, Clone)]
@@ -581,6 +696,9 @@ pub enum InstructionDraft {
         name: String,
         /// Mintability policy for the asset.
         mintable: Mintable,
+        /// Owning domain, which the signer must own. Only genesis registers domainless
+        /// definitions.
+        domain: Option<DomainId>,
     },
     /// Publish a Space Directory manifest for AXT/AMX policies.
     PublishSpaceDirectoryManifest {
@@ -697,7 +815,28 @@ impl InstructionDraft {
             definition,
             name: name.to_owned(),
             mintable,
+            domain: None,
         })
+    }
+    /// Place a definition registration in `domain`, which the signer must own.
+    ///
+    /// Other drafts are returned unchanged.
+    #[must_use]
+    pub fn in_domain(self, domain: DomainId) -> Self {
+        match self {
+            Self::RegisterAssetDefinition {
+                definition,
+                name,
+                mintable,
+                ..
+            } => Self::RegisterAssetDefinition {
+                definition,
+                name,
+                mintable,
+                domain: Some(domain),
+            },
+            other => other,
+        }
     }
     /// Create a Space Directory manifest publication draft from JSON input.
     ///
@@ -844,7 +983,13 @@ impl InstructionDraft {
                 definition,
                 name,
                 mintable,
-            } => format!("Register asset definition {name} [{definition}] ({mintable})"),
+                domain,
+            } => match domain {
+                Some(domain) => format!(
+                    "Register asset definition {name} [{definition}] in {domain} ({mintable})"
+                ),
+                None => format!("Register asset definition {name} [{definition}] ({mintable})"),
+            },
             InstructionDraft::PublishSpaceDirectoryManifest { manifest } => format!(
                 "Publish Space Directory manifest for {} (dataspace {}, {} entr{})",
                 manifest.uaid,
@@ -883,7 +1028,8 @@ impl InstructionDraft {
             ),
         }
     }
-    fn instruction(&self) -> InstructionBox {
+    /// The exact instruction this draft signs.
+    pub(crate) fn instruction(&self) -> InstructionBox {
         match self {
             InstructionDraft::MintAsset { asset, quantity } => {
                 Mint::asset_quantity(quantity.clone(), asset.clone()).into()
@@ -904,13 +1050,14 @@ impl InstructionDraft {
                 definition,
                 name,
                 mintable,
+                domain,
             } => {
                 let builder = apply_mintable(
                     AssetDefinition::numeric(
                         definition.clone(),
                         name.clone(),
                         iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
+                        domain.clone(),
                     ),
                     *mintable,
                 );
@@ -994,6 +1141,7 @@ impl InstructionDraft {
                 definition,
                 name,
                 mintable,
+                domain,
             } => {
                 object.insert(
                     "kind".to_owned(),
@@ -1008,6 +1156,9 @@ impl InstructionDraft {
                     "mintable".to_owned(),
                     Value::String(format_mintable(*mintable)),
                 );
+                if let Some(domain) = domain {
+                    object.insert("domain".to_owned(), Value::String(domain.to_string()));
+                }
             }
             InstructionDraft::PublishSpaceDirectoryManifest { manifest } => {
                 object.insert(
@@ -1139,11 +1290,26 @@ impl InstructionDraft {
                 InstructionDraft::register_account_from_input(&account)
             }
             "register_asset_definition" => {
-                require_draft_fields(map, &kind, &["kind", "definition", "name", "mintable"], &[])?;
+                require_draft_fields(
+                    map,
+                    &kind,
+                    &["kind", "definition", "name", "mintable"],
+                    &["domain"],
+                )?;
                 let definition = extract_string(map, "definition")?;
                 let name = extract_string(map, "name")?;
                 let mintable = parse_mintable_label(&extract_string(map, "mintable")?)?;
-                InstructionDraft::register_asset_definition_from_input(&definition, &name, mintable)
+                let draft = InstructionDraft::register_asset_definition_from_input(
+                    &definition,
+                    &name,
+                    mintable,
+                )?;
+                match map.get("domain") {
+                    None => Ok(draft),
+                    Some(_) => {
+                        Ok(draft.in_domain(parse_domain_id(&extract_string(map, "domain")?)?))
+                    }
+                }
             }
             "publish_space_directory_manifest" => {
                 require_draft_fields(map, &kind, &["kind", "manifest"], &[])?;
@@ -1310,6 +1476,12 @@ fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
         });
     }
     Ok(parsed)
+}
+fn parse_domain_id(value: &str) -> Result<DomainId, ComposeError> {
+    DomainId::parse_fully_qualified(value).map_err(|err| ComposeError::InvalidDomainId {
+        domain: value.to_owned(),
+        reason: err.to_string(),
+    })
 }
 pub(crate) fn parse_asset_definition_id(value: &str) -> Result<AssetDefinitionId, ComposeError> {
     let parsed = AssetDefinitionId::from_str(value).map_err(|err| {
@@ -2135,6 +2307,41 @@ mod tests {
             InstructionDraft::from_json_value(&value)
                 .expect_err("noncanonical mintable spelling must be rejected");
         }
+
+        let with_domain = |domain: &str| {
+            let mut value = canonical.clone();
+            value
+                .as_object_mut()
+                .expect("draft object")
+                .insert("domain".to_owned(), Value::String(domain.to_owned()));
+            value
+        };
+        let scoped = with_domain("coffee.universal");
+        let parsed = InstructionDraft::from_json_value(&scoped).expect("domain-scoped draft");
+        assert_eq!(
+            parsed.to_json_value(),
+            scoped,
+            "the domain survives a round trip"
+        );
+        assert!(matches!(
+            InstructionDraft::from_json_value(&with_domain("coffee")),
+            Err(ComposeError::InvalidDomainId { .. })
+        ));
+        let mint = InstructionDraft::mint_from_input(
+            &format!(
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#{}",
+                account_literal(&ALICE_ID)
+            ),
+            "1",
+        )
+        .expect("mint draft");
+        assert_eq!(
+            mint.clone()
+                .in_domain(DomainId::parse_fully_qualified("coffee.universal").unwrap())
+                .summary(),
+            mint.summary(),
+            "only registrations take a domain"
+        );
     }
     #[test]
     fn multisig_json_preserves_required_occurrence_nonce() {
@@ -2605,6 +2812,95 @@ mod tests {
             .expect("checked composed transaction signature verifies");
     }
     #[test]
+    fn quoted_previews_list_each_fee_component_and_offline_previews_list_none() {
+        use iroha_data_model::transaction::FeeChargeKind;
+        let authorities = development_signing_authorities();
+        let signer = authorities
+            .iter()
+            .find(|auth| auth.allows_permission(InstructionPermission::MintAsset))
+            .expect("signer with mint permission present");
+        let account = account_literal(signer.account_id());
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
+        let draft = InstructionDraft::mint_from_input(&format!("{asset_def}#{account}"), "5")
+            .expect("mint draft");
+        let offline = compose_preview_with_options(
+            test_network_id(),
+            std::slice::from_ref(&draft),
+            signer,
+            &TransactionComposeOptions::new(),
+        )
+        .expect("compose offline");
+        assert!(offline.fees().is_empty(), "offline previews carry no quote");
+        let components = [
+            iroha_torii_shared::FeeQuoteComponent {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: asset_def.clone(),
+                max_amount: "0.003".parse().expect("quantity"),
+            },
+            iroha_torii_shared::FeeQuoteComponent {
+                kind: FeeChargeKind::PipelineGas,
+                asset_definition_id: asset_def.clone(),
+                max_amount: "1.5".parse().expect("quantity"),
+            },
+        ];
+        let quoted = TransactionPreview::quoted(
+            offline.signed_transaction().clone(),
+            std::slice::from_ref(&draft),
+            &components,
+        );
+        assert_eq!(
+            quoted
+                .fees()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            [
+                format!("Network fee up to 0.003 {asset_def}"),
+                format!("Execution gas up to 1.5 {asset_def}"),
+            ]
+        );
+        assert_eq!(
+            quoted.fees()[1],
+            FeeLimit {
+                label: "Execution gas",
+                max_amount: "1.5".into(),
+                asset_definition: asset_def.to_string(),
+            }
+        );
+        assert_eq!(quoted.summaries(), offline.summaries());
+        assert_eq!(
+            quoted.drafts().len(),
+            1,
+            "quoted previews keep their drafts"
+        );
+        assert!(quoted.lease().is_none());
+        let lease = DomainLease {
+            domain: "coffee.universal".into(),
+            years: 1,
+            amount: Some("0.5".into()),
+            asset_definition: asset_def.to_string(),
+        };
+        let leased = quoted.clone().with_lease(lease.clone());
+        assert_eq!(leased.lease(), Some(&lease));
+        assert_eq!(
+            leased.summaries()[0],
+            format!("Lease domain coffee.universal for 1 year at 0.5 {asset_def}")
+        );
+        assert_eq!(&leased.summaries()[1..], quoted.summaries());
+        assert_eq!(leased.drafts().len(), 1, "the lease is not a draft");
+        assert_eq!(
+            DomainLease {
+                amount: None,
+                ..lease
+            }
+            .to_string(),
+            "Restore domain coffee.universal at no charge"
+        );
+        assert_eq!(quoted.hash(), offline.hash());
+    }
+    #[test]
     fn composed_previews_keep_one_draft_summary_per_signed_instruction() {
         let authorities = development_signing_authorities();
         let signer = authorities
@@ -2630,5 +2926,12 @@ mod tests {
             [drafts[0].summary(), drafts[1].summary()]
         );
         assert!(preview.summaries()[0].starts_with("Mint 5 to "));
+        assert!(matches!(
+            preview.drafts(),
+            [
+                InstructionDraft::MintAsset { .. },
+                InstructionDraft::BurnAsset { .. }
+            ]
+        ));
     }
 }

@@ -12,7 +12,14 @@ fn network() -> NetworkId {
 }
 
 fn capabilities() -> AccountCapabilitiesV1 {
-    AccountCapabilitiesV1::from_admission(network(), 369, &[Algorithm::Ed25519]).unwrap()
+    AccountCapabilitiesV1::from_policy(
+        network(),
+        369,
+        &iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+            Algorithm::Ed25519,
+        ])
+        .unwrap(),
+    )
 }
 
 #[derive(Debug)]
@@ -150,7 +157,22 @@ fn rejects_unusable_or_noncanonical_signing_policy() {
     bad.network_prefix = 0;
     assert!(validate_capabilities(&bad).is_err());
     let mut bad = valid.clone();
-    bad.default_signing = "secp256k1".into();
+    bad.allowed_signing = vec!["secp256k1".into()];
+    validate_capabilities(&bad).expect("explicit policy need not admit Ed25519");
+    bad.allowed_signing = vec!["secp256k1".into(), "ed25519".into()];
+    validate_capabilities(&bad).expect("discovery order does not express a signer preference");
+    bad.allowed_signing = Algorithm::ALL
+        .iter()
+        .rev()
+        .map(|algorithm| algorithm.as_static_str().to_owned())
+        .collect();
+    for _ in 0..bad.allowed_signing.len() {
+        validate_capabilities(&bad).expect("all admitted algorithm orders are accepted");
+        bad.allowed_signing.rotate_left(1);
+    }
+    bad.allowed_signing.push("ed25519".into());
+    assert!(validate_capabilities(&bad).is_err());
+    bad.allowed_signing = vec!["ED25519".into()];
     assert!(validate_capabilities(&bad).is_err());
     let mut bad = valid.clone();
     bad.allowed_signing.clear();
@@ -161,6 +183,35 @@ fn rejects_unusable_or_noncanonical_signing_policy() {
     let mut bad = valid;
     bad.allowed_signing.push("unsupported".into());
     assert!(validate_capabilities(&bad).is_err());
+}
+
+#[tokio::test]
+async fn public_capabilities_ignore_metadata_and_signer_order() {
+    // Public discovery has no signer preference. Exercise the deployed response shape through
+    // the real SDK decoder without changing the signed crypto-policy representation.
+    let body = br#"{"schema_version":1,"network_id":"hash:4978D0BD15FC32B834672B27BBD8A03653B1DF060A1EEE7E9374D29AF3886D91#6774","network_prefix":369,"allowed_signing":["bls_normal","ed25519","secp256k1"],"default_signing":"ed25519"}"#;
+    let transport = Arc::new(Transport {
+        requests: Mutex::new(Vec::new()),
+        body: body.to_vec(),
+    });
+    let client = Client::with_transport(
+        "https://taira.sora.org/".parse().unwrap(),
+        Duration::from_secs(5),
+        transport.clone(),
+    )
+    .unwrap();
+    let discovered = client.capabilities().await.unwrap();
+    assert_eq!(discovered.schema_version, 1);
+    assert_eq!(discovered.network_prefix, 369);
+    assert_eq!(
+        discovered.network_id.to_string(),
+        "hash:4978D0BD15FC32B834672B27BBD8A03653B1DF060A1EEE7E9374D29AF3886D91#6774"
+    );
+    assert_eq!(
+        discovered.allowed_signing,
+        ["bls_normal", "ed25519", "secp256k1"]
+    );
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -411,4 +462,17 @@ async fn faucet_discovery_requires_exact_canonical_v1_fields() {
         .unwrap()
         .insert("schema_version".to_owned(), Value::from(2_u64));
     assert!(discover(&invalid).await.is_err());
+}
+
+#[test]
+fn capabilities_accept_every_canonical_identity_without_order_or_backend_filtering() {
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(
+        Algorithm::ALL.to_vec(),
+    )
+    .unwrap();
+    let capability = AccountCapabilitiesV1::from_policy(network(), 369, &policy);
+    validate_capabilities(&capability).unwrap();
+    let mut reordered = capability;
+    reordered.allowed_signing.sort();
+    validate_capabilities(&reordered).unwrap();
 }

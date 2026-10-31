@@ -56,6 +56,10 @@ pub(in crate::state) struct OriginalMusubiMaterializers {
     max_total_rows: u64,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 impl OriginalMusubiMaterializers {
     /// Check all output cardinalities before creating any canonical backing.
     pub(in crate::state) fn new(
@@ -237,6 +241,10 @@ impl OriginalMusubiMaterializers {
 /// Advance and borrow the complete group inside the existing publisher's checked cut.
 /// The callback cannot return a reference that outlives the exact original owner.
 #[cfg(test)]
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn with_original_musubi_tables<R>(
     block: &mut StateBlock<'_>,
     limits: [LeafLimits; 3],

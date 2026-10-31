@@ -7687,7 +7687,7 @@ fn run_real_process_fault_campaign(
     verify_controller_readiness(&network, &runtime)?;
     let sponsor = network.client();
     prepare_participant_assets(&network, shape)?;
-    require_genesis_private_note_active(&sponsor)?;
+    require_genesis_private_note_profile(&sponsor)?;
     let routes = routes_from_network(&network, shape)?;
     let committees = committees_from_network(&network, shape, &routes)?;
     ensure!(
@@ -8693,8 +8693,8 @@ fn run_real_process_transparent_control_benchmark(
     publish_matched_workload(&request, &request_sha, network, &workload, evidence_root)?;
     let inventory = owner.inventory(&request.commit)?;
     let authority = network.client();
-    // Both profiles use a retained session whose mandatory profile-activation
-    // notice completed before these per-attempt consent and observation checks.
+    // Both profiles use a retained session whose native private-note capability
+    // was checked before these per-attempt consent and observation checks.
     let activated_height = owner.current_height()?;
     let expiry = activated_height
         .checked_add(1000)
@@ -8965,7 +8965,7 @@ fn run_real_process_leakage_campaign(
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
     prepare_participant_assets(&network, shape)?;
-    let activated_height = require_genesis_private_note_active(&sponsor)?;
+    let activated_height = require_genesis_private_note_profile(&sponsor)?;
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
@@ -9008,8 +9008,8 @@ fn run_real_process_leakage_campaign(
             // capsule key/nonce material across invocations.  OS entropy changes
             // only fixed-width cryptographic values and therefore preserves the
             // public shape, padding, and packet/message/record-count comparison.
-            let mut output_rng = rand_core_06::OsRng;
-            let mut capsule_rng = rand::rngs::OsRng;
+            let mut output_rng = rand::rngs::SysRng;
+            let mut capsule_rng = rand::rngs::SysRng;
             if ordinal == 0 {
                 prepare_leg_with_private_data_and_rngs(
                     ordinal,

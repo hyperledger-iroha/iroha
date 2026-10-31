@@ -6,7 +6,7 @@ use super::*;
 use crate::protocol::AllTerms;
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 struct RecordedFilter {
     omit_residue: usize,

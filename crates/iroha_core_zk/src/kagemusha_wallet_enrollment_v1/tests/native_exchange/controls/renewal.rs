@@ -151,13 +151,15 @@ fn archive_current(
     device: &HostDevice,
     sources: &Sources,
     credential: &KagemushaWalletCredentialV1,
+    send: &[u8; 32],
     ack: &[u8],
     output: &Path,
     label: &str,
     records: &mut Vec<norito::json::Value>,
 ) -> Vec<u8> {
+    fold(wallet);
     let before = wallet.snapshot().unwrap();
-    let bytes = complete(wallet.accept_credited(ack).unwrap());
+    let bytes = archive::drain(wallet, send, ack);
     let package: KagemushaWalletPackageV1 = decode(&bytes);
     package.verify(credential).unwrap();
     sources
@@ -178,7 +180,9 @@ fn archive_current(
         before.known_burned_total
     );
     let signatures = device.platform.with(|state| state.sign_calls);
-    assert_eq!(complete(wallet.accept_credited(ack).unwrap()), bytes);
+    wallet.observe_credited_for_send(send, ack).unwrap();
+    assert_eq!(archive::completed(wallet, send, ack), bytes);
+    assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
     fold(wallet);
     assert_eq!(device.platform.with(|state| state.sign_calls), signatures);
     records.push(original(output, &format!("{label}-archive.norito"), &bytes));
@@ -490,10 +494,10 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
     let renewed1 = terms::renewal(&original_b, &issuer, 20000);
     let mut skipped_body = renewed1.body;
     skipped_body.renewal_sequence = 2;
-    let skipped = terms::issue(skipped_body, &issuer);
+    let skipped = terms::issue(&skipped_body, &issuer);
     let mut foreign_body = renewed1.body;
     foreign_body.regulatory_policy.time_anchor_max_response_ms += 1;
-    let foreign = terms::issue(foreign_body, &issuer);
+    let foreign = terms::issue(&foreign_body, &issuer);
     for (label, credential) in [
         ("skipped-renewal", skipped),
         ("changed-immutable-policy", foreign),
@@ -530,7 +534,16 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
         renewed1.credential_digest()
     );
     assert_eq!(b.snapshot().unwrap().owned_balance, 100);
-    b.review_send(&request30, &frames_a[2]).unwrap();
+    assert!(matches!(
+        b.review_send(
+            unbound_review_id(),
+            &request30,
+            &frames_a[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
     // Fresh local request identity cannot adopt an already consumed renewal again.
     refresh_refused(
         &mut b,
@@ -1011,13 +1024,14 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
         &device_b,
         &sources,
         &renewed2,
+        &intent30.request_id,
         &ack30,
         &output,
         "daily-straddle",
         &mut records,
     );
+    let mut acknowledgements = vec![(intent30.request_id, ack30, archive30)];
     let mut sends = vec![(intent30, payment30)];
-    let mut acknowledgements = vec![(ack30, archive30)];
     let mut balances = vec![
         norito::json!({"amount":"30","interval":[20950,21000],"b":"70","a":"30","used":[30,30,0,30,0]}),
     ];
@@ -1128,6 +1142,7 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
                 &device_b,
                 &sources,
                 &renewed2,
+                &intent.request_id,
                 &ack,
                 &output,
                 $label,
@@ -1144,8 +1159,8 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
                 a.snapshot().unwrap().known_burned_total + b.snapshot().unwrap().known_burned_total,
                 0
             );
+            acknowledgements.push((intent.request_id, ack, archived));
             sends.push((intent, payment));
-            acknowledgements.push((ack, archived));
         }};
     }
     // The full debit is charged to BOTH touched Daily windows; equality at U=21000
@@ -1264,9 +1279,9 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
         assert_eq!(complete(b.execute(intent).unwrap()), payment);
         assert_eq!(b.snapshot().unwrap(), final_b);
     }
-    for (acknowledgement, original) in acknowledgements {
+    for (send, acknowledgement, original) in acknowledgements {
         // Exact Archive completion remains immutable even after later policy/renewal.
-        let package = complete(b.accept_credited(&acknowledgement).unwrap());
+        let package = archive::completed(&mut b, &send, &acknowledgement);
         assert_eq!(package, original);
         let archived: KagemushaWalletPackageV1 = decode(&package);
         assert!(matches!(

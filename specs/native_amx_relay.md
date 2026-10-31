@@ -15,6 +15,7 @@ The file-only `[amx_relay]` table has these local settings:
 | `poll_interval_ms` | 2000 | Observation cadence, bounded to 1–60000 ms |
 | `max_source_heights_per_pass` | 32 | Nonzero bound, at most 32 |
 | `max_finality_proof_reads` | 64 | Nonzero bound, at most 64 per observation |
+| `max_pending_finality_walks` | 16 | 1–64 ordinary carrier checkpoint slots per destination, plus two reserved handoff slots |
 | `routes` | `[]` | At most 32 explicitly provisioned destinations |
 
 Each `[[amx_relay.routes]]` contains `network_id`, `chain_id`, `scope_json`, `authority`,
@@ -82,8 +83,8 @@ accepts an already successful exact source delivery under its original signed fe
 intent. A pending carrier with incompatible current fees remains unresolved until
 its authenticated outcome is known or the operator restores its authorization.
 
-A status response selects a destination height only. The shared genesis-rooted
-verifier authenticates the certified block and exact transaction input/output.
+A status response selects a destination height only. Each pending obligation's
+genesis-rooted verifier authenticates the certified block and exact transaction input/output.
 The signed authority and original instruction digest must also match the freshly
 authenticated source intent. Membership with rejected execution never confirms
 delivery. A decoded completed journal is checked against fresh authenticated
@@ -94,10 +95,46 @@ An authenticated rejected execution permits up to three total carrier identities
 Every replacement requires another opaque, freshly authenticated source intent;
 fee replenishment can therefore resume the obligation. Exhaustion remains an
 operator-actionable unresolved obligation and never counts as delivery.
+Before calling the signer, retained custody must be identity-free or authenticate
+the exact prior carrier's rejection. Resetting a decoded journal cannot obtain a
+new signature for an unknown or successful original. Retransmission continues to
+use the existing signed bytes; current source, fees and debit consent still apply.
 
 Restart rescans original authenticated heights and resumes the same workflows.
 The source scan repeats without requiring an additional payment or successor
-block. Per-observation proof limits retain the verifier's authenticated progress.
+block. Per-observation proof limits retain each admitted obligation's authenticated
+progress in signed local custody, with three resident decisions per walk. The route's
+existing account key signs local progress; only native finality verifies execution.
+Custody lives in a sibling directory formed by appending `.finality` to the complete
+journal directory name, then the destination network identity. It binds the original
+genesis, root, chain, instance, signer, source-plan digest and exact instruction.
+Carrier identity is retained before dispatch; the existing exact-carrier journal
+remains the only outbound delivery owner.
+
+Each admitted slot reserves its full maximum record size, one native checkpoint
+plus a 64 KiB envelope. Alongside the configured ordinary slots, the route reserves
+two slots for one handoff group, one live approval slot and one atomic staging slot,
+with fixed zero-length locks. The maximum payload reservation is therefore
+`(max_pending_finality_walks + 4) * MAX_PENDING_RECORD_BYTES`. Ordinary exhaustion
+defers fresh carriers before signing, while admitted updates remain possible.
+The dedicated handoff carrier and effect scan are admitted together, so a cold
+route with full ordinary custody can still verify the authority needed to resume it.
+Publication precedes installing progress;
+restart reauthenticates the signed record and imports its native checkpoint under
+the original independently selected genesis. A corrected locator can restart only
+that pending walk; it cannot lower the separately retained live approval floor.
+Terminal retirement requires the exact carrier's authenticated outcome (or an
+identity-free reservation), even if another carrier already delivered the business
+effect. This is pending-obligation restart custody, with no historical restoration,
+alternate decoder or repair of lost keys or malicious filesystem rollback.
+
+Fresh admission keeps one finite source frontier and an exact `(height, ordinal,
+source-plan)` cursor across capacity refusals. Completed early work cannot repeatedly
+take a released slot ahead of a waiting original. Existing authenticated pending
+reservations continue independently of that cursor. A signed expiry wake is checked
+before fresh reservation; ready expiry work reserves its original slot before Decision
+observation. Scheduling state grants no completion or replacement authority and is
+discarded on restart. The native pending records supply the retained obligations.
 
 The `decision_amx_relay` source reader separately authenticates the original Begin
 and Decision at their selected heights on the same Global root. Begin binds the
@@ -137,8 +174,9 @@ settlement or release of an existing Yes escrow.
 Before a fresh signature and before dispatching retained signed bytes, the service verifies
 the exact grant in a complete authenticated private World cut. Its account-authenticated
 bounded proof route and async SDK reader bind the requested relay, terms, schema and
-independently verified block. The selected height cannot move below the route verifier's
-retained authenticated height. A historical proof, including one fetched after restart,
+independently verified block. The selected height cannot move below the route's separately
+retained live approval prefix. An earlier pending carrier's replay cannot lower that
+floor. A historical proof, including one fetched after restart,
 cannot establish that no later revoke exists; the native use-time check remains decisive.
 Evidence unavailability or original memory refusal preserves the unsigned reservation or
 exact signed identity for retry. Read-only recovery of an already finalized carrier does
@@ -160,6 +198,9 @@ authenticated successful outcome, a bounded ephemeral
 route barrier defers later deliveries for that route; other destinations continue.
 The barrier retains the unresolved source position across passes, so an earlier handoff
 already authenticated during this process cannot reset a later bounded recovery scan.
+It also remembers only the latest authenticated successful boundary within the process.
+An earlier pending carrier still receives read-only outcome recovery across this barrier;
+the scheduling hint cannot close that carrier or authorize signing or retransmission.
 Its source network/scope, exact carrier and destination root binding scope the cursor;
 a changed binding discards it. Process restart starts again from original history.
 
@@ -168,17 +209,20 @@ the destination beyond the retained verifier epochs. Before opening or resuming 
 workflow, the same adapter scans the pinned destination's certified history for an
 exact successful handoff effect. Public node status supplies only an untrusted upper
 scan bound. Each candidate's direction, dataspace, original source header and original
-certified result must match the reconstructed opaque source intent; the shared finality
+certified result must match the reconstructed opaque source intent; the pending finality
 verifier authenticates its exact signed input and successful execution. An interchangeable
 valid quorum witness may differ, but rejected inclusion or a reported destination epoch
 never closes the barrier. An exhausted local workflow does not block this read-only recovery.
 
-Each observation has the existing proof-read bound. An unfinished scan retains only its
-next height; a local refusal is neither absence nor delivery. A cached positive height
-is refetched and its exact effect reverified before a later recovery reports success.
-This recognizes an already authenticated delivery without changing an unknown local
-carrier's journal outcome or submitting a replacement. Restart reconstructs the same
-source deliveries and verifies the destination again, with no extra index or journal.
+Each observation has the existing proof-read bound. An unfinished effect scan retains
+its authenticated prefix, contiguous inspected height and finite captured destination
+tip in its original pending slot. A generic later prefix cannot replace inspection of
+earlier blocks for this exact effect. The captured tip advances only after that finite
+scan completes. A local refusal is neither absence nor delivery. A retained positive
+checkpoint is reauthenticated under the original genesis and its exact successful
+effect is checked before recovery reports success. Another carrier's successful effect still requires independent recovery of
+any original local signed carrier before pending slots retire. Restart reconstructs
+the same source deliveries and reauthenticates their bounded progress.
 
 TODO: qualify the complete two-bank loop on the current node candidate.
 Consensus deadline progress must be carried by real committed obligation work;

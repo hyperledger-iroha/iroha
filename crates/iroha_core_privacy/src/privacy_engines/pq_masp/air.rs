@@ -347,6 +347,10 @@ impl<'a> TraceBuilderV1<'a> {
         let variables = self.allocate_bytes(bytes);
         Ok((variables.map(ByteExpressionV1::Variable), Some(variables)))
     }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The accepted plaintext owns secret bytes and must be zeroized after its constrained representation is allocated, including errors."
+    )]
     fn allocate_note(
         &mut self,
         note: Option<PqMaspNotePlaintextV1>,

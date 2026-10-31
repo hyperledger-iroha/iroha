@@ -1,8 +1,10 @@
 //! Canonical signed RS16 geometry for global and lane consensus instances.
 //!
-//! This owns layout validation and the single genesis-builder profile. Transport,
-//! authenticated shards and availability custody are separate required integration work.
+//! This owns layout validation, the single genesis-builder profile, authenticated
+//! manifest/row evidence and original-pool payload custody. The native node driver
+//! runs authoring, acquisition and transport jobs outside the consensus event loop.
 mod artifact;
+mod json;
 pub use artifact::{
     AcquisitionError, AuthoredBody, AuthoringError, AvailabilityError, AvailabilityFrame,
     AvailabilitySource, AvailableBody, BodyRestoration, MAX_AVAILABILITY_FRAME_BYTES,
@@ -42,7 +44,6 @@ pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
     Encode,
     iroha_schema::IntoSchema,
     norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -74,7 +75,6 @@ pub struct DataAvailabilityLayout {
     Encode,
     iroha_schema::IntoSchema,
     norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
 )]
 #[norito(
     tag = "encoding",

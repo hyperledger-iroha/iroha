@@ -277,14 +277,14 @@ fn settlement_setter_rebuilds_the_exact_state_owned_router_engine() {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let original = state.settlement().clone();
+        let original = *state.settlement();
         assert!(
             state
                 .settlement_engine
                 .matches_router_config(&original.router)
         );
 
-        let mut changed = original.clone();
+        let mut changed = original;
         changed.router.epsilon_bps += 1;
         changed.router.buffer_halt_pct += 1;
         assert!(
@@ -378,9 +378,7 @@ fn runtime_nexus_setter_requires_exact_protected_dataspace_projection() {
                 .unwrap();
         let mut world = state.world.block();
         world
-            .parameters
-            .get_mut()
-            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
                 runtime
                     .into_custom_parameter()
                     .expect("bounded cumulative DS fixture"),
@@ -767,6 +765,9 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let construction_pin = crossbeam_epoch::pin();
         let probe = restore(probe_budget.clone(), snapshot.clone()).unwrap();
         let restore_peak = probe_budget.peak_reserved_bytes();
+        let retained_bytes = probe_budget.reserved_bytes()
+            - initial_custody_test_support::restored_state_constructor_retired_bytes();
+        let parameter_graphs = initial_custody_test_support::retain_parameter_graphs(&probe.world);
         drop(construction_pin);
         let retained_layout_bytes =
             mv::cell::CellInitialization::<Option<NativeExecutionTip>>::allocation_layouts()
@@ -802,7 +803,10 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         // Count every actual admitted lock control without retaining a release
         // observation across State retirement.
         drop(lock_releases);
-        let retained_bytes = retained_layout_bytes + notification_bytes;
+        let parameter_bytes = retained_bytes
+            .checked_sub(retained_layout_bytes + notification_bytes)
+            .unwrap();
+        assert!(parameter_bytes > 0);
         // Restoring SCCP replaces initial scalar generations. Reclaim those
         // transient owners before comparing exact live custody.
         initial_custody_test_support::reclaim_to(&probe_budget, retained_bytes);
@@ -816,17 +820,16 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let retirement_pin = crossbeam_epoch::pin();
         drop(probe);
         retirement_pin.flush();
-        assert_eq!(probe_budget.reserved_bytes(), retired_ebr_bytes);
+        assert_eq!(
+            probe_budget.reserved_bytes(),
+            retired_ebr_bytes + parameter_bytes
+        );
         drop(retirement_pin);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while probe_budget.reserved_bytes() != 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "original restored owners were not reclaimed after their readers released"
-            );
-            crossbeam_epoch::pin().flush();
-            std::thread::yield_now();
-        }
+        initial_custody_test_support::reclaim_to(&probe_budget, parameter_bytes);
+        assert_eq!(probe_budget.reserved_bytes(), parameter_bytes);
+        // Only the same-version original graph handles remain. Their final
+        // release proves the entire payload census belongs to those graphs.
+        drop(parameter_graphs);
         assert_eq!(probe_budget.reserved_bytes(), 0);
         let budget = iroha_allocation::AllocationBudget::new(restore_peak + 137);
         let held = budget.try_reserve_bytes(120).unwrap();

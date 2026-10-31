@@ -1,7 +1,9 @@
 //! Canonical peer identities, public-key codecs and bounded JSON.
 
 pub use self::model::PeerId;
+mod endpoint;
 use derive_more::Constructor;
+pub use endpoint::Peer;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
 use norito::json::{self, FastJsonWrite, JsonDeserialize};

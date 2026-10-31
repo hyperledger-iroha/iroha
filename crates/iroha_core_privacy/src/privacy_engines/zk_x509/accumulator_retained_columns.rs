@@ -10,7 +10,7 @@ use crate::privacy_engines::transparent_stark::{
     masked_trace_coefficients_on_coset_v1, masked_trace_coefficients_with_mask_v1,
     sample_trace_mask_v1,
 };
-use rand::TryRngCore;
+use rand::TryRng;
 
 /// The two original CA commitments have separate, fixed-width owners.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +45,7 @@ impl core::fmt::Debug for CaOriginalMaskedColumnsV1 {
             .debug_struct("CaOriginalMaskedColumnsV1")
             .field("family", &self.family)
             .field("coefficients", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl CaOriginalMaskedColumnsV1 {
@@ -63,7 +63,7 @@ impl CaOriginalMaskedColumnsV1 {
     }
 
     /// Consume and clear native columns after sampling each original mask once.
-    pub(super) fn sample_v1<R: TryRngCore>(
+    pub(super) fn sample_v1<R: TryRng>(
         family: CaColumnFamilyV1,
         native: Vec<Vec<F>>,
         rng: &mut R,

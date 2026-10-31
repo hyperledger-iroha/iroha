@@ -2,10 +2,15 @@
 
 use super::*;
 use iroha_allocation::AllocationBudget;
-use iroha_core::sumeragi::certified_chain::{CertifiedChain, QcVerification};
-use iroha_data_model::sns::{
-    DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1,
-    lease::{MAX_SNS_LEASE_PROOF_BYTES_V1, SnsLeaseProofRefV1},
+use iroha_core::{state::StateReadOnly, sumeragi::certified_chain::CommittedBlock};
+use iroha_data_model::{
+    sns::{
+        DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1,
+        lease::{MAX_SNS_LEASE_PROOF_BYTES_V1, SnsLeaseProofRefV1},
+    },
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityLimits,
+    },
 };
 
 const ROUTE: &str = "/v1/sns/dataspaces/{alias}/lease/{height}";
@@ -52,6 +57,30 @@ fn capacity() -> Error {
     ))
 }
 
+fn lease_source_limits(bytes: usize) -> NativeFinalityLimits {
+    let unit = bytes / 8;
+    NativeFinalityLimits {
+        block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
+        journal_bytes: (unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
+        block_count: 3,
+        allocated_bytes: unit * 4,
+    }
+}
+
+// The current execution tip authenticates the target and its parent without replaying
+// every historical quorum. Tests retain exactly these two frames plus signed genesis.
+fn current_lease_tip(
+    view: &impl StateReadOnly,
+    height: u64,
+    limits: NativeFinalityLimits,
+) -> Result<CommittedBlock, Error> {
+    let decode_limits = limits.decode_limits().map_err(|_| capacity())?;
+    norito::core::with_decode_limits_scope(decode_limits, || {
+        crate::native_projection_response::current_global_tip(view, height, limits, unavailable)
+    })
+    .map_err(Error::from)
+}
+
 pub async fn handler(
     State(app): State<SharedAppState>,
     axum::extract::Path((alias, height)): axum::extract::Path<(String, String)>,
@@ -68,10 +97,11 @@ pub async fn handler(
     let key = rate_limit_key(&headers, Some(remote.ip()), ROUTE, principal);
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
-    let bytes = app.query_fanout_working_set_bytes;
-    let memory = app
-        .query_fanout_inflight
-        .try_acquire_parts([u64::try_from(bytes).map_err(|_| capacity())?])
+    // Native history reads admit the complete original block bodies, including
+    // maximum-size transactions, under the existing finality memory allowance.
+    let bytes = app.finality_working_set_bytes;
+    let memory = crate::acquire_query_pool_credit(&app, bytes)
+        .await
         .ok_or_else(capacity)?;
     let memory = QueryFanoutMemoryReservation::new(memory);
     let budget = AllocationBudget::new(bytes);
@@ -81,18 +111,12 @@ pub async fn handler(
     let state = app.state.clone();
     let response =
         routing::run_admitted_blocking(admission, "SNS lease worker failed", move || {
+            let limits = lease_source_limits(bytes);
+            let _source = budget
+                .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
+                .map_err(|_| capacity())?;
             let view = state.view();
-            global(view.world())?;
-            if u64::try_from(view.height()).ok() != Some(height) {
-                return Err(unavailable());
-            }
-            let chain = CertifiedChain::new(&view).map_err(|_| unavailable())?;
-            let certified = chain.certified(height).map_err(|_| unavailable())?;
-            if certified.verification() != QcVerification::Verified {
-                return Err(unavailable());
-            }
-            let tip = certified.into_committed();
-            drop(chain);
+            let tip = current_lease_tip(&view, height, limits)?;
             drop(view);
             let mut body = state
                 .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |world, record| {
@@ -127,6 +151,9 @@ pub async fn handler(
     )
     .await
 }
+
+#[cfg(test)]
+mod recent_tip_tests;
 
 #[cfg(test)]
 mod tests {

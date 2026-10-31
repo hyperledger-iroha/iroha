@@ -5,7 +5,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     alejandra = {
-      url = "github:kamadorueda/alejandra/3.0.0";
+      url = "github:kamadorueda/alejandra/4.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
@@ -139,10 +139,8 @@
               openssl.dev
               libiconvReal
               zlib
-            ]
-            # If building FOR darwin, need Apple frameworks
-            ++ lib.optional pkgsCross.stdenv.isDarwin
-            [darwin.apple_sdk.frameworks.Security];
+            ];
+          # The Darwin stdenv supplies its current Apple SDK, including Security.
 
           cargoBuildOptions = default:
             default
@@ -198,6 +196,7 @@
       packages.appimage = nix-appimage.mkappimage.${system} {
         drv = packages.iroha3;
         name = "iroha3";
+        executable = "iroha3d";
       };
 
       packages.targets = mkTargets {

@@ -213,7 +213,7 @@ pub fn execute_contract_deployment_state_local_read(
     request: &ContractDeploymentStateRequestDto,
     expected_route: Option<RoutingDecision>,
 ) -> Result<AxResponse, Error> {
-    super::json_ok(read_contract_deployment_state(
+    super::json_ok(&read_contract_deployment_state(
         app,
         request,
         expected_route,
@@ -335,7 +335,8 @@ pub async fn handler_contract_deployment_state(
         body.as_ref(),
         "contract_deployment_state_auth_required",
         "canonical signed account headers are required to read contract deployment state",
-    )?;
+    )
+    .await?;
     let request: ContractDeploymentStateRequestDto =
         match super::decode_current_app_routed_read_json(body.as_ref()) {
             Some(Ok(request)) => request,
@@ -374,7 +375,7 @@ mod tests {
         app_auth::CanonicalRequestAuthConfig,
         tests_runtime_handlers::{
             app_auth_test_guard, checked_torii_test_ed25519_keypair,
-            mk_app_state_for_tests_with_world, signed_network_app_headers,
+            mk_app_state_for_tests_with_pre_genesis_world, signed_network_app_headers,
         },
     };
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
@@ -391,6 +392,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use norito::codec::Encode as _;
     use std::{num::NonZeroU64, sync::Arc};
+    #[derive(Clone, Copy)]
     enum NonceFixture {
         Missing,
         U64(u64),
@@ -426,18 +428,20 @@ mod tests {
         other: Option<&AccountId>,
         nonce: NonceFixture,
     ) -> SharedAppState {
-        mk_app_state_for_tests_with_world(fixture_world(authority, other, nonce))
+        mk_app_state_for_tests_with_pre_genesis_world(fixture_world(authority, other, nonce))
     }
+    type AliasAnchorBinding = (
+        ContractAddress,
+        ContractAlias,
+        Option<u64>,
+        Option<u64>,
+        u64,
+    );
+
     fn anchor_state(
         app: &mut SharedAppState,
         creation_time_ms: u64,
-        binding: Option<(
-            ContractAddress,
-            ContractAlias,
-            Option<u64>,
-            Option<u64>,
-            u64,
-        )>,
+        binding: Option<AliasAnchorBinding>,
     ) -> iroha_crypto::HashOf<BlockHeader> {
         let app = Arc::get_mut(app).expect("unique deployment app");
         let state = Arc::get_mut(&mut app.state).expect("unique deployment fixture world");
@@ -475,6 +479,15 @@ mod tests {
         let block_hash = chain.committed(2).block_hash();
         app.state = chain.state().clone();
         app.kura = chain.kura().clone();
+        app.signed_query_admission = Arc::new(
+            crate::routing::SignedQueryAdmission::new(
+                chain.network_id(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(120),
+                std::num::NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("deployment authentication retains the original signed genesis network"),
+        );
         app.local_peer_id = Some(chain.validators()[0].0.clone());
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash
@@ -527,7 +540,7 @@ mod tests {
             iroha_core::sns::record_storage_key(&selector),
             record.encode(),
         );
-        let mut app = mk_app_state_for_tests_with_world(world);
+        let mut app = mk_app_state_for_tests_with_pre_genesis_world(world);
         anchor_state(&mut app, 1_000, None);
         let response = read_contract_deployment_state(
             &app,
@@ -760,8 +773,7 @@ mod tests {
         .expect_err("caller/authority mismatch must fail");
         assert!(matches!(mismatch, Error::AppForbidden { .. }));
         let unknown_body = format!(
-            r#"{{"authority":"{}","contract_alias":"deploy::universal","unknown":true}}"#,
-            authority
+            r#"{{"authority":"{authority}","contract_alias":"deploy::universal","unknown":true}}"#
         )
         .into_bytes();
         let unknown_headers = signed_network_app_headers(

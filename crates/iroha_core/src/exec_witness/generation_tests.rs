@@ -89,9 +89,9 @@ fn assert_inactive_generation_removed() {
     assert!(witness.fastpq_transcripts.is_empty());
 }
 
-fn assert_capture(expected: ExecWitness) {
+fn assert_capture(expected: &ExecWitness) {
     let actual = drain_exec_witness_checked(|_| Ok(())).unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(&actual, expected);
     assert_inactive_generation_removed();
 }
 
@@ -137,7 +137,7 @@ fn stale_overlay_cannot_append_replace_or_clear_restarted_capture() {
         let mut map = transcript_map(2);
         map.extend(transcript_map(4));
         expected.fastpq_transcripts = map_to_bundles(map);
-        assert_capture(expected);
+        assert_capture(&(expected));
     }
 }
 
@@ -185,7 +185,7 @@ fn stale_nested_guards_and_new_children_preserve_lifo_without_rebinding() {
                     drop(outer);
                 }
                 EXEC_WITNESS_OVERLAYS.with(|overlays| assert!(overlays.borrow().is_empty()));
-                assert_capture(expected(3));
+                assert_capture(&(expected(3)));
             }
         }
     }
@@ -208,7 +208,7 @@ fn overlay_opened_inactive_and_its_child_never_attach_to_a_later_capture() {
     record(3, TranscriptMode::ReplaceEmpty);
     child.commit();
     old.commit();
-    assert_capture(expected(2));
+    assert_capture(&(expected(2)));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -269,7 +269,7 @@ fn every_capture_lifecycle_boundary_preserves_unowned_overlay_isolation() {
                 Invalidation::Restart => start_block(),
                 Invalidation::Clear => clear_block(),
                 Invalidation::LegacyDrain => assert_eq!(drain_exec_witness(), expected(1)),
-                Invalidation::CheckedDrain => assert_capture(expected(1)),
+                Invalidation::CheckedDrain => assert_capture(&(expected(1))),
                 Invalidation::CheckedReject => {
                     assert_eq!(
                         drain_exec_witness_checked(|_| Err("owner rejected".to_owned())),
@@ -301,7 +301,14 @@ fn every_capture_lifecycle_boundary_preserves_unowned_overlay_isolation() {
             record(3, TranscriptMode::Append);
             resume_tx.send(()).unwrap();
             worker.join().unwrap();
-            assert_capture(expected(3));
+            assert_capture(&(expected(3)));
+            if matches!(invalidation, Invalidation::CheckedPanic) {
+                // The lifecycle assertion above proves recovery. Keep the fixture's
+                // deliberate poison from leaking into later independent captures.
+                assert!(slot().is_poisoned());
+                slot().clear_poison();
+                assert!(!slot().is_poisoned());
+            }
             drop(guard);
         }
     }
@@ -338,7 +345,7 @@ fn ownerless_lifecycle_calls_cannot_change_or_validate_an_owned_capture() {
         lock_slot().generation.as_ref().unwrap(),
         &generation,
     ));
-    assert_capture(expected(1));
+    assert_capture(&(expected(1)));
 }
 
 #[test]
@@ -353,7 +360,7 @@ fn ownerless_snapshot_reads_preserve_the_owned_capture() {
     .join()
     .unwrap();
     assert_eq!(observed, expected(1));
-    assert_capture(expected(1));
+    assert_capture(&(expected(1)));
 }
 
 #[test]
@@ -372,7 +379,7 @@ fn guard_ownership_releases_and_reacquires_across_threads() {
         assert_inactive_generation_removed();
         start_block();
         record(2, TranscriptMode::Append);
-        assert_capture(expected(2));
+        assert_capture(&(expected(2)));
         drop(guard);
         assert!(!owns_exec_witness());
     });
@@ -385,7 +392,7 @@ fn guard_ownership_releases_and_reacquires_across_threads() {
     assert_inactive_generation_removed();
     start_block();
     record(3, TranscriptMode::Append);
-    assert_capture(expected(3));
+    assert_capture(&(expected(3)));
     drop(guard);
     assert!(!owns_exec_witness());
 }
@@ -491,5 +498,5 @@ fn stale_overlay_keeps_its_identity_alive_until_lifo_cleanup() {
     drop(overlay);
     assert!(old.upgrade().is_none());
     record(2, TranscriptMode::Append);
-    assert_capture(expected(2));
+    assert_capture(&(expected(2)));
 }

@@ -3,6 +3,12 @@
 use super::super::publication::{
     FieldRefusal, PreparedWorld, PreparedWorldField, WorldPublicationError,
 };
+type WorldMutation<'a> = (&'a str, fn(&World));
+type WorldWriterHold<'name> = (
+    &'name str,
+    for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>,
+);
+
 use super::*;
 use mv::PublicationPreparationError;
 
@@ -147,7 +153,7 @@ fn detached_world_activates_original_prepaid_control_on_publication_thread() {
     drop(cleanup);
     let prepared = prepare(original, &world);
     assert_eq!(budget.reserved_bytes(), before);
-    let (_, _, retirement, _, _) = prepared.publish();
+    let (_, _, retirement, (), ()) = prepared.publish();
     assert_eq!(all_images(&world), expected);
     drop(retirement);
 }
@@ -164,6 +170,10 @@ fn physical_custody<A>(journal: &DetachedWorld<A>) -> (usize, usize, Vec<usize>)
     )
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 fn prepare_field<'target>(
     original: Box<dyn RetainedWorldField>,
     target: &'target World,
@@ -395,8 +405,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
             ]
         };
     }
-    let holders: &[(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>)] =
-        &with_world_overlay_fields!(holders);
+    let holders: &[WorldWriterHold<'_>] = &with_world_overlay_fields!(holders);
     let world = fixture();
     let before = all_images(&world);
     let mut original = world.block();
@@ -478,7 +487,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
             ]
         };
     }
-    let invalidators: &[(&str, fn(&World))] = &with_world_overlay_fields!(invalidators);
+    let invalidators: &[WorldMutation<'_>] = &with_world_overlay_fields!(invalidators);
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));

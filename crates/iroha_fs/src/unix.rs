@@ -986,7 +986,65 @@ impl Directory {
         temporary_attempts: u32,
         before: &mut impl FnMut(AtomicWriteStep, &Path) -> io::Result<()>,
     ) -> io::Result<()> {
-        self.revalidate()?;
+        self.write_atomic_from_staging_observed(
+            self,
+            name,
+            bytes,
+            mode,
+            crate::AtomicWriteOptions {
+                private_destination,
+                temporary_attempts,
+            },
+            before,
+        )
+    }
+
+    pub(super) fn write_atomic_from_staging(
+        &self,
+        staging: &Self,
+        name: &OsStr,
+        bytes: &[u8],
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        self.write_atomic_from_staging_observed(
+            staging,
+            name,
+            bytes,
+            mode,
+            crate::AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 128,
+            },
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    pub(super) fn write_atomic_from_staging_observed(
+        &self,
+        staging: &Self,
+        name: &OsStr,
+        bytes: &[u8],
+        mode: PublishMode,
+        options: crate::AtomicWriteOptions,
+        before: &mut impl FnMut(AtomicWriteStep, &Path) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let crate::AtomicWriteOptions {
+            private_destination,
+            temporary_attempts,
+        } = options;
+        // Both original directory owners remain retained through publication and cleanup.
+        let revalidate = || {
+            self.revalidate()?;
+            staging.revalidate()
+        };
+        revalidate()?;
+        let destination_identity = self.identity()?;
+        let staging_identity = staging.identity()?;
+        if destination_identity.volume != staging_identity.volume {
+            return Err(invalid("atomic publication requires one native volume"));
+        }
+        let same_directory = destination_identity == staging_identity;
+        revalidate()?;
         if mode == PublishMode::Replace {
             match self.open_read(name) {
                 Ok(file) => {
@@ -1002,13 +1060,13 @@ impl Directory {
         let (temporary, mut file) = (0..temporary_attempts)
             .find_map(|_| {
                 let name = temporary_name();
-                if let Err(error) = before(AtomicWriteStep::CreateTemp, &self.path().join(&name))
-                    .and_then(|()| self.revalidate())
+                if let Err(error) = before(AtomicWriteStep::CreateTemp, &staging.path().join(&name))
+                    .and_then(|()| revalidate())
                 {
                     return Some(Err(error));
                 }
                 match rustix::fs::openat(
-                    &self.current().file,
+                    &staging.current().file,
                     &name,
                     OFlags::RDWR
                         | OFlags::CREATE
@@ -1029,61 +1087,71 @@ impl Directory {
                 ))
             })?;
         let result = (|| {
-            let temporary_path = self.path().join(&temporary);
+            let temporary_path = staging.path().join(&temporary);
             let (head, tail) = bytes.split_at(bytes.len() / 2);
             before(AtomicWriteStep::WriteHead, &temporary_path)?;
-            self.revalidate()?;
+            revalidate()?;
             file.write_all(head)?;
             before(AtomicWriteStep::WriteTail, &temporary_path)?;
-            self.revalidate()?;
+            revalidate()?;
             file.write_all(tail)?;
             before(AtomicWriteStep::SyncFile, &temporary_path)?;
-            self.revalidate()?;
+            revalidate()?;
             file.sync_all()?;
             validate_file(&file, true)?;
-            self.revalidate()?;
+            revalidate()?;
             before(AtomicWriteStep::Publish, &self.path().join(name))?;
-            self.revalidate()?;
-            let named = self.open_read(OsStr::new(&temporary))?;
+            revalidate()?;
+            let named = staging.open_read(OsStr::new(&temporary))?;
             if identity(&named)? != identity(&file)? {
                 return Err(changed());
             }
             match mode {
                 PublishMode::Replace => {
                     rustix::fs::renameat(
-                        &self.current().file,
+                        &staging.current().file,
                         &temporary,
                         &self.current().file,
                         name,
                     )?;
                     before(AtomicWriteStep::Published, &self.path().join(name))?;
                 }
-                PublishMode::CreateNew => {
-                    publish_new_observed(&self.current().file, &temporary, name, || {
-                        before(AtomicWriteStep::Published, &self.path().join(name))
-                    })?
-                }
+                PublishMode::CreateNew => publish_new_observed(
+                    &staging.current().file,
+                    &temporary,
+                    &self.current().file,
+                    name,
+                    || before(AtomicWriteStep::Published, &self.path().join(name)),
+                )?,
             }
             before(AtomicWriteStep::SyncDirectory, self.path())?;
-            self.revalidate()?;
+            revalidate()?;
             self.current().file.sync_all()?;
+            if !same_directory {
+                before(AtomicWriteStep::SyncDirectory, staging.path())?;
+                revalidate()?;
+                staging.current().file.sync_all()?;
+            }
             let published = self.open_read(name)?;
             validate_file(&published, true)?;
             if identity(&published)? != identity(&file)? {
                 return Err(changed());
             }
-            self.revalidate()
+            revalidate()
         })();
         if result.is_err() {
-            // Never remove a substituted staging object, nor the already-published destination.
-            if self
+            // Roll back only our exact unpublished file through its retained directory.
+            // A changed pathname refuses publication but cannot redirect this cleanup:
+            // open_read and unlinkat below are relative to the same original descriptor.
+            // Never remove a substituted staging object, nor the published destination.
+            if staging
                 .open_read(OsStr::new(&temporary))
                 .and_then(|named| identity(&named))
                 .ok()
                 .zip(identity(&file).ok())
                 .is_some_and(|(named, retained)| named == retained)
             {
-                let _ = rustix::fs::unlinkat(&self.current().file, &temporary, AtFlags::empty());
+                let _ = rustix::fs::unlinkat(&staging.current().file, &temporary, AtFlags::empty());
             }
         }
         result
@@ -1355,7 +1423,7 @@ impl Directory {
         let source = source
             .to_str()
             .ok_or_else(|| invalid("directory name must be UTF-8"))?;
-        publish_new(&parent.file, source, name)?;
+        publish_new(&parent.file, source, &parent.file, name)?;
         parent.sync()?;
         current.path = parent.path.join(name);
         self.links.push(Arc::new(current));
@@ -1675,21 +1743,22 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     }
 }
 
-fn publish_new(parent: &File, temporary: &str, name: &OsStr) -> io::Result<()> {
-    publish_new_observed(parent, temporary, name, || Ok(()))
+fn publish_new(source: &File, temporary: &str, destination: &File, name: &OsStr) -> io::Result<()> {
+    publish_new_observed(source, temporary, destination, name, || Ok(()))
 }
 
 #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
 fn publish_new_observed(
-    parent: &File,
+    source: &File,
     temporary: &str,
+    destination: &File,
     name: &OsStr,
     published: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
     rustix::fs::renameat_with(
-        parent,
+        source,
         temporary,
-        parent,
+        destination,
         name,
         rustix::fs::RenameFlags::NOREPLACE,
     )?;
@@ -1698,14 +1767,15 @@ fn publish_new_observed(
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
 fn publish_new_observed(
-    parent: &File,
+    source: &File,
     temporary: &str,
+    destination: &File,
     name: &OsStr,
     published: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    rustix::fs::linkat(parent, temporary, parent, name, AtFlags::empty())?;
+    rustix::fs::linkat(source, temporary, destination, name, AtFlags::empty())?;
     published()?;
-    rustix::fs::unlinkat(parent, temporary, AtFlags::empty())?;
+    rustix::fs::unlinkat(source, temporary, AtFlags::empty())?;
     Ok(())
 }
 

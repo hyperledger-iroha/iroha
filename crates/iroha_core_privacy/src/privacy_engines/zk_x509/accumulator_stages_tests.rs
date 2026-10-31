@@ -3,7 +3,8 @@
 use super::super::super::private_table::inspection;
 use super::super::tests::{credential_main_pre_aux_v1, fixture};
 use super::*;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn native_staged_columns_match_every_actual_row_and_clear_retained_storage() {
@@ -12,13 +13,13 @@ fn native_staged_columns_match_every_actual_row_and_clear_retained_storage() {
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         credential_main_pre_aux_v1(),
         ca_profile_digest_v1().unwrap(),
-        ca_public_digest_v1(TEST_PROOF_INSTANCE_V1, public, &schedule).unwrap(),
+        ca_public_digest_v1(TEST_PROOF_INSTANCE_V1, &public, &schedule).unwrap(),
         PrivacyOuterDigestV1::from_bytes([0x81; 48]),
     )
     .unwrap();
     let ((), cleared) = inspection::observe_v1(|| {
         let base = native_base_columns_v1(&trace).unwrap();
-        let auxiliary = native_aux_columns_v1(&trace, public, binding).unwrap();
+        let auxiliary = native_aux_columns_v1(&trace, &public, &binding).unwrap();
         let reference = build_ca_accumulator_stark_material_v1(
             &trace,
             &schedule,
@@ -57,7 +58,7 @@ fn staged_original_commitments_replay_exactly_and_bind_the_shared_challenge() {
         &trace,
         &schedule,
         credential_main_pre_aux_v1(),
-        &mut StdRng::seed_from_u64(191),
+        &mut ChaCha12Rng::seed_from_u64(191),
     )
     .unwrap();
     state.validate_v1().unwrap();
@@ -73,7 +74,7 @@ fn staged_original_commitments_replay_exactly_and_bind_the_shared_challenge() {
     let expected = derive_zk_x509_credential_pre_aux_binding_v1(
         credential_main_pre_aux_v1(),
         ca_profile_digest_v1().unwrap(),
-        ca_public_digest_v1(TEST_PROOF_INSTANCE_V1, state.public, &schedule).unwrap(),
+        ca_public_digest_v1(TEST_PROOF_INSTANCE_V1, &state.public, &schedule).unwrap(),
         state.trace_roots[0].base_root,
     )
     .unwrap();
@@ -99,7 +100,9 @@ fn staged_original_commitments_replay_exactly_and_bind_the_shared_challenge() {
     let plan = CaMainPrivateLinkPlanV1::new_v1(&schedule, state.binding.sha()).unwrap();
     let point = E::canonical([31, 5, 17, 2]).unwrap();
     let values = state.open_link_values_v1(&plan, point).unwrap();
-    let mixes: [E; 108] = core::array::from_fn(|index| E::from_base(F(index as u64 + 19)));
+    let mixes: [E; 108] = core::array::from_fn(|index| {
+        E::from_base(F(u64::try_from(index).expect("test index fits u64") + 19))
+    });
     let coefficients = state
         .link_deep_coefficients_v1(&plan, point, &values, &mixes)
         .unwrap();
@@ -182,9 +185,7 @@ fn staged_native_scratch_clears_each_family_on_return_and_unwind() {
                 scratch.base.fill(F(3));
                 scratch.current.fill(F(5));
                 scratch.previous.fill(F(7));
-                if unwind {
-                    panic!("deliberate staged native scratch unwind");
-                }
+                assert!(!unwind, "deliberate staged native scratch unwind");
                 drop(scratch);
             })
         });
@@ -221,19 +222,13 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         &trace,
         &schedule,
         credential_main_pre_aux_v1(),
-        &mut StdRng::seed_from_u64(913),
+        &mut ChaCha12Rng::seed_from_u64(913),
     )
     .unwrap();
     let layout = ca_aggregate_layout_v1().unwrap();
     let alphas: Vec<E> = (0..1363)
         .map(|index| {
-            E::canonical([
-                index as u64 + 7,
-                index as u64 * 3 + 11,
-                index as u64 * 5 + 13,
-                index as u64 * 7 + 17,
-            ])
-            .unwrap()
+            E::canonical([index + 7, index * 3 + 11, index * 5 + 13, index * 7 + 17]).unwrap()
         })
         .collect();
     let expected = {
@@ -252,21 +247,23 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         let mut complete_alphas = alphas.clone();
         complete_alphas.resize(1379, E::ZERO);
         ca_composition_lanes_v1(
-            state.public,
-            &base,
-            &aux,
-            &fixed,
-            state.binding.sha(),
-            state.binding.rfc5280(),
-            claims,
+            &CaCompositionInputsV1 {
+                public: &state.public,
+                base_lde: &base,
+                aux_lde: &aux,
+                fixed_lde: &fixed,
+                sha_challenges: state.binding.sha(),
+                io_challenges: state.binding.rfc5280(),
+                claims: &claims,
+            },
             &complete_alphas,
             &layout,
-            &mut StdRng::seed_from_u64(917),
+            &mut ChaCha12Rng::seed_from_u64(917),
         )
         .unwrap()
     };
     let actual = state
-        .local_composition_v1(&alphas, &mut StdRng::seed_from_u64(917))
+        .local_composition_v1(&alphas, &mut ChaCha12Rng::seed_from_u64(917))
         .unwrap();
     assert_eq!(
         &*actual, &*expected,
@@ -280,7 +277,7 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         bad.resize(bad_len, E::ONE);
         assert!(
             state
-                .local_composition_v1(&bad, &mut StdRng::seed_from_u64(917))
+                .local_composition_v1(&bad, &mut ChaCha12Rng::seed_from_u64(917))
                 .is_err()
         );
     }
@@ -293,7 +290,7 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
     ]);
     assert!(
         state
-            .local_composition_v1(&bad, &mut StdRng::seed_from_u64(917))
+            .local_composition_v1(&bad, &mut ChaCha12Rng::seed_from_u64(917))
             .is_err()
     );
     let ((), cleared) = inspection::observe_v1(|| drop(actual));

@@ -3,6 +3,8 @@ package org.hyperledger.iroha.sdk.tx.norito
 import org.hyperledger.iroha.sdk.core.model.instructions.KaigiWirePayloadEncoderV1
 import org.hyperledger.iroha.sdk.core.model.instructions.UpdatePlainConvictionWirePayloadEncoder
 
+import org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 import java.math.BigInteger
 import java.util.LinkedHashMap
 import java.util.Optional
@@ -95,6 +97,98 @@ internal class TransactionPayloadAdapter private constructor(
         }
     }
 
+    /** Re-encode a payload decoded only by the closed canonical-byte inspector below. */
+    private fun encodeCanonicalInspection(encoder: NoritoEncoder, value: TransactionPayload) {
+        withChainContext(chainDiscriminant) {
+            validateSignedAttachments(value)
+            require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
+                "feePayment.gasLimit is required for IVM and contract-call executables"
+            }
+            encodeSizedField(encoder, TRANSACTION_DOMAIN_ADAPTER, value.networkId)
+            encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
+            encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
+            encodeSizedField(encoder, InspectionExecutableAdapter(value.networkId), value.executable)
+            encodeSizedField(encoder, TTL_ADAPTER, Optional.ofNullable(value.timeToLiveMs))
+            encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
+            encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
+            encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
+            encodeSizedField(encoder, ATTACHMENTS_OPTION_ADAPTER, Optional.ofNullable(value.attachments))
+        }
+    }
+
+    /** Exact signed bytes, never a proof-free intent or construction admission. */
+    private class InspectionExecutableAdapter(private val networkId: NetworkId) : TypeAdapter<Executable> {
+        private val instruction = InspectionInstructionAdapter(networkId)
+        override fun encode(encoder: NoritoEncoder, value: Executable) {
+            when (value) {
+                is Executable.Instructions -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG)
+                    encodeSizedField(encoder, NoritoAdapters.sequence(instruction), value.instructions)
+                }
+                is Executable.Batch -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_BATCH_TAG)
+                    encodeSizedField(encoder, NoritoAdapters.sequence(InspectionBatchItemAdapter(networkId)), value.entries)
+                }
+                is Executable.IvmProved -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_IVM_PROVED_TAG)
+                    val proved = object : TypeAdapter<Executable.IvmProved> {
+                        override fun encode(encoder: NoritoEncoder, value: Executable.IvmProved) {
+                            encodeSizedField(encoder, IVM_BYTECODE_ADAPTER, value.ivmBytes)
+                            encodeSizedField(encoder, NoritoAdapters.sequence(instruction), value.overlay)
+                            encodeSizedField(encoder, HASH_ADAPTER, value.eventsCommitment)
+                            encodeSizedField(encoder, HASH_ADAPTER, value.gasPolicyCommitment)
+                        }
+                        override fun decode(decoder: NoritoDecoder): Executable.IvmProved =
+                            throw UnsupportedOperationException("canonical inspection is encode-only")
+                    }
+                    encodeSizedField(encoder, proved, value)
+                }
+                is Executable.Ivm, is Executable.ContractCall -> encodeExecutable(encoder, value)
+            }
+        }
+        override fun decode(decoder: NoritoDecoder): Executable =
+            throw UnsupportedOperationException("canonical inspection is encode-only")
+    }
+
+    private class InspectionBatchItemAdapter(networkId: NetworkId) : TypeAdapter<ExecutableBatchItem> {
+        private val instruction = InspectionInstructionAdapter(networkId)
+        override fun encode(encoder: NoritoEncoder, value: ExecutableBatchItem) {
+            when (value) {
+                is ExecutableBatchItem.Instruction -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_INSTRUCTION_TAG)
+                    encodeSizedField(encoder, instruction, value.instruction)
+                }
+                is ExecutableBatchItem.ContractCall -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, BATCH_ITEM_CONTRACT_CALL_TAG)
+                    encodeSizedField(encoder, CONTRACT_INVOCATION_ADAPTER, value.invocation)
+                }
+            }
+        }
+        override fun decode(decoder: NoritoDecoder): ExecutableBatchItem =
+            throw UnsupportedOperationException("canonical inspection is encode-only")
+    }
+
+    private class InspectionInstructionAdapter(private val networkId: NetworkId) : TypeAdapter<InstructionBox> {
+        override fun encode(encoder: NoritoEncoder, value: InstructionBox) {
+            val wire = value.payload as? WirePayload
+                ?: throw IllegalArgumentException("Instruction payload must be wire-framed")
+            when (wire.wireName) {
+                "iroha.privacy.submit_proof.v1" -> {
+                    // Inspect every generic submission even with no attachments. This refuses
+                    // retired inline X509 identities; its proof-free result is never serialized.
+                    PrivacyNativeBridge.submitProofIntentProjectionV1(wire.payloadBytes)
+                }
+                SubmitPrivacyZkX509CertificateV1.WIRE_ID -> {
+                    val request = SubmitPrivacyZkX509CertificateV1.fromCanonicalRequestV1(wire.payloadBytes)
+                    require(request.contextNetworkId == networkId) { "X509 request network mismatch" }
+                }
+            }
+            encodeWireInstruction(encoder, value)
+        }
+        override fun decode(decoder: NoritoDecoder): InstructionBox =
+            throw UnsupportedOperationException("canonical inspection is encode-only")
+    }
+
     override fun decode(decoder: NoritoDecoder): TransactionPayload =
         withChainContext(chainDiscriminant) {
             val networkId = decodeSizedField(decoder, TRANSACTION_DOMAIN_ADAPTER)
@@ -142,6 +236,15 @@ internal class TransactionPayloadAdapter private constructor(
 
     internal fun actionStatementDigest(action: ActionIntentV1, intent: OrderedIntentDigestV1) =
         withChainContext(chainDiscriminant) { SIGNED_ATTACHMENTS_ADAPTER.statementDigest(action, intent) }
+
+    internal fun actionStatementProjectionV1(original: TransactionPayload, actionIndex: Long): ByteArray =
+        withChainContext(chainDiscriminant) {
+            val actions = requireNotNull(original.attachments) { "original signed actions are absent" }.actions
+            require(actionIndex in 0 until actions.size.toLong()) { "action ordinal is absent" }
+            val action = actions[actionIndex.toInt()]
+            require(action.actionIndex == actionIndex) { "action ordinal mismatch" }
+            SIGNED_ATTACHMENTS_ADAPTER.statementProjection(action, orderedIntentDigest(original))
+        }
 
     /** Exact canonical frame hashed by Rust's ordered intent digest. */
     internal fun orderedIntentProjection(value: TransactionPayload): ByteArray = withChainContext(chainDiscriminant) {
@@ -191,6 +294,12 @@ internal class TransactionPayloadAdapter private constructor(
     private class IntentInstructionAdapter : TypeAdapter<InstructionBox> {
         override fun encode(encoder: NoritoEncoder, value: InstructionBox) {
             val wire = value.payload as? WirePayload
+            if (wire?.wireName == SubmitPrivacyZkX509CertificateV1.WIRE_ID) {
+                val request = SubmitPrivacyZkX509CertificateV1.fromCanonicalRequestV1(wire.payloadBytes)
+                encodeSizedField(encoder, STRING_ADAPTER, wire.wireName)
+                encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, request.canonicalRequestBytes())
+                return
+            }
             if (wire?.wireName != "iroha.privacy.submit_proof.v1") {
                 INSTRUCTION_ADAPTER.encode(encoder, value)
                 return
@@ -299,7 +408,101 @@ internal class TransactionPayloadAdapter private constructor(
         return NoritoHeader.HEADER_LENGTH + empty.toByteArray().size - field(zeroBox) + field(realBox)
     }
 
+    /** Match each executing direct request before the attachment-absent fast path. */
+    private fun requireDirectZkX509Requests(value: TransactionPayload) {
+        val instructions = when (val executable = value.executable) {
+            is Executable.Instructions -> executable.instructions.mapIndexed { index, instruction -> index to instruction }
+            is Executable.Batch -> executable.entries.mapIndexedNotNull { index, item ->
+                (item as? ExecutableBatchItem.Instruction)?.let { index to it.instruction }
+            }
+            else -> emptyList()
+        }
+        for ((index, instruction) in instructions) {
+            val wire = instruction.payload as? WirePayload ?: continue
+            if (wire.wireName != SubmitPrivacyZkX509CertificateV1.WIRE_ID) continue
+            val request = SubmitPrivacyZkX509CertificateV1.fromCanonicalRequestV1(wire.payloadBytes)
+            require(request.contextNetworkId == value.networkId) { "X509 request network mismatch" }
+            val attachments = requireNotNull(value.attachments) { "X509 request requires signed attachments" }
+            val action = attachments.actions.firstOrNull { it.actionIndex == request.proofActionIndex }
+                ?: throw IllegalArgumentException("X509 request action is absent")
+            require(request.proofActionIndex < attachments.actions.size.toLong() &&
+                attachments.actions[request.proofActionIndex.toInt()] === action) { "X509 action ordinal mismatch" }
+            require(action.invocation == ActionInvocationBindingV1.Direct(index.toLong())) {
+                "X509 request direct invocation mismatch"
+            }
+            request.requireActionV1(action)
+        }
+    }
+
+    /** Retain every occurrence's count/index/kind in the pre-proof original intent. */
+    private fun requireCompleteAttachmentPlan(attachments: SignedAttachmentsV1) {
+        attachments.occurrences.forEachIndexed { index, occurrence ->
+            require(occurrence.index == index.toLong()) { "planned occurrences are out of order" }
+            if (occurrence.kind == org.hyperledger.iroha.sdk.core.model.AttachmentKindV1.Proof &&
+                occurrence.length == 0L && occurrence.contentHash.isZero() && occurrence.bytes.isEmpty()) {
+                // Explicit proof placeholder; only derived proof metadata is omitted from intent.
+            } else occurrence.validate()
+        }
+        var next = 0L
+        attachments.actions.forEachIndexed { index, action ->
+            require(action.actionIndex == index.toLong()) { "planned actions are out of order" }
+            require(!action.publicInputsDigest.isZero()) { "planned public-input digest is zero" }
+            for (reference in action.attachments) {
+                require(reference.index == next) { "planned proof reference is duplicated or out of order" }
+                val occurrence = attachments.occurrences.getOrNull(next.toInt())
+                    ?: throw IllegalArgumentException("original planned proof occurrence is missing")
+                require(reference.kind == occurrence.kind && reference.role.admits(reference.kind) &&
+                    reference.length == occurrence.length && reference.contentHash == occurrence.contentHash) {
+                    "planned proof occurrence does not match its original reference"
+                }
+                next++
+            }
+        }
+        require(next == attachments.occurrences.size.toLong()) { "unreferenced planned proof occurrence" }
+    }
+
+    internal fun materializeZkX509StatementV1(
+        request: SubmitPrivacyZkX509CertificateV1,
+        original: TransactionPayload,
+    ): ByteArray = withChainContext(chainDiscriminant) {
+        require(request.contextNetworkId == original.networkId) { "X509 request network mismatch" }
+        requireDirectZkX509Requests(original)
+        val attachments = requireNotNull(original.attachments) { "X509 request requires original actions" }
+        requireCompleteAttachmentPlan(attachments)
+        require(request.proofActionIndex < attachments.actions.size.toLong()) { "X509 request action is absent" }
+        val action = attachments.actions[request.proofActionIndex.toInt()]
+        request.requireActionV1(action)
+        when (val invocation = action.invocation) {
+            is ActionInvocationBindingV1.Direct -> {
+                val instruction = when (val executable = original.executable) {
+                    is Executable.Instructions -> executable.instructions.getOrNull(invocation.instructionIndex.toInt())
+                    is Executable.Batch -> (executable.entries.getOrNull(invocation.instructionIndex.toInt()) as? ExecutableBatchItem.Instruction)?.instruction
+                    else -> null
+                }
+                val wire = instruction?.payload as? WirePayload
+                require(wire?.wireName == SubmitPrivacyZkX509CertificateV1.WIRE_ID &&
+                    wire.payloadBytes.contentEquals(request.canonicalRequestBytes())) {
+                    "X509 materialization requires the exact original direct request"
+                }
+            }
+            is ActionInvocationBindingV1.Contract -> {
+                require(when (val executable = original.executable) {
+                    is Executable.Ivm, is Executable.IvmProved, is Executable.ContractCall -> invocation.rootIndex == 0L
+                    is Executable.Batch -> executable.entries.getOrNull(invocation.rootIndex.toInt()) is ExecutableBatchItem.ContractCall
+                    else -> false
+                }) { "X509 original contract root mismatch" }
+            }
+            ActionInvocationBindingV1.Transaction -> throw IllegalArgumentException("X509 requires an original invocation")
+        }
+        val intent = orderedIntentDigest(original)
+        val statement = SIGNED_ATTACHMENTS_ADAPTER.statementDigest(action, intent)
+        require(action.statementDigest.isZero() || action.statementDigest == statement) { "stale X509 action statement binding" }
+        PrivacyNativeBridge.materializeZkX509StatementV1(request.canonicalRequestBytes(),
+            SIGNED_ATTACHMENTS_ADAPTER.actionFrame(action), intent.bytes)
+    }
+
     private fun validateSignedAttachments(value: TransactionPayload) {
+        requireDirectZkX509Requests(value)
         val attachments = value.attachments ?: return
         SIGNED_ATTACHMENTS_ADAPTER.canonicalFrame(attachments)
         val intent = orderedIntentDigest(value)
@@ -785,21 +988,7 @@ internal class TransactionPayloadAdapter private constructor(
     private class InstructionAdapter : TypeAdapter<InstructionBox> {
         override fun encode(encoder: NoritoEncoder, value: InstructionBox) {
             value.requirePrivacyExact12ConstructionAdmission()
-            val payload = value.payload
-            if (payload is WirePayload) {
-                require(isWirePayloadCandidate(payload.wireName, payload.payloadBytes)) {
-                    "Wire payload must include a valid Norito header"
-                }
-                KaigiWirePayloadEncoderV1.requireCanonicalIfKnown(payload.wireName, payload.payloadBytes)
-                UpdatePlainConvictionWirePayloadEncoder.requireCanonicalIfKnown(
-                    payload.wireName,
-                    payload.payloadBytes,
-                )
-                encodeSizedField(encoder, STRING_ADAPTER, payload.wireName)
-                encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, payload.payloadBytes)
-                return
-            }
-            throw IllegalArgumentException("Instruction payload must be wire-framed")
+            encodeWireInstruction(encoder, value)
         }
 
         override fun decode(decoder: NoritoDecoder): InstructionBox {
@@ -1261,10 +1450,19 @@ internal class TransactionPayloadAdapter private constructor(
         }
 
         fun validateCanonicalPayloadBytes(encoded: ByteArray): TransactionPayload {
+            val snapshot = encoded.copyOf()
             val validator = forChain(CANONICAL_VALIDATION_DISCRIMINANT)
-            val decoded = NoritoCodec.decodeAdaptive(encoded, validator)
-            val reencoded = NoritoCodec.encodeAdaptive(decoded, validator).payload()
-            require(encoded.contentEquals(reencoded)) {
+            val decoded = NoritoCodec.decodeAdaptive(snapshot, validator)
+            // This adapter is created only after decoding supplied bytes and never escapes.
+            // It grants no admission: callers receive the same unadmitted decoded boxes.
+            val inspection = object : TypeAdapter<TransactionPayload> {
+                override fun encode(encoder: NoritoEncoder, value: TransactionPayload) =
+                    validator.encodeCanonicalInspection(encoder, value)
+                override fun decode(decoder: NoritoDecoder): TransactionPayload =
+                    throw UnsupportedOperationException("canonical inspection is encode-only")
+            }
+            val reencoded = NoritoCodec.encodeAdaptive(decoded, inspection).payload()
+            require(snapshot.contentEquals(reencoded)) {
                 "transaction payload bytes are not the exact canonical encoding"
             }
             return decoded
@@ -1611,6 +1809,24 @@ internal class TransactionPayloadAdapter private constructor(
             require(length <= Int.MAX_VALUE) { "Field payload too large" }
             val payload = decoder.readBytes(length.toInt())
             return AccountIdAdapter.decodePayload(payload, decoder.flags)
+        }
+
+        private fun encodeWireInstruction(encoder: NoritoEncoder, value: InstructionBox) {
+            val payload = value.payload
+            if (payload is WirePayload) {
+                require(isWirePayloadCandidate(payload.wireName, payload.payloadBytes)) {
+                    "Wire payload must include a valid Norito header"
+                }
+                KaigiWirePayloadEncoderV1.requireCanonicalIfKnown(payload.wireName, payload.payloadBytes)
+                UpdatePlainConvictionWirePayloadEncoder.requireCanonicalIfKnown(
+                    payload.wireName,
+                    payload.payloadBytes,
+                )
+                encodeSizedField(encoder, STRING_ADAPTER, payload.wireName)
+                encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, payload.payloadBytes)
+                return
+            }
+            throw IllegalArgumentException("Instruction payload must be wire-framed")
         }
 
         private fun encodeExecutable(encoder: NoritoEncoder, executable: Executable) {

@@ -1,6 +1,9 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::{asset_fi, asset_uid, asset_uid_enrollment, retail_daily_limit};
+use crate::isi::{
+    asset_escrow_scope, asset_fi, asset_fi_context, asset_uid, asset_uid_enrollment,
+    retail_daily_limit,
+};
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
@@ -8,31 +11,52 @@ pub(super) struct BuiltInWireId {
     #[cfg(test)]
     pub(super) type_label: &'static str,
     pub(super) type_name: TypeName,
+    /// Declared Norito identity of the payload type.
+    pub(super) payload: fn() -> std::borrow::Cow<'static, str>,
     pub(super) wire_id: &'static str,
     frame_len: fn(usize) -> Option<usize>,
     #[cfg(test)]
     pub(super) governance_only: bool,
+    /// Registered tolerantly: an instruction added after the frozen baseline
+    /// (`specs/live_runtime_upgrades.md` §5.2, [`InstructionRegistry::register_with_id_tolerant`]).
+    pub(super) tolerant: bool,
     register: Registrar,
 }
 macro_rules! built_in_wire_id_with_scope {
-    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, register = $register:expr) => {
+    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, tolerant = $tolerant:literal, register = $register:expr) => {
         BuiltInWireId {
             #[cfg(test)]
             type_label: stringify!($ty),
             type_name: std::any::type_name::<$ty>,
+            payload: norito::schema::identity::nominal_name::<$ty>,
             wire_id: $wire_id,
             frame_len: crate::isi::framed_instruction_payload_len_for::<$ty>,
             #[cfg(test)]
             governance_only: $governance_only,
+            tolerant: $tolerant,
             register: $register,
         }
     };
 }
+/// One built-in instruction's registration.
+///
+/// The baseline forms register strictly. An instruction added after the frozen baseline (an
+/// addition of `iroha_core::runtime::catalog::additions`) uses a `tolerant` form instead: releases
+/// without it keep its envelopes opaque, so this release must never fail to decode one either
+/// (`specs/live_runtime_upgrades.md` §5.2).
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_macro_rules,
+        reason = "no instruction is added after the frozen baseline yet; the first addition uses the tolerant forms"
+    )
+)]
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = false,
+            tolerant = false,
             register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
         )
     };
@@ -40,16 +64,33 @@ macro_rules! built_in_wire_id {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = false,
+            tolerant = false,
             register = |registry| registry.register_with_id::<$ty>($wire_id)
         )
     };
+    ($ty:ty => $wire_id:literal, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            tolerant = true,
+            register = |registry| registry.register_with_id_slice_tolerant::<$ty>($wire_id)
+        )
+    };
+    ($ty:ty => $wire_id:literal, register, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            tolerant = true,
+            register = |registry| registry.register_with_id_tolerant::<$ty>($wire_id)
+        )
+    };
 }
-#[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = true,
+            tolerant = false,
             register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
         )
     };
@@ -74,10 +115,12 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_uid_enrollment::ActivateAssetUidEnrollmentV1 => "iroha.asset.uid.enrollment.activate.v1"),
     built_in_wire_id!(asset_uid_enrollment::SetAssetUidSystemAccountV1 => "iroha.asset.uid.system.set.v1"),
     built_in_wire_id!(asset_fi::SetAssetFiV1 => "iroha.asset.fi.set.v1"),
+    built_in_wire_id!(asset_escrow_scope::InitializeAssetEscrowReadScopeV1 => "iroha.asset.escrow.read_scope.initialize.v1"),
     built_in_wire_id!(asset_fi::SetAssetFiLinkAttestationV1 => "iroha.asset.fi.link.attestation.set.v1"),
     built_in_wire_id!(asset_fi::SetAssetFiLinkV1 => "iroha.asset.fi.link.set.v1"),
     built_in_wire_id!(asset_fi::TransferToLinkedFiV1 => "iroha.asset.fi.link.transfer.v1"),
-
+    built_in_wire_id!(asset_fi_context::AssertAssetFiContextV1 => "iroha.asset.fi.context.assert.v1"),
+    built_in_wire_id!(asset_fi_context::AssertAssetFiTransferReceiptV1 => "iroha.asset.fi.transfer_receipt.assert.v1"),
     built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
     built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
     built_in_wire_id!(crate::isi::sumeragi_amx::RegisterAmxDataspaceV1 => "iroha.sumeragi.amx.register_dataspace.v1", register),
@@ -378,11 +421,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(smart_contract_code::RemoveSmartContractBytes => "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes"),
     built_in_wire_id!(zk::VerifyProof => "iroha.instruction.v1::zk::VerifyProof"),
     built_in_wire_id!(zk::PruneProofs => "iroha.instruction.v1::zk::PruneProofs"),
-    built_in_wire_id!(privacy::RegisterPrivacyProtocolActivationV1 => "iroha.privacy.register_protocol_activation.v1"),
-    built_in_wire_id!(privacy::RegisterPrivacyExact12QualificationV1 => "iroha.privacy.register_exact12_qualification.v1"),
-    built_in_wire_id!(privacy::SchedulePrivacyConsensusPolicyTighteningV1 => "iroha.privacy.schedule_consensus_policy_tightening.v1"),
-    built_in_wire_id!(privacy::SchedulePrivacyProtocolLimitsTighteningV1 => "iroha.privacy.schedule_protocol_limits_tightening.v1"),
-    built_in_wire_id!(privacy::TransitionPrivacyProtocolLifecycleV1 => "iroha.privacy.transition_protocol_lifecycle.v1"),
+    built_in_wire_id!(privacy::SchedulePrivacyConsensusPolicyUpdateV1 => "iroha.privacy.schedule_consensus_policy_update.v1"),
+    built_in_wire_id!(privacy::SchedulePrivacyProtocolLimitsUpdateV1 => "iroha.privacy.schedule_protocol_limits_update.v1"),
     built_in_wire_id!(privacy::PublishPrivacyRootV1 => "iroha.privacy.publish_root.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyOrchardPoolV1 => "iroha.privacy.bootstrap_orchard_pool.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyProofManagedPoolV1 => "iroha.privacy.bootstrap_proof_managed_pool.v1"),
@@ -407,6 +447,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(privacy::RotatePrivacyZkX509CrlV1 => "iroha.privacy.rotate_zk_x509_crl.v1"),
     built_in_wire_id!(privacy::RevokePrivacyZkX509CrlV1 => "iroha.privacy.revoke_zk_x509_crl.v1"),
     built_in_wire_id!(privacy::SubmitPrivacyProofV1 => "iroha.privacy.submit_proof.v1"),
+    built_in_wire_id!(privacy::SubmitPrivacyZkX509CertificateV1 => "iroha.privacy.submit_zk_x509_certificate.v1"),
     built_in_wire_id!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1 => "iroha.private_settlement.activate_pool.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1 => "iroha.private_settlement.rotate_pool_policy.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1 => "iroha.private_settlement.register_atomic_prepare.v1", register),
@@ -446,45 +487,26 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(confidential::PublishPoseidonParams => "iroha.instruction.v1::confidential::PublishPoseidonParams", register),
     built_in_wire_id!(confidential::SetPoseidonParamsLifecycle => "iroha.instruction.v1::confidential::SetPoseidonParamsLifecycle", register),
     built_in_wire_id!(ministry::SubmitAgendaProposal => "iroha.instruction.v1::ministry::SubmitAgendaProposal"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeDeployContract => "iroha.instruction.v1::governance::ProposeDeployContract"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeContractLifecycleGovernance => "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeContractEmergencyHold => "iroha.instruction.v1::governance::ProposeContractEmergencyHold"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeGlobalDataTriggerPermissionGovernance => "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha.instruction.v1::governance::ProposeSccpRouteGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeSorafsProviderGovernance => "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeValidationFeePolicy => "iroha.instruction.v1::governance::ProposeValidationFeePolicy"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::ProposeValidationFeePayoutLifecycle => "iroha.instruction.v1::governance::ProposeValidationFeePayoutLifecycle"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CreateParliamentGovernanceAttemptV1 => "iroha.governance.parliament.attempt.create.v1"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::SubmitParliamentLifecycleTransitionV1 => "iroha.governance.parliament.transition.submit.v1"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CastZkBallot => "iroha.instruction.v1::governance::CastZkBallot"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::CastPlainBallot => "iroha.instruction.v1::governance::CastPlainBallot"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::UpdatePlainConviction => "iroha.instruction.v1::governance::UpdatePlainConviction"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::SlashGovernanceLock => "iroha.instruction.v1::governance::SlashGovernanceLock"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha.instruction.v1::governance::RestituteGovernanceLock"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::RegisterCitizen => "iroha.instruction.v1::governance::RegisterCitizen"),
-    #[cfg(feature = "governance")]
     governance_wire_id!(governance::UnregisterCitizen => "iroha.instruction.v1::governance::UnregisterCitizen"),
-    built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
-    built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
-    built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
+    built_in_wire_id!(runtime_upgrade::AttestRuntimeSupportV1 => "iroha.runtime.support.attest.v1"),
+    built_in_wire_id!(runtime_upgrade::ContainRuntimeV1 => "iroha.runtime.contain.v1"),
 ];
 /// Borrow encoding metadata from this same canonical registration inventory.
 pub(super) fn encoding_entry(
@@ -504,4 +526,62 @@ pub(super) fn register_all() -> InstructionRegistry {
         .fold(InstructionRegistry::new(), |registry, entry| {
             (entry.register)(registry)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Registration forms of the built-in inventory (`specs/live_runtime_upgrades.md` §5.2).
+    use super::*;
+
+    #[test]
+    fn tolerant_forms_register_tolerantly_and_baseline_forms_do_not() {
+        let cases = [
+            (
+                built_in_wire_id!(Log => "test.tolerant.slice.v1", tolerant),
+                true,
+            ),
+            (
+                built_in_wire_id!(Log => "test.tolerant.register.v1", register, tolerant),
+                true,
+            ),
+            (built_in_wire_id!(Log => "test.strict.slice.v1"), false),
+            (
+                built_in_wire_id!(Log => "test.strict.register.v1", register),
+                false,
+            ),
+            (
+                governance_wire_id!(Log => "test.strict.governance.v1"),
+                false,
+            ),
+        ];
+        for (entry, tolerant) in cases {
+            assert_eq!(entry.tolerant, tolerant, "{}", entry.wire_id);
+            let registry = (entry.register)(InstructionRegistry::new());
+            assert!(registry.contains(entry.wire_id));
+            assert_eq!(
+                registry.is_tolerant(entry.wire_id),
+                tolerant,
+                "{}",
+                entry.wire_id
+            );
+        }
+    }
+
+    #[test]
+    fn the_baseline_inventory_is_strict_and_well_formed() {
+        // Every current entry belongs to the frozen baseline; a later addition registers
+        // tolerantly. Every wire ID satisfies the envelope wire-ID rule, so the release-independent
+        // framing check never refuses a registered instruction.
+        let registry = register_all();
+        for entry in ALL {
+            assert!(!entry.tolerant, "{}", entry.wire_id);
+            assert!(!registry.is_tolerant(entry.wire_id), "{}", entry.wire_id);
+            assert!(
+                crate::isi::is_well_formed_wire_id(entry.wire_id),
+                "{}",
+                entry.wire_id
+            );
+        }
+        assert!(super::super::built_in_instruction_schemas().all(|schema| !schema.tolerant));
+    }
 }

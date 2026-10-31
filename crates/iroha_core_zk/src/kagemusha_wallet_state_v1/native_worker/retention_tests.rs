@@ -34,9 +34,11 @@ fn key() -> RetentionKeyV1 {
 /// the own selector.
 #[test]
 fn every_key_input_separates_retained_state() {
+    type Mutation = (&'static str, fn(&mut RetentionKeyV1));
+
     let base = key();
     let durable = [[21; 32], [22; 32]];
-    let mutations: [(&str, fn(&mut RetentionKeyV1)); 15] = [
+    let mutations: [Mutation; 15] = [
         ("scheme", |k| k.installation.0[0] ^= 1),
         ("verifier manifest", |k| k.installation.1[0] ^= 1),
         ("wallet", |k| k.wallet[0] ^= 1),
@@ -246,7 +248,7 @@ fn retained_fold_state_is_move_only() {
     impl<T: ?Sized> AmbiguousIfClone<()> for T {}
     #[allow(dead_code)]
     struct IsClone;
-    impl<T: ?Sized + Clone> AmbiguousIfClone<IsClone> for T {}
+    impl<T: Clone> AmbiguousIfClone<IsClone> for T {}
     let _ = <RetainedFoldV1 as AmbiguousIfClone<_>>::check;
     let _ = <FoldRetentionV1 as AmbiguousIfClone<_>>::check;
 }

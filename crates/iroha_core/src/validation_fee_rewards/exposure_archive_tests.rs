@@ -170,10 +170,10 @@ fn archived_tail_fixture() -> (
         persist_tail(
             stx,
             &binding,
-            ValidationFeeExposureArchive {
+            &(ValidationFeeExposureArchive {
                 page,
                 previous: None,
-            },
+            }),
             0,
         )
         .unwrap();
@@ -278,7 +278,7 @@ fn archived_exposure_survives_hot_rollover_replay_and_signed_claims() {
             .is_none()
     );
     let latest = load_archive(&stx, &binding, period, &validator, &head.latest).unwrap();
-    let previous = latest.previous.clone().unwrap();
+    let previous = latest.previous.unwrap();
     let historical = load_archive(&stx, &binding, period, &validator, &previous).unwrap();
     assert_eq!(historical.page.page_index, 0);
     assert!(

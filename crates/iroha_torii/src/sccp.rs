@@ -147,7 +147,7 @@ fn format(accept: Option<&ExtractAccept>) -> Result<crate::utils::ResponseFormat
 }
 
 #[cfg(test)]
-fn respond<T>(accept: Option<&ExtractAccept>, value: T) -> Response
+fn respond<T>(accept: Option<&ExtractAccept>, value: &T) -> Response
 where
     T: norito::json::JsonSerialize + norito::core::NoritoSerialize + 'static,
 {
@@ -163,7 +163,7 @@ where
     T: norito::json::JsonSerialize + norito::core::NoritoSerialize + 'static,
 {
     match result {
-        Ok(value) => respond(accept, value),
+        Ok(value) => respond(accept, &value),
         Err(failure) => read_error(&failure),
     }
 }
@@ -183,7 +183,7 @@ fn validator_headers(response: &mut Response, etag: &str) {
 /// Respond with an immutable record: a strong `ETag` over the negotiated representation, and
 /// `304 Not Modified` for a matching `If-None-Match`.
 #[cfg(test)]
-fn respond_immutable<T>(accept: Option<&ExtractAccept>, headers: &HeaderMap, value: T) -> Response
+fn respond_immutable<T>(accept: Option<&ExtractAccept>, headers: &HeaderMap, value: &T) -> Response
 where
     T: norito::json::JsonSerialize + norito::core::NoritoSerialize + 'static,
 {
@@ -195,11 +195,11 @@ where
     let encoded = match format {
         ResponseFormat::Norito => {
             let mut bytes = Vec::new();
-            norito::core::to_bytes_in(&value, &mut bytes)
+            norito::core::to_bytes_in(value, &mut bytes)
                 .ok()
                 .map(|()| (crate::utils::NORITO_MIME_TYPE, bytes))
         }
-        ResponseFormat::Json => norito::json::to_vec(&value)
+        ResponseFormat::Json => norito::json::to_vec(value)
             .ok()
             .map(|bytes| ("application/json", bytes)),
     };
@@ -303,7 +303,7 @@ where
             value.data(),
             immutable(value.data()),
         ),
-        Err(error) => native::source_error(error),
+        Err(error) => native::source_error(&(error)),
     }
 }
 
@@ -369,7 +369,7 @@ pub fn recent_response(
         .transpose()
     {
         Ok(before) => before,
-        Err(error) => return native::source_error(error),
+        Err(error) => return native::source_error(&(error)),
     };
     metadata_fixture_response(
         accept,
@@ -447,7 +447,7 @@ pub fn controls_response(
     )
 }
 
-fn history_read_error(failure: read::SccpHistoryReadError) -> Response {
+fn history_read_error(failure: &read::SccpHistoryReadError) -> Response {
     use read::SccpHistoryReadError as Failure;
     match failure {
         Failure::MissingCommitment => error(
@@ -577,7 +577,7 @@ pub fn history_response(
     });
     match result {
         Ok(path) => respond_funded(owner, accept, headers, path.view(), size.is_some()),
-        Err(failure) => history_read_error(failure),
+        Err(failure) => history_read_error(&(failure)),
     }
 }
 

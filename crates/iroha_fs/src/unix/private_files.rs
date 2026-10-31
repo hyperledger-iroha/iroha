@@ -299,6 +299,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         publish_new(
             &self.directory.borrow().current().file,
             self.name.as_ref().to_str().ok_or_else(changed)?,
+            &self.directory.borrow().current().file,
             name.as_ref(),
         )?;
         let after = validate_file(&self.file, true)?;

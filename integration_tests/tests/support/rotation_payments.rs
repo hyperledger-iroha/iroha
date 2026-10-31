@@ -15,7 +15,8 @@ use eyre::{Result, ensure, eyre};
 use iroha::{
     blocking::Client,
     client::{
-        NativePaymentRequest, NativePaymentRunOptions, NativePaymentSession, VerifiedPaymentReceipt,
+        FileNativePaymentFinality, MAX_NATIVE_PAYMENT_FINALITY_BYTES, NativePaymentRequest,
+        NativePaymentRunOptions, NativePaymentSession, VerifiedPaymentReceipt,
     },
     workflow::{FileWorkflowStorage, WorkflowRunOptions},
 };
@@ -169,6 +170,15 @@ pub(super) async fn customer_payment_at_height(
     let operation = account.native_payment_with_session(
         NativePaymentRequest::new(terms, fee)?,
         Arc::new(FileWorkflowStorage::open_or_create(directory)?),
+        // Each original payment keeps its own bounded prefix beside the shared journal.
+        // This explicit key is fixture-only and remains identical on a cold retry.
+        Arc::new(FileNativePaymentFinality::open(
+            directory
+                .with_extension("finality")
+                .join(target_height.get().to_string()),
+            &[0x79; 32],
+            MAX_NATIVE_PAYMENT_FINALITY_BYTES,
+        )?),
         session,
     )?;
     let completed = owned_payment_until(deadline, async move {

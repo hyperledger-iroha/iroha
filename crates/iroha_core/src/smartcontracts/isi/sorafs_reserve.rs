@@ -3,7 +3,7 @@ use super::*;
 use crate::smartcontracts::ValidSingularQuery;
 use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
 use crate::smartcontracts::isi::helpers::transaction_account_has_permission as has_permission;
-use crate::state::{StateTransaction, WorldReadOnly};
+use crate::state::{StateTransaction, WorldReadOnly, WorldTransaction};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetId,
@@ -89,8 +89,7 @@ impl VerifiedSorafsReserveWithdrawal {
     fn new(
         provider_id: ProviderId,
         movement_id: [u8; 32],
-        policy_digest: [u8; 32],
-        expected_provider_revision: u64,
+        (policy_digest, expected_provider_revision): ([u8; 32], u64),
         decision_authority: AccountId,
         source_id: AssetId,
         destination_id: AssetId,
@@ -248,7 +247,7 @@ fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    decode_state_with_current(bytes, label, None)
+    decode_state_with_current(bytes, label, None, None)
 }
 fn decode_state_for_current<T>(
     bytes: &[u8],
@@ -258,12 +257,13 @@ fn decode_state_for_current<T>(
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    decode_state_with_current(bytes, label, Some(current))
+    decode_state_with_current(bytes, label, Some(current), None)
 }
 fn decode_state_with_current<T>(
     bytes: &[u8],
     label: &str,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
@@ -273,31 +273,57 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let limits = match current.as_deref() {
-        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
-        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
-            bytes.len(),
-            STATE_LIMITS,
-        ),
-    }
-    .map_err(InstructionExecutionError::Query)?;
-    let (value, allocation_bytes) = if current.is_some() {
-        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_canonical_with_limits::<T>(bytes, limits)
-        });
-        (value, Some(usage.total_allocated_bytes()))
+    let limits = current
+        .as_deref()
+        .map_or_else(
+            || {
+                crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    bytes.len(),
+                    STATE_LIMITS,
+                )
+            },
+            |current| current.decode_limits(bytes.len(), STATE_LIMITS),
+        )
+        .map_err(InstructionExecutionError::Query)?;
+    let decoded = if owner.is_some() {
+        crate::execution_attempt::canonical_policy_decode(owner, bytes, limits)
+            .map(|value| (value, None))
     } else {
-        (decode_canonical_with_limits::<T>(bytes, limits), None)
+        norito::core::classify_decode_attempt(|| {
+            // Fixed reserve and query limits are inner policy limits. Only a refusal
+            // from the caller's enclosing scope belongs to its execution attempt.
+            if current.is_some() {
+                let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+                    decode_canonical_with_limits::<T>(bytes, limits)
+                });
+                value.map(|value| (value, Some(usage.total_allocated_bytes())))
+            } else {
+                decode_canonical_with_limits::<T>(bytes, limits).map(|value| (value, None))
+            }
+        })
+        .map_err(norito::CanonicalDecodeControlError::Decode)
     };
-    let value = value.map_err(|error| {
-        if crate::smartcontracts::isi::query::singular_query_limits_active()
-            && error.is_decode_resource_limit()
-        {
-            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
-            corrupt_state(format!("{label} state is not exact canonical Norito"))
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
+    let (value, allocation_bytes) = decoded.map_err(|error| {
+        let rejected = |error: norito::CanonicalDecodeControlError| {
+            let error = match error {
+                norito::CanonicalDecodeControlError::Decode(error) => error.into_error(),
+                error => return corrupt_state(format!("failed to decode {label}: {error}")),
+            };
+            if crate::smartcontracts::isi::query::singular_query_limits_active()
+                && error.is_decode_resource_limit()
+            {
+                InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+            } else if matches!(error, norito::Error::NonCanonicalEncoding) {
+                corrupt_state(format!("{label} state is not exact canonical Norito"))
+            } else {
+                corrupt_state(format!("failed to decode {label}: {error}"))
+            }
+        };
+        match owner {
+            Some(owner) => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, rejected),
+            ),
+            None => rejected(error),
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current, allocation_bytes) {
@@ -410,49 +436,57 @@ fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
 ) -> Result<Option<ReservePersistedEventV1>, InstructionExecutionError> {
+    read_persisted_event_with_owner(world, sequence, None)
+}
+fn read_persisted_event_with_owner(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ReservePersistedEventV1>, InstructionExecutionError> {
     if sequence == 0 {
         return Err(corrupt_state("reserve event sequence zero cannot be read"));
     }
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    decode_persisted_event(bytes, sequence).map(Some)
+    decode_persisted_event_with_current(bytes, sequence, None, owner).map(Some)
 }
+#[cfg(test)]
 fn decode_persisted_event(
     bytes: &[u8],
     sequence: u64,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
-    decode_persisted_event_with_current(bytes, sequence, None)
+    decode_persisted_event_with_current(bytes, sequence, None, None)
 }
 fn decode_persisted_event_for_current(
     bytes: &[u8],
     sequence: u64,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
-    decode_persisted_event_with_current(bytes, sequence, Some(current))
+    decode_persisted_event_with_current(bytes, sequence, Some(current), None)
 }
 fn decode_persisted_event_with_current(
     bytes: &[u8],
     sequence: u64,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
     if bytes.len() > RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 {
         return Err(corrupt_state(format!(
             "reserve committed event exceeds {RESERVE_COMMITTED_EVENT_MAX_BYTES_V1} bytes"
         )));
     }
-    let record: ReservePersistedEventV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reserve committed event", current)?,
-        None => decode_state(bytes, "reserve committed event")?,
-    };
+    let record: ReservePersistedEventV1 =
+        decode_state_with_current(bytes, "reserve committed event", current, owner)?;
     validate_persisted_event(&record, sequence)?;
     Ok(record)
 }
 fn validate_event_journal_head(
     world: &impl WorldReadOnly,
     head: ReserveEventJournalHeadV1,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<(), InstructionExecutionError> {
-    let record = read_persisted_event(world, head.last_sequence)?
+    let record = read_persisted_event_with_owner(world, head.last_sequence, owner)?
         .ok_or_else(|| corrupt_state("reserve event journal head references a missing event"))?;
     if record.target_block_height != head.last_target_block_height
         || record.event_index != head.last_event_index
@@ -466,7 +500,7 @@ fn validate_event_journal_head(
     } else {
         let predecessor_sequence = head.last_sequence - 1;
         Some(
-            read_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
+            read_persisted_event_with_owner(world, predecessor_sequence, owner)?.ok_or_else(|| {
                 corrupt_state(format!(
                     "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
                 ))
@@ -559,45 +593,42 @@ fn append_reserve_event_journal(
     let current_state = read_reserve_state(state_transaction.world())?;
     let head = current_state.as_ref().map(|state| state.journal_head);
     ensure_no_event_after_head(state_transaction.world(), head)?;
-    let (sequence, event_index) = match head {
-        Some(head) => {
-            let sequence = head
-                .last_sequence
+    let (sequence, event_index) = if let Some(head) = head {
+        let sequence = head
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("reserve event sequence overflow"))?;
+        let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+            core::cmp::Ordering::Less => 0,
+            core::cmp::Ordering::Equal => head
+                .last_event_index
                 .checked_add(1)
-                .ok_or_else(|| corrupt_state("reserve event sequence overflow"))?;
-            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
-                core::cmp::Ordering::Less => 0,
-                core::cmp::Ordering::Equal => head
-                    .last_event_index
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt_state("reserve event block index overflow"))?,
-                core::cmp::Ordering::Greater => {
-                    return Err(corrupt_state(
-                        "reserve event target height regressed behind the journal head",
-                    ));
-                }
-            };
-            (sequence, event_index)
-        }
-        None => {
-            ensure_reserve_namespace_empty(state_transaction.world())?;
-            let policy = next_policy.as_ref().ok_or_else(|| {
-                corrupt_state("first reserve event has no initial policy activation")
-            })?;
-            if event.kind != SorafsReserveLedgerEventKind::PolicyActivated
-                || event.provider_id.is_some()
-                || event.operation_id.is_some()
-                || event.provider_revision != 0
-                || event.resulting_lifecycle_stage.is_some()
-                || policy.policy.revision != 1
-                || policy.policy_digest != event.policy_digest
-            {
+                .ok_or_else(|| corrupt_state("reserve event block index overflow"))?,
+            core::cmp::Ordering::Greater => {
                 return Err(corrupt_state(
-                    "reserve event journal must begin with initial policy activation",
+                    "reserve event target height regressed behind the journal head",
                 ));
             }
-            (1, 0)
+        };
+        (sequence, event_index)
+    } else {
+        ensure_reserve_namespace_empty(state_transaction.world())?;
+        let policy = next_policy
+            .as_ref()
+            .ok_or_else(|| corrupt_state("first reserve event has no initial policy activation"))?;
+        if event.kind != SorafsReserveLedgerEventKind::PolicyActivated
+            || event.provider_id.is_some()
+            || event.operation_id.is_some()
+            || event.provider_revision != 0
+            || event.resulting_lifecycle_stage.is_some()
+            || policy.policy.revision != 1
+            || policy.policy_digest != event.policy_digest
+        {
+            return Err(corrupt_state(
+                "reserve event journal must begin with initial policy activation",
+            ));
         }
+        (1, 0)
     };
     let key = event_key(sequence);
     if state_transaction
@@ -679,24 +710,34 @@ fn read_policy(
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, InstructionExecutionError> {
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
-/// Return whether `asset_id` is the exact asset held by active SoraFS reserve custody.
+/// Return whether `asset_id` is the exact asset held by active `SoraFS` reserve custody.
 pub(super) fn is_reserve_custody_asset(
     world: &impl WorldReadOnly,
     asset_id: &AssetId,
 ) -> Result<bool, InstructionExecutionError> {
-    Ok(read_policy(world)?.is_some_and(|record| {
-        record.policy.asset_definition == *asset_id.definition()
-            && record.policy.custody_account == *asset_id.account()
-    }))
+    is_reserve_custody_asset_with_owner(world, asset_id, None)
 }
-/// Return whether `account_id` is the active SoraFS reserve custody account.
+/// Check custody while preserving local refusals from the policy and journal decoders.
+pub(super) fn is_reserve_custody_asset_with_owner(
+    world: &impl WorldReadOnly,
+    asset_id: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(
+        read_reserve_state_with_owner(world, owner)?.is_some_and(|state| {
+            state.policy.policy.asset_definition == *asset_id.definition()
+                && state.policy.policy.custody_account == *asset_id.account()
+        }),
+    )
+}
+/// Return whether `account_id` is the active `SoraFS` reserve custody account.
 pub(super) fn is_reserve_custody_account(
     world: &impl WorldReadOnly,
     account_id: &AccountId,
 ) -> Result<bool, InstructionExecutionError> {
     Ok(read_policy(world)?.is_some_and(|record| record.policy.custody_account == *account_id))
 }
-/// Return whether `definition_id` backs the active SoraFS reserve ledger.
+/// Return whether `definition_id` backs the active `SoraFS` reserve ledger.
 pub(super) fn is_reserve_asset_definition(
     world: &impl WorldReadOnly,
     definition_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -756,30 +797,35 @@ pub(super) fn validate_verified_reserve_withdrawal(
 fn read_reserve_state(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
+    read_reserve_state_with_owner(world, None)
+}
+fn read_reserve_state_with_owner(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(reserve_state_key()) else {
         return Ok(None);
     };
-    let state = decode_reserve_state(bytes)?;
-    validate_event_journal_head(world, state.journal_head)?;
+    let state = decode_reserve_state_with_current(bytes, None, owner)?;
+    validate_event_journal_head(world, state.journal_head, owner)?;
     Ok(Some(state))
 }
+#[cfg(test)]
 fn decode_reserve_state(bytes: &[u8]) -> Result<ReserveStateV1, InstructionExecutionError> {
-    decode_reserve_state_with_current(bytes, None)
+    decode_reserve_state_with_current(bytes, None, None)
 }
 fn decode_reserve_state_for_current(
     bytes: &[u8],
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<ReserveStateV1, InstructionExecutionError> {
-    decode_reserve_state_with_current(bytes, Some(current))
+    decode_reserve_state_with_current(bytes, Some(current), None)
 }
 fn decode_reserve_state_with_current(
     bytes: &[u8],
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<ReserveStateV1, InstructionExecutionError> {
-    let state: ReserveStateV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reserve state", current)?,
-        None => decode_state(bytes, "reserve state")?,
-    };
+    let state: ReserveStateV1 = decode_state_with_current(bytes, "reserve state", current, owner)?;
     state
         .validate()
         .map_err(|error| corrupt_state(error.to_string()))?;
@@ -1728,8 +1774,7 @@ impl Execute for DecideSorafsReserveMovement {
                     let authorization = VerifiedSorafsReserveWithdrawal::new(
                         movement.provider_id,
                         movement.movement_id,
-                        policy.policy_digest,
-                        self.expected_provider_revision,
+                        (policy.policy_digest, self.expected_provider_revision),
                         authority.clone(),
                         source_id,
                         destination_id,
@@ -2326,7 +2371,7 @@ fn read_policy_for_query(
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, QueryExecutionFail> {
     let key = reserve_state_key();
     let bytes = world.smart_contract_state().get(key);
-    budget.inspect_direct_read(key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(key, bytes.map_or(0, std::vec::Vec::len))?;
     bytes
         .map(|bytes| {
             let mut current =
@@ -2395,7 +2440,7 @@ fn read_persisted_event_for_query(
     }
     let key = event_key(sequence);
     let bytes = world.smart_contract_state().get(&key);
-    budget.inspect_direct_read(&key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(&key, bytes.map_or(0, std::vec::Vec::len))?;
     bytes
         .map(|bytes| {
             let mut current =
@@ -2412,7 +2457,7 @@ fn read_event_journal_head_for_query(
 ) -> Result<Option<ReserveEventJournalHeadV1>, QueryExecutionFail> {
     let key = reserve_state_key();
     let bytes = world.smart_contract_state().get(key);
-    budget.inspect_direct_read(key, bytes.map_or(0, |bytes| bytes.len()))?;
+    budget.inspect_direct_read(key, bytes.map_or(0, std::vec::Vec::len))?;
     let Some(bytes) = bytes else {
         return Ok(None);
     };

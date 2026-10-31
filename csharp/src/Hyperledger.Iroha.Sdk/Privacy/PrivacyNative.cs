@@ -22,7 +22,7 @@ public enum PrivacyProtocolIdV1 : uint
     PqMaspStarkV1 = 11,
 }
 
-/// <summary>Stable ABI-31 result of validating one typed local compiled-profile catalog.</summary>
+/// <summary>Stable ABI-33 result of validating one typed local compiled-profile catalog.</summary>
 public enum PrivacyCompiledProfileCatalogValidationStatusV1
 {
     Valid = 0,
@@ -36,7 +36,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1
     InvalidCatalog = 8,
 }
 
-/// <summary>Stable ABI-31 result of validating the Rust-derived exact-12 fixture bundle.</summary>
+/// <summary>Stable ABI-33 result of validating the Rust-derived exact-12 fixture bundle.</summary>
 public enum PrivacyExact12FixtureValidationStatusV1
 {
     Valid = 0,
@@ -219,7 +219,7 @@ public static class PrivacyNative
     public const int PrivacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024;
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
-    public const uint RequiredBridgeAbiVersion = 31;
+    public const uint RequiredBridgeAbiVersion = 33;
     private const string LibraryName = "connect_norito_bridge";
     private static readonly bool Available = DetectAvailability();
     private delegate int NativeArchiveQuery(out IntPtr output, out UIntPtr outputLength);
@@ -500,17 +500,13 @@ public static class PrivacyNative
             PrivacyExact12CapabilityManifestCodecV1.Validate(snapshot, catalog);
             return PrivacyExact12CapabilityManifestValidationStatusV1.Valid;
         }
-        catch (PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException)
-        {
-            return PrivacyExact12CapabilityManifestValidationStatusV1.LocalCompiledTupleMismatch;
-        }
         catch (PrivacyExact12CapabilityManifestException)
         {
             return PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest;
         }
     }
 
-    /// <summary>Require Rust's complete release, audit and deployment evidence verification.</summary>
+    /// <summary>Require Rust's canonical runtime manifest and per-protocol governance validation.</summary>
     internal static void RequireValidCapabilityArchive(byte[] archive)
     {
         ArgumentNullException.ThrowIfNull(archive);

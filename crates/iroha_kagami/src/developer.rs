@@ -16,12 +16,19 @@ use iroha_data_model::{
 };
 use iroha_deploy::managed::{
     self, DataspaceRequest, InstalledRuntime, ManagedContext, ManagedDataspaceStatus, ManagedPhase,
-    ManagedStatus, ManagedStore, default_state_root, workspace_state_root,
+    ManagedStatus, ManagedStore, ManagedValidatorState, default_state_root,
+    discover_workspace_root, workspace_state_root,
 };
 use iroha_primitives::numeric::Quantity;
-use musubi::deployment_runtime::{AliasSelection, ContractInput, DeploymentRuntime};
+use musubi::deployment_runtime::{
+    AliasSelection, ContractInput, DeploymentRuntime, SavedDeployment,
+};
 
 use crate::{Outcome, RunArgs, localnet, tui};
+
+/// Debug binaries on a busy machine can take most of 30 seconds, and a false failure costs more
+/// than a slower report of a real one.
+const DEFAULT_START_TIMEOUT_SECONDS: u64 = 120;
 
 /// Store selection and output formatting for managed developer commands.
 #[derive(Debug, Clone, Args)]
@@ -29,7 +36,7 @@ pub struct StoreArgs {
     /// Private runtime store. By default each workspace has its own OS application-state directory.
     #[arg(long)]
     state: Option<PathBuf>,
-    /// Workspace whose managed context is selected (defaults to the current directory).
+    /// Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory).
     #[arg(long)]
     workspace: Option<PathBuf>,
     /// Emit one public JSON result; progress remains on stderr.
@@ -57,10 +64,10 @@ impl StoreArgs {
         let root = if let Some(path) = &self.state {
             path.clone()
         } else {
-            let workspace = self
-                .workspace
-                .clone()
-                .map_or_else(std::env::current_dir, Ok)?;
+            let workspace = match &self.workspace {
+                Some(workspace) => workspace.clone(),
+                None => discover_workspace_root(&std::env::current_dir()?)?,
+            };
             workspace_state_root(&default_state_root()?, &workspace)?
         };
         ManagedStore::open(&root).map_err(Into::into)
@@ -80,10 +87,8 @@ pub enum LocalnetCommand {
     Down(NamedArgs),
     /// Explicitly retire one stopped generation so the next up creates a fresh ledger.
     Reset(ResetArgs),
-    /// Generate an operator-owned network bundle without starting validators.
+    /// Generate a developer network bundle without starting validators.
     Generate(localnet::Args),
-    /// Validate an isolated native beacon configuration and opaque descriptor handoff.
-    ValidateBeaconLaunch(localnet::ValidateBeaconLaunchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -99,8 +104,14 @@ pub struct NamedArgs {
 pub struct UpArgs {
     #[command(flatten)]
     named: NamedArgs,
+    /// Provision local storage and package-registry services when creating this network.
+    #[arg(long)]
+    with_storage: bool,
     /// Complete generation and readiness budget in seconds.
-    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+    ///
+    /// A ready localnet returns as soon as all four validators are verified; the budget only
+    /// bounds slow first starts, such as debug builds on a loaded machine.
+    #[arg(long, default_value_t = DEFAULT_START_TIMEOUT_SECONDS, value_parser = clap::value_parser!(u64).range(1..=600))]
     timeout: u64,
 }
 
@@ -108,12 +119,15 @@ pub struct UpArgs {
 pub struct LogsArgs {
     #[command(flatten)]
     named: NamedArgs,
-    /// Validator index (0..3). Omit to read the supervisor log.
+    /// Validator index (0..3). Omit to read the supervisor log, which is usually short; validator output is here.
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
     peer: Option<u8>,
     /// Maximum bytes returned from the end of the log.
     #[arg(long, default_value_t = 16384, value_parser = clap::value_parser!(u32).range(1..=1048576))]
     bytes: u32,
+    /// Keep printing new log output until interrupted.
+    #[arg(long, short, conflicts_with = "json")]
+    follow: bool,
 }
 
 #[derive(Debug, Args)]
@@ -254,6 +268,18 @@ pub enum ContractCommand {
     View(ContractViewArgs),
     /// Prepare, execute or resume a finite durable mutable call.
     Call(ContractCallArgs),
+    /// List the saved deployment journals that deploy --resume accepts, by contract alias.
+    Saved(ContractSavedArgs),
+}
+
+/// Saved deployment journals in one managed environment; nothing starts or signs.
+#[derive(Debug, Args)]
+pub struct ContractSavedArgs {
+    #[command(flatten)]
+    store: StoreArgs,
+    /// Existing managed environment; otherwise use the workspace selection.
+    #[arg(long)]
+    context: Option<String>,
 }
 
 /// Selected managed deployment view, without caller-supplied configuration or intent files.
@@ -294,8 +320,8 @@ pub struct ContractCallArgs {
     /// Named arguments validated and encoded natively from the retained deployed interface.
     #[arg(long, default_value = "{}", conflicts_with = "resume")]
     args: String,
-    /// Positive aggregate cap across any exact self-grant and the call in the generated fee asset.
-    #[arg(long, required_unless_present = "resume", conflicts_with = "resume")]
+    /// Positive aggregate cap across any exact self-grant and the call in the generated fee asset [default: 1000].
+    #[arg(long, conflicts_with = "resume")]
     max_fee: Option<Quantity>,
     /// Signature-bound mutable execution budget.
     #[arg(long, default_value_t = 1_500_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000), conflicts_with = "resume")]
@@ -348,6 +374,9 @@ pub struct DeployArgs {
     /// Bound the aggregate quoted fees in their single fee asset before dispatch.
     #[arg(long, conflicts_with = "resume")]
     max_fee: Option<Quantity>,
+    /// Startup budget in seconds when the deployment has to start its localnet first.
+    #[arg(long, default_value_t = DEFAULT_START_TIMEOUT_SECONDS, value_parser = clap::value_parser!(u64).range(1..=600))]
+    timeout: u64,
 }
 
 /// Internal entry point for the shared native supervisor.
@@ -380,24 +409,42 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
             Self::Generate(args) => args.run(writer),
-            Self::ValidateBeaconLaunch(args) => args.run(writer),
             Self::Up(args) => {
                 let store = args.named.store.open()?;
-                match up(&store, &args.named.name, args.timeout) {
+                tui::status(format!(
+                    "Starting localnet `{}`: four validators, up to {}s",
+                    args.named.name, args.timeout
+                ));
+                match up(&store, &args.named.name, args.timeout, args.with_storage) {
                     Ok(status) if status.phase == ManagedPhase::Ready => {
                         print_status(writer, &status, args.named.store.json)
                     }
-                    Ok(status) => localnet_failure(
-                        writer,
-                        store.root(),
-                        &args.named.name,
-                        Some(&status),
-                        args.named.store.json,
-                        eyre!("localnet is not ready"),
-                    ),
+                    Ok(status) => {
+                        print_validator_failure(writer, &store, &status, args.named.store.json);
+                        localnet_failure(
+                            writer,
+                            store.root(),
+                            &args.named.name,
+                            Some(&status),
+                            args.named.store.json,
+                            eyre!("localnet is not ready"),
+                        )
+                    }
+                    // The message already names the remedy, and there may be nothing to inspect.
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<managed::Error>(),
+                            Some(managed::Error::RuntimeMismatch(_))
+                        ) =>
+                    {
+                        Err(error)
+                    }
                     Err(error) => {
                         // Observation cannot replace the original error or create a generation.
                         let retained = store.status(&args.named.name).ok();
+                        if let Some(status) = &retained {
+                            print_validator_failure(writer, &store, status, args.named.store.json);
+                        }
                         localnet_failure(
                             writer,
                             store.root(),
@@ -409,26 +456,31 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
                     }
                 }
             }
-            Self::Status(args) => print_status(
-                writer,
-                &args.store.open()?.status(&args.name)?,
-                args.store.json,
-            ),
-            Self::Down(args) => print_status(
-                writer,
-                &args.store.open()?.down(&args.name)?,
-                args.store.json,
-            ),
+            Self::Status(args) => {
+                let store = args.store.open()?;
+                let status = known_environment(&store, &args.name, store.status(&args.name))?;
+                print_status(writer, &status, args.store.json)
+            }
+            Self::Down(args) => {
+                let store = args.store.open()?;
+                let status = known_environment(&store, &args.name, store.down(&args.name))?;
+                print_status(writer, &status, args.store.json)
+            }
             Self::Reset(args) => {
                 let store = args.store.open()?;
-                store.reset(&args.name)?;
+                known_environment(&store, &args.name, store.reset(&args.name))?;
                 print_reset(writer, store.root(), &args.name, args.store.json)
             }
             Self::Logs(args) => {
-                let logs = args.named.store.open()?.logs(
+                let store = args.named.store.open()?;
+                let logs = known_environment(
+                    &store,
                     &args.named.name,
-                    args.peer.map(usize::from),
-                    args.bytes as usize,
+                    store.logs(
+                        &args.named.name,
+                        args.peer.map(usize::from),
+                        args.bytes as usize,
+                    ),
                 )?;
                 if args.named.store.json {
                     write_json(
@@ -436,7 +488,15 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
                         &norito::json!({"name": (args.named.name), "log": logs}),
                     )
                 } else {
+                    if logs.is_empty() && args.peer.is_none() {
+                        tui::status(
+                            "The supervisor log is empty; validator output is under `kagami localnet logs --peer 0`",
+                        );
+                    }
                     write!(writer, "{logs}")?;
+                    if args.follow {
+                        follow_logs(writer, &store, &args.named.name, args.peer.map(usize::from))?;
+                    }
                     Ok(())
                 }
             }
@@ -452,21 +512,30 @@ impl<T: Write> RunArgs<T> for ContextCommand {
                 if args.json {
                     return write_json(writer, &contexts);
                 }
+                if contexts.is_empty() {
+                    writeln!(
+                        writer,
+                        "No environments in this workspace yet. Create one with `kagami localnet up`."
+                    )?;
+                }
                 for context in contexts {
                     print_context(writer, &context, false)?;
                 }
                 Ok(())
             }
-            Self::Show(args) => print_context(
-                writer,
-                &args.store.open()?.context(args.name.as_deref())?,
-                args.store.json,
-            ),
-            Self::Use(args) => print_context(
-                writer,
-                &args.store.open()?.select(&args.name)?,
-                args.store.json,
-            ),
+            Self::Show(args) => {
+                let store = args.store.open()?;
+                let context = match args.name.as_deref() {
+                    Some(name) => known_environment(&store, name, store.context(Some(name)))?,
+                    None => store.context(None)?,
+                };
+                print_context(writer, &context, args.store.json)
+            }
+            Self::Use(args) => {
+                let store = args.store.open()?;
+                let context = known_environment(&store, &args.name, store.select(&args.name))?;
+                print_context(writer, &context, args.store.json)
+            }
         }
     }
 }
@@ -670,6 +739,7 @@ impl<T: Write> RunArgs<T> for ContractCommand {
             Self::Deploy(args) => args.run(writer),
             Self::View(args) => args.run(writer),
             Self::Call(args) => args.run(writer),
+            Self::Saved(args) => args.run(writer),
         }
     }
 }
@@ -708,7 +778,11 @@ impl<T: Write> RunArgs<T> for DeployArgs {
             store.context(args.context.as_deref())?;
         }
         let context = store
-            .ensure_selected(&runtime, args.context.as_deref(), Duration::from_secs(30))?
+            .ensure_selected(
+                &runtime,
+                args.context.as_deref(),
+                Duration::from_secs(args.timeout),
+            )?
             .context;
         let target = store.capture_deployment(&context)?;
         let config = context.load_client_config()?;
@@ -730,7 +804,7 @@ impl<T: Write> RunArgs<T> for DeployArgs {
                 let store = ManagedStore::open(&registry_root)?;
                 Ok(store.build_registry(&runtime, &registry_prepared, deadline)?)
             }));
-        let mut progress = deployment_progress;
+        let mut progress = |event: DeploymentProgress| deployment_progress(&event);
         let mut review = |preflight: &DeploymentPreflight| {
             ensure!(
                 preflight.dataspace_id.as_u64() == context.dataspace_id,
@@ -780,6 +854,11 @@ impl<T: Write> RunArgs<T> for DeployArgs {
             writeln!(writer, "journal: {}", report.journal.display())?;
             if let Some(lifecycle) = &report.lifecycle {
                 writeln!(writer, "{}", lifecycle.summary())?;
+                writeln!(
+                    writer,
+                    "Next: {}",
+                    hook_command(&report.receipt.contract_alias, lifecycle)
+                )?;
             }
             if let Some(parent) = report.parent_summary() {
                 writeln!(writer, "{parent}")?;
@@ -799,7 +878,7 @@ fn managed_contract_context(
         .ensure_selected(
             &InstalledRuntime::discover()?,
             requested,
-            Duration::from_secs(30),
+            Duration::from_secs(DEFAULT_START_TIMEOUT_SECONDS),
         )?
         .context)
 }
@@ -809,21 +888,9 @@ fn view_request(
     arguments: &str,
     gas_limit: u64,
 ) -> Result<managed::ManagedContractViewRequest> {
-    ensure!(
-        !entrypoint.is_empty() && entrypoint.trim() == entrypoint,
-        "entrypoint must use its exact public selector"
-    );
-    ensure!(
-        arguments.len() <= 64 * 1024,
-        "contract arguments exceed the 64 KiB bound"
-    );
-    let arguments = iroha_contract_deploy::call::parse_contract_arguments(arguments)?;
-    Ok(managed::ManagedContractViewRequest {
-        entrypoint,
-        arguments,
-        gas_limit: std::num::NonZeroU64::new(gas_limit)
-            .ok_or_else(|| eyre!("gas limit must be positive"))?,
-    })
+    Ok(managed::ManagedContractViewRequest::parse(
+        entrypoint, arguments, gas_limit,
+    )?)
 }
 
 impl<T: Write> RunArgs<T> for ContractViewArgs {
@@ -852,6 +919,80 @@ impl<T: Write> RunArgs<T> for ContractViewArgs {
             write_json(writer, &result.result)
         }
     }
+}
+
+impl<T: Write> RunArgs<T> for ContractSavedArgs {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let store = self.store.open()?;
+        // Listing reads retained journals only; a stopped environment stays stopped.
+        let context = match self.context.as_deref() {
+            Some(name) => known_environment(&store, name, store.context(Some(name)))?,
+            None => store.context(None)?,
+        };
+        let config = context.load_client_config()?;
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let prepared = store.prepared(&context.name)?;
+        ensure!(
+            prepared.context == context,
+            "deployment generation changed before journal listing"
+        );
+        let saved = DeploymentRuntime::new(
+            config,
+            store.root().join("deployments").join(&context.name),
+            prepared.build_cache_root(),
+        )
+        .saved_deployments()?;
+        print_saved_deployments(writer, &context.name, &saved, self.store.json)
+    }
+}
+
+fn print_saved_deployments(
+    writer: &mut impl Write,
+    name: &str,
+    saved: &[SavedDeployment],
+    json: bool,
+) -> Outcome {
+    if json {
+        let entries = saved
+            .iter()
+            .map(|deployment| {
+                norito::json!({
+                    "alias": (deployment.alias.to_string()),
+                    "applied": (deployment.has_receipt),
+                    "journal": (deployment.journal.display().to_string()),
+                })
+            })
+            .collect::<Vec<_>>();
+        return write_json(
+            writer,
+            &norito::json!({ "context": name, "saved": entries }),
+        );
+    }
+    if saved.is_empty() {
+        writeln!(
+            writer,
+            "No saved deployments in `{name}`. `kagami contract deploy` saves one per contract alias."
+        )?;
+        return Ok(());
+    }
+    for deployment in saved {
+        let outcome = if deployment.has_receipt {
+            "applied"
+        } else {
+            "not finished"
+        };
+        writeln!(
+            writer,
+            "{}  {outcome}  {}",
+            deployment.alias,
+            deployment.journal.display()
+        )?;
+    }
+    writeln!(
+        writer,
+        "Resume one with `kagami contract deploy --resume <journal>`."
+    )?;
+    Ok(())
 }
 
 impl<T: Write> RunArgs<T> for ContractCallArgs {
@@ -884,7 +1025,7 @@ impl<T: Write> RunArgs<T> for ContractCallArgs {
             let max_fee = self
                 .max_fee
                 .clone()
-                .ok_or_else(|| eyre!("call requires --max-fee"))?;
+                .unwrap_or_else(|| Quantity::from(DEFAULT_CALL_MAX_FEE));
             ensure!(!max_fee.is_zero(), "--max-fee must be positive");
             Some((alias, request, max_fee))
         } else {
@@ -958,12 +1099,135 @@ impl<T: Write> RunArgs<T> for ContractCallArgs {
     }
 }
 
-fn up(store: &ManagedStore, name: &str, timeout: u64) -> Result<ManagedStatus> {
+/// Managed environments pay in their own generated fee asset, so a call needs no budgeting
+/// decision to get started; the cap still bounds every call, and `--max-fee` changes it.
+const DEFAULT_CALL_MAX_FEE: u32 = 1000;
+
+/// The exact command that runs a deployed contract's initialization hook.
+fn hook_command(
+    alias: &impl std::fmt::Display,
+    lifecycle: &iroha_contract_deploy::DeploymentLifecycleGuidance,
+) -> String {
+    let arguments = if lifecycle.hook.params.is_empty() {
+        String::new()
+    } else {
+        format!(" --args '{}'", lifecycle.hook.arguments_template())
+    };
+    format!(
+        "kagami contract call {alias} --entrypoint {}{arguments}",
+        lifecycle.hook.name
+    )
+}
+
+/// Print new output from one retained log until the process is interrupted.
+fn follow_logs(
+    writer: &mut impl Write,
+    store: &ManagedStore,
+    name: &str,
+    peer: Option<usize>,
+) -> Outcome {
+    let mut offset = store.log_len(name, peer)?;
+    loop {
+        writer.flush()?;
+        std::thread::sleep(Duration::from_millis(500));
+        let (text, next) = store.logs_since(name, peer, offset)?;
+        offset = next;
+        write!(writer, "{text}")?;
+    }
+}
+
+const FAILURE_TAIL_BYTES: usize = 4096;
+const FAILURE_TAIL_LINES: usize = 8;
+const FAILURE_LINE_CHARS: usize = 240;
+
+/// Show why validators failed, because the retained status only names a closed failure class.
+fn print_validator_failure(
+    writer: &mut impl Write,
+    store: &ManagedStore,
+    status: &ManagedStatus,
+    json: bool,
+) {
+    if json {
+        return;
+    }
+    let exited: Vec<usize> = status
+        .validators
+        .iter()
+        .filter(|validator| !matches!(validator.state, ManagedValidatorState::Running))
+        .map(|validator| usize::from(validator.index))
+        .collect();
+    let candidates = if exited.is_empty() {
+        vec![0, 1, 2, 3]
+    } else {
+        exited
+    };
+    for index in candidates {
+        let Ok(log) = store.logs(&status.context.name, Some(index), FAILURE_TAIL_BYTES) else {
+            continue;
+        };
+        let tail = failure_tail(&log);
+        if tail.is_empty() {
+            continue;
+        }
+        // Output problems must not replace the startup failure the caller is about to report.
+        let _ = writeln!(writer, "validator {index} log:");
+        for line in &tail {
+            let _ = writeln!(writer, "  {line}");
+        }
+        if let Some(hint) = failure_hint(&log) {
+            let _ = writeln!(writer, "{hint}");
+        }
+        return;
+    }
+}
+
+fn failure_tail(log: &str) -> Vec<String> {
+    let mut lines: Vec<String> = log
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(FAILURE_TAIL_LINES)
+        .map(|line| line.chars().take(FAILURE_LINE_CHARS).collect())
+        .collect();
+    lines.reverse();
+    lines
+}
+
+fn failure_hint(log: &str) -> Option<&'static str> {
+    log.contains("unexpected argument").then_some(
+        "kagami and iroha3d look like different builds; rebuild both with `cargo build -p iroha_kagami -p irohad`",
+    )
+}
+
+fn localnet_service_profile(
+    with_storage: bool,
+    retained: Option<iroha_deploy::localnet::LocalnetServiceProfile>,
+) -> Result<iroha_deploy::localnet::LocalnetServiceProfile> {
+    use iroha_deploy::localnet::LocalnetServiceProfile::{Standard, StreamTokenAuthorities};
+    let profile = retained.unwrap_or(if with_storage {
+        StreamTokenAuthorities
+    } else {
+        Standard
+    });
+    ensure!(
+        !with_storage || profile == StreamTokenAuthorities,
+        "this retained network has no storage services; create a new named network with `kagami localnet up registry --with-storage`"
+    );
+    Ok(profile)
+}
+
+fn up(store: &ManagedStore, name: &str, timeout: u64, with_storage: bool) -> Result<ManagedStatus> {
     let runtime = InstalledRuntime::discover()?;
     let mut request = runtime.localnet_request(name, Duration::from_secs(timeout));
+    if store.discard_unready_generation(&request)? {
+        tui::status(format!(
+            "Replacing `{name}`, which never became ready and was created by other binaries"
+        ));
+    }
     match store.prepared(name) {
         Ok(prepared) => {
-            request.service_profile = prepared.service_profile;
+            request.service_profile =
+                localnet_service_profile(with_storage, Some(prepared.service_profile))?;
             store
                 .up_retained(&request, &prepared.context)
                 .map_err(Into::into)
@@ -971,6 +1235,7 @@ fn up(store: &ManagedStore, name: &str, timeout: u64) -> Result<ManagedStatus> {
         Err(iroha_deploy::managed::Error::Io(error))
             if error.kind() == std::io::ErrorKind::NotFound =>
         {
+            request.service_profile = localnet_service_profile(with_storage, None)?;
             store.up(&request).map_err(Into::into)
         }
         Err(error) => Err(error.into()),
@@ -1005,19 +1270,8 @@ fn check_fee_budget<'a>(
     Ok(())
 }
 
-fn deployment_progress(progress: DeploymentProgress) {
-    match progress {
-        DeploymentProgress::Prepared(_) => tui::status("Deployment prepared with exact fee quotes"),
-        DeploymentProgress::Submitting(stage) => tui::status(format!(
-            "Submitting {} ({}/{})",
-            stage.name, stage.number, stage.total
-        )),
-        DeploymentProgress::Recovering(stage) => {
-            tui::status(format!("Recovering {} by its retained hash", stage.name))
-        }
-        DeploymentProgress::Applied { stage, .. } => tui::status(format!("{} applied", stage.name)),
-        DeploymentProgress::ReadingBack { .. } => tui::status("Verifying deployed code and alias"),
-    }
+fn deployment_progress(progress: &DeploymentProgress) {
+    tui::status(progress.to_string());
 }
 
 fn print_status(writer: &mut impl Write, status: &ManagedStatus, json: bool) -> Outcome {
@@ -1030,10 +1284,32 @@ fn print_status(writer: &mut impl Write, status: &ManagedStatus, json: bool) -> 
         status.context.name, status.phase, status.running_peers
     )?;
     print_context(writer, &status.context, false)?;
+    for validator in &status.validators {
+        writeln!(
+            writer,
+            "validator {}: {}",
+            validator.index,
+            validator_state(validator.state)
+        )?;
+    }
     if let Some(reason) = &status.failure {
         writeln!(writer, "reason: {reason}")?;
     }
     Ok(())
+}
+
+fn validator_state(state: ManagedValidatorState) -> String {
+    match state {
+        ManagedValidatorState::Running => "running".into(),
+        ManagedValidatorState::Exited {
+            code: Some(code), ..
+        } => format!("exited with code {code}"),
+        ManagedValidatorState::Exited {
+            signal: Some(signal),
+            ..
+        } => format!("exited by signal {signal}"),
+        ManagedValidatorState::Exited { .. } => "exited".into(),
+    }
 }
 
 fn managed_action(
@@ -1108,12 +1384,41 @@ fn localnet_failure(
         }
         writeln!(
             writer,
-            "Inspect the requested environment with these action fields:"
+            "Retained work resumes when you run the same `kagami localnet up` again. Inspect the network with:"
         )?;
         print_managed_action(writer, root, name, "localnet", "status")?;
         print_managed_action(writer, root, name, "localnet", "logs")
     })();
     Err(original)
+}
+
+/// Name a missing environment instead of surfacing the store's bare file-system error.
+fn known_environment<T>(store: &ManagedStore, name: &str, result: managed::Result<T>) -> Result<T> {
+    match result {
+        Err(managed::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            let known = store
+                .contexts()
+                .map(|contexts| {
+                    contexts
+                        .into_iter()
+                        .map(|context| context.name)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if known.iter().any(|known| known == name) {
+                return Err(managed::Error::Io(error).into());
+            }
+            let found = if known.is_empty() {
+                String::new()
+            } else {
+                format!(" (found: {})", known.join(", "))
+            };
+            Err(eyre!(
+                "no environment named `{name}` in this workspace{found}; create it with `kagami localnet up {name}` or list them with `kagami context list`"
+            ))
+        }
+        other => other.map_err(Into::into),
+    }
 }
 
 fn dataspace_failure(
@@ -1141,11 +1446,16 @@ fn dataspace_failure(
         }
         if let Some(status) = status {
             print_dataspace_status(writer, status, false)?;
+            writeln!(
+                writer,
+                "Inspect the requested data space with these read-only actions:"
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "If this context contains retained work, inspect it with these read-only actions:"
+            )?;
         }
-        writeln!(
-            writer,
-            "Inspect the requested dataspace with these action fields:"
-        )?;
         print_managed_action(writer, root, name, "dataspace", "status")?;
         print_managed_action(writer, root, name, "localnet", "logs")
     })();
@@ -1205,6 +1515,7 @@ fn print_context(writer: &mut impl Write, context: &ManagedContext, json: bool) 
     writeln!(writer, "{}  {}", context.name, context.torii_url)?;
     writeln!(writer, "network: {}", context.network_id)?;
     writeln!(writer, "account: {}", context.account_id)?;
+    writeln!(writer, "client config: {}", context.client_config.display())?;
     Ok(())
 }
 
@@ -1217,6 +1528,67 @@ fn write_json(writer: &mut impl Write, value: &impl norito::json::JsonSerialize)
 mod tests {
     use super::*;
     use clap::Parser as _;
+
+    #[test]
+    fn hook_command_is_runnable_and_shows_placeholders_for_arguments() {
+        let mut hook = iroha_contract_deploy::LifecycleHook {
+            name: "hajimari".to_owned(),
+            params: Vec::new(),
+        };
+        assert_eq!(
+            hook_command(&"Hello::universal", &hook.clone().guidance(false)),
+            "kagami contract call Hello::universal --entrypoint hajimari"
+        );
+        hook.params.push(iroha_contract_deploy::LifecycleParameter {
+            name: "limit".to_owned(),
+            type_name: "int".to_owned(),
+        });
+        assert_eq!(
+            hook_command(&"Hello::universal", &hook.guidance(false)),
+            r#"kagami contract call Hello::universal --entrypoint hajimari --args '{"limit":"<int>"}'"#
+        );
+    }
+
+    #[test]
+    fn failure_tail_keeps_the_last_nonblank_lines_within_bounds() {
+        let log = format!("{}\n\nlast line\n\n", "line\n".repeat(20));
+        let tail = failure_tail(&log);
+        assert_eq!(tail.len(), FAILURE_TAIL_LINES);
+        assert_eq!(tail.last().unwrap(), "last line");
+        let long = "x".repeat(FAILURE_LINE_CHARS * 2);
+        assert_eq!(failure_tail(&long)[0].chars().count(), FAILURE_LINE_CHARS);
+        assert!(failure_tail(" \n\n").is_empty());
+    }
+
+    #[test]
+    fn failure_hint_recognizes_a_daemon_from_another_build() {
+        assert!(
+            failure_hint("error: unexpected argument '--managed-listeners' found")
+                .unwrap()
+                .contains("cargo build -p iroha_kagami -p irohad")
+        );
+        assert!(failure_hint("bind failed").is_none());
+    }
+
+    #[test]
+    fn logs_follow_conflicts_with_json_and_call_needs_no_fee_cap() {
+        assert!(
+            crate::Cli::try_parse_from(["kagami", "localnet", "logs", "--follow", "--json"])
+                .is_err()
+        );
+        assert!(crate::Cli::try_parse_from(["kagami", "localnet", "logs", "-f"]).is_ok());
+        assert!(
+            crate::Cli::try_parse_from([
+                "kagami",
+                "contract",
+                "call",
+                "Hello::universal",
+                "--entrypoint",
+                "greet",
+            ])
+            .is_ok()
+        );
+    }
 
     #[test]
     fn administrative_amx_cli_requires_explicit_parent_signer_and_original_finite_terms() {
@@ -1359,12 +1731,40 @@ mod tests {
     #[test]
     fn localnet_up_needs_no_configuration() {
         let cli = crate::Cli::try_parse_from(["kagami", "localnet", "up"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            crate::Command::Localnet(LocalnetCommand::Up(_))
-        ));
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = cli.command else {
+            panic!("expected localnet startup");
+        };
+        assert!(!args.with_storage);
         assert!(crate::Cli::try_parse_from(["kagami", "localnet", "reset"]).is_err());
         assert!(crate::Cli::try_parse_from(["kagami", "localnet-wizard"]).is_err());
+    }
+
+    #[test]
+    fn localnet_storage_is_explicit_and_cannot_replace_a_retained_profile() {
+        use iroha_deploy::localnet::LocalnetServiceProfile::{Standard, StreamTokenAuthorities};
+        let cli =
+            crate::Cli::try_parse_from(["kagami", "localnet", "up", "registry", "--with-storage"])
+                .unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = cli.command else {
+            panic!("expected localnet startup");
+        };
+        assert!(args.with_storage);
+        assert_eq!(localnet_service_profile(false, None).unwrap(), Standard);
+        assert_eq!(
+            localnet_service_profile(true, None).unwrap(),
+            StreamTokenAuthorities
+        );
+        for profile in [Standard, StreamTokenAuthorities] {
+            assert_eq!(
+                localnet_service_profile(false, Some(profile)).unwrap(),
+                profile
+            );
+        }
+        assert_eq!(
+            localnet_service_profile(true, Some(StreamTokenAuthorities)).unwrap(),
+            StreamTokenAuthorities
+        );
+        assert!(localnet_service_profile(true, Some(Standard)).is_err());
     }
 
     #[test]
@@ -1403,6 +1803,7 @@ mod tests {
             phase: ManagedPhase::Failed,
             running_peers: 0,
             failure: Some("startup readiness deadline expired".into()),
+            validators: Vec::new(),
         };
         for retained in [None, Some(&status)] {
             let original = std::io::Error::new(
@@ -1485,8 +1886,16 @@ mod tests {
                 Ok(())
             }
         }
-        for (json, dataspace) in [(false, false), (true, false), (false, true), (true, true)] {
-            let original = iroha_deploy::managed::Error::Timeout(Duration::from_secs(9));
+        for (json, dataspace, checkpoint) in [false, true].into_iter().flat_map(|json| {
+            [false, true].into_iter().flat_map(move |dataspace| {
+                [false, true].map(move |checkpoint| (json, dataspace, checkpoint))
+            })
+        }) {
+            let original = if checkpoint {
+                missing_checkpoint_error()
+            } else {
+                iroha_deploy::managed::Error::Timeout(Duration::from_secs(9))
+            };
             let error = if dataspace {
                 dataspace_failure(
                     &mut BrokenWriter,
@@ -1507,12 +1916,181 @@ mod tests {
                 )
             }
             .unwrap_err();
-            assert!(matches!(
-                error.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(duration))
-                    if *duration == Duration::from_secs(9)
-            ));
+            if checkpoint {
+                assert!(matches!(
+                    error.downcast_ref::<managed::Error>(),
+                    Some(managed::Error::ParentCheckpoint { source, .. })
+                        if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                            iroha::http::PublicHttpError::Status(404)
+                        ))
+                ));
+            } else {
+                assert!(matches!(
+                    error.downcast_ref::<iroha_deploy::managed::Error>(),
+                    Some(iroha_deploy::managed::Error::Timeout(duration))
+                        if *duration == Duration::from_secs(9)
+                ));
+            }
         }
+    }
+
+    fn missing_checkpoint_error() -> managed::Error {
+        managed::Error::ParentCheckpoint {
+            profile: Box::new(
+                iroha_deploy::bootstrap::InstalledNetworkProfile::new(
+                    "taira".into(),
+                    "https://taira.sora.org/",
+                    "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+                    369,
+                )
+                .unwrap(),
+            ),
+            source: Box::new(iroha_deploy::bootstrap::CheckpointReadError::Http(
+                iroha::http::PublicHttpError::Status(404),
+            )),
+        }
+    }
+
+    #[test]
+    fn checkpoint_failure_without_status_keeps_conditional_recovery_and_original_cause() {
+        let root = Path::new("/workspace with spaces/state 'quoted'");
+        let mut output = Vec::new();
+        let error = dataspace_failure(
+            &mut output,
+            root,
+            "custom-local-name",
+            None,
+            false,
+            missing_checkpoint_error().into(),
+        )
+        .unwrap_err();
+        let human = String::from_utf8(output).unwrap();
+        assert!(human.contains("If this context contains retained work"));
+        assert!(!human.contains("Inspect the requested data space"));
+        assert!(human.contains("action: kagami dataspace status"));
+        assert!(human.contains("action: kagami localnet logs"));
+        assert!(human.contains("  name: custom-local-name"));
+        assert!(human.contains(&format!("--state (quoted path): {root:?}")));
+        assert!(matches!(
+            error.downcast_ref::<managed::Error>(),
+            Some(managed::Error::ParentCheckpoint { source, .. })
+                if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                    iroha::http::PublicHttpError::Status(404)
+                ))
+        ));
+        assert!(error.to_string().contains("network `taira`"));
+        assert!(error.to_string().contains("https://taira.sora.org/"));
+        assert!(error.to_string().contains("retry the same command"));
+    }
+
+    #[test]
+    fn unknown_environment_names_itself_and_the_next_command() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = ManagedStore::open(&temporary.path().join("state")).unwrap();
+        let missing = || managed::Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound));
+        let message = known_environment::<()>(&store, "local", Err(missing()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("no environment named `local`")
+                && message.contains("kagami localnet up local")
+                && !message.contains("found:"),
+            "{message}"
+        );
+        // Other failures, and successes, pass through unchanged.
+        assert_eq!(known_environment(&store, "local", Ok(7)).unwrap(), 7);
+        let busy =
+            known_environment::<()>(&store, "local", Err(managed::Error::Busy("local".into())))
+                .unwrap_err()
+                .to_string();
+        assert!(busy.contains("already owned"), "{busy}");
+    }
+
+    #[test]
+    fn empty_context_list_says_how_to_create_an_environment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state = temporary.path().join("state");
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "context",
+            "list",
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::Command::Context(command) = cli.command else {
+            unreachable!("context list parses as a context command");
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        command.run(&mut writer).unwrap();
+        let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
+        assert_eq!(
+            output,
+            "No environments in this workspace yet. Create one with `kagami localnet up`.\n"
+        );
+    }
+
+    #[test]
+    fn saved_deployments_print_alias_outcome_and_how_to_resume() {
+        let saved = vec![SavedDeployment {
+            alias: "Counter::universal".parse().unwrap(),
+            journal: PathBuf::from("/state/deployments/local/slot/commit"),
+            has_receipt: false,
+        }];
+        let mut text = Vec::new();
+        print_saved_deployments(&mut text, "local", &saved, false).unwrap();
+        assert_eq!(
+            String::from_utf8(text).unwrap(),
+            "Counter::universal  not finished  /state/deployments/local/slot/commit\n\
+             Resume one with `kagami contract deploy --resume <journal>`.\n"
+        );
+        let mut empty = Vec::new();
+        print_saved_deployments(&mut empty, "local", &[], false).unwrap();
+        assert_eq!(
+            String::from_utf8(empty).unwrap(),
+            "No saved deployments in `local`. `kagami contract deploy` saves one per contract alias.\n"
+        );
+        let mut json = Vec::new();
+        print_saved_deployments(&mut json, "local", &saved, true).unwrap();
+        let value: norito::json::Value = norito::json::from_slice(&json).unwrap();
+        assert_eq!(value.get("context").and_then(|v| v.as_str()), Some("local"));
+        let entry = &value.get("saved").unwrap().as_array().unwrap()[0];
+        assert_eq!(
+            entry.get("alias").and_then(|v| v.as_str()),
+            Some("Counter::universal")
+        );
+        assert_eq!(
+            entry.get("applied").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn saved_deployments_need_a_selected_environment_and_never_create_one() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state = temporary.path().join("state");
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "contract",
+            "saved",
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::Command::Contract(command) = cli.command else {
+            unreachable!("contract saved parses as a contract command");
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        let error = command.run(&mut writer).unwrap_err().to_string();
+        assert!(error.contains("kagami localnet up"), "{error}");
+        assert!(
+            ManagedStore::open(&state)
+                .unwrap()
+                .contexts()
+                .unwrap()
+                .is_empty(),
+            "listing must not create an environment"
+        );
     }
 
     #[test]
@@ -1585,14 +2163,6 @@ mod tests {
             crate::Cli::try_parse_from(arguments).unwrap();
         }
         for arguments in [
-            vec![
-                "kagami",
-                "contract",
-                "call",
-                "Counter::dpn",
-                "--entrypoint",
-                "set",
-            ],
             vec![
                 "kagami",
                 "contract",
@@ -1747,6 +2317,90 @@ mod tests {
     }
 
     #[test]
+    fn status_lists_each_validator_and_names_the_exited_one() {
+        use iroha_deploy::managed::ManagedValidatorStatus;
+        let context = ManagedContext {
+            name: "local".into(),
+            chain_id: "fixture".into(),
+            network_id: "fixture-network".into(),
+            account_id: "fixture-account".into(),
+            dataspace_id: 0,
+            dataspace_alias: "universal".into(),
+            torii_url: "http://127.0.0.1:8080/".into(),
+            client_config: PathBuf::from("/private/fixture"),
+        };
+        let ready = ManagedStatus {
+            context: context.clone(),
+            phase: ManagedPhase::Ready,
+            running_peers: 4,
+            failure: None,
+            validators: (0..4)
+                .map(|index| ManagedValidatorStatus {
+                    index,
+                    state: ManagedValidatorState::Running,
+                })
+                .collect(),
+        };
+        let mut text = Vec::new();
+        print_status(&mut text, &ready, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        let rows = text
+            .lines()
+            .filter(|line| line.starts_with("validator "))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                "validator 0: running",
+                "validator 1: running",
+                "validator 2: running",
+                "validator 3: running",
+            ]
+        );
+        let failed = ManagedStatus {
+            context,
+            phase: ManagedPhase::Failed,
+            running_peers: 0,
+            failure: Some(
+                "a supervised validator exited; inspect its retained log peer2.log".into(),
+            ),
+            validators: vec![ManagedValidatorStatus {
+                index: 2,
+                state: ManagedValidatorState::Exited {
+                    code: Some(101),
+                    signal: None,
+                },
+            }],
+        };
+        let mut text = Vec::new();
+        print_status(&mut text, &failed, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.ends_with(
+            "validator 2: exited with code 101\nreason: a supervised validator exited; inspect its retained log peer2.log\n"
+        ));
+        let mut json = Vec::new();
+        print_status(&mut json, &failed, true).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<ManagedStatus>(&json).unwrap(),
+            failed
+        );
+        assert_eq!(
+            validator_state(ManagedValidatorState::Exited {
+                code: None,
+                signal: Some(9),
+            }),
+            "exited by signal 9"
+        );
+        assert_eq!(
+            validator_state(ManagedValidatorState::Exited {
+                code: None,
+                signal: None,
+            }),
+            "exited"
+        );
+    }
+
+    #[test]
     fn dataspace_output_separates_local_readiness_from_parent_evidence() {
         use iroha_deploy::managed::{
             ManagedAttachmentFailure, ManagedAttachmentPhase, ManagedAttachmentStatus,
@@ -1766,6 +2420,7 @@ mod tests {
                 phase: ManagedPhase::Ready,
                 running_peers: 4,
                 failure: None,
+                validators: Vec::new(),
             },
             attachment: ManagedAttachmentStatus {
                 network: "taira".into(),
@@ -1792,21 +2447,39 @@ mod tests {
         // A ready child must remain distinguishable from the failed parent attachment in
         // recovery output, including when no retained attachment was published at all.
         let root = Path::new("/workspace with spaces/state 'quoted'");
-        for retained in [None, Some(&status)] {
+        for (retained, checkpoint) in [None, Some(&status)]
+            .into_iter()
+            .flat_map(|retained| [false, true].map(move |checkpoint| (retained, checkpoint)))
+        {
             let mut output = Vec::new();
+            let original: color_eyre::Report = if checkpoint {
+                missing_checkpoint_error().into()
+            } else {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original detail").into()
+            };
             let error = dataspace_failure(
                 &mut output,
                 root,
                 "custom-local-name",
                 retained,
                 true,
-                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original detail").into(),
+                original,
             )
             .unwrap_err();
-            assert_eq!(
-                error.downcast_ref::<std::io::Error>().unwrap().kind(),
-                std::io::ErrorKind::PermissionDenied
-            );
+            if checkpoint {
+                assert!(matches!(
+                    error.downcast_ref::<managed::Error>(),
+                    Some(managed::Error::ParentCheckpoint { source, .. })
+                        if matches!(source.as_ref(), iroha_deploy::bootstrap::CheckpointReadError::Http(
+                            iroha::http::PublicHttpError::Status(404)
+                        ))
+                ));
+            } else {
+                assert_eq!(
+                    error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                    std::io::ErrorKind::PermissionDenied
+                );
+            }
             let text = std::str::from_utf8(&output).unwrap();
             assert_eq!(text.lines().count(), 1);
             assert!(!text.contains("original detail"));
@@ -1876,6 +2549,28 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn auto_start_budgets_default_to_two_minutes_and_are_bounded() {
+        let parse = |extra: &[&str]| {
+            let mut command_line = vec!["kagami", "contract", "deploy", "hello.ko"];
+            command_line.extend_from_slice(extra);
+            crate::Cli::try_parse_from(command_line).map(|cli| match cli.command {
+                crate::Command::Contract(ContractCommand::Deploy(args)) => args.timeout,
+                _ => unreachable!("deploy parses as a deploy command"),
+            })
+        };
+        assert_eq!(parse(&[]).unwrap(), 120);
+        assert_eq!(parse(&["--timeout", "180"]).unwrap(), 180);
+        assert!(parse(&["--timeout", "0"]).is_err());
+        assert!(parse(&["--timeout", "601"]).is_err());
+        // `localnet up` shares the budget: a ready network returns as soon as it is verified.
+        let up = crate::Cli::try_parse_from(["kagami", "localnet", "up"]).unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = up.command else {
+            unreachable!("localnet up parses as localnet up");
+        };
+        assert_eq!(args.timeout, 120);
     }
 
     #[test]

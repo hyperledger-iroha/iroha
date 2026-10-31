@@ -13,6 +13,10 @@ use std::sync::Arc;
 
 /// A failed or interrupted original attempt cannot be replaced with another census.
 #[derive(Default)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The sealed census stays in its original owner; phase transitions do not allocate new backing"
+)]
 pub(super) enum QuantitySourceCensusState {
     #[default]
     Unsealed,

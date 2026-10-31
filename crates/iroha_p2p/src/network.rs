@@ -26,9 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{NetworkId, prelude::Peer};
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::Peer;
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
@@ -50,7 +51,6 @@ use std::{
     },
     time::Duration,
 };
-#[cfg(test)]
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 #[cfg(test)]
@@ -7201,12 +7201,14 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             },
             initial_trusted_sources,
             HashSet::new(),
+            None,
             shutdown_signal,
         )
         .await
     }
     /// Launch with protected-source authority and the configured validator roster.
     /// The roster is installed before topology processing to prevent a startup race.
+    /// An owned prebound listener preserves the managed launcher's port reservation.
     ///
     /// # Errors
     ///
@@ -7215,6 +7217,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         identity_keys,
         initial_trusted_sources,
         initial_validator_dial_roster,
+        prebound_listener,
         shutdown_signal
     ))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
@@ -7309,6 +7312,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         }: HandshakeCapabilities,
         mut initial_trusted_sources: HashSet<PeerId>,
         mut initial_validator_dial_roster: HashSet<PeerId>,
+        prebound_listener: Option<std::net::TcpListener>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         // Reject vulnerable QUIC before listener or dialer sockets are created.
@@ -7774,10 +7778,10 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 quic_datagram_max_payload_bytes,
                 quic_datagram_receive_buffer_bytes,
                 quic_datagram_send_buffer_bytes,
-                network_id.clone(),
-                consensus_caps.clone(),
+                network_id,
+                consensus_caps,
                 confidential_caps.clone(),
-                crypto_caps.clone(),
+                crypto_caps,
                 p2p_post_queue_cap.get(),
                 outbound_frame_queue_limits,
                 outbound_post_byte_budgets.clone(),
@@ -7798,6 +7802,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         }
         let task = start_tls_listener::<WireMessage<T>, E>(
             listener_socket_addr,
+            prebound_listener,
             Arc::clone(&key_pair),
             Arc::clone(&soranet_transport_key_pair),
             Arc::clone(&soranet_transport_certificate),
@@ -9365,8 +9370,7 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::peer::{Peer, PeerId};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use std::time::Duration;
@@ -10260,6 +10264,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -10354,6 +10359,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -10525,6 +10531,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let tls_listener = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             tls_addr,
+            None,
             Arc::new(key_pair.clone()),
             Arc::clone(&soranet_transport_key_pair),
             Arc::clone(&soranet_transport_certificate),
@@ -10532,7 +10539,7 @@ mod accept_stream_tests {
             service_tx.clone(),
             Duration::from_secs(5),
             preauth_timeout,
-            network_id.clone(),
+            network_id,
             None,
             None,
             None,
@@ -10622,10 +10629,14 @@ mod accept_stream_tests {
 
         let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap())
             .expect("create QUIC client endpoint");
-        let mut crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-            .with_no_client_auth();
+        let mut crypto = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("test TLS provider")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+        .with_no_client_auth();
         crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let mut client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -10798,11 +10809,14 @@ mod accept_stream_tests {
             alpn_protocols: Vec<Vec<u8>>,
         ) -> std::io::Result<()> {
             let tcp = tokio::net::TcpStream::connect(addr).await?;
-            let mut client_cfg =
-                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-                    .with_no_client_auth();
+            let mut client_cfg = ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(std::io::Error::other)?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+            .with_no_client_auth();
             client_cfg.alpn_protocols = alpn_protocols;
             let connector = TlsConnector::from(Arc::new(client_cfg));
             let server_name = rustls::pki_types::ServerName::try_from("iroha-tls")
@@ -10848,6 +10862,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -11124,10 +11139,14 @@ mod accept_stream_tests {
                 panic!("quic endpoint failed: {err:?}");
             }
         };
-        let mut crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-            .with_no_client_auth();
+        let mut crypto = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("test TLS provider")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+        .with_no_client_auth();
         crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let mut client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -11439,10 +11458,14 @@ where
     let cert_der = cert.der().clone().into_owned();
     let transport_binding = crate::transport::certificate_fingerprint(cert_der.as_ref());
     let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-    let mut tls = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(vec![cert_der], priv_key.into())
-        .map_err(|e| Error::from(std::io::Error::other(format!("rustls server config: {e}"))))?;
+    let mut tls = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .map_err(std::io::Error::other)?
+    .with_no_client_auth()
+    .with_single_cert(vec![cert_der], priv_key.into())
+    .map_err(|e| Error::from(std::io::Error::other(format!("rustls server config: {e}"))))?;
     // Signed application authentication runs after QUIC setup, so replayable
     // 0-RTT data is never accepted on the P2P transport.
     tls.max_early_data_size = 0;
@@ -11568,10 +11591,7 @@ where
             let soranet_transport_key_pair = Arc::clone(&soranet_transport_key_pair);
             let soranet_transport_certificate = Arc::clone(&soranet_transport_certificate);
             let public_address = public_address.clone();
-            let network_id = network_id.clone();
-            let consensus_caps = consensus_caps.clone();
             let confidential_caps = confidential_caps.clone();
-            let crypto_caps = crypto_caps.clone();
             let idle_timeout = idle_timeout;
             let post_capacity = post_capacity;
             let outbound_frame_queue_limits = outbound_frame_queue_limits;
@@ -11702,10 +11722,8 @@ where
                     Connection::from_quic(
                         conn_id,
                         new_conn.clone(),
-                        send_hi,
-                        recv_hi,
-                        send_low,
-                        recv_low,
+                        (send_hi, recv_hi),
+                        send_low.zip(recv_low),
                         datagram_ingress,
                         Some(remote),
                         transport_binding,
@@ -11850,12 +11868,11 @@ mod quic_tests {
         {
             Ok(task) => task,
             Err(err) => {
-                if let Error::Io(io_err) = &err {
-                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
-                        || io_err.to_string().contains("Operation not permitted")
-                    {
-                        return;
-                    }
+                if let Error::Io(io_err) = &err
+                    && (io_err.kind() == std::io::ErrorKind::PermissionDenied
+                        || io_err.to_string().contains("Operation not permitted"))
+                {
+                    return;
                 }
                 panic!("scaffold should start without error: {err:?}");
             }
@@ -11881,9 +11898,30 @@ struct TlsListenerOptions {
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 }
+/// Keep a managed socket bound while moving its ownership into the async reactor.
+async fn prepare_tcp_listener(
+    address: std::net::SocketAddr,
+    prebound: Option<std::net::TcpListener>,
+) -> io::Result<TcpListener> {
+    match prebound {
+        Some(listener) => {
+            if listener.local_addr()? != address {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "prebound P2P listener does not match the configured address",
+                ));
+            }
+            listener.set_nonblocking(true)?;
+            TcpListener::from_std(listener)
+        }
+        None => TcpListener::bind(address).await,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
+    prebound_listener: Option<std::net::TcpListener>,
     key_pair: Arc<iroha_crypto::KeyPair>,
     soranet_transport_key_pair: Arc<iroha_crypto::KeyPair>,
     soranet_transport_certificate: Arc<crate::peer::LocalSoranetTransportCertificateV5>,
@@ -11933,14 +11971,17 @@ where
         rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
     )
     .clone_key();
-    let mut server_cfg =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, priv_key)
-            .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
+    let mut server_cfg = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .map_err(std::io::Error::other)?
+    .with_no_client_auth()
+    .with_single_cert(cert_chain, priv_key)
+    .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
     server_cfg.alpn_protocols = vec![crate::transport::P2P_ALPN.to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_cfg));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = prepare_tcp_listener(addr, prebound_listener).await?;
     let id_alloc = NEXT_TLS_CONN_ID.get_or_init(|| std::sync::atomic::AtomicU64::new(1 << 59));
     let task = tokio::spawn(async move {
         let mut children = tokio::task::JoinSet::new();
@@ -16786,7 +16827,7 @@ mod tests;
 pub mod message {
     //! Module for network messages
     use super::*;
-    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::Peer;
     use norito::codec::{Decode, Encode};
     /// Priority for network messages.
     #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]

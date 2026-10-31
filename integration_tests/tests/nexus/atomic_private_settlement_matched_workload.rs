@@ -1012,7 +1012,7 @@ mod tests {
             assert_eq!(data[ordinal].amount, u128::from(payment.amount));
             let funding = private_settlement_funding(
                 network_id(),
-                &governed[ordinal],
+                &governed[ordinal].governance,
                 ordinal,
                 &data[ordinal],
             )

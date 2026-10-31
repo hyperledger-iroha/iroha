@@ -24,7 +24,7 @@ fn forged_destination(
 
 #[test]
 fn division_interior_rows_and_all_shared_columns_are_bound_for_success_and_both_traps() {
-    for kind in 0..4 {
+    for (kind, &opcode) in DIVISION_OPS.iter().enumerate() {
         for (a, b, gas) in [
             (0xffff_ffff_0000_0001, 7, 1_000),
             (17, 0, 11),
@@ -33,7 +33,7 @@ fn division_interior_rows_and_all_shared_columns_are_bound_for_success_and_both_
         ] {
             let body = [
                 enc::encode_ri(wide::arithmetic::ADDI, 24, 24, 0),
-                enc::encode_rr(DIVISION_OPS[kind], 8, 6, 7),
+                enc::encode_rr(opcode, 8, 6, 7),
             ];
             let (segment, records) = attempted(&body, 2, &[(6, a), (7, b), (8, 91)], gas);
             let rows = segment.witness_rows(&records).unwrap();
@@ -230,8 +230,8 @@ fn trap_transition_forgery_cannot_write_advance_debit_or_continue_after_failure(
             let changed = ScalarSegment::new(
                 segment.contract.clone(),
                 1,
-                forged[0].before,
-                forged[0].after,
+                &forged[0].before,
+                &forged[0].after,
                 segment.outcome,
             );
             if let Ok(changed) = changed {
@@ -248,8 +248,8 @@ fn trap_transition_forgery_cannot_write_advance_debit_or_continue_after_failure(
         let changed = ScalarSegment::new(
             segment.contract.clone(),
             2,
-            segment.before,
-            extra.after,
+            &segment.before,
+            &extra.after,
             SegmentOutcome::OutOfGas,
         )
         .unwrap();

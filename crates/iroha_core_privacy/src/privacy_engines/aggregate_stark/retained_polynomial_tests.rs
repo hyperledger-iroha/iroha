@@ -1,5 +1,6 @@
 use super::*;
-use rand::{SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
     PrivacyProtocolIdV1::PqMaspStarkV1,
     b"retained-polynomial-test-v1",
@@ -20,16 +21,18 @@ fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
             .build()
             .expect("bounded test pool")
             .install(|| {
-                let mut rng = StdRng::from_seed([0xD7; 32]);
+                let mut rng = ChaCha12Rng::from_seed([0xD7; 32]);
                 let (commitment, polynomials) = commit_masked_trace_polynomial_columns_v1(
                     DIGEST_CONTEXT_V1,
                     b"aggregate-retained-batch-leaf",
                     b"aggregate-retained-batch-node",
-                    4,
-                    3,
-                    6,
-                    native_columns.len(),
-                    3,
+                    MaskedTraceShapeV1 {
+                        group: 4,
+                        native_trace_log2: 3,
+                        lde_log2: 6,
+                        width: native_columns.len(),
+                        mask_degree: 3,
+                    },
                     &indices,
                     &mut rng,
                     |column| Ok(native_columns[column].clone()),
@@ -57,25 +60,17 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
     fn reject_before_source(
         leaf_domain: &[u8],
         node_domain: &'static [u8],
-        group: usize,
-        native_log2: u8,
-        lde_log2: u8,
-        width: usize,
-        mask_degree: usize,
+        shape: MaskedTraceShapeV1,
         indices: &[usize],
     ) {
         let calls = std::cell::Cell::new(0_usize);
-        let mut rng = StdRng::from_seed([0xD2; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xD2; 32]);
         assert_eq!(
             commit_masked_trace_polynomial_columns_v1(
                 DIGEST_CONTEXT_V1,
                 leaf_domain,
                 node_domain,
-                group,
-                native_log2,
-                lde_log2,
-                width,
-                mask_degree,
+                shape,
                 indices,
                 &mut rng,
                 |_| {
@@ -92,28 +87,140 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
             "shape and commitment allocation preflight precede source work"
         );
     }
-    reject_before_source(b"", b"node", 0, 3, 6, 2, 3, &[]);
-    reject_before_source(b"leaf", b"", 0, 3, 6, 2, 3, &[]);
-    reject_before_source(b"leaf", b"node", 0, 3, 3, 2, 3, &[]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, 0, 3, &[]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 56, &[]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[1, 1]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[2, 1]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[64]);
-    reject_before_source(b"leaf", b"node", usize::from(u16::MAX) + 1, 3, 6, 2, 3, &[]);
-    reject_before_source(b"leaf", b"node", 0, 3, 6, usize::from(u16::MAX) + 1, 3, &[]);
+    reject_before_source(
+        b"",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 3,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 0,
+            mask_degree: 3,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 56,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[1, 1],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[2, 1],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[64],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: usize::from(u16::MAX) + 1,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: 2,
+            mask_degree: 3,
+        },
+        &[],
+    );
+    reject_before_source(
+        b"leaf",
+        b"node",
+        MaskedTraceShapeV1 {
+            group: 0,
+            native_trace_log2: 3,
+            lde_log2: 6,
+            width: usize::from(u16::MAX) + 1,
+            mask_degree: 3,
+        },
+        &[],
+    );
     let calls = std::cell::Cell::new(0_usize);
-    let mut rng = StdRng::from_seed([0xD3; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0xD3; 32]);
     assert_eq!(
         commit_masked_trace_polynomial_columns_v1(
             DIGEST_CONTEXT_V1,
             b"leaf",
             b"node",
-            0,
-            3,
-            6,
-            2,
-            3,
+            MaskedTraceShapeV1 {
+                group: 0,
+                native_trace_log2: 3,
+                lde_log2: 6,
+                width: 2,
+                mask_degree: 3
+            },
             &[],
             &mut rng,
             |_| {

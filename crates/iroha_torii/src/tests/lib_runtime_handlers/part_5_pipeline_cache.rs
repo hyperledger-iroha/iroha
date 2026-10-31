@@ -137,7 +137,7 @@ async fn pipeline_status_cache_rejects_uncertified_block_custody() {
     let header = block.header();
     let tx_hash = block.external_transactions().next().expect("tx").hash();
     let block_hash = store_block(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
+    record_committed_block_hash_for_test(&app, header, block_hash);
     let event = BlockEvent {
         header,
         status: BlockStatus::Applied,
@@ -340,6 +340,10 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
 #[tokio::test]
 async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health()
 {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
+    #[cfg(feature = "app_api")]
     use futures::FutureExt as _;
     use iroha_core::execution_attempt::ExecutionAttemptError;
     let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
@@ -408,52 +412,63 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
     );
     assert_eq!(pending.block_hash, block.hash());
     drop(pending);
-    // Off-chain Explorer reads retain their actual query owner, independently
+    // Off-chain history reads retain their actual query owner, independently
     // of the execution pool used by status and event-visibility reads above.
     let reservation = try_acquire_new_query_fanout_memory(&app)
-        .expect("fund original Explorer query working set");
+        .expect("fund original history query working set");
+    #[cfg(feature = "app_api")]
     let admission = COLLECTION_READ_MEMORY_RESERVATION
         .scope(reservation, acquire_query_admission(&app, true))
         .await
         .expect("admit original Explorer read");
+    #[cfg(feature = "app_api")]
     let owner = crate::history_producer::HistoryProducerOwner::from_admission(&admission)
         .expect("retain original Explorer query owner");
+    #[cfg(not(feature = "app_api"))]
+    let owner = crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)
+        .expect("retain original history query owner");
     let cold_pool = owner.cold_frames();
     let occupied_cold = cold_pool
         .try_reserve_bytes(cold_pool.limit_bytes() - cold_pool.reserved_bytes())
         .expect("occupy the original Explorer cold-frame pool");
-    let error = owner
-        .scope(|| {
-            routing::handle_v1_explorer_health(
-                app.state.clone(),
-                routing::MaybeTelemetry::disabled(),
-            )
-            .now_or_never()
-            .expect("health production completes synchronously inside its owner")
-        })
-        .expect_err("health may not replace resource refusal with a null timestamp");
-    assert_eq!(
-        error.into_response().status(),
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    #[cfg(feature = "app_api")]
+    {
+        let error = owner
+            .scope(|| {
+                routing::handle_v1_explorer_health(
+                    app.state.clone(),
+                    routing::MaybeTelemetry::disabled(),
+                )
+                .now_or_never()
+                .expect("health production completes synchronously inside its owner")
+            })
+            .expect_err("health may not replace resource refusal with a null timestamp");
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
     assert_eq!(
         routing::handle_version(app.state.clone()).await.status(),
         StatusCode::TOO_MANY_REQUESTS,
         "latest-version read cannot report missing genesis under capacity pressure"
     );
-    let detail = routing::handle_v1_explorer_block_detail_admitted(
-        app.state.clone(),
-        routing::MaybeTelemetry::disabled(),
-        routing::DataspaceReadVisibility::all_for_tests(),
-        "2".to_owned(),
-        admission,
-    )
-    .await
-    .expect_err("capacity cannot authorize hash-only Explorer fallback");
-    assert_eq!(
-        detail.into_response().status(),
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    #[cfg(feature = "app_api")]
+    {
+        let detail = routing::handle_v1_explorer_block_detail_admitted(
+            app.state.clone(),
+            routing::MaybeTelemetry::disabled(),
+            routing::DataspaceReadVisibility::all_for_tests(),
+            "2".to_owned(),
+            admission,
+        )
+        .await
+        .expect_err("capacity cannot authorize hash-only Explorer fallback");
+        assert_eq!(
+            detail.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
     drop(occupied);
     drop(occupied_cold);
     let outcome = owner
@@ -486,6 +501,7 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
         scopes.is_some(),
         "the readable block scope is cached for later events"
     );
+    #[cfg(feature = "app_api")]
     assert_eq!(
         owner
             .scope(|| {
@@ -504,6 +520,9 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
 
 #[tokio::test]
 async fn pipeline_block_event_reads_recent_original_carrier_and_preserves_refused_event() {
+    // Keep retired fixture State versions charged while measuring the event
+    // read's exact pool usage, independent of the global collector's schedule.
+    let _retirement = crossbeam_epoch::pin();
     let (app, _, mut chain) = canonical_outcome_test_fixture(false);
     chain.commit(Vec::new());
     chain.commit(Vec::new());

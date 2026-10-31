@@ -16,6 +16,13 @@ does not change the V1 header, payload layout, checksum or signed bytes.
 `core::PayloadRef` forwards an existing field's binary and JSON serialization,
 length hints, and errors without inserting a wrapper field. It has no decoder
 or frame identity; its containing record retains the canonical schema.
+For generic payload-only fields, use `PayloadRef(&value)` to retain the original
+owner while forwarding its bytes; a plain `&T` is not a payload adapter. Executor
+V1 validation encodes this adapter inside the bare `Validate` payload and prepends
+the existing fixed `u64` total-length prefix. Owned and borrowed targets
+therefore produce identical executor input bytes and decode through the existing
+owned target. This does not equate generic nominal frame identities or add a
+borrowed decoder.
 
 `DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
 active bounded payload context. Both typed frame directions are blanket
@@ -539,6 +546,54 @@ validity, runs the shared header/field kernels, then compares the complete fille
 payload against the original frame through the existing streaming canonical
 writer. It preserves original codec/resource causes separately from local
 prepared-destination failures; neither is retried through an owning decoder.
+
+`validate_canonical_header` exposes the identical header-policy check before a
+caller admits immutable raw source storage. Success checks header syntax,
+compression and flags only; it authenticates neither schema, payload extent,
+padding, checksum nor field canonicality. The subsequent canonical prepared
+decoder remains mandatory and owns the complete validation decision.
+
+`PreparedDecodeWorkspace::decode_canonical_into_with_owned_controls` provides
+header-first admission for prepared record destinations: it checks the same
+canonical header before reserving either control, then runs the existing derived
+field walk and streaming frame comparison with those original controls. The
+caller retains an `Option<PreparedDecodeWorkspace>` across refusal and retry;
+completed controls cannot refund their own late leaf-capacity refusal or be
+replaced by equal-limit foreign controls. Finish/cancellation retires the original
+workspace explicitly. `OwnedPreparedDecodeError` separates original pool admission from the existing
+canonical, destination, or physical-control errors. Destinations still own their
+actual graph backing; no ordinary owned-decoder fallback is used. The native UID
+binding destination uses the existing account controller destination and retains
+its real compact keys, multisig members, key ledger and retry spans. Its complete
+value stays paired with the original controller charges. UID policy rosters,
+State lookup keys and accounting maps remain separate ownership obligations.
+
+`decode_canonical_with_owned_controls` funds the existing
+`PreparedCanonicalDecode` default and schema counter controls from the caller's
+original finite allocation pool. It checks the ordinary canonical header before
+admission, then runs the same canonical decoding kernel. Its
+`CanonicalDecodeControlError` keeps the original `AllocationRefusal`,
+`PrepaidSharedError`, or `DecodeAttemptError` distinct, including release and
+enclosing-scope provenance. Each actual counter retains its charge until its last
+owner retires; partial construction refunds only retired controls and unused
+reservation credit. This entry owns neither decoded graph storage nor custom
+serializer scratch. Those allocations still require separate original-pool
+custody. Canonical bytes and protocol-limit classification are unchanged.
+
+`PreparedDecodeWorkspace::decode_canonical` lends the same two originally
+funded controls to successive ordinary canonical values. Each call checks header
+policy before advancing the checked attempt identity, then uses the same payload,
+field and complete-frame comparison kernel as the one-shot entry. The explicit
+schema scope still retires before streaming verification; the canonical default
+scope encloses that verification. Different types, frame lengths and schema limits
+need no replacement controls or scope backing. An old captured refusal retains
+its original family, attempt identity and classification even while later calls
+reuse the physical counters; it cannot acquire a later attempt's provenance.
+`CanonicalDecodeControlError::Scope` keeps local workspace invariants separate
+from original canonical failures. Cancellation refunds each control only after
+its last workspace or captured-error owner retires. This API owns controls only;
+decoded policy graphs, input rows and serializer scratch remain separate custody
+obligations.
 
 `decode_canonical_value_into` uses that same canonical-field entry for the
 actual enum or validated-record value produced by `DecodeValueFields`. The
@@ -1754,11 +1809,27 @@ so all native artifact captures and generated ABI hash material must be produced
 from the changed compiler before their mandatory consumers pass.
 
 
-The JSON parser's `parse_string_with_buffer` and typed map/sequence callbacks share
-ordinary parsing, framing and logical-quota kernels. A caller can admit an exact
-original-pool string/key destination before copying without replacing a resource
-refusal with syntax. These callbacks do not fund enclosing maps, crypto validation
-scratch or retained retry state, and do not change canonical JSON or binary layouts.
+The JSON parser's `parse_string_with_buffer`, `parse_array_with` and typed
+map/sequence callbacks share ordinary parsing, framing and logical-quota kernels.
+A caller can admit an exact original-pool destination before copying without
+replacing a resource refusal with syntax. `validate_canonical_json_with_buffer`
+uses those same string/container/number kernels and checked scalar writers to
+compare emitted bytes with the original input. Its bounded iterative visitor
+state retains only the previous object key; caller-owned string scratch replaces
+an owned Value tree or rewritten document. Duplicate or descending object keys,
+alternate number/string spellings, whitespace and trailing bytes are rejected.
+The decoder context and original refusal observer are never reset.
+
+The data model's `CustomParameters` has one sorted contiguous representation;
+keys are derived from each stored value's identity. Its canonical map field
+layout rejects duplicate, descending or mismatched key/value identities. Ordinary
+codecs construct authoring values. Direct JSON admission funds entry/identifier
+backing and preserves each Json leaf's original text/control charge through all
+shared clones. Immutable State publication must check the original pool and bind
+the exact predecessor; these collection APIs alone do not fund enclosing State,
+source bytes, other projection validation scratch or retained retry state.
+Actual schema and SDK artifacts must be regenerated when the first-release
+nominal collection identity is adopted. No alternate legacy map decoder exists.
 
 
 ### Private pool public context cut

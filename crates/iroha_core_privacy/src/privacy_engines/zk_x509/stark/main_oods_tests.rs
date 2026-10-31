@@ -222,11 +222,7 @@ fn scalar_dispatch_residues(
         .unwrap(),
         SegmentAdapterIdV1::ByteMemory => io_constraint_residues_v1(
             registration.segment,
-            io.fixed_schedule.logical_active_rows,
-            opening.base_current,
-            opening.base_next,
-            opening.aux_current,
-            opening.aux_next,
+            io.fixed_schedule.logical_active_rows,(opening.base_current, opening.base_next),(opening.aux_current, opening.aux_next),
             fixed,
             io.challenges,
         )
@@ -250,7 +246,7 @@ fn scalar_dispatch_residues(
             opening.aux_current.try_into().unwrap(),
             opening.aux_next.try_into().unwrap(),
             fixed.try_into().unwrap(),
-            log19.post_base.der(),
+            &log19.post_base.der(),
             log19.post_base.rfc5280(),
         )
         .unwrap(),
@@ -272,13 +268,13 @@ fn scalar_dispatch_residues(
                 log19.post_base.sha_word(),
                 log19.post_base.sha(),
                 log19.post_base.rfc5280(),
-                segment as u8,
+                u8::try_from(segment).expect("fixture value fits u8"),
             )
             .unwrap()
         }
         _ => {
             let (_signature, _) = p256_instance_parts_v1(registration.segment.instance).unwrap();
-            p256_opened_residues_v1(registration, opening, fixed, p256.challenges).unwrap()
+            p256_opened_residues_v1(registration, opening, fixed, &p256.challenges).unwrap()
         }
     }
 }
@@ -314,21 +310,28 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         &layout,
         &statement,
         ZkX509Rfc5280StarkShapeV1::from_statement(&main_log19_statement_fixture_v1()).unwrap(),
+        crate::privacy_engines::zk_x509::verifier_profile::ZkX509CrlPublicInputsV1 {
+            crl_der: [7; 32],
+            issuer_spki: [8; 32],
+            this_update: 1,
+            next_update: 2,
+        },
     )
     .unwrap();
     assert!(key_plan.admissible_v1(point, &shared).unwrap());
     let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
     let p256 =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, post_base)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, &post_base)
             .unwrap();
     let projection =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
+        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base)
             .unwrap();
-    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base).unwrap();
+    let io =
+        MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &statement, &post_base).unwrap();
     let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
         &layout,
         &main_log19_statement_fixture_v1(),
-        post_base,
+        &post_base,
     )
     .unwrap();
     // The production preparer compiles public fixed context without creating
@@ -696,7 +699,9 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
     let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
         [0x81; 32],
         assembly.verifier_profile.compiled_profile_digest,
-        core::array::from_fn(|index| digest(index as u8 + 1)),
+        core::array::from_fn(|index| {
+            digest(u8::try_from(index).expect("fixture value fits u8") + 1)
+        }),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -715,26 +720,26 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
     let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
-        &layout, &assembly, sha, p256, binding,
+        &layout, &assembly, sha, p256, &binding,
     )
     .unwrap();
     let post_base = binding.main_post_base();
     let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
     let verifier_p256 =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, post_base)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, &post_base)
             .unwrap();
     let projection = MainProjectionVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixture.statement,
-        post_base,
+        &post_base,
     )
     .unwrap();
-    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &fixture.statement, post_base)
+    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, &fixture.statement, &post_base)
         .unwrap();
     let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
         &layout,
         &assembly.rfc_trace.statement,
-        post_base,
+        &post_base,
     )
     .unwrap();
     log19.prepare_complete_oods_fixed_v1().unwrap();
@@ -761,7 +766,7 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
             MainProjectionProverConstraintSourceV1::for_main_v1(
                 &layout,
                 &fixture.statement,
-                post_base,
+                &post_base,
             )
             .unwrap(),
         ),
@@ -773,7 +778,7 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
                 &layout,
                 &fixture.statement,
                 &assembly.io,
-                post_base,
+                &post_base,
             )
             .unwrap(),
         ),
@@ -793,7 +798,14 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
         let powers =
             main_deep_replay::MainDeepPointPowersV1::new_v1([point, next], 1_usize << native_log)
                 .unwrap();
-        stream_main_fixed_polynomial_sets_v1(provider, |set| {
+        stream_main_fixed_polynomial_sets_v1(
+            provider,
+            main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+                &layout,
+                assembly.allocated_payload_bytes_v1(),
+            )
+            .unwrap(),
+            |set| {
             let registration = set.registration;
             let index = canonical_main_registration_index_v1(&layout, registration)?;
             assert_eq!(registration.segment.trace_log2, native_log);
@@ -822,7 +834,8 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
             }
             seen[index] += 1;
             Ok(())
-        })
+            },
+        )
         .unwrap();
     }
     assert!(seen.iter().all(|count| *count == 1), "{seen:?}");

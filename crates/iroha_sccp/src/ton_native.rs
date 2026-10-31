@@ -1188,8 +1188,7 @@ fn parse_ton_boc_with(bytes: &[u8], memory: &Memory<'_>) -> Option<TonBoc> {
 }
 
 fn ton_minimum_sized_uint_bytes(value: usize) -> usize {
-    let significant_bits =
-        usize::try_from(usize::BITS - value.leading_zeros()).expect("usize bit width fits usize");
+    let significant_bits = usize::try_from(value.bit_width()).expect("usize bit width fits usize");
     significant_bits.div_ceil(8).max(1)
 }
 
@@ -1739,7 +1738,7 @@ pub fn ton_boc_single_root_hash_v1(bytes: &[u8]) -> Option<H256> {
 }
 
 fn ton_hashmap_uint_len_bits(max_value: usize) -> usize {
-    usize::try_from(usize::BITS - max_value.leading_zeros()).expect("usize width fits")
+    usize::try_from(max_value.bit_width()).expect("usize width fits")
 }
 
 fn ton_key_bit(key: &[u8], bit_len: u16, offset: usize) -> Option<bool> {
@@ -2586,13 +2585,13 @@ fn ton_select_masterchain_validator_set_with(
 }
 
 fn ton_shard_parent(shard: u64) -> Option<u64> {
-    let terminator = shard & shard.wrapping_neg();
+    let terminator = shard.isolate_lowest_one();
     let parent_terminator = terminator.checked_shl(1).filter(|value| *value != 0)?;
     Some((shard & !(terminator | parent_terminator)) | parent_terminator)
 }
 
 fn ton_shard_child(shard: u64, right: bool) -> Option<u64> {
-    let terminator = shard & shard.wrapping_neg();
+    let terminator = shard.isolate_lowest_one();
     if terminator <= 1 {
         return None;
     }
@@ -4201,6 +4200,41 @@ mod tests {
         let mut padded = boc.clone();
         padded.cells[0] = ordinary_cell(vec![0], vec![1, 2]);
         assert_eq!(ton_parse_prev_ref(&padded, 0, 0, WHOLE, true, false), None);
+    }
+
+    #[test]
+    fn shard_terminator_and_uint_width_helpers_hold_at_edge_values() {
+        const LEFT: u64 = 0x4000_0000_0000_0000;
+        const WHOLE: u64 = 0x8000_0000_0000_0000;
+        const RIGHT: u64 = 0xc000_0000_0000_0000;
+        // The terminator is the lowest set bit: zero has none, and bit 0 cannot split.
+        assert_eq!(ton_shard_parent(WHOLE), None);
+        assert_eq!(ton_shard_parent(LEFT), Some(WHOLE));
+        assert_eq!(ton_shard_parent(RIGHT), Some(WHOLE));
+        assert_eq!(ton_shard_parent(0), None);
+        assert_eq!(ton_shard_parent(1), Some(2));
+        assert_eq!(ton_shard_parent(u64::MAX), Some(u64::MAX - 1));
+        assert_eq!(ton_shard_child(WHOLE, false), Some(LEFT));
+        assert_eq!(ton_shard_child(WHOLE, true), Some(RIGHT));
+        assert_eq!(ton_shard_child(2, false), Some(1));
+        assert_eq!(ton_shard_child(2, true), Some(3));
+        for shard in [0, 1, u64::MAX] {
+            assert_eq!(ton_shard_child(shard, false), None);
+            assert_eq!(ton_shard_child(shard, true), None);
+        }
+        // Zero still takes one byte; the widths grow past each power of two.
+        assert_eq!(ton_minimum_sized_uint_bytes(0), 1);
+        assert_eq!(ton_minimum_sized_uint_bytes(0xff), 1);
+        assert_eq!(ton_minimum_sized_uint_bytes(0x100), 2);
+        assert_eq!(ton_minimum_sized_uint_bytes(usize::MAX), size_of::<usize>());
+        assert_eq!(ton_hashmap_uint_len_bits(0), 0);
+        assert_eq!(ton_hashmap_uint_len_bits(1), 1);
+        assert_eq!(ton_hashmap_uint_len_bits(3), 2);
+        assert_eq!(ton_hashmap_uint_len_bits(4), 3);
+        assert_eq!(
+            ton_hashmap_uint_len_bits(usize::MAX),
+            usize::try_from(usize::BITS).unwrap()
+        );
     }
 
     #[test]

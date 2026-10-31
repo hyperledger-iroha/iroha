@@ -27,7 +27,7 @@ const EXTERNAL_NETWORKS: [SccpNetworkV1; 3] = [
 /// Preserves the original storage refusal. The caller must discard its refused block;
 /// no record or event is published until the normal native output is certified.
 #[inline(never)]
-pub(crate) fn lapse_after_enactments(
+pub fn lapse_after_enactments(
     state: &mut StateBlock<'_>,
 ) -> Result<(), StateStorageAdmissionError> {
     if state.sumeragi_schedule.original_root_scope() != Some(SumeragiRootScope::Global)

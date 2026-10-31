@@ -18,6 +18,10 @@ const MAX_KEY_BYTES: u64 = 128;
 
 /// Independent private-root and generated-port selection shared by native staging commands.
 #[derive(clap::Args, Debug, Default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names define the staging-prefixed clap flags and their cross-argument requirements"
+)]
 pub(super) struct StagedRuntimeArgs {
     /// Existing direct owner-only child of the approved Taira runtime root.
     #[arg(long, value_name = "DIR", requires_all = ["staging_api_base_port", "staging_p2p_base_port"])]
@@ -112,15 +116,15 @@ impl StagedRuntimeLayout {
 
     /// Explicit generated Torii port for the ordered validator slot.
     pub(super) fn api_port(&self, index: usize) -> Result<u16> {
-        self.slot_port(self.api_base_port, index)
+        Self::slot_port(self.api_base_port, index)
     }
 
     /// Explicit generated P2P port for the ordered validator slot.
     pub(super) fn p2p_port(&self, index: usize) -> Result<u16> {
-        self.slot_port(self.p2p_base_port, index)
+        Self::slot_port(self.p2p_base_port, index)
     }
 
-    fn slot_port(&self, base: u16, index: usize) -> Result<u16> {
+    fn slot_port(base: u16, index: usize) -> Result<u16> {
         if index >= VALIDATOR_SLUGS.len() {
             return Err(eyre!(
                 "staging port slot is outside the four-validator committee"
@@ -1184,8 +1188,14 @@ mod tests {
             .unwrap()
             .unwrap();
         for index in 0..4 {
-            assert_eq!(selected.api_port(index).unwrap(), 28080 + index as u16);
-            assert_eq!(selected.p2p_port(index).unwrap(), 21337 + index as u16);
+            assert_eq!(
+                selected.api_port(index).unwrap(),
+                28080 + u16::try_from(index).expect("fixture value fits u16")
+            );
+            assert_eq!(
+                selected.p2p_port(index).unwrap(),
+                21337 + u16::try_from(index).expect("fixture value fits u16")
+            );
             assert_eq!(
                 selected.local_origin(index).unwrap(),
                 format!("http://127.0.0.1:{}/", 28080 + index)

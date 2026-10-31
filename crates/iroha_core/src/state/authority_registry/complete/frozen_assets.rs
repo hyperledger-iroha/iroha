@@ -1,6 +1,6 @@
 //! Frozen balance/reference/index owners and exact direct-home authority.
 //! Scoped rows do not supply complete State or private settlement authority.
-//! TODO: join all remaining owners/cells/history to StatePublication and Kura.
+//! TODO: join all remaining owners/cells/history to `StatePublication` and Kura.
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
 use crate::state::{
     StateBlock, authority_registry::grouped_ownership::validate_original_assets,
@@ -101,6 +101,10 @@ impl<'frozen> Original<'frozen> {
 }
 /// Validate both original balance images and encode the caller's actual assets.
 /// Every original target/mode and the State pool stay borrowed through encoding.
+#[expect(
+    clippy::result_large_err,
+    reason = "Capture refusal propagates original allocation and source custody inline without allocating an error box"
+)]
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,
@@ -113,11 +117,13 @@ pub(in crate::state) fn capture(
         &original.rows,
         &original.definitions,
         &original.domains,
-        &original.by_definition,
-        &original.by_domain,
-        &original.holders,
-        &original.nonzero,
-        &original.asset_counts,
+        (
+            &original.by_definition,
+            &original.by_domain,
+            &original.holders,
+            &original.nonzero,
+            &original.asset_counts,
+        ),
         &original.homes,
         &original.incarnations,
         max_work,

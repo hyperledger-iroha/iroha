@@ -123,7 +123,7 @@ pub(super) fn claim(
     // f -> f+1 changes the final IPA equation by the nonzero blinding generator; all
     // transcript point/scalar encodings and the original proof length remain canonical.
     bad.package.step_proof = original.package.step_proof.clone();
-    bad.package.receipt = original.package.receipt.clone();
+    bad.package.receipt = original.package.receipt;
     assert_eq!(&bad, original, "every other claim field must stay exact");
     bytes
 }

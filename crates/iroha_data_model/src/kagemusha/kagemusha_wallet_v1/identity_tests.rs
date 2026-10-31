@@ -38,7 +38,7 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn public_key(
     signing: &SigningKey,
 ) -> KagemushaDevicePublicKeyV1 {
     KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        signing.verifying_key().to_encoded_point(false).as_bytes(),
+        signing.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .expect("canonical key")
 }
@@ -1287,12 +1287,7 @@ fn kagemusha_wallet_v1_credential_issuer_verification() {
     let mut by_root = credential;
     let root_signature: P256Signature = f.root.sign(&credential.body.signing_message());
     let mut root_raw = [0; 64];
-    root_raw.copy_from_slice(
-        &root_signature
-            .normalize_s()
-            .unwrap_or(root_signature)
-            .to_bytes(),
-    );
+    root_raw.copy_from_slice(&root_signature.normalize_s().to_bytes());
     by_root.signature = KagemushaDeviceSignatureV1::from_raw_bytes(&root_raw).expect("low-S");
     assert!(matches!(
         by_root.verify(&f.scheme, &f.enrollment_certificate),

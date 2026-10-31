@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod startup_replay;
+
 pub(super) struct PreparedTieredSnapshot {
     payload: Option<TieredSnapshotPayload>,
     // On abandonment, observe release after the stored payload is destroyed.
@@ -14,6 +16,15 @@ pub(super) struct PreparedTieredSnapshot {
 
 impl PreparedTieredSnapshot {
     pub(super) fn prepare(world: &WorldBlock<'_>, worker: &TieredSnapshotWorker) -> Self {
+        if worker.inner.startup_replay_active.load(Ordering::Acquire) {
+            // Startup still executes and authenticates every block. Its final exact
+            // World supplies one complete local persistence image before runtime.
+            return Self {
+                payload: None,
+                #[cfg(test)]
+                _capture: None,
+            };
+        }
         let complete = {
             let backend = worker.inner.backend.lock();
             if !backend.enabled() {

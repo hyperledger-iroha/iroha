@@ -166,8 +166,8 @@ impl<E> NumericPlanFields<'_, E> {
             )));
         }
         let mut words = [0_u64; MAX_MANTISSA_BYTES / core::mem::size_of::<u64>()];
-        for (word, bytes) in words.iter_mut().zip(self.magnitude.chunks_exact(8)) {
-            *word = u64::from_le_bytes(bytes.try_into().expect("fixed eight-byte chunk"));
+        for (word, bytes) in words.iter_mut().zip(self.magnitude.as_chunks::<8>().0) {
+            *word = u64::from_le_bytes(*bytes);
         }
         let limbs = self.magnitude_len.div_ceil(8).max(1);
         infallible_observed(validate_decimal_parts_observed(

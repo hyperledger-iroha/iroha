@@ -1,9 +1,9 @@
-//! WebAuthn and mTLS authentication for Torii operator endpoints.
+//! `WebAuthn` and mTLS authentication for Torii operator endpoints.
 //!
 //! Ordinary operator routes still require their exact-network request signature at middleware;
-//! a WebAuthn session is an additional gate, not a substitute. The four credential-exchange
+//! a `WebAuthn` session is an additional gate, not a substitute. The four credential-exchange
 //! routes are the deliberate exception: mTLS plus a first-credential bootstrap token or an
-//! authenticated WebAuthn session owns enrollment, and a verified assertion owns session issue.
+//! authenticated `WebAuthn` session owns enrollment, and a verified assertion owns session issue.
 use crate::{
     JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
     routing::MaybeTelemetry,
@@ -22,7 +22,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Algorithm, PublicKey};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
 use parking_lot::Mutex;
-use rand::rand_core::{TryCryptoRng, TryRngCore as _};
+use rand::rand_core::{TryCryptoRng, TryRng as _};
 use sha2::{Digest as _, Sha256};
 use std::{
     cmp::Reverse,
@@ -45,7 +45,7 @@ const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
 const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const CREDENTIAL_LOCK_FILENAME: &str = ".operator_webauthn.lock";
-/// Maximum accepted JSON body size for one operator WebAuthn exchange request.
+/// Maximum accepted JSON body size for one operator `WebAuthn` exchange request.
 pub const CREDENTIAL_EXCHANGE_BODY_LIMIT: usize = 64 * 1024;
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
@@ -369,8 +369,7 @@ impl std::fmt::Display for OperatorAuthInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingWebAuthn => write!(f, "torii.operator_auth.webauthn is required"),
-            Self::InvalidWebAuthn(msg) => write!(f, "{msg}"),
-            Self::InvalidPolicy(msg) => write!(f, "{msg}"),
+            Self::InvalidWebAuthn(msg) | Self::InvalidPolicy(msg) => write!(f, "{msg}"),
             Self::CredentialLoad(msg) => write!(f, "failed to load operator credentials: {msg}"),
         }
     }
@@ -428,7 +427,7 @@ struct StoredCredential {
     sign_count: u32,
     created_at_ms: u64,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChallengeKind {
     Registration,
     Authentication,
@@ -665,11 +664,11 @@ pub struct OperatorAuth {
 }
 impl OperatorAuth {
     pub(crate) fn new(
-        config: ToriiOperatorAuth,
-        data_dir: PathBuf,
+        config: &ToriiOperatorAuth,
+        data_dir: &std::path::Path,
         telemetry: MaybeTelemetry,
     ) -> Result<Self, OperatorAuthInitError> {
-        validate_operator_auth_capacities(&config)?;
+        validate_operator_auth_capacities(config)?;
         let webauthn = if config.enabled {
             let Some(cfg) = config.webauthn.clone() else {
                 return Err(OperatorAuthInitError::MissingWebAuthn);
@@ -699,7 +698,7 @@ impl OperatorAuth {
             )?;
         }
         let bootstrap_token_hashes = validate_bootstrap_tokens(config.enabled, &config.tokens)?;
-        let credentials_path = operator_credentials_path(&data_dir);
+        let credentials_path = operator_credentials_path(data_dir);
         let credential_store_lock = if config.enabled {
             acquire_credential_store_lock(&credentials_path)
                 .map_err(OperatorAuthInitError::CredentialLoad)?
@@ -918,7 +917,7 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_registration_options_with_rng(ctx, &mut rng)
     }
     fn webauthn_registration_options_with_rng<R: TryCryptoRng + ?Sized>(
@@ -938,7 +937,7 @@ impl OperatorAuth {
                 .map(|credential| {
                     json_object(vec![
                         json_entry("type", "public-key"),
-                        json_entry("id", encode_b64url(&credential.id)),
+                        json_entry("id", &(encode_b64url(&credential.id))),
                     ])
                 })
                 .collect::<Vec<_>>()
@@ -972,7 +971,7 @@ impl OperatorAuth {
         for alg in &policy.allowed_algorithms {
             params.push(json_object(vec![
                 json_entry("type", "public-key"),
-                json_entry("alg", alg.cose_alg()),
+                json_entry("alg", &(alg.cose_alg())),
             ]));
         }
         let mut public_key = norito::json::Map::new();
@@ -986,7 +985,7 @@ impl OperatorAuth {
         public_key.insert(
             "user".into(),
             json_object(vec![
-                json_entry("id", user_id_b64),
+                json_entry("id", &(user_id_b64)),
                 json_entry("name", policy.user_name.as_str()),
                 json_entry("displayName", policy.user_display_name.as_str()),
             ]),
@@ -1015,7 +1014,7 @@ impl OperatorAuth {
         self.record_success(ctx, ACTION_REGISTER_OPTIONS, "ok");
         Ok(json_object(vec![json_entry(
             "publicKey",
-            norito::json::Value::Object(public_key),
+            &(norito::json::Value::Object(public_key)),
         )]))
     }
     fn webauthn_finish_registration(
@@ -1066,7 +1065,7 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_authentication_options_with_rng(ctx, &mut rng)
     }
     fn webauthn_authentication_options_with_rng<R: TryCryptoRng + ?Sized>(
@@ -1090,7 +1089,7 @@ impl OperatorAuth {
                 .map(|credential| {
                     json_object(vec![
                         json_entry("type", "public-key"),
-                        json_entry("id", encode_b64url(&credential.id)),
+                        json_entry("id", &(encode_b64url(&credential.id))),
                     ])
                 })
                 .collect::<Vec<_>>()
@@ -1138,7 +1137,7 @@ impl OperatorAuth {
         self.record_event(ACTION_LOGIN_OPTIONS, "allowed", "ok");
         Ok(json_object(vec![json_entry(
             "publicKey",
-            norito::json::Value::Object(public_key),
+            &(norito::json::Value::Object(public_key)),
         )]))
     }
     fn webauthn_finish_authentication(
@@ -1146,7 +1145,7 @@ impl OperatorAuth {
         ctx: &AuthContext,
         payload: &norito::json::Value,
     ) -> Result<SessionOutcome, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_finish_authentication_with_rng(ctx, payload, &mut rng)
     }
     fn webauthn_finish_authentication_with_rng<R: TryCryptoRng + ?Sized>(
@@ -1302,10 +1301,10 @@ impl OperatorAuth {
             .map(|credential| {
                 let credential_id = encode_b64url(&credential.id);
                 let metadata = json_object(vec![
-                    json_entry("credential_id", credential_id.clone()),
+                    json_entry("credential_id", &(credential_id)),
                     json_entry("algorithm", credential.alg.label()),
-                    json_entry("sign_count", credential.sign_count),
-                    json_entry("created_at_ms", credential.created_at_ms),
+                    json_entry("sign_count", &(credential.sign_count)),
+                    json_entry("created_at_ms", &(credential.created_at_ms)),
                 ]);
                 (credential_id, metadata)
             })
@@ -1315,12 +1314,12 @@ impl OperatorAuth {
         Ok(json_object(vec![
             json_entry(
                 "credentials",
-                entries
+                &(entries
                     .into_iter()
                     .map(|(_, metadata)| metadata)
-                    .collect::<Vec<_>>(),
+                    .collect::<Vec<_>>()),
             ),
-            json_entry("credentials_total", credentials_total),
+            json_entry("credentials_total", &(credentials_total)),
         ]))
     }
     fn delete_credential(
@@ -1396,18 +1395,16 @@ impl OperatorAuth {
         }
     }
     fn check_bootstrap_token(&self, headers: &HeaderMap) -> TokenCheck {
-        operator_token(headers)
-            .map(|token| {
-                if self
-                    .bootstrap_token_hashes
-                    .contains(&bootstrap_token_digest(token))
-                {
-                    TokenCheck::Valid
-                } else {
-                    TokenCheck::Invalid
-                }
-            })
-            .unwrap_or(TokenCheck::Missing)
+        operator_token(headers).map_or(TokenCheck::Missing, |token| {
+            if self
+                .bootstrap_token_hashes
+                .contains(&bootstrap_token_digest(token))
+            {
+                TokenCheck::Valid
+            } else {
+                TokenCheck::Invalid
+            }
+        })
     }
     fn record_event(&self, action: &'static str, result: &'static str, reason: &'static str) {
         self.telemetry.with_metrics(|telemetry| {
@@ -1565,12 +1562,12 @@ fn bootstrap_token_digest(token: &str) -> [u8; 32] {
     hasher.update(token.as_bytes());
     hasher.finalize().into()
 }
-/// Result of a successful WebAuthn registration ceremony.
+/// Result of a successful `WebAuthn` registration ceremony.
 pub struct RegistrationOutcome {
     credential_id: String,
     credentials_total: usize,
 }
-/// Result of a successful WebAuthn authentication ceremony.
+/// Result of a successful `WebAuthn` authentication ceremony.
 pub struct SessionOutcome {
     session_token: String,
     expires_in_secs: u64,
@@ -1622,7 +1619,7 @@ fn operator_credentials_path(base: &Path) -> PathBuf {
 #[cfg(test)]
 fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {
     let mut buf = vec![0u8; len];
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     random_bytes_with_rng_into(&mut buf, &mut rng)?;
     Ok(buf)
 }
@@ -1679,8 +1676,7 @@ fn decode_managed_credential_id(value: &str) -> Result<Vec<u8>, OperatorAuthErro
 }
 fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
     limits::effective_remote_ip(headers, remote)
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "anon".to_string())
+        .map_or_else(|| "anon".to_string(), |ip| ip.to_string())
 }
 fn mtls_present(
     headers: &HeaderMap,
@@ -2908,17 +2904,17 @@ fn persist_credentials(
     let mut entries = Vec::with_capacity(credentials.len());
     for credential in credentials {
         let entry = json_object(vec![
-            json_entry("id_b64", encode_b64url(&credential.id)),
-            json_entry("public_key_b64", encode_b64url(&credential.public_key)),
+            json_entry("id_b64", &(encode_b64url(&credential.id))),
+            json_entry("public_key_b64", &(encode_b64url(&credential.public_key))),
             json_entry("alg", credential.alg.label()),
-            json_entry("sign_count", credential.sign_count),
-            json_entry("created_at_ms", credential.created_at_ms),
+            json_entry("sign_count", &(credential.sign_count)),
+            json_entry("created_at_ms", &(credential.created_at_ms)),
         ]);
         entries.push(entry);
     }
     let payload = json_object(vec![
-        json_entry("version", 1_u64),
-        json_entry("credentials", entries),
+        json_entry("version", &(1_u64)),
+        json_entry("credentials", &(entries)),
     ]);
     let body = norito::json::to_json_pretty(&payload).map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to serialize credentials: {err}"))
@@ -2932,7 +2928,7 @@ fn create_credential_temp_file(
 ) -> Result<(fs::File, std::ffi::OsString), String> {
     for _ in 0..CREDENTIAL_TEMP_FILE_RETRIES {
         let mut nonce = [0_u8; 16];
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         rng.try_fill_bytes(&mut nonce).map_err(|error| {
             format!("failed to generate a credential temporary-file name: {error}")
         })?;
@@ -3562,7 +3558,7 @@ fn verify_signature(
             let verifying_key = parse_es256_public_key(public_key)?;
             let sig = P256Signature::from_der(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
-            if sig.normalize_s().is_some() {
+            if sig.normalize_s() != sig {
                 return Err(OperatorAuthError::signature_invalid());
             }
             verifying_key
@@ -3591,9 +3587,9 @@ fn parse_es256_public_key(public_key: &[u8]) -> Result<P256Key, OperatorAuthErro
             "invalid ES256 public key",
         ));
     }
-    let encoded = p256::EncodedPoint::from_bytes(public_key)
+    let encoded = p256::Sec1Point::from_bytes(public_key)
         .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key encoding"))?;
-    P256Key::from_encoded_point(&encoded)
+    P256Key::from_sec1_point(&encoded)
         .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))
 }
 fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
@@ -3603,7 +3599,7 @@ fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
 }
 fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
     match value {
-        CborValue::Integer(value) => Ok(i128::from(value.clone())),
+        CborValue::Integer(value) => Ok(i128::from(*value)),
         _ => Err(OperatorAuthError::invalid_payload(
             "COSE value must be an integer",
         )),
@@ -3707,7 +3703,7 @@ fn expect_cbor_value(
 ) -> Result<&CborValue, OperatorAuthError> {
     map.iter()
         .find(|(candidate, _)| match candidate {
-            CborValue::Integer(value) => i128::from(value.clone()) == key,
+            CborValue::Integer(value) => i128::from(*value) == key,
             _ => false,
         })
         .map(|(_, value)| value)
@@ -3768,18 +3764,18 @@ pub async fn handle_operator_register_verify(
         .webauthn_finish_registration(&ctx, &payload)?;
     let response = json_object(vec![
         json_entry("status", "ok"),
-        json_entry("credential_id", outcome.credential_id),
-        json_entry("credentials_total", outcome.credentials_total),
+        json_entry("credential_id", &(outcome.credential_id)),
+        json_entry("credentials_total", &(outcome.credentials_total)),
     ]);
     Ok(JsonBody(response))
 }
-/// List enrolled operator WebAuthn credentials without exposing verification keys.
+/// List enrolled operator `WebAuthn` credentials without exposing verification keys.
 pub async fn handle_operator_credentials(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     Ok(JsonBody(app.operator_auth.credential_inventory()?))
 }
-/// Delete one operator WebAuthn credential and revoke all outstanding operator auth state.
+/// Delete one operator `WebAuthn` credential and revoke all outstanding operator auth state.
 pub async fn handle_operator_credential_delete(
     State(app): State<SharedAppState>,
     AxumPath(credential_id): AxumPath<String>,
@@ -3793,8 +3789,8 @@ pub async fn handle_operator_credential_delete(
         .delete_credential(&credential_id, generation)?;
     Ok(JsonBody(json_object(vec![
         json_entry("status", "ok"),
-        json_entry("credential_id", outcome.credential_id),
-        json_entry("credentials_total", outcome.credentials_total),
+        json_entry("credential_id", &(outcome.credential_id)),
+        json_entry("credentials_total", &(outcome.credentials_total)),
     ])))
 }
 pub async fn handle_operator_login_options(
@@ -3829,9 +3825,9 @@ pub async fn handle_operator_login_verify(
         .webauthn_finish_authentication(&ctx, &payload)?;
     let response = json_object(vec![
         json_entry("status", "ok"),
-        json_entry("session_token", outcome.session_token),
-        json_entry("expires_in_secs", outcome.expires_in_secs),
-        json_entry("credential_id", outcome.credential_id),
+        json_entry("session_token", &(outcome.session_token)),
+        json_entry("expires_in_secs", &(outcome.expires_in_secs)),
+        json_entry("credential_id", &(outcome.credential_id)),
     ]);
     Ok(JsonBody(response))
 }

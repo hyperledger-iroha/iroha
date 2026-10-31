@@ -16,7 +16,7 @@ internal fun enrollmentProbeStage(outcome: String): String? = when (outcome) {
     "native-local-abandoned", "native-signed-abandonment-exported", "native-expired-local-abandoned" -> "abandoned"
     "native-activation-confirmed" -> "activated"
     "native-complete-load" -> "loaded"
-    "native-complete-send", "native-exact-send-delivery-admitted-over-nearby" -> "sent"
+    "native-complete-send", "native-exact-send-delivery-verified-over-nearby" -> "sent"
     "native-complete-receive", "native-durable-receive-acknowledged-over-nearby",
     "native-credit-evidence-UNFOLDED", "native-credit-evidence-CREDITED" -> "received"
     "native-current-head-folded" -> "folded"

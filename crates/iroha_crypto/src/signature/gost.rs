@@ -10,8 +10,8 @@ use num_bigint::BigUint;
 #[cfg(test)]
 use num_bigint::{BigInt, Sign};
 use num_traits::{One, Zero};
-use rand::{RngCore, rngs::OsRng};
-use rand_core::TryRngCore;
+use rand::{Rng, rngs::SysRng};
+use rand_core::TryRng;
 use std::sync::LazyLock;
 use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -342,7 +342,7 @@ fn params_for_algorithm(algorithm: Algorithm) -> Result<Params<'static>, ParseEr
         Algorithm::Gost3410_2012_256ParamSetC => Ok(Params::Bits256(&PARAM_256_C)),
         Algorithm::Gost3410_2012_512ParamSetA => Ok(Params::Bits512(&PARAM_512_A)),
         Algorithm::Gost3410_2012_512ParamSetB => Ok(Params::Bits512(&PARAM_512_B)),
-        other => Err(ParseError(format!(
+        other => Err(ParseError::Invalid(format!(
             "algorithm {other:?} is not a supported GOST parameter set"
         ))),
     }
@@ -559,7 +559,7 @@ fn increment_nonce(params: &CurveParams, current: &BigUint) -> BigUint {
 }
 fn parse_private_generic(params: &CurveParams, payload: &[u8]) -> Result<PrivateKey, ParseError> {
     if payload.len() != params.scalar_len {
-        return Err(ParseError(format!(
+        return Err(ParseError::Invalid(format!(
             "invalid private key length for {}: expected {}, got {}",
             params.name,
             params.scalar_len,
@@ -568,7 +568,7 @@ fn parse_private_generic(params: &CurveParams, payload: &[u8]) -> Result<Private
     }
     let scalar = le_bytes_to_biguint(payload);
     if scalar.is_zero() || scalar >= params.q {
-        return Err(ParseError(format!(
+        return Err(ParseError::Invalid(format!(
             "private key outside [1, q-1] for {}",
             params.name
         )));
@@ -659,7 +659,7 @@ fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<Publ
         bytes_le: point_to_le_bytes(&point, params.scalar_len),
     })
 }
-fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error> {
+fn random_scalar<R: Rng>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error> {
     const MAX_DETERMINISTIC_SCALAR_ATTEMPTS: usize = 1024;
     let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
     for _ in 0..MAX_DETERMINISTIC_SCALAR_ATTEMPTS {
@@ -675,11 +675,11 @@ fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> Result<BigUin
     ))
 }
 fn random_scalar_from_os(params: &CurveParams) -> Result<BigUint, Error> {
-    random_scalar_from_rng(params, &mut OsRng)
+    random_scalar_from_rng(params, &mut SysRng)
 }
 fn random_scalar_from_rng<R>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error>
 where
-    R: TryRngCore,
+    R: TryRng,
     R::Error: fmt::Display,
 {
     const MAX_RANDOM_SCALAR_ATTEMPTS: usize = 1024;
@@ -728,14 +728,14 @@ fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 fn signing_entropy_from_os(params: &CurveParams) -> Result<Zeroizing<Vec<u8>>, Error> {
-    signing_entropy_from_rng(params, &mut OsRng)
+    signing_entropy_from_rng(params, &mut SysRng)
 }
 fn signing_entropy_from_rng<R>(
     params: &CurveParams,
     rng: &mut R,
 ) -> Result<Zeroizing<Vec<u8>>, Error>
 where
-    R: TryRngCore,
+    R: TryRng,
     R::Error: fmt::Display,
 {
     let mut entropy = Zeroizing::new(vec![0u8; params.scalar_len]);
@@ -861,7 +861,7 @@ pub(crate) fn verify_bytes(
 mod tests {
     use super::*;
     use num_traits::{One, ToPrimitive};
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::{hint::black_box, time::Instant};
     const LEGACY_HMAC_BLOCK_LEN: usize = 64;
     fn seed_pair() -> (PublicKey, PrivateKey) {
@@ -871,7 +871,7 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
@@ -1509,39 +1509,45 @@ mod tests {
             Self { samples, idx: 0 }
         }
     }
-    impl RngCore for StubRng {
-        fn next_u32(&mut self) -> u32 {
-            panic!("next_u32 not supported in StubRng");
+    impl rand::TryRng for StubRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            panic!("next_u32 not supported in StubRng")
         }
-        fn next_u64(&mut self) -> u64 {
-            panic!("next_u64 not supported in StubRng");
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            panic!("next_u64 not supported in StubRng")
         }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            let sample = self
-                .samples
-                .get(self.idx)
-                .expect("StubRng ran out of samples");
-            self.idx += 1;
-            assert_eq!(
-                sample.len(),
-                dest.len(),
-                "StubRng sample length must match destination length"
-            );
-            dest.copy_from_slice(sample);
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                let sample = self
+                    .samples
+                    .get(self.idx)
+                    .expect("StubRng ran out of samples");
+                self.idx += 1;
+                assert_eq!(
+                    sample.len(),
+                    dest.len(),
+                    "StubRng sample length must match destination length"
+                );
+                dest.copy_from_slice(sample);
+            })
         }
     }
     struct FixedRng {
         byte: u8,
     }
-    impl RngCore for FixedRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::from_le_bytes([self.byte; 4])
+    impl rand::TryRng for FixedRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::from_le_bytes([self.byte; 8])
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
         }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            dest.fill(self.byte);
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                dest.fill(self.byte);
+            })
         }
     }
     #[test]

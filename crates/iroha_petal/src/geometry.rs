@@ -115,6 +115,87 @@ impl Homography {
     }
 }
 
+/// A camera pose: a homography from the canvas onto undistorted image pixels, followed by
+/// radial lens distortion about the image centre.
+///
+/// A pixel `p` that an undistorted camera would see at `u` is seen at
+/// `c + (u − c) · (1 + k · |u − c|² / s²)`, with `c` the image centre, `k` the
+/// [`distortion`](Self::distortion) (negative is barrel) and `s = 0.8 · max(width, height)`.
+/// `k = 0` is a plain homography.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pose {
+    /// Canvas to undistorted pixels.
+    pub homography: Homography,
+    /// Radial distortion coefficient `k`.
+    pub distortion: f64,
+    /// Distortion centre in pixels.
+    pub center: (f64, f64),
+    /// Squared distortion scale `s²` in pixels².
+    pub scale2: f64,
+}
+
+impl Pose {
+    /// A pose without lens distortion.
+    #[must_use]
+    pub fn plain(homography: Homography) -> Self {
+        Self {
+            homography,
+            distortion: 0.0,
+            center: (0.0, 0.0),
+            scale2: 1.0,
+        }
+    }
+
+    /// Maps a canvas point to image pixels.
+    #[must_use]
+    pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let (ux, uy) = self.homography.apply(x, y);
+        if self.distortion == 0.0 {
+            return (ux, uy);
+        }
+        let (dx, dy) = (ux - self.center.0, uy - self.center.1);
+        let factor = 1.0 + self.distortion * (dx * dx + dy * dy) / self.scale2;
+        (self.center.0 + dx * factor, self.center.1 + dy * factor)
+    }
+
+    /// The pose with distortion `distortion` that takes the canvas points `src` to the image
+    /// points `dst` of a `width × height` image: the image points are undistorted (six
+    /// fixed-point rounds), then the homography is fitted to them.
+    #[must_use]
+    pub fn fit(
+        src: &[(f64, f64)],
+        dst: &[(f64, f64)],
+        distortion: f64,
+        width: usize,
+        height: usize,
+    ) -> Option<Self> {
+        let center = (width as f64 / 2.0, height as f64 / 2.0);
+        let scale2 = (0.8 * width.max(height) as f64).powi(2);
+        let undistorted: Vec<(f64, f64)> = dst
+            .iter()
+            .map(|&(px, py)| {
+                let (dx, dy) = (px - center.0, py - center.1);
+                let (mut ux, mut uy) = (dx, dy);
+                if distortion != 0.0 {
+                    for _ in 0..6 {
+                        let factor = 1.0 + distortion * (ux * ux + uy * uy) / scale2;
+                        ux = dx / factor;
+                        uy = dy / factor;
+                    }
+                }
+                (center.0 + ux, center.1 + uy)
+            })
+            .collect();
+        let homography = Homography::from_points(src, &undistorted)?;
+        Some(Self {
+            homography,
+            distortion,
+            center,
+            scale2,
+        })
+    }
+}
+
 /// Translation to the centroid and isotropic scale to mean distance √2.
 fn normalisation(points: &[(f64, f64)]) -> (Homography, (f64,)) {
     let n = points.len() as f64;
@@ -218,6 +299,37 @@ mod tests {
         let (x, y) = truth.apply(300.0, 200.0);
         let (bx, by) = inverse.apply(x, y);
         assert!((bx - 300.0).abs() < 1e-6 && (by - 200.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_fitted_pose_takes_its_source_points_onto_distorted_image_points() {
+        let src = [(72.0, 72.0), (952.0, 72.0), (952.0, 952.0), (72.0, 952.0)];
+        let dst = [
+            (380.0, 90.0),
+            (900.0, 110.0),
+            (880.0, 640.0),
+            (360.0, 620.0),
+        ];
+        for distortion in [0.0, -0.08, 0.03] {
+            let pose = Pose::fit(&src, &dst, distortion, 1280, 720).unwrap();
+            for (s, d) in src.iter().zip(&dst) {
+                let (x, y) = pose.apply(s.0, s.1);
+                assert!(
+                    (x - d.0).abs() < 1e-3 && (y - d.1).abs() < 1e-3,
+                    "{distortion}"
+                );
+            }
+        }
+        // barrel distortion pulls a mid-edge point toward the image centre
+        let plain = Pose::fit(&src, &dst, 0.0, 1280, 720).unwrap();
+        let barrel = Pose::fit(&src, &dst, -0.08, 1280, 720).unwrap();
+        let (px, _) = plain.apply(512.0, 72.0);
+        let (bx, _) = barrel.apply(512.0, 72.0);
+        assert!((px - bx).abs() < 5.0);
+        assert_eq!(
+            Pose::plain(Homography::IDENTITY).apply(3.0, 4.0),
+            (3.0, 4.0)
+        );
     }
 
     #[test]

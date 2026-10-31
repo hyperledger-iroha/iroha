@@ -14,6 +14,13 @@ use super::*;
 /// reserve, not an estimate or a portable bound on the process allocator or RSS.
 pub(super) const MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1: usize = 1 << 30;
 
+// Independent current-profile payload pin: masks, cuts, maximum registration,
+// replay batch, CA coefficients/metadata, and two complete cache batches.
+#[cfg(test)]
+pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_872_458_392
+    + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
+    );
+
 /// Dimensions inspected before any additional private source matrix is built.
 /// All other source dimensions come from the exact registered MAIN layout.
 #[derive(Clone, Copy)]
@@ -141,6 +148,7 @@ pub(super) struct MainProverBufferPlanV1 {
     pub(super) replay_batch: usize,
     pub(super) composition: usize,
     pub(super) quotient_stage: usize,
+    pub(super) quotient_cache_reserve: usize,
     pub(super) fri_stage: usize,
     pub(super) openings: usize,
     pub(super) maximum_live_buffers: usize,
@@ -163,13 +171,36 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
     })
 }
 
-// Row replay uses the existing clearing batch helper. Fixed fields are public;
-// this conservative row+metadata charge fits independently of backend choice.
-type P256AggregateFixedReplayScratchV1 = (
-    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
-    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+// The SHA and P-256 matrix producers own separate public fixed rows. Charge
+// both current/next scratch rows at their maximum width, independently of the
+// selected producer or transform backend.
+/// Maximum row owned by either batched public fixed-matrix producer.
+pub(super) const MAIN_FIXED_REPLAY_ROW_WIDTH_V1: usize =
+    if ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 > P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 {
+        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
+    } else {
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
+    };
+type MainFixedReplayScratchV1 = (
+    [F; MAIN_FIXED_REPLAY_ROW_WIDTH_V1],
+    [F; MAIN_FIXED_REPLAY_ROW_WIDTH_V1],
     [usize; 16],
 );
+
+#[cfg(test)]
+#[test]
+fn fixed_replay_scratch_charges_both_rows_of_the_widest_matrix_producer() {
+    assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 137);
+    assert_eq!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, 134);
+    assert_eq!(
+        MAIN_FIXED_REPLAY_ROW_WIDTH_V1,
+        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1.max(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1)
+    );
+    let required = 2 * 137 * core::mem::size_of::<F>() + 16 * core::mem::size_of::<usize>();
+    assert_eq!(core::mem::size_of::<MainFixedReplayScratchV1>(), required);
+    let arithmetic_only = 2 * 134 * core::mem::size_of::<F>() + 16 * core::mem::size_of::<usize>();
+    assert_eq!(required - arithmetic_only, 48);
+}
 
 /// Distinct caller lifetime boundaries; replay/cache and worker/source scratch
 /// retain their separate reservations throughout the registration.
@@ -218,7 +249,7 @@ impl MainRegistrationQuotientPayloadV1 {
                 aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
                 core::mem::size_of::<&mut [F]>(),
             ])?,
-            core::mem::size_of::<P256AggregateFixedReplayScratchV1>(),
+            core::mem::size_of::<MainFixedReplayScratchV1>(),
             main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
                 stripe,
@@ -347,6 +378,8 @@ impl MainProverBufferPlanV1 {
             // Reserve all public columns before the first source or entropy draw.
             super::main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(layout)?,
             P256MainBaseSourceV1::allocation_forecast_v1()?,
+            ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1()
+                .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1()
                 .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
@@ -384,6 +417,26 @@ impl MainProverBufferPlanV1 {
         )
     }
 
+    /// Admit joined transforms after the global source admission, charging the
+    /// larger of complete original-commitment and finalization lifetimes.
+    /// Registration quotient matrices and their local cache are absent in both
+    /// caller phases; their headroom may hold device staging until it drains.
+    /// Source, scratch, runtime and public-power reservations remain unchanged.
+    pub(super) fn joined_transform_admission_v1(
+        &self,
+        assembly_payload: usize,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let global = self.check_before_sources_v1(assembly_payload)?;
+        let joint = main_ca_resources::MainCaJointBufferPlanV1::from_common_v1(*self)?;
+        let live = joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments)?
+            .max(joint.required_v1(main_ca_resources::MainCaBufferPhaseV1::Finalization)?);
+        global
+            .checked_sub(self.maximum_live_buffers)
+            .and_then(|reserved| reserved.checked_add(live))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)
+    }
+
     /// Check actual source capacities before mask sampling, composition or FRI.
     /// Keeping the admitted allowance fixed prevents later phases from spending
     /// capacity reserved for source replay or runtime overhead.
@@ -419,6 +472,10 @@ impl MainProverBufferPlanV1 {
             // and in every later phase, even when the current public domain
             // uses no table. No private capacity can select table/fallback.
             main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+            // The joined evaluator survives its source/replay callbacks. Its
+            // independent public coset table therefore coexists with the FFT
+            // tables above and must be reserved in every policy's peak envelope.
+            main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1,
         ])?;
         if required > self.remaining_source_and_runtime_envelope {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
@@ -426,7 +483,9 @@ impl MainProverBufferPlanV1 {
         sum(&[self.maximum_live_buffers, required])
     }
 
-    /// Reuse only already admitted arithmetic headroom. Source/scratch/runtime
+    /// Reuse only already admitted arithmetic headroom. The private cache's
+    /// actual capacities are deducted before any public fixed prefix is kept.
+    /// Source/scratch/runtime
     /// allowances and the global maximum remain reserved at their original size.
     pub(super) fn quotient_cache_plan_v1(
         &self,
@@ -555,6 +614,21 @@ impl MainProverBufferPlanV1 {
             let candidate = registration_quotient_payload_v1(layout, *registration, degree_cap)?;
             quotient_stage = quotient_stage.max(candidate);
         }
+        // Keep two bounded batches of original masked columns available across
+        // quotient stripes, including both clearing headers and the cache owner.
+        // This explicit reuse policy is charged inside the same process ceiling;
+        // a hash dependency's inline size must not silently remove the cache.
+        let quotient_cache_reserve = sum(&[
+            core::mem::size_of::<main_quotient_cache::MainQuotientReplayCacheV1>(),
+            product(&[
+                2,
+                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                sum(&[
+                    product(&[maximum_native + MASK_DEGREE + 1, field])?,
+                    core::mem::size_of::<super::super::super::private_table::PrivateTableV1<F>>(),
+                ])?,
+            ])?,
+        ])?;
         // Mask coefficients/evaluations and all binary digest-tree levels, plus
         // retained original plus outgoing/current/successor FRI layers and a
         // DEEP coefficient accumulator. The retained-copy admission checks
@@ -586,24 +660,16 @@ impl MainProverBufferPlanV1 {
             replay_batch,
             composition,
             quotient_stage,
+            quotient_cache_reserve,
             fri_stage,
             openings,
             maximum_live_buffers: 0,
             remaining_source_and_runtime_envelope: 0,
         };
-        plan.maximum_live_buffers = sum(&[
-            plan.masks,
-            sum(&[plan.quotient_stage, plan.replay_batch])?.max(sum(&[
-                plan.joined_streams,
-                plan.replay_batch,
-                plan.composition,
-                plan.fri_stage,
-                plan.openings,
-            ])?),
-        ])?;
-        // Preserve the previous arithmetic envelope. Cut roots coexist with
-        // sampling, every registration/cache, DEEP, FRI and final row assembly.
-        // Query replay now owns only its selected hash states, not all LDE rows.
+        // Derive the peak from complete simultaneous owners. In particular,
+        // registration retains both cuts even if a smaller hash-state owner
+        // makes the quotient phase larger than commitment/finalization work.
+        // Query replay owns only its selected hash states, not all LDE rows.
         for stage in [
             sum(&[
                 plan.masks,
@@ -616,6 +682,7 @@ impl MainProverBufferPlanV1 {
                 plan.retained_cuts,
                 plan.quotient_stage,
                 plan.replay_batch,
+                plan.quotient_cache_reserve,
             ])?,
             sum(&[
                 plan.masks,
@@ -627,9 +694,28 @@ impl MainProverBufferPlanV1 {
                 plan.openings,
             ])?,
         ] {
-            if stage > plan.maximum_live_buffers {
-                return Err(ZkX509StarkErrorV1::ProofTooLarge);
-            }
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(stage);
+        }
+        // The complete credential also retains CA originals and phase-local
+        // joint owners. Count them explicitly rather than borrowing incidental
+        // headroom from the size of a different phase's hash implementation.
+        let joint = main_ca_resources::MainCaJointBufferPlanV1::from_common_v1(plan)?;
+        for phase in [
+            main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
+            main_ca_resources::MainCaBufferPhaseV1::Registration,
+            main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+        ] {
+            let payload = sum(&[
+                joint.phase_payload_v1(phase)?,
+                if phase == main_ca_resources::MainCaBufferPhaseV1::Registration {
+                    plan.quotient_cache_reserve
+                } else {
+                    0
+                },
+            ])?;
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(payload);
         }
         // Joined finalization runs after its coefficient/FFT batch has dropped.
         // Its bounded digest tile, exact-level prefixes and named worker

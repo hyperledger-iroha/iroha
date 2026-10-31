@@ -1196,9 +1196,7 @@ fn issuer_repo_collateral(
         &state_transaction.world.repo_agreements_by_counterparty,
         &state_transaction.world.repo_agreements_by_custodian,
     ] {
-        if let Some(ids) = index.get(issuer) {
-            agreements.extend(ids.iter().cloned());
-        }
+        agreements.extend(crate::state::range_bounds::index_members(index, issuer).cloned());
     }
     let mut reserved = Quantity::zero();
     for id in agreements {
@@ -1679,7 +1677,8 @@ pub mod query {
                 .world()
                 .bonds()
                 .iter()
-                .filter_map(move |(_, record)| filter.applies(record).then(|| record.clone())))
+                .filter(move |&(_, record)| filter.applies(record))
+                .map(|(_, record)| record.clone()))
         }
     }
 

@@ -8,6 +8,9 @@ use std::{
     cell::Cell,
 };
 
+mod live_census;
+pub(crate) use live_census::{LiveAllocationStats, live_allocations_during};
+
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
     static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
@@ -65,6 +68,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
             record_allocation();
+            live_census::allocated(pointer, layout.size());
         }
         pointer
     }
@@ -76,6 +80,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let pointer = unsafe { System.alloc_zeroed(layout) };
         if !pointer.is_null() {
             record_allocation();
+            live_census::allocated(pointer, layout.size());
         }
         pointer
     }
@@ -87,11 +92,13 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let result = unsafe { System.realloc(pointer, layout, size) };
         if !result.is_null() {
             record_allocation();
+            live_census::reallocated(pointer, result, size);
         }
         result
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        live_census::deallocated(pointer);
         unsafe { System.dealloc(pointer, layout) };
     }
 }
@@ -100,7 +107,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 ///
 /// # Panics
 /// Rejects nested observation before changing the active counter or tracking guard.
-pub(crate) fn allocations_during(f: impl FnOnce()) -> usize {
+pub fn allocations_during(f: impl FnOnce()) -> usize {
     struct StopTracking;
     impl Drop for StopTracking {
         fn drop(&mut self) {
@@ -125,7 +132,7 @@ pub(crate) fn allocations_during(f: impl FnOnce()) -> usize {
 ///
 /// # Panics
 /// Rejects nested refusal before changing the outer observation.
-pub(crate) fn refuse_one_layout_during<T>(layout: Layout, f: impl FnOnce() -> T) -> (T, bool) {
+pub fn refuse_one_layout_during<T>(layout: Layout, f: impl FnOnce() -> T) -> (T, bool) {
     refuse_layout_occurrence_during(layout, 0, f)
 }
 
@@ -134,7 +141,7 @@ pub(crate) fn refuse_one_layout_during<T>(layout: Layout, f: impl FnOnce() -> T)
 ///
 /// # Panics
 /// Rejects nested refusal before changing the existing observation.
-pub(crate) fn refuse_layout_occurrence_during<T>(
+pub fn refuse_layout_occurrence_during<T>(
     layout: Layout,
     occurrence: usize,
     f: impl FnOnce() -> T,

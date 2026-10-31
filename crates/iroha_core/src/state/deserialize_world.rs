@@ -10,7 +10,7 @@ pub(in crate::state) mod musubi_rejection;
 use musubi_rejection::{ProjectionCut, ProjectionRejection, ProjectionTable};
 
 #[path = "deserialize_world_musubi_source_read.rs"]
-pub(crate) mod musubi_source_read;
+pub mod musubi_source_read;
 
 #[path = "deserialize_world_musubi_live.rs"]
 pub(in crate::state) mod musubi_live;
@@ -27,6 +27,22 @@ pub(in crate::state) mod musubi_universal;
 pub(in crate::state) mod proof_tag_index;
 #[path = "deserialize_world_verifying_key_index.rs"]
 mod verifying_key_index;
+
+/// Project persisted privacy validation without flattening original local codec refusal.
+fn privacy_state_json_error(
+    error: crate::privacy_state::PrivacyStateValidationErrorV1,
+) -> json::Error {
+    use crate::privacy_state::{PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1};
+    match error {
+        PrivacyStateValidationErrorV1::PgcAccountRoot(
+            PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(original),
+        ) => json::Error::from_decode_resource(original.into_error()),
+        original => json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message: original.to_string(),
+        },
+    }
+}
 
 struct MusubiPersistedState<'a> {
     namespace_bindings: &'a Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
@@ -6133,16 +6149,27 @@ fn timed_ovn_phase_matches_ballot_status_v1(
     use iroha_data_model::governance::types::BallotAttemptStatusV1 as BallotStatus;
     use iroha_data_model::governance::types::ParliamentBallotFailureKindV1 as FailureKind;
     match (status, failure_kind) {
-        (BallotStatus::Registration, None) => phase == PersistedTimedOvnPhaseV1::Registered,
         (BallotStatus::SurvivorFreeze, None) => {
             phase == PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        (BallotStatus::TimedCommitment, None) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        (BallotStatus::TimedCommitment, None)
+        | (
+            BallotStatus::NoResult | BallotStatus::Superseded,
+            Some(FailureKind::CommitmentDeadlineExpired),
+        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
         (BallotStatus::AwaitingRelease | BallotStatus::Opening, None) => {
             phase == PersistedTimedOvnPhaseV1::Sealed
         }
-        (BallotStatus::Finalized, None) => phase == PersistedTimedOvnPhaseV1::Released,
-        (
+        (BallotStatus::Finalized, None)
+        | (
+            BallotStatus::NoResult,
+            Some(
+                FailureKind::ConfirmationJuryCapacityUnavailable
+                | FailureKind::RandomnessRedrawBudgetExhausted,
+            ),
+        ) => phase == PersistedTimedOvnPhaseV1::Released,
+        (BallotStatus::Registration, None)
+        | (
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::RegistrationDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Registered,
@@ -6152,19 +6179,8 @@ fn timed_ovn_phase_matches_ballot_status_v1(
         ) => phase == PersistedTimedOvnPhaseV1::RegistrationClosed,
         (
             BallotStatus::NoResult | BallotStatus::Superseded,
-            Some(FailureKind::CommitmentDeadlineExpired),
-        ) => phase == PersistedTimedOvnPhaseV1::SurvivorsFrozen,
-        (
-            BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
-        (
-            BallotStatus::NoResult,
-            Some(
-                FailureKind::ConfirmationJuryCapacityUnavailable
-                | FailureKind::RandomnessRedrawBudgetExhausted,
-            ),
-        ) => phase == PersistedTimedOvnPhaseV1::Released,
         _ => false,
     }
 }
@@ -7119,7 +7135,10 @@ mod parliament_attempt_size_restore_tests {
 #[cfg(test)]
 mod validation_fee_registry_restore_tests {
     use super::*;
-    use crate::query::store::LiveQueryStore;
+    use crate::{
+        query::store::LiveQueryStore,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
     use iroha_data_model::{
         governance::types::{GovernanceCertificateId, ProposalKind, ValidationFeePolicyProposal},
         parameter::Parameter,
@@ -7144,10 +7163,36 @@ mod validation_fee_registry_restore_tests {
         (first_seed..first_seed + 24).map(account).collect()
     }
 
+    fn history_config() -> TestChainConfig {
+        let mut config = TestChainConfig::new(World::default(), 1_000);
+        config.chain_id = "validation-fee-restore".parse().expect("fixture chain id");
+        config.clock_bootstrap_in_genesis = true;
+        config
+    }
+
     fn network_id() -> iroha_data_model::NetworkId {
-        iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-            Hash::prehashed([0x91; 32]),
-        ))
+        static NETWORK: std::sync::OnceLock<iroha_data_model::NetworkId> =
+            std::sync::OnceLock::new();
+        *NETWORK.get_or_init(|| {
+            let prepared = CertifiedTestChain::prepare(history_config())
+                .expect("prepare original signed restore-fixture genesis");
+            iroha_data_model::NetworkId::from_genesis_hash(prepared.genesis.expected_hash())
+        })
+    }
+
+    fn retained_history() -> CertifiedTestChain {
+        let mut history = CertifiedTestChain::start(history_config())
+            .expect("execute original signed restore-fixture genesis");
+        assert_eq!(history.network_id(), network_id());
+        while history.height() < RESTORED_HEIGHT {
+            // The fixture signs a real clock transaction and certifies each suffix block.
+            history.commit(Vec::new());
+        }
+        assert_eq!(
+            history.kura().exact_durable_blocks_count().unwrap(),
+            usize::try_from(RESTORED_HEIGHT).unwrap(),
+        );
+        history
     }
 
     fn registry_world_with_policy_network(
@@ -7418,19 +7463,24 @@ mod validation_fee_registry_restore_tests {
                 .insert(ballot_attempt_id, lifecycle);
         }
         {
-            let mut parameters = world.parameters.block();
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(npos.into_custom_parameter()))
-                .expect("valid fixture parameters");
-            parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("funded original parameter-only fixture block");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(npos.into_custom_parameter()),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Custom(
                     registry.clone().into_custom_parameter().expect(
                         "validation-fee fixture registry fits the canonical JSON parameter",
                     ),
-                ))
-                .expect("valid fixture parameters");
+                ),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture parameters");
             parameters.commit();
         }
         (world, registry)
@@ -7462,19 +7512,18 @@ mod validation_fee_registry_restore_tests {
         world: World,
         restored_network_id: iroha_data_model::NetworkId,
     ) -> Result<Box<State>, StateRestoreError> {
+        let history = retained_history();
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
-            Kura::blank_kura_for_testing(),
+            Arc::clone(history.kura()),
             LiveQueryStore::start_test(),
             "validation-fee-restore"
                 .parse()
                 .expect("validation-fee restore chain id"),
             restored_network_id,
         );
-        for height in 1..=RESTORED_HEIGHT {
-            state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
-                height.to_le_bytes(),
-            )));
+        for hash in history.state().block_hashes.view().iter().copied() {
+            state.push_block_hash_for_testing(hash);
         }
         let resolver_revision = MusubiResolverIndexRevisionV1::default();
         let genesis_hash = state
@@ -7509,7 +7558,7 @@ mod validation_fee_registry_restore_tests {
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: state.lane_manifests.read().clone(),
-            kura: Kura::blank_kura_for_testing(),
+            kura: Arc::clone(history.kura()),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
@@ -7557,9 +7606,11 @@ mod validation_fee_registry_restore_tests {
         assert!(
             matches!(
                 restore_world(world),
-                Err(StateRestoreError::NativeExecutionReplayRequired)
+                Err(StateRestoreError::SuccessorRequired {
+                    height: RESTORED_HEIGHT
+                })
             ),
-            "decoded policy provenance cannot authorize an unexecuted native history"
+            "decoded policy provenance cannot authorize a World without its certified successor"
         );
     }
 
@@ -7664,7 +7715,9 @@ mod validation_fee_registry_restore_tests {
         );
         assert!(matches!(
             restore_world(world),
-            Err(StateRestoreError::NativeExecutionReplayRequired)
+            Err(StateRestoreError::SuccessorRequired {
+                height: RESTORED_HEIGHT
+            })
         ));
     }
 
@@ -7675,8 +7728,38 @@ mod validation_fee_registry_restore_tests {
         );
         let (world, _) =
             registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_policy_network);
-        let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
-            .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
+        // Supply initialized structural parameter cuts without granting this
+        // rejected restore fixture native execution authority.
+        {
+            let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+                .expect("fund original fixture parameter cell");
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                crate::sumeragi::test_chain::crypto_fixture_policy()
+                    .into_parameter()
+                    .expect("fixture crypto policy parameter"),
+                world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("valid fixture crypto policy");
+            parameters.commit();
+        }
+        // An unchanged parameter commit retains the initialized current cut as
+        // its predecessor, matching the fixture's post-genesis history height.
+        crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original predecessor parameter cell")
+            .commit();
+        validate_restored_crypto_policy(
+            &world,
+            usize::try_from(RESTORED_HEIGHT).expect("fixture height fits usize"),
+        )
+        .expect("fixture current and predecessor parameter cuts retain crypto policy");
+        let history = retained_history();
+        let block_hashes: Vec<HashOf<BlockHeader>> = history
+            .state()
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
             .collect();
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
@@ -7700,7 +7783,7 @@ mod validation_fee_registry_restore_tests {
             &activation,
             &lineage,
         ));
-        let kura = Kura::blank_kura_for_testing();
+        let kura = Arc::clone(history.kura());
         let error = build_state(
             BuildStateInputs {
                 execution_budget: iroha_allocation::AllocationBudget::new(
@@ -7717,9 +7800,7 @@ mod validation_fee_registry_restore_tests {
                 prev_commit_topology: Cell::new(Vec::new()),
                 ivm: IVM::new(0),
                 nexus: iroha_config::parameters::actual::Nexus::default(),
-                chain_id: "validation-fee-emergency-fast"
-                    .parse()
-                    .expect("validation-fee emergency-fast chain id"),
+                chain_id: history.state().chain_id.clone(),
                 network_id: network_id(),
                 nexus_runtime_restored_from_snapshot: false,
                 kura,
@@ -8099,7 +8180,7 @@ fn take_native_amx_participant(
         source
             .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
             .transpose()
-            .map(|value| value.unwrap_or_default())
+            .map(std::option::Option::unwrap_or_default)
             .map_err(|error| match error {
                 local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
                 | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
@@ -8180,7 +8261,7 @@ fn decode_world_fields(
     if !cfg!(all(test, sumeragi_core_mutation = "HC930")) {
         map.require_source_order(canonical_world_field_order(), "world")?;
     }
-    let parameters = take_parameters_cell(&mut map, "parameters")?;
+    let parameters = take_parameters_cell(&mut map, "parameters", execution_budget)?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
     // Derived from the restored World: accelerated restoration recomputes it by a cold capture
@@ -8551,16 +8632,17 @@ fn decode_world_fields(
         })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
-    let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
+    let runtime_change_sets = take_required(&mut map, "runtime_change_sets")?;
+    let runtime_containments = take_required(&mut map, "runtime_containments")?;
+    let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
+    let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
+        take_required(&mut map, "runtime_selection")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
-    let privacy_exact12_qualification: Cell<
-        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
-    > = take_required(&mut map, "privacy_exact12_qualification")?;
-    let privacy_activations: Storage<
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
-    > = take_required(&mut map, "privacy_activations")?;
+    let privacy_protocol_policies: Storage<
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
+    > = take_required(&mut map, "privacy_protocol_policies")?;
     let kagemusha_wallet_ledger: Storage<
         iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
         Vec<u8>,
@@ -8678,7 +8760,7 @@ fn decode_world_fields(
     > = take_required(&mut map, "privacy_root_heads")?;
     crate::privacy_state::validate_privacy_persisted_state_v1(
         privacy_consensus_policy.view().get(),
-        &privacy_activations.view(),
+        &privacy_protocol_policies.view(),
         crate::privacy_state::PrivacyPgcStateReadV1 {
             accounts: &privacy_pgc_accounts.view(),
             pool_invariants: &privacy_pgc_pool_invariants.view(),
@@ -8688,18 +8770,8 @@ fn decode_world_fields(
         &privacy_roots.view(),
         &privacy_root_heads.view(),
     )
-    .map_err(|message| json::Error::InvalidField {
-        field: "world.privacy_state".to_owned(),
-        message,
-    })?;
-    if let Some(qualification) = privacy_exact12_qualification.view().get() {
-        qualification
-            .validate()
-            .map_err(|error| json::Error::InvalidField {
-                field: "world.privacy_exact12_qualification".to_owned(),
-                message: error.to_string(),
-            })?;
-    }
+    .map_err(privacy_state_json_error)?;
+
     crate::privacy_state::validate_privacy_public_reserve_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
@@ -9019,10 +9091,12 @@ fn decode_world_fields(
         private_dataspaces,
         pedersen_params,
         poseidon_params,
-        runtime_upgrades,
+        runtime_change_sets,
+        runtime_containments,
+        runtime_definitions,
+        runtime_selection,
         privacy_consensus_policy,
-        privacy_exact12_qualification,
-        privacy_activations,
+        privacy_protocol_policies,
         kagemusha_wallet_ledger,
         private_settlement_governance,
         private_settlement_pools,
@@ -9271,12 +9345,12 @@ fn parse_world(
     proof_tag_index::rebuild(&mut world)?;
     verifying_key_index::validate_verifying_key_index(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
-    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(|error| {
-        json::Error::InvalidField {
+    crate::smartcontracts::isi::escrow::controlled::validate_persistence(&world.view()).map_err(
+        |error| json::Error::InvalidField {
             field: "world.smart_contract_state.asset_lock_control_v1".to_owned(),
             message: error.to_string(),
-        }
-    })?;
+        },
+    )?;
     super::asset_uid::validate_persistence(&world.view()).map_err(|error| {
         json::Error::InvalidField {
             field: "world.smart_contract_state.asset_uid_v1".to_owned(),
@@ -9800,6 +9874,33 @@ struct BuildStateInputs {
     #[cfg(feature = "telemetry")]
     telemetry: StateTelemetry,
 }
+// Validate original current/predecessor parameter cuts against the restored
+// history coordinate. This grants no authority to restore native execution.
+fn validate_restored_crypto_policy(
+    world: &World,
+    committed_height: usize,
+) -> Result<(), MergeLedgerCommitError> {
+    let reject = |message: &str| MergeLedgerCommitError::ExecutionStatePublication(message.into());
+    if committed_height > 0 {
+        world
+            .parameters
+            .view()
+            .get()
+            .require_crypto_policy()
+            .map_err(reject)?;
+    }
+    if committed_height > 1 {
+        let predecessor = world.parameters.predecessor_view();
+        // MV retains an undo value only when the last committed block changed
+        // this cell. With no undo value, the predecessor is the current cut,
+        // whose mandatory policy was validated above.
+        if let Some(previous) = predecessor.get().as_ref() {
+            previous.require_crypto_policy().map_err(reject)?;
+        }
+    }
+    Ok(())
+}
+
 fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
@@ -9850,6 +9951,7 @@ fn build_state(
             "restored standalone governance state is invalid: {error}"
         ))
     })?;
+    validate_restored_crypto_policy(&world, block_hashes.committed_height())?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
     let da_receipt_cursors =
         PublicationRwLock::try_new(DaReceiptCursorIndex::default(), &execution_budget)
@@ -9951,10 +10053,22 @@ fn build_state(
             "failed to read the exact durable Kura boundary: {error}"
         ))
     })?;
+    let restored_tip = usize::try_from(restored_height).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height does not fit this host: {error}"
+        ))
+    })?;
+    if restored_tip > durable_blocks {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height {restored_tip} exceeds durable Kura height {durable_blocks}"
+        )));
+    }
+    // The restored tip, not the Kura tip: Kura may hold the blocks replay applies next, and
+    // the next block's time triggers start from this header's creation time.
     let latest_block_header = if emergency_fast {
         None
     } else {
-        NonZeroUsize::new(durable_blocks)
+        NonZeroUsize::new(restored_tip)
             .map(|height| kura.get_block(height, &execution_budget))
             .transpose()
             .map_err(|error| match error {
@@ -10004,7 +10118,7 @@ fn build_state(
             .map_err(StateStorageAdmissionError::World)?,
         provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::try_new(
-            Arc::new(LanePrivacyRegistry::empty()),
+            LanePrivacyRegistry::empty(),
             &execution_budget,
         )
         .map_err(StateStorageAdmissionError::World)?,
@@ -10099,8 +10213,15 @@ fn build_state(
             state.project_canonical_runtime(runtime.get(), &world)
         }
         .map_err(|error| MergeLedgerCommitError::ExecutionStatePublication(error.to_string()))?;
+        // The read projection above owns no privacy copy. Admit exactly once
+        // after its physical read guards retire and before either installation.
+        let privacy = LanePrivacyRegistry::try_from_manifest_registry(
+            &projection.manifests,
+            &state.ivm_execution_budget(),
+        )
+        .map_err(MergeLedgerCommitError::ExecutionDeferred)?;
         *state.lane_manifests.get_mut() = projection.manifests;
-        *state.lane_privacy_registry.get_mut() = projection.privacy;
+        *state.lane_privacy_registry.get_mut() = privacy;
     }
     crate::sumeragi::evidence::validate_persisted_records(&state)
         .map_err(crate::sumeragi::evidence::restoration_failure)?;
@@ -10269,8 +10390,6 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-        runtime_upgrade_provenance:
-            iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
         viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
         sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
         sorafs_pin_fee_asset_id:
@@ -10342,9 +10461,7 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 /// Decode and validate the World component without granting authenticated State
 /// history. This test-only helper returns a World, never an installed native tip.
 #[cfg(test)]
-pub(crate) fn decode_world_component_for_testing(
-    world: &World,
-) -> Result<World, StateRestoreError> {
+pub fn decode_world_component_for_testing(world: &World) -> Result<World, StateRestoreError> {
     let encoded = json::to_json(world)?;
     let ivm = IVM::new(0);
     parse_world(
@@ -10430,10 +10547,10 @@ mod decode_tests {
         assert_eq!(
             WorldStateAccumulator::capture(&restored.block())
                 .unwrap()
-                .root(),
+                .baseline_root(),
             WorldStateAccumulator::capture(&world.block())
                 .unwrap()
-                .root()
+                .baseline_root()
         );
         {
             let reverted = restored.block_and_revert();
@@ -11277,9 +11394,9 @@ mod decode_tests {
             .musubi_archive_availability
             .view()
             .get(&archive_id)
-            .cloned()
+            .copied()
             .expect("seeded availability row");
-        let mut stale = original.clone();
+        let mut stale = original;
         stale.active_locations = 1;
         stale
             .validate()
@@ -11773,9 +11890,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), canonical);
         let mut map = SnapshotJsonMap::from_owned(map);
-        let parsed = take_parameters_cell(&mut map, "parameters")
-            .expect("canonical parameters MV envelope must be accepted");
-        assert_eq!(&**parsed.view().get(), &expected);
+        let parsed = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .expect("canonical parameters MV envelope must be accepted");
+        assert_eq!(&***parsed.view().get(), &expected);
     }
     #[test]
     fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
@@ -11914,7 +12035,7 @@ mod decode_tests {
             aborts
                 .iter()
                 .next()
-                .map(|(_, abort)| abort.clone())
+                .map(|(_, abort)| *abort)
                 .expect("finalized fixture abort")
         };
         let encoded = json::to_json(&world).expect("serialize finalized settlement World");
@@ -12108,6 +12229,14 @@ mod decode_tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(key.clone(), original.clone());
+        let expectation_key = format!(
+            "multisig/proposal-expectation/{}/{proposal_id}",
+            iroha_crypto::HashOf::new(&account),
+        ).parse().unwrap();
+        world.smart_contract_state_mut_for_testing().insert(
+            expectation_key,
+            norito::to_bytes(&iroha_crypto::Hash::new(b"original approved execution closure")).unwrap(),
+        );
         let encoded = json::to_json(&world).unwrap();
         let ivm = IVM::new(0);
         let seed = IvmSeed {
@@ -12451,9 +12580,13 @@ mod decode_tests {
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
         let mut map = SnapshotJsonMap::from_owned(map);
-        let error = take_parameters_cell(&mut map, "parameters")
-            .err()
-            .expect("legacy blocks-only parameters envelope must be rejected");
+        let error = take_parameters_cell(
+            &mut map,
+            "parameters",
+            &scalar_cell_custody::default_budget(),
+        )
+        .err()
+        .expect("legacy blocks-only parameters envelope must be rejected");
         assert!(
             error.to_string().contains("parameters"),
             "unexpected diagnostic: {error}"
@@ -12884,7 +13017,7 @@ mod decode_tests {
             index_revision: 1,
         };
         let mut checkpoints = Storage::default();
-        checkpoints.insert(revision, checkpoint.clone());
+        checkpoints.insert(revision, checkpoint);
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_checkpoints".to_owned(),
@@ -13282,3 +13415,53 @@ mod kaigi_typed_deferral_tests;
 #[cfg(test)]
 #[path = "deserialize_world_kaigi_relay_deferral_tests.rs"]
 mod kaigi_relay_typed_deferral_tests;
+
+#[cfg(test)]
+#[path = "deserialize_crypto_policy_tests.rs"]
+mod crypto_policy_history_tests;
+
+#[cfg(test)]
+mod privacy_root_refusal_tests {
+    use super::privacy_state_json_error;
+    use crate::privacy_state::{PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1};
+
+    #[test]
+    fn privacy_restore_json_preserves_original_scope_and_invalid_field() {
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let mut expected = None;
+        let original = norito::with_decode_limits_scope(limits, || {
+            norito::core::classify_decode_attempt(|| {
+                let inner = norito::core::classify_decode_attempt(|| {
+                    norito::core::reserve_decode_allocation(1)
+                })
+                .unwrap_err();
+                expected = inner.local_refusal();
+                Err::<(), _>(
+                    privacy_state_json_error(PrivacyStateValidationErrorV1::PgcAccountRoot(
+                        PrivacyPgcAccountStateRootErrorV1::NamespaceEncoding(inner),
+                    ))
+                    .into_core_error(),
+                )
+            })
+        })
+        .unwrap_err();
+        assert_eq!(original.local_refusal().as_ref(), expected.as_ref());
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        norito::core::reserve_decode_allocation(1)
+            .expect("same allocation retries outside retired scope");
+        for error in [
+            PrivacyStateValidationErrorV1::Invalid("orphan table".to_owned()),
+            PrivacyStateValidationErrorV1::PgcAccountRoot(
+                PrivacyPgcAccountStateRootErrorV1::ZeroEpoch,
+            ),
+        ] {
+            assert!(
+                matches!(privacy_state_json_error(error), norito::json::Error::InvalidField { field, .. }
+                if field == "world.privacy_state")
+            );
+        }
+    }
+}

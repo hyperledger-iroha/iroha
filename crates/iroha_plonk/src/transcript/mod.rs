@@ -36,7 +36,7 @@
 use core::{fmt, marker::PhantomData};
 
 use ff::{Field, PrimeField};
-use group::{GroupEncoding, prime::PrimeCurveAffine};
+use group::{CurveAffine, GroupEncoding};
 use iroha_pasta::{PastaAffine, PastaCurve, poseidon::PoseidonField};
 use zeroize::Zeroizing;
 

@@ -38,7 +38,7 @@ use rand::TryCryptoRng;
 pub use rand::TryCryptoRng as ZkAceTryCryptoRngV1;
 /// Fallible RNG core contract re-exported for deterministic/adversarial tests
 /// without forcing transaction-builder crates to depend on `rand`.
-pub use rand::TryRngCore as ZkAceTryRngCoreV1;
+pub use rand::TryRng as ZkAceTryRngCoreV1;
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -74,13 +74,13 @@ impl ZkAcePrivacyWitnessV1 {
     }
     fn validate(&self) -> Result<(), ZkAcePrivacyWitnessValidationErrorV1> {
         if self.identity_root == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityRoot);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::IdentityRoot);
         }
         if self.identity_blinding == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityBlinding);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::IdentityBlinding);
         }
         if self.replay_secret == [0; 32] {
-            return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroReplaySecret);
+            return Err(ZkAcePrivacyWitnessValidationErrorV1::ReplaySecret);
         }
         Ok(())
     }
@@ -126,13 +126,13 @@ impl Zeroize for ZkAcePrivacyWitnessV1 {
 pub enum ZkAcePrivacyWitnessValidationErrorV1 {
     /// The external identity root is the all-zero sentinel.
     #[error("ZK-ACE identity root witness must be non-zero")]
-    ZeroIdentityRoot,
+    IdentityRoot,
     /// The identity blinding is the all-zero sentinel.
     #[error("ZK-ACE identity blinding witness must be non-zero")]
-    ZeroIdentityBlinding,
+    IdentityBlinding,
     /// The replay secret is the all-zero sentinel.
     #[error("ZK-ACE replay secret witness must be non-zero")]
-    ZeroReplaySecret,
+    ReplaySecret,
 }
 /// Transcript family frozen into the dedicated proof implementation.
 pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
@@ -144,7 +144,7 @@ pub const ZK_ACE_FULL_ENGINE_AVAILABLE_V1: bool = false;
 /// Outstanding release evidence required before ZK-ACE can be activated.
 pub const ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1: &[u8] = b"independent-qrom-fiat-shamir-reduction+sha3-384-outer-and-constrained-poseidon-collision-and-multi-target-accounting+implementation-review-not-yet-registered";
 /// Source and relation description frozen into the compiled profile.
-pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:outer-sha3-384-opaque48-v1:identity-lanes6-independent:replay-lanes6-independent:typed-catalog+protocol+profile+tree-role+phase+level+index+counter-byte-frames:fp4-deep-ali:independent-pre-batching-fri-mask:binary-fp4-fri:blowup8:queries136:classical-rom128:qrom-certification-pending:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
+pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:outer-sha3-384-opaque48-v1:identity-lanes6-independent:replay-lanes6-independent:typed-catalog-native-blake3-256-raw32+protocol+profile+tree-role+phase+level+index+counter-byte-frames:fp4-deep-ali:independent-pre-batching-fri-mask:binary-fp4-fri:blowup8:queries136:classical-rom128:qrom-certification-pending:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
     b"ZKA1:fixed-shape:scalars-big-endian:outer-digest48-opaque-bytes:2131222:strict-exact:no-lengths:no-generic-envelope";
@@ -161,7 +161,11 @@ pub const ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1: &str =
 /// Exact independent-lane Poseidon profile used by the native hash and AIR.
 pub const ZK_ACE_POSEIDON_PROFILE_V1: &[u8] = b"poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6";
 /// Native and consensus proof byte ceiling.
-pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
+pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = {
+    assert!(MAX_PROOF_BYTES <= u32::MAX as usize);
+    let bytes = MAX_PROOF_BYTES.to_le_bytes();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+};
 /// Frozen SHA-256 self-authentication digest of every verifier-profile field below.
 ///
 /// SHA-256 is retained here only as a non-STARK artifact checksum. It is never
@@ -302,7 +306,7 @@ pub fn prove_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
 ) -> Result<Vec<u8>, ZkAceNativeErrorV1> {
-    prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::OsRng)
+    prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::SysRng)
 }
 /// Fail closed at the production ZK-ACE verification boundary.
 ///
@@ -431,17 +435,18 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     use std::str::FromStr as _;
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected ZK-ACE entropy failure")
         }
     }
     struct PanicEntropyRng;
-    impl TryRngCore for PanicEntropyRng {
+    impl TryRng for PanicEntropyRng {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("deterministically invalid ZK-ACE input reached entropy")

@@ -12,7 +12,7 @@ pub fn norm_factor<F: iroha_pasta::PastaField>(value: F) -> F {
 mod tests {
     use super::*;
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn check<F: iroha_pasta::PastaField>() {
         assert_eq!(F::MULTIPLICATIVE_GENERATOR, F::from(5));
