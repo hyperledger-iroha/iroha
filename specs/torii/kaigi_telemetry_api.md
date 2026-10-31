@@ -42,7 +42,7 @@ pub struct KaigiRelaySummaryListDto {
 /// Detailed relay view returned by `/v1/kaigi/relays/{relay_id}`.
 pub struct KaigiRelayDetailDto {
     pub relay: KaigiRelaySummaryDto,
-    pub hpke_public_key_b64: String,
+    pub hpke_public_key_b64: String, // the whole suite-tagged key descriptor
     pub reported_call: Option<KaigiId>,
     pub reported_by: Option<String>,
     pub notes: Option<String>,
@@ -142,9 +142,10 @@ domain; `call.domain` remains the domain of the call that submitted the report.
   only the requested heap window, and caps retained page JSON at
   `KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES`.
 - The SSE route retains its separate streaming protocol and is not converted to
-  snapshot-style operator request signing by this contract. It consumes the
-  core event broadcast and therefore remains available when metrics telemetry
-  is not compiled or the active profile disables metrics.
+  snapshot-style operator request signing by this contract. It requires a
+  canonical account signature instead. It consumes the core event broadcast and
+  therefore remains available when metrics telemetry is not compiled or the
+  active profile disables metrics.
 - The three snapshot routes reject with `TelemetryProfileRestricted` when the
   active profile disables metrics.
 
@@ -180,9 +181,16 @@ the Prometheus label registry.
   transport tests verify generated exact-target signatures and one-shot
   dispatch.
 
+### Relay failover
+
+The relay stream reports registry and health changes, which are about a relay. A
+manifest change is about one call, so it is reported on the account-signed call
+stream `/v1/kaigi/calls/{call_id}/events` as `relay_manifest_updated`, with the
+hop count and expiry. Participants then re-read the manifest from the call view,
+which is authoritative. The same stream reports `roster_updated`, `ended` and
+`usage_updated`; its `kind` query parameter filters by these names.
+
 ### Follow-up
 
-- Runtime currently emits registration and health updates. Manifest/failover
-  events can be added to the SSE stream once upstream producers expose them.
 - Observability dashboards should be updated to reference the new JSON
   endpoints in addition to the Prometheus scrape targets.

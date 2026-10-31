@@ -178,7 +178,7 @@ Generate, start, verify, and select a localnet without supplying configuration
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--with-storage` — Provision local storage and package-registry services when creating this network
 * `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds.
@@ -204,7 +204,7 @@ Observe the live supervisor and its retained environment
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -224,12 +224,13 @@ Read a bounded retained supervisor or validator log tail
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
-* `--peer <PEER>` — Validator index (0..3). Omit to read the supervisor log
+* `--peer <PEER>` — Validator index (0..3). Omit to read the supervisor log, which is usually short; validator output is here
 * `--bytes <BYTES>` — Maximum bytes returned from the end of the log
 
   Default value: `16384`
+* `-f`, `--follow` — Keep printing new log output until interrupted
 
 
 
@@ -248,7 +249,7 @@ Stop the owned validators, preserving their identities and ledger
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -266,7 +267,7 @@ Explicitly retire one stopped generation so the next up creates a fresh ledger
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -429,7 +430,7 @@ Create, fund, register, and select four private validators without supplying con
 
   Default value: `60`
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -454,7 +455,7 @@ Explicit administrative parent AMX registration of one retained private generati
 
   Default value: `60`
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -472,7 +473,7 @@ Observe local validators and independently verified parent attachment separately
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -512,7 +513,7 @@ List retained contexts in this workspace
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -530,7 +531,7 @@ Show the selected context, or one exact named context
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -548,7 +549,7 @@ Select an existing context for subsequent developer commands
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 
 
@@ -581,7 +582,7 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Use an existing managed context without changing the workspace selection
 * `--alias <ALIAS>` — Exact authorized contract alias; otherwise derive the name in the context's dataspace
@@ -609,7 +610,7 @@ Read a verified deployed view in the selected managed environment
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 * `--entrypoint <ENTRYPOINT>` — Read-only public entrypoint
@@ -635,14 +636,14 @@ Prepare, execute or resume a finite durable mutable call
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 * `--entrypoint <ENTRYPOINT>` — Mutable public selector, including an explicitly requested lifecycle hook
 * `--args <ARGS>` — Named arguments validated and encoded natively from the retained deployed interface
 
   Default value: `{}`
-* `--max-fee <MAX_FEE>` — Positive aggregate cap across any exact self-grant and the call in the generated fee asset
+* `--max-fee <MAX_FEE>` — Positive aggregate cap across any exact self-grant and the call in the generated fee asset [default: 1000]
 * `--gas-limit <GAS_LIMIT>` — Signature-bound mutable execution budget
 
   Default value: `1500000`
@@ -670,7 +671,7 @@ List the saved deployment journals that deploy --resume accepts, by contract ali
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Existing managed environment; otherwise use the workspace selection
 
@@ -701,7 +702,7 @@ Publish with original generated client/namespace intent and the canonical durabl
 ###### **Options:**
 
 * `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
-* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the enclosing git repository or Musubi workspace, otherwise the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--context <CONTEXT>` — Use this exact retained environment without changing workspace selection
 * `--package <PACKAGE>` — Exact package when the workspace contains more than one selected member

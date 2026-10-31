@@ -4236,6 +4236,7 @@ pub mod application_api {
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => dataspace_get("application.explorer_instructions_by_hash_by_index_get", "/v1/explorer/instructions/{hash}/{index}");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => dataspace_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
         KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}");
+        KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET => account_private_sdk_get("application.kaigi_calls_by_call_id_participation_get", "/v1/kaigi/calls/{call_id}/participation");
         KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
         KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => app_unprojected_protocol_get("application.kaigi_calls_by_call_id_events_get", "/v1/kaigi/calls/{call_id}/events");
         KAIGI_RELAYS_GET => operator_expensive_get("application.kaigi_relays_get", "/v1/kaigi/relays");

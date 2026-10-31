@@ -1,17 +1,18 @@
 //! Real four-validator final Kaigi authorization/usage lifecycle and persisted replay rejection.
 //!
-//! Governed keys are installed through signed RegisterVerifyingKey instructions. Every proof
-//! binds the actual network identity and the latest identical call record fetched from all peers.
+//! Genesis installs the governed keys: post-genesis signers cannot register verifying keys under
+//! the default executor. Every proof binds the actual network identity and the latest identical
+//! call record fetched from all peers.
 //! The standard revision-4 RS16 path, exact four/three equal-vote committee and production proof budgets
 //! remain enabled. The only resource override is one GiB of ordinary local storage per validator.
-//! TODO: Compile and execute against the exact retained daemon before claiming deployment evidence.
+//! TODO: Run against the exact retained release daemon before claiming deployment evidence.
 
 use super::privacy_exact12_network_support::{run_network_case, wait_for_transaction_on_peers};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::{AccountTransactionDraft, FeeQuoteRequest},
+    client::{AccountTransactionDraft, FeeQuoteRequest, TransactionFinalityFailure},
 };
 use iroha_core::privacy_release_evidence::kaigi::{
     KaigiAuthorizationActionV1, build_kaigi_release_authorization_v1, build_kaigi_release_usage_v1,
@@ -26,17 +27,22 @@ use iroha_data_model::{
         Grant, InstructionBox, Log, Register, Transfer,
         error::{InstructionExecutionError, InvalidParameterError},
     },
-    kaigi::{KaigiId, KaigiPrivacyMode, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
+    kaigi::{
+        KAIGI_STALE_ROSTER_ROOT_ERROR_V1, KaigiId, KaigiPrivacyMode, KaigiRecord, KaigiStatus,
+        NewKaigi, kaigi_metadata_key,
+    },
     prelude::{AssetId, FindDomainById, HasMetadata},
     transaction::{FeePaymentIntent, SignedTransaction, error::TransactionRejectionReason},
 };
-use iroha_executor_data_model::permission::governance::CanManageVerifyingKeys;
+use iroha_executor_data_model::permission::{
+    domain::CanModifyDomainMetadata, governance::CanManageVerifyingKeys,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
-use iroha_test_samples::{ALICE_ID, gen_account_in};
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};
 
@@ -94,6 +100,34 @@ async fn submit_exact(
     )
     .await
     .map_err(|_| eyre!("Kaigi signed submission timed out"))?
+}
+
+/// Submit, and on a terminal rejection read its exact reason as the signer. The public
+/// status route carries none, so the signed details route is the only native evidence.
+async fn submit_resolving_rejection(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<HashOf<SignedTransaction>> {
+    let error = match submit_exact(client, transaction).await {
+        Ok(hash) => return Ok(hash),
+        Err(error) => error,
+    };
+    let rejected = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<TransactionFinalityFailure>())
+        .any(|failure| failure.response().status.kind == "Rejected");
+    if !rejected {
+        return Err(error);
+    }
+    let client = client.clone();
+    let transaction = transaction.clone();
+    let reason = read_on_dedicated_thread(move || {
+        Ok(client
+            .client()
+            .get_transaction_rejection_reason(&transaction)?)
+    })
+    .await?;
+    Err(eyre!(reason))
 }
 
 async fn applied(
@@ -164,6 +198,37 @@ async fn identical_records(
     }
 }
 
+/// Read a signer's own standing, which is all a real client has to prove from.
+async fn standing(client: &Client, call: &KaigiId) -> Result<norito::json::Value> {
+    let client = client.clone();
+    let call = call.clone();
+    read_on_dedicated_thread(move || client.client().get_kaigi_call_participation_json(&call)).await
+}
+
+fn ensure_standing(
+    observed: &norito::json::Value,
+    active: bool,
+    sequence: u64,
+    commitment: Option<&iroha_data_model::kaigi::KaigiParticipantCommitment>,
+    record: &KaigiRecord,
+) -> Result<()> {
+    use norito::json::Value;
+    ensure!(
+        observed.get("active").and_then(Value::as_bool) == Some(active)
+            && observed.get("sequence").and_then(Value::as_u64) == Some(sequence)
+            && observed
+                .get("active_commitment_hex")
+                .and_then(Value::as_str)
+                == commitment
+                    .map(|commitment| hex::encode(commitment.commitment.to_le_bytes()))
+                    .as_deref()
+            && observed.get("roster_root_hex").and_then(Value::as_str)
+                == Some(hex::encode(<[u8; 32]>::from(record.roster_root())).as_str()),
+        "standing differs from the retained record: {observed:?}"
+    );
+    Ok(())
+}
+
 // Mutate only the native transcript. Canonical framing, public inputs and
 // verifier identity remain unchanged, so the network tests cryptographic failure.
 fn corrupt_native_proof(proof: &[u8]) -> Result<Vec<u8>> {
@@ -220,7 +285,10 @@ async fn rejected_unchanged(
     expected: Option<&KaigiRecord>,
 ) -> Result<()> {
     let transaction = prepare(signer, label, vec![instruction]).await?;
-    require_native_rejection(submit_exact(signer, &transaction).await, expected_error)?;
+    require_native_rejection(
+        submit_resolving_rejection(signer, &transaction).await,
+        expected_error,
+    )?;
     // An independently Applied barrier separates a real rejection from a stalled node.
     applied(
         clients,
@@ -325,7 +393,7 @@ async fn lifecycle() -> Result<()> {
         });
     zk_policy.proofs.kaigi_authorization_vk = Some(authorization_vk);
     zk_policy.proofs.kaigi_usage_vk = Some(usage_vk);
-    let builder = NetworkBuilder::new()
+    let mut builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
@@ -336,15 +404,24 @@ async fn lifecycle() -> Result<()> {
         .with_genesis_instruction(Register::domain(Domain::new(domain.clone())))
         .with_genesis_instruction(Register::account(Account::new(participant.clone())))
         .with_genesis_instruction(Grant::account_permission(
-            CanManageVerifyingKeys,
+            CanModifyDomainMetadata {
+                domain: domain.clone(),
+            },
             ALICE_ID.clone(),
         ))
-        .with_config_layer(move |layer| {
-            layer.write(
-                ["nexus", "storage", "local_budget_bytes"],
-                1_073_741_824_i64,
-            );
-        });
+        .with_genesis_instruction(Grant::account_permission(
+            CanManageVerifyingKeys,
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        ));
+    for registration in registrations {
+        builder = builder.with_genesis_instruction(registration);
+    }
+    let builder = builder.with_config_layer(move |layer| {
+        layer.write(
+            ["nexus", "storage", "local_budget_bytes"],
+            1_073_741_824_i64,
+        );
+    });
     let network = sandbox::start_network_async_or_skip(builder, TEST_NAME)
         .await?
         .ok_or_else(|| eyre!("mandatory real Kaigi network was skipped"))?;
@@ -370,13 +447,6 @@ async fn lifecycle() -> Result<()> {
                 && *member.client().network_id() == network_id,
             "client network identities differ"
         );
-        applied(
-            &clients,
-            &host,
-            "register-governed-keys",
-            registrations.into_iter().map(Into::into).collect(),
-        )
-        .await?;
         // The generated participant is a real independent signer. Fund its ordinary
         // fee asset through an Applied transfer, rather than bypassing fee admission.
         let fee_definition =
@@ -422,7 +492,7 @@ async fn lifecycle() -> Result<()> {
             call.id(),
             "tampered-create",
             corrupt.into(),
-            "privacy proof envelope auxiliary bytes must be empty",
+            "failed to decode Kaigi authorization instances: invalid native PIPA-R envelope metadata",
             None,
         )
         .await?;
@@ -446,6 +516,19 @@ async fn lifecycle() -> Result<()> {
         ensure!(
             initial.participants.is_empty(),
             "private call exposed a transparent roster"
+        );
+        ensure_standing(
+            &standing(&host, call.id()).await?,
+            true,
+            0,
+            Some(&created.commitment),
+            &initial,
+        )?;
+        let newcomer = standing(&member, call.id()).await?;
+        ensure_standing(&newcomer, false, 1, None, &initial)?;
+        ensure!(
+            newcomer.get("host_account_id").is_none(),
+            "an account with no retained participation learned the private host"
         );
         let joined = build_kaigi_release_authorization_v1(
             network_id,
@@ -474,7 +557,7 @@ async fn lifecycle() -> Result<()> {
             call.id(),
             "tampered-native-join-proof",
             invalid_join.into(),
-            "privacy proof verification failed",
+            "kaigi authorization proof verification failed: proof or verifying key failed cryptographic verification",
             Some(&initial),
         )
         .await?;
@@ -496,6 +579,12 @@ async fn lifecycle() -> Result<()> {
             active.private_participation.entries()[0].sequence() == 1
                 && active.roster_root() != initial.roster_root(),
             "join did not bind first participation"
+        );
+        let joined_standing = standing(&member, call.id()).await?;
+        ensure_standing(&joined_standing, true, 1, Some(&joined.commitment), &active)?;
+        ensure!(
+            joined_standing.get("host_account_id").is_some(),
+            "a retained participant must learn the host it needs to prove against"
         );
         rejected_unchanged(
             &clients,
@@ -539,7 +628,7 @@ async fn lifecycle() -> Result<()> {
             call.id(),
             "replayed-usage",
             usage.into(),
-            "Kaigi usage differs from authenticated call, host, root, segment or billed tuple",
+            "Kaigi usage commitment already recorded",
             Some(&used),
         )
         .await?;
@@ -572,6 +661,7 @@ async fn lifecycle() -> Result<()> {
                     .is_none(),
             "leave failed to preserve retired sequence"
         );
+        ensure_standing(&standing(&member, call.id()).await?, false, 2, None, &departed)?;
         restart_persisted(&network, &clients, call.id(), &departed, "departed-restart").await?;
         rejected_unchanged(
             &clients,
@@ -581,6 +671,25 @@ async fn lifecycle() -> Result<()> {
             "replayed-old-join-after-restart",
             joined.join(call.id(), &participant).into(),
             "nullifier already used",
+            Some(&departed),
+        )
+        .await?;
+        // A proof bound to any earlier root loses to the roster change that replaced it.
+        let stale = build_kaigi_release_authorization_v1(
+            network_id,
+            &active,
+            &participant,
+            2,
+            KaigiAuthorizationActionV1::Join,
+        );
+        rejected_unchanged(
+            &clients,
+            &host,
+            &member,
+            call.id(),
+            "stale-root-join",
+            stale.join(call.id(), &participant).into(),
+            KAIGI_STALE_ROSTER_ROOT_ERROR_V1,
             Some(&departed),
         )
         .await?;

@@ -1231,7 +1231,7 @@ fn build_vega_action(
     };
     let mut rng = DeterministicCryptoRng::new(proof_seed);
     let signed = build_signed_vega_privacy_action_with_rng_v1(
-        context,
+        &context,
         fixture.public_input,
         fixture.witness_material,
         &fixture.device_signing_key,

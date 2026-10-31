@@ -230,7 +230,7 @@ impl CallAuthorization {
                 .ok_or_else(|| eyre!("call quote added an unauthorized fee asset"))?;
             if amount > *cap {
                 return Err(eyre!(
-                    "aggregate call quote exceeds its original fee authorization"
+                    "aggregate call quote {amount} exceeds its original fee authorization {cap}"
                 ));
             }
         }
@@ -290,9 +290,13 @@ fn entrypoint_arguments(
         .find(|entry| entry.name == entrypoint)
         .ok_or_else(|| eyre!("entrypoint is absent from the verified local artifact"))?;
     if (descriptor.kind == EntryPointKind::View) != view {
-        return Err(eyre!(
-            "entrypoint kind differs from the requested view or mutable call"
-        ));
+        return Err(if descriptor.kind == EntryPointKind::View {
+            eyre!("`{entrypoint}` is a view; read it with `kagami contract view` or `musubi view`")
+        } else {
+            eyre!(
+                "`{entrypoint}` changes state; run it with `kagami contract call` or `musubi call`"
+            )
+        });
     }
     Ok(match &descriptor.argument_schema {
         Some(schema) => {
@@ -1027,10 +1031,13 @@ fn transaction_record(name: &str, signed: &SignedTransaction) -> TransactionReco
         norito_hex: hex::encode(signed.encode_versioned()),
     }
 }
+/// Stands for the caller's client configuration, which only the frontend knows.
+pub const CLIENT_CONFIG_PLACEHOLDER: &str = "<client-config>";
+
 fn missing_call_permission(permission: &Permission, account: &AccountId) -> eyre::Report {
     match norito::json::to_string(permission) {
         Ok(token) => eyre!(
-            "caller lacks the exact required permission {token}; have an authorized owner or token holder submit this JSON with `iroha account permission grant --id {account}` before calling"
+            "caller lacks the exact required permission {token}; an authorized owner or token holder can grant it with:\n  printf '%s' '{token}' | iroha --config {CLIENT_CONFIG_PLACEHOLDER} --fee-payer authority account permission grant --id {account}"
         ),
         Err(error) => eyre!("failed to render the required permission: {error}"),
     }
@@ -1052,7 +1059,9 @@ fn required_permission(
         .find(|entry| entry.name == intent.invocation.entrypoint)
         .ok_or_else(|| eyre!("entrypoint is absent from the verified local artifact"))?;
     if descriptor.kind == EntryPointKind::View {
-        return Err(eyre!("read-only entrypoints use `musubi view`"));
+        return Err(eyre!(
+            "read-only entrypoints are read, not called; use `kagami contract view` or `musubi view`"
+        ));
     }
     Ok(match &descriptor.authorization {
         EntrypointAuthorizationV1::Anyone => None,
@@ -1236,6 +1245,9 @@ impl DeploymentTransport for CallTransport<'_> {
             .submit_transaction_and_wait(signed)
             .map(|_| ())
     }
+    fn rejection_reason(&self, signed: &SignedTransaction) -> Option<String> {
+        super::read_rejection_reason(&self.service.client, signed)
+    }
     fn wait(&self, hash: HashOf<SignedTransaction>) -> Result<AppliedEvidence> {
         let outcome = self.service.client.wait_for_transaction_applied(
             hash,
@@ -1383,7 +1395,10 @@ fn execute_step<T: DeploymentTransport>(
             if let Err(journal_error) = recorded {
                 return journal_error;
             }
-            return error;
+            return match transport.rejection_reason(&signed) {
+                Some(reason) => error.wrap_err(format!("{} was rejected: {reason}", step.name)),
+                None => error,
+            };
         }
         eyre::Report::new(ContractCallPending {
             stage: step.name.clone(),

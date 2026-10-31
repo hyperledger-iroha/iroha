@@ -25467,7 +25467,7 @@ state_test! { sync strict_snapshot_index_finalization_rejects_mis_homed_kaigi_re
     let mut wrong_domain = Domain::new(wrong.clone()).build(&ALICE_ID);
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
-        hpke_public_key: vec![0xAA],
+        hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(0xAA),
         bandwidth_class: 1,
     };
     wrong_domain.metadata_mut().insert(
@@ -25518,7 +25518,7 @@ state_test! { sync derived_state_rebuild_rejects_future_kaigi_relay_feedback
         kaigi_relay_metadata_key(&relay_id).expect("relay metadata key"),
         Json::try_new(KaigiRelayRegistration {
             relay_id: relay_id.clone(),
-            hpke_public_key: vec![0xAA],
+            hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(0xAA),
             bandwidth_class: 1,
         })
         .expect("serialize relay registration"),

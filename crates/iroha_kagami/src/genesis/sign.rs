@@ -23,9 +23,9 @@ use iroha_deploy::genesis::staging::{
 #[cfg(test)]
 use iroha_deploy::genesis::staging::{
     build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
-    staged_default_account_literal, staged_default_nexus, staged_default_pipeline,
-    staged_lane_manifest_registry, staged_signed_native_genesis,
-    staged_signed_native_genesis_with_projection, staged_signed_sumeragi_context_hashes,
+    staged_default_account_literal, staged_default_nexus, staged_lane_manifest_registry,
+    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
+    staged_signed_sumeragi_context_hashes,
 };
 #[cfg(test)]
 use iroha_genesis::GenesisBlock;
@@ -1916,6 +1916,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         // Materialize a separate complete four-validator identity fixture.
         // Some tested manifests intentionally leave topology for the later CLI
         // override; their original bytes remain the signing input unchanged.
+        // Rebuilding parses the manifest's account literals under its own network.
+        let _manifest_profile = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let identity_manifest = manifest
             .clone()
             .clear_topology()
@@ -4649,25 +4651,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("typed validator mode overrides");
         let nexus = table["nexus"].as_table_mut().expect("Nexus config");
         nexus.insert("staking".to_owned(), toml::Value::Table(staking));
-        let pipeline = table
-            .entry("pipeline")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .expect("pipeline config");
-        let gas = pipeline
-            .entry("gas")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .expect("gas config");
-        gas.insert(
-            "tech_account_id".to_owned(),
-            toml::Value::String(
-                staged_default_pipeline(&manifest)
-                    .expect("manifest-specific gas account")
-                    .gas
-                    .tech_account_id,
-            ),
-        );
         // Use the existing complete fixture author: real key files, four trusted
         // validators and an actual signed genesis identity precede config admission.
         let path = runtime_test_peer_config(table, &manifest, &test_genesis_key_pair());

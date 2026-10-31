@@ -15,6 +15,9 @@
     "record": "Vectors, ledgers, scripts and documentation."
   },
   "sites": {
+    "crates/connect_norito_bridge/src/zk_x509_holder_ffi/tests.rs": [
+      "test"
+    ],
     "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs": [
       "deferred"
     ],
@@ -85,6 +88,12 @@
       "canonical",
       "in-relation"
     ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_crl_times_tests.rs": [
+      "test"
+    ],
+    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_sha_digests_tests.rs": [
+      "test"
+    ],
     "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs": [
       "test"
     ],
@@ -124,6 +133,9 @@
     "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs": [
       "test"
     ],
+    "crates/iroha_js_host/src/privacy_x509_transaction/tests.rs": [
+      "test"
+    ],
     "fixtures/zk/x509/interval_vectors_v1.json": [
       "record"
     ],
@@ -133,9 +145,6 @@
     ],
     "python/iroha_python/iroha_python_rs/src/lib.rs": [
       "transport"
-    ],
-    "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs": [
-      "test"
     ],
     "scripts/check_zk_x509_presentation_interval.py": [
       "record"

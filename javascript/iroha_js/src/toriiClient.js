@@ -905,7 +905,30 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
   return copy;
 }
 
-const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
+const KAIGI_CALL_EVENT_KIND_VALUES = new Set([
+  "roster_updated",
+  "ended",
+  "relay_manifest_updated",
+  "usage_updated",
+]);
+const KAIGI_CALL_EVENT_KIND_MESSAGE =
+  "must be roster_updated, ended, relay_manifest_updated or usage_updated";
+const KAIGI_CALL_PARTICIPATION_REQUIRED_FIELDS = new Set([
+  "call_id",
+  "privacy_mode",
+  "status",
+  "is_host",
+  "active",
+  "original_account_id",
+  "roster_root_hex",
+  "segments_recorded",
+]);
+const KAIGI_CALL_PARTICIPATION_FIELDS = new Set([
+  ...KAIGI_CALL_PARTICIPATION_REQUIRED_FIELDS,
+  "host_account_id",
+  "sequence",
+  "active_commitment_hex",
+]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "cancelled", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const SORAFS_PIN_LIST_MAX_ITEMS = 256;
@@ -7543,6 +7566,62 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch the signed account's own standing in a Kaigi call
+   * (`GET /v1/kaigi/calls/{call_id}/participation`).
+   *
+   * Sequence, retained subject and roster root come from one committed state, so
+   * they can be passed directly to `buildKaigiAuthorizationProofV1`.
+   * @param {string} callId
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<KaigiCallParticipation | null>} `null` when the call does not exist.
+   */
+  async getKaigiCallParticipation(callId, options = {}) {
+    const context = "getKaigiCallParticipation";
+    const normalizedCallId = requireExactNonEmptyString(callId, "callId");
+    const record = requirePlainObjectOption(options, `${context} options`);
+    const { signal } = normalizeSignalOption(record, context);
+    assertSupportedOptionKeys(record, new Set(["signal", "canonicalAuth"]), `${context} options`);
+    const canonicalAuth = this.#requireKaigiCanonicalAuth(record.canonicalAuth, context);
+    const response = await this._request(
+      "GET",
+      `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/participation`,
+      { headers: JSON_ACCEPT_HEADERS, signal, canonicalAuth },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "kaigi call participation endpoint",
+      { signal },
+    );
+    return normalizeKaigiCallParticipation(payload, normalizedCallId);
+  }
+
+  /**
+   * Resolve the account signature Torii requires on account-gated Kaigi routes.
+   * @param {CanonicalRequestAuth|null|undefined} requested
+   * @param {string} context
+   * @returns {CanonicalRequestAuth}
+   */
+  #requireKaigiCanonicalAuth(requested, context) {
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      requested === undefined ? this.#canonicalRequestAuth : requested,
+      `${context}.canonicalAuth`,
+    );
+    if (!canonicalAuth) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} canonicalAuth is required when the client has no canonicalRequestAuth`,
+        `${context}.canonicalAuth`,
+      );
+    }
+    return canonicalAuth;
+  }
+
+  /**
    * Fetch committed Kaigi signal metadata for a call (`GET /v1/kaigi/calls/{call_id}/signals`).
    * @param {string} callId
    * @param {KaigiCallSignalsOptions} [options]
@@ -7555,19 +7634,10 @@ export class ToriiClient {
       params,
       canonicalAuth: requestedCanonicalAuth,
     } = buildKaigiCallSignalsQuery(options);
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
-      requestedCanonicalAuth === undefined
-        ? this.#canonicalRequestAuth
-        : requestedCanonicalAuth,
-      "listKaigiCallSignals.canonicalAuth",
+    const canonicalAuth = this.#requireKaigiCanonicalAuth(
+      requestedCanonicalAuth,
+      "listKaigiCallSignals",
     );
-    if (!canonicalAuth) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "listKaigiCallSignals canonicalAuth is required when the client has no canonicalRequestAuth",
-        "listKaigiCallSignals.canonicalAuth",
-      );
-    }
     const response = await this._request(
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
@@ -7599,15 +7669,20 @@ export class ToriiClient {
     const { signal, lastEventId } = normalizeEventStreamOptions(
       options,
       "streamKaigiCallEvents",
-      ["kind"],
+      ["kind", "canonicalAuth"],
     );
     const params = buildKaigiCallEventParams(options);
+    const canonicalAuth = this.#requireKaigiCanonicalAuth(
+      options?.canonicalAuth,
+      "streamKaigiCallEvents",
+    );
     const iterator = this._streamSse(
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/events`,
       {
         params,
         lastEventId,
         signal,
+        canonicalAuth,
       },
     );
     return (async function* mapEvents() {
@@ -7708,13 +7783,18 @@ export class ToriiClient {
     const { signal, lastEventId } = normalizeEventStreamOptions(
       options,
       "streamKaigiRelayEvents",
-      ["domain", "relay", "kind"],
+      ["domain", "relay", "kind", "canonicalAuth"],
     );
     const params = buildKaigiRelayEventParams(options);
+    const canonicalAuth = this.#requireKaigiCanonicalAuth(
+      options?.canonicalAuth,
+      "streamKaigiRelayEvents",
+    );
     const iterator = this._streamSse("/v1/kaigi/relays/events", {
       params,
       lastEventId,
       signal,
+      canonicalAuth,
     });
     return (async function* mapEvents() {
       for await (const event of iterator) {
@@ -26356,19 +26436,85 @@ function normalizeKaigiCallSignalsCursor(value, context) {
   return cursor;
 }
 
+function normalizeKaigiCallParticipation(payload, expectedCallId) {
+  const context = "kaigi call participation";
+  const record = requireKaigiResponseObject(
+    payload,
+    KAIGI_CALL_PARTICIPATION_REQUIRED_FIELDS,
+    KAIGI_CALL_PARTICIPATION_FIELDS,
+    context,
+  );
+  const callId = requireExactNonEmptyString(record.call_id, `${context}.call_id`);
+  if (callId !== expectedCallId) {
+    rejectType(`${context}.call_id must match the requested call`);
+  }
+  const privacyMode = requireKaigiEnum(
+    record.privacy_mode,
+    new Set(["transparent", "private"]),
+    `${context}.privacy_mode`,
+  );
+  const isHost = record.is_host;
+  const active = record.active;
+  if (typeof isHost !== "boolean" || typeof active !== "boolean") {
+    rejectType(`${context}.is_host and active must be booleans`);
+  }
+  const hasSequence = objectHasOwn(record, "sequence");
+  if (hasSequence !== (privacyMode === "private")) {
+    rejectType(`${context}.sequence must be present exactly for a private call`);
+  }
+  return {
+    call_id: callId,
+    privacy_mode: privacyMode,
+    status: requireKaigiEnum(record.status, new Set(["active", "ended"]), `${context}.status`),
+    is_host: isHost,
+    active,
+    original_account_id: requireExactNonEmptyString(
+      record.original_account_id,
+      `${context}.original_account_id`,
+    ),
+    host_account_id: objectHasOwn(record, "host_account_id")
+      ? requireExactNonEmptyString(record.host_account_id, `${context}.host_account_id`)
+      : undefined,
+    sequence: hasSequence
+      ? normalizeKaigiU64(record.sequence, `${context}.sequence`)
+      : undefined,
+    active_commitment_hex: objectHasOwn(record, "active_commitment_hex")
+      ? requireExactLowerHex32String(
+          record.active_commitment_hex,
+          `${context}.active_commitment_hex`,
+        )
+      : undefined,
+    roster_root_hex: requireKaigiMarkedHash(record.roster_root_hex, `${context}.roster_root_hex`),
+    segments_recorded: normalizeKaigiBoundedUnsignedInteger(
+      record.segments_recorded,
+      `${context}.segments_recorded`,
+      0xffff_ffff,
+    ),
+  };
+}
+
 function normalizeKaigiCallEventData(payload, expectedCallId) {
   const context = "kaigi call event";
   const baseRecord = ensureRecord(payload, context);
   const kind = requireExactNonEmptyString(baseRecord.kind, `${context}.kind`);
   if (!KAIGI_CALL_EVENT_KIND_VALUES.has(kind)) {
-    rejectType("kaigi call event.kind must be roster_updated or ended");
+    rejectType(`kaigi call event.kind ${KAIGI_CALL_EVENT_KIND_MESSAGE}`);
   }
-  const requiredFields = kind === "ended"
-    ? new Set(["kind", "call", "status", "ended_at_ms"])
-    : new Set(["kind", "call", "privacy_mode", "commitment_count", "nullifier_count"]);
-  const allowedFields = kind === "ended"
-    ? requiredFields
-    : new Set([...requiredFields, "participant_count", "roster_root_hex"]);
+  const requiredFields = {
+    ended: new Set(["kind", "call", "status", "ended_at_ms"]),
+    relay_manifest_updated: new Set(["kind", "call", "hop_count", "expiry_ms"]),
+    usage_updated: new Set([
+      "kind",
+      "call",
+      "total_duration_ms",
+      "total_billed_gas",
+      "segments_recorded",
+    ]),
+    roster_updated: new Set(["kind", "call", "privacy_mode", "commitment_count", "nullifier_count"]),
+  }[kind];
+  const allowedFields = kind === "roster_updated"
+    ? new Set([...requiredFields, "participant_count", "roster_root_hex"])
+    : requiredFields;
   const record = requireKaigiResponseObject(
     baseRecord,
     requiredFields,
@@ -26391,6 +26537,37 @@ function normalizeKaigiCallEventData(payload, expectedCallId) {
       ended_at_ms: normalizeKaigiU64(
         record.ended_at_ms,
         "kaigi call event.ended_at_ms",
+      ),
+    };
+  }
+  if (kind === "relay_manifest_updated") {
+    return {
+      kind,
+      call,
+      hop_count: normalizeKaigiBoundedUnsignedInteger(
+        record.hop_count,
+        `${context}.hop_count`,
+        0xffff_ffff,
+      ),
+      expiry_ms: normalizeKaigiU64(record.expiry_ms, `${context}.expiry_ms`),
+    };
+  }
+  if (kind === "usage_updated") {
+    return {
+      kind,
+      call,
+      total_duration_ms: normalizeKaigiU64(
+        record.total_duration_ms,
+        `${context}.total_duration_ms`,
+      ),
+      total_billed_gas: normalizeKaigiU64(
+        record.total_billed_gas,
+        `${context}.total_billed_gas`,
+      ),
+      segments_recorded: normalizeKaigiBoundedUnsignedInteger(
+        record.segments_recorded,
+        `${context}.segments_recorded`,
+        0xffff_ffff,
       ),
     };
   }
@@ -26633,7 +26810,7 @@ function buildKaigiCallEventParams(options = {}) {
     for (const entry of values) {
       const token = requireNonEmptyString(entry, "kaigiCallEvents.kind").toLowerCase();
       if (!KAIGI_CALL_EVENT_KIND_VALUES.has(token)) {
-        rejectType("kaigiCallEvents.kind must be roster_updated or ended");
+        rejectType(`kaigiCallEvents.kind ${KAIGI_CALL_EVENT_KIND_MESSAGE}`);
       }
       normalized.push(token);
     }

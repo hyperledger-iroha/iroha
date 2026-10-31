@@ -701,9 +701,7 @@ pub(super) fn i105_payload_digits<D: Destination>(
     let digit_count = payload.chars().count();
     let mut digits = destination.buffer(digit_count)?;
     for ch in payload.chars() {
-        let mut symbol = [0_u8; 4];
-        let encoded = ch.encode_utf8(&mut symbol);
-        let Some(digit) = lookup_i105_digit(encoded) else {
+        let Some(digit) = lookup_i105_digit(ch) else {
             return Err(AccountAddressError::InvalidI105Char(ch).into());
         };
         digits.push(digit);

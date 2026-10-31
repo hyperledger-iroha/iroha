@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd -- "${ROOT}"
 
+# Without rg every check below would report a missing handler instead of the missing tool.
+if ! command -v rg >/dev/null 2>&1; then
+	echo "error: ripgrep (rg) is required; install it with brew install ripgrep, apt install ripgrep or cargo install ripgrep" >&2
+	exit 2
+fi
+
 TARGET="crates/iroha_torii/src/lib.rs"
 INGRESS_TARGET="crates/iroha_torii/src/soranet_privacy_ingress.rs"
 BUILDER_TARGET="crates/iroha_torii/src/router/builder.rs"
@@ -20,7 +26,7 @@ endpoints=(
 )
 
 for fn in "${endpoints[@]}"; do
-	pattern="(?s)fn[[:space:]]+${fn}.*Extension\(_collector\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>"
+	pattern="(?s)fn[[:space:]]+${fn}.*Extension\(_?collector\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>"
 	if ! rg --pcre2 --multiline -n "${pattern}" "${INGRESS_TARGET}" >/dev/null; then
 		echo "error: ${fn} must require the verified SoraNet collector witness." >&2
 		exit 1
@@ -74,9 +80,9 @@ for route_spec in "${repair_routes[@]}"; do
 	fi
 done
 
-repair_ingress_pattern="(?s)async[[:space:]]+fn[[:space:]]+submit_repair_signed_transaction\\(.*?validate_repair_signed_transaction\\(.*?submit_signed_transaction_for_ingress_strict_durable\\("
+repair_ingress_pattern="(?s)async[[:space:]]+fn[[:space:]]+submit_repair_signed_transaction\\(.*?validate_repair_signed_transaction\\(.*?submit_signed_transaction_for_ingress\\("
 if ! rg --pcre2 --multiline -n "${repair_ingress_pattern}" "${PIN_TARGET}" >/dev/null; then
-	echo "error: SoraFS repair commands must validate their native instruction and use strict durable transaction ingress." >&2
+	echo "error: SoraFS repair commands must validate their native instruction and use the signed transaction ingress." >&2
 	exit 1
 fi
 

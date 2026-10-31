@@ -154,9 +154,12 @@ async fn account_routes_require_valid_root_metadata_and_preserve_explicit_global
             block.commit();
         }
         assert_eq!(
-            app.state.world.view().parameters().custom().contains_key(
-                &consensus_metadata::handshake_meta_id()
-            ),
+            app.state
+                .world
+                .view()
+                .parameters()
+                .custom()
+                .contains_key(&consensus_metadata::handshake_meta_id()),
             malformed,
             "only the malformed fixture authors a root-metadata slot"
         );

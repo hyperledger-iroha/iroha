@@ -4,7 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-readonly rust_forbidden_pattern='ContractAddress::derive\(\s*[^,]{0,180}(?:\bChainId\b|\bchain_id\b|\bchain_discriminant\b|&chain\b|\.chain_id\()'
+# Without rg the checks below would report a violation that is not there.
+if ! command -v rg >/dev/null 2>&1; then
+    echo "error: ripgrep (rg) is required; install it with brew install ripgrep, apt install ripgrep or cargo install ripgrep" >&2
+    exit 2
+fi
+
+readonly rust_forbidden_pattern='ContractAddress::derive\(\s*[^,]{0,180}(?:\bChainId\b|\bchain_id\b|\bchain_discriminant\b|&chain\b(?!\.network_id\(\))|\.chain_id\()'
 
 if rg --pcre2 --multiline --line-number "$rust_forbidden_pattern" crates integration_tests; then
     echo "contract-address derivation must use exact genesis-derived NetworkId, never ChainId" >&2

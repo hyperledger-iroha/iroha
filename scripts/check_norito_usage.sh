@@ -15,6 +15,11 @@ if [ "${1:-}" = "--help" ]; then
     exit 0
 fi
 
+if ! command -v rg >/dev/null 2>&1; then
+    printf '%s\n' "error: ripgrep (rg) is required; install it with brew install ripgrep, apt install ripgrep or cargo install ripgrep" >&2
+    exit 2
+fi
+
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 VIOLATIONS=$(rg --glob '!crates/norito/src/aos.rs' --glob '*.rs' 'aos_write_len_and_ver' "$REPO_ROOT" || true)
 

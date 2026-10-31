@@ -1,10 +1,11 @@
 //! Signed genesis for developer localnets.
 //!
 //! Genesis registers the client signer and funds it in XOR, the fee asset; grants the client
-//! contract, alias, parameter and account-registration rights; and bootstraps the validator
-//! committee (genesis topology for permissioned networks, staked public-lane validators for
-//! `NPoS`). The storage layer adds its service accounts, provider admission and publication
-//! namespace. Genesis is signed against the parsed peer configuration so the node accepts it.
+//! contract, alias, parameter and account-registration rights; enables private Kaigi calls;
+//! and bootstraps the validator committee (genesis topology for permissioned networks, staked
+//! public-lane validators for `NPoS`). The storage layer adds its service accounts, provider
+//! admission and publication namespace. Genesis is signed against the parsed peer configuration
+//! so the node accepts it.
 
 use super::service_authorities::{GeneratedAuthorities, publication_client};
 use super::*;
@@ -50,7 +51,7 @@ use iroha_primitives::{
 };
 use std::num::NonZeroU64;
 
-const UNIVERSAL_DOMAIN: &str = "universal.universal";
+pub(super) const UNIVERSAL_DOMAIN: &str = "universal.universal";
 const NEXUS_DOMAIN: &str = "nexus.universal";
 const IVM_DOMAIN: &str = "ivm.universal";
 /// Domain separator of the keyless protocol custody account (gas, fees, stake escrow, slashes).
@@ -153,6 +154,7 @@ fn build(inputs: &Inputs<'_>) -> Result<RawGenesisTransaction> {
         ))
         .build_raw()?;
     genesis = grant_client_permissions(genesis, &genesis_account, inputs.client)?;
+    genesis = kaigi::append_private_calls(genesis, inputs.client)?;
     genesis = set_topology(genesis, inputs.peers)?;
     genesis = if npos {
         let stake = stake_amount(&genesis.effective_parameters()?)?;

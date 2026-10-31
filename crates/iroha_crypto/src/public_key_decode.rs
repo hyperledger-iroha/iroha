@@ -16,11 +16,7 @@ fn invalid_key() -> Error {
 
 pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
     let valid = match algorithm {
-        Algorithm::Ed25519 => {
-            signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
-                .map(drop)
-                .is_ok()
-        }
+        Algorithm::Ed25519 => super::ed25519_decode_cache::validate(payload).is_ok(),
         Algorithm::Secp256k1 => {
             signature::secp256k1::EcdsaSecp256k1Sha256::validate_public_key_for_decode(payload)
                 .is_ok()

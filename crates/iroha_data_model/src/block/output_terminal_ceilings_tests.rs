@@ -375,7 +375,9 @@ fn actual_internal_rejection_fallback_fits_derived_terminals_at_descriptor_extre
                         ExecutionOutputV1::NetworkWithLifecycle(_)
                         | ExecutionOutputV1::PipelineWithLifecycle(_)
                         | ExecutionOutputV1::TimeWithLifecycle(_) => {
-                            unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
+                            unreachable!(
+                                "legacy V1 fixture unexpectedly contains a lifecycle carrier"
+                            )
                         }
                         ExecutionOutputV1::Network(_) => unreachable!(),
                     };

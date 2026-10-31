@@ -145,7 +145,7 @@ fn canonical_word_transfer_rejects_every_noncanonical_position_and_accepts_empty
             );
         }
     }
-    for words in [Vec::new(), Vec::with_capacity(17)] {
+    for words in [Vec::<u64>::new(), Vec::with_capacity(17)] {
         let capacity = words.capacity();
         let pointer = words.as_ptr().cast::<F>();
         let column = ZeroizingFieldColumnV1::from_canonical_words_v1(words).unwrap();

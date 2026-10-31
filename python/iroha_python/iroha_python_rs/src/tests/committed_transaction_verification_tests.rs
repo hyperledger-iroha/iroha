@@ -1149,7 +1149,6 @@ fn native_details_builder_selects_only_exact_hash_and_preserves_reader_context()
     });
 }
 
-
 #[test]
 fn selected_route_projection_refuses_missing_obsolete_misaligned_or_foreign_context() {
     pyo3::Python::initialize();

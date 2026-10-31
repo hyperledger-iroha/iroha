@@ -8038,7 +8038,13 @@ fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String>
     }
 }
 fn args_command(build: CompiledBuildMetadata) -> clap::Command {
-    Args::command().version(build.version())
+    // Two binaries with one package version can still come from different sources.
+    let version = format!(
+        "{} (source {})",
+        build.version(),
+        build.source_commit_label()
+    );
+    Args::command().version(&*Box::leak(version.into_boxed_str()))
 }
 fn parse_args(build: CompiledBuildMetadata) -> Args {
     parse_args_from(build, env::args_os())
@@ -8300,7 +8306,7 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
-                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use".to_owned(),
+                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use. To run a local network without writing configuration, use `kagami localnet up`; `kagami localnet generate --out-dir DIR` writes a bundle of peer configs".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;

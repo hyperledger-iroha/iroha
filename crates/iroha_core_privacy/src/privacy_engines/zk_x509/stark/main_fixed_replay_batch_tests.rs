@@ -300,7 +300,7 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
     .unwrap();
     let mut native =
         ZeroizingBaseColumnsV1(vec![vec![F::ZERO; rows]; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]);
-    fixed.fill_fixed_matrix_v1(0, &mut native).unwrap();
+    fixed.fill_fixed_matrix_v1(0, &mut native.0).unwrap();
     let policy =
         main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
             .unwrap();
@@ -312,11 +312,11 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
         for kind in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
             let start = Instant::now();
             if kind == 0 {
-                for column in &mut *scalar {
+                for column in &mut scalar.0 {
                     goldilocks_ifft_v1(column, root).unwrap();
                 }
             } else {
-                main_initial_fixed_coefficients_with_v1(&mut bounded, root, policy, |words, root, direction| {
+                main_initial_fixed_coefficients_with_v1(&mut bounded.0, root, policy, |words, root, direction| {
                     let backend = fastpq_prover::goldilocks_transform::transform_goldilocks_columns_v1(words, root, direction, fastpq_prover::ExecutionMode::Auto)?;
                     if backend == Backend::Metal { metal_columns += words.len(); }
                     Ok(backend)

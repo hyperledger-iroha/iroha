@@ -2,11 +2,11 @@
 //!
 //! A localnet carries what local development needs and nothing else: an exact `3f + 1`
 //! validator committee, one funded client account that may deploy contracts and register
-//! accounts, the XOR fee asset, and peer configurations limited to node essentials plus a few
-//! developer conveniences. It never takes a public chain identity, a Sora network profile or
-//! Taira policy; Nexus, Taira and the private dataspace presets come from
-//! [`crate::sora_network`]. No faucet, account onboarding, fee sponsorship, alias setup,
-//! VPN operator or peer telemetry polling is generated.
+//! accounts, the XOR fee asset, the verifying keys private Kaigi calls need, and peer
+//! configurations limited to node essentials plus a few developer conveniences. It never takes
+//! a public chain identity, a Sora network profile or Taira policy; Nexus, Taira and the private
+//! dataspace presets come from [`crate::sora_network`]. No faucet, account onboarding, fee
+//! sponsorship, alias setup, VPN operator or peer telemetry polling is generated.
 //!
 //! [`generate_localnet`] writes a bundle with `start.sh` and `stop.sh` launchers for
 //! `kagami localnet generate`. [`prepare_localnet_at`] prepares the same network for the
@@ -18,6 +18,7 @@
 mod bundle;
 mod config;
 mod genesis;
+mod kaigi;
 pub mod service_authorities;
 #[cfg(test)]
 mod tests;

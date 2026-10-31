@@ -146,6 +146,17 @@ fn prepare_selected(
     Ok(retained)
 }
 
+/// Record the binaries a retained developer network now runs on. Its identity is unchanged.
+pub(super) fn replace_programs(
+    directory: &PrivateDirectory,
+    retained: &RetainedLocalnet,
+) -> Result<()> {
+    let generation = directory.open_child(DIRECTORY)?;
+    generation.write_atomic(MANIFEST, &encode(retained)?, PublishMode::Replace)?;
+    generation.sync()?;
+    Ok(())
+}
+
 fn reconcile_publication(directory: &PrivateDirectory, expected: &RetainedLocalnet) -> Result<()> {
     let published = read(directory)?;
     if encode(&published)? != encode(expected)? {

@@ -96,7 +96,10 @@ fn builder(barrier: &PrivateSettlementPrepareBarrierV1, abort: bool) -> Transact
 }
 
 fn bytes(transaction: &SignedTransaction) -> usize {
-    SignedTransaction::canonical_frame_len_from_wire_len_v1(transaction.encode_wire_v1().unwrap().len()).unwrap()
+    SignedTransaction::canonical_frame_len_from_wire_len_v1(
+        transaction.encode_wire_v1().unwrap().len(),
+    )
+    .unwrap()
 }
 
 #[test]

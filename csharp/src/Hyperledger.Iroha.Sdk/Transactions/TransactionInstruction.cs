@@ -49,6 +49,22 @@ public abstract record class TransactionInstruction
     public static CreateKaigiInstruction CreateKaigi(Hyperledger.Iroha.Kaigi.NewKaigi call,
         Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(call, authorization);
 
+    /// <summary>Replace or clear a Kaigi call's relay route.</summary>
+    public static SetKaigiRelayManifestInstruction SetKaigiRelayManifest(Hyperledger.Iroha.Kaigi.KaigiId callId,
+        Hyperledger.Iroha.Kaigi.KaigiRelayManifest? relayManifest) => new(callId, relayManifest);
+
+    /// <summary>Register or update the signing relay's descriptor.</summary>
+    public static RegisterKaigiRelayInstruction RegisterKaigiRelay(string relayId, ReadOnlySpan<byte> hpkePublicKey, byte bandwidthClass) =>
+        new(relayId, hpkePublicKey, bandwidthClass);
+
+    /// <summary>Retire a Kaigi relay descriptor.</summary>
+    public static UnregisterKaigiRelayInstruction UnregisterKaigiRelay(string relayId) => new(relayId);
+
+    /// <summary>Report the health of a relay in a Kaigi call's manifest.</summary>
+    public static ReportKaigiRelayHealthInstruction ReportKaigiRelayHealth(Hyperledger.Iroha.Kaigi.KaigiId callId, string relayId,
+        Hyperledger.Iroha.Kaigi.KaigiRelayHealthStatus status, ulong reportedAtMs, string? notes = null) =>
+        new(callId, relayId, status, reportedAtMs, notes);
+
     /// <summary>Join a Kaigi call.</summary>
     public static JoinKaigiInstruction JoinKaigi(Hyperledger.Iroha.Kaigi.KaigiId callId, string participant,
         Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(callId, participant, authorization);

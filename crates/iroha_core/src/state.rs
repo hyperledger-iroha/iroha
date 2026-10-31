@@ -31704,8 +31704,9 @@ impl State {
             .view_lock_contention_log
             .lock()
             .should_emit(now, STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN);
+        // Readers retry and succeed; this explains slowness rather than reporting a fault.
         if let Some(suppressed_since_last) = suppressed {
-            warn!(
+            debug!(
                 caller = %caller,
                 suppressed_since_last,
                 cooldown_ms = STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN.as_millis(),

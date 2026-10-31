@@ -1428,10 +1428,12 @@ impl StateTransaction<'_, '_> {
         supply_after: &Quantity,
     ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
         let mut prepared = self.prepare_quantity_supply_candidate(
-            authority,(entry_hash, authorization_context),
+            authority,
+            (entry_hash, authorization_context),
             id,
             amount,
-            false,(&Quantity::zero(), supply_after),
+            false,
+            (&Quantity::zero(), supply_after),
         )?;
         if let Ok(journal) = &mut prepared.journal {
             journal

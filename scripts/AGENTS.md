@@ -5,11 +5,11 @@ These guidelines apply to the `scripts/` directory.
 ## Purpose and layout
 - Shell and Python helpers that back CI (`ci/`, `buildkite/`), release automation, fixture regeneration, GPU experiments, etc.
 - `test_env.py` provisions a local multi-peer network that is consumed by the Python test suites and manual QA.
+- `dev_doctor.py` (`make doctor`) checks that a machine has the tools these helpers need.
 - `requirements.txt` is the exact pinned Python dependency set shared by the
   scripts (BLAKE3, JSON Schema validation, pytest, requests, the pre-3.11 TOML
-  backport, and `tomli_w`). Its security-patched pytest and HTTP stack require
-  Python 3.10+
-  even though dependency-free helpers may retain an older syntax floor.
+  backport, and `tomli_w`). Repository scripts need Python 3.11+ because several
+  import `tomllib`; `scripts/test_swift_local.py` needs Python 3.12.
   Install it with `python3 -m pip install -r scripts/requirements.txt` before
   running helpers that import Python modules.
 
@@ -26,6 +26,6 @@ These guidelines apply to the `scripts/` directory.
 - Treat SDK parity helpers as multi-SDK tooling now: when touching `check_norito_bindings_sync.py`, `check_android_fixtures.py`, `norito_fixture_alignment.py`, or fixture regeneration scripts, keep Java and Kotlin parity expectations aligned.
 
 ## Notes
-- `test_env.py` assumes the Rust workspace has already been built; run `cargo build --workspace` first so it can reuse the binaries.
+- `test_env.py` assumes its binaries are already built; run `cargo build -p irohad -p iroha_cli -p iroha_kagami` first.
 - Long-running orchestration scripts (SoraFS, the Sumeragi soak, Norito feature matrix) capture artefacts under `run/` directories—ensure they clean up on success and clearly report the paths for later inspection.
 - If a script affects build/test flows, mention it in the relevant README or developer doc so other contributors can discover it.

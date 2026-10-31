@@ -16,6 +16,7 @@ pub mod confidential_spool;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
+mod ed25519_decode_cache;
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;
 /// Baseline BFV fully homomorphic encryption primitives.

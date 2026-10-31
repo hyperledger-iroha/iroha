@@ -28,7 +28,8 @@ Runs the affected contributor workflow:
   4) prepare current native artifacts and run Swift tests when affected (macOS)
 
 Options:
-  --base REF       Compare committed changes with REF instead of origin/main.
+  --base REF       Compare committed changes with REF instead of the branch
+                   named in ci/default_base_ref.
   --full           Validate every Rust lane and run Swift tests.
   --skip-tests     Omit affected cargo tests.
   --skip-swift     Omit Swift tests.

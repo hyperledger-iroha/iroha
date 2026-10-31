@@ -549,6 +549,47 @@ To restore default gateway settings, emit the rollback snippet:
 iroha app sorafs gateway direct-mode rollback
 ```
 
+### Kaigi calls
+
+`iroha app kaigi` creates and runs ledger-backed calls. A private call needs no
+hand-built artifacts: pass `--secret-file` and the CLI reads the ledger state it must
+bind, proves locally and submits. The file holds one owner-only secret, is created the
+first time you create or join a call, and is required again to leave or end it.
+
+```bash
+# As the host. The output gives participants their join command.
+iroha --fee-payer authority app kaigi create --domain universal.universal --call-name standup \
+  --host <host-account> --privacy-mode zk-roster-v1 --secret-file host.secret
+
+# As a participant, configured with that participant's account.
+iroha --fee-payer authority app kaigi join --domain universal.universal --call-name standup \
+  --participant <participant-account> --host <host-account> --secret-file me.secret
+iroha --fee-payer authority app kaigi leave --domain universal.universal --call-name standup \
+  --participant <participant-account> --secret-file me.secret
+
+# As the host again.
+iroha --fee-payer authority app kaigi record-usage --domain universal.universal --call-name standup \
+  --duration-ms 60000 --secret-file host.secret
+iroha --fee-payer authority app kaigi end --domain universal.universal --call-name standup \
+  --secret-file host.secret
+```
+
+A proof binds the exact roster root, so an action can lose a race with another roster
+change. The CLI reads the new state and proves again, up to three attempts in all. A
+secret that cannot open the stored commitment fails locally, before any proof or fee.
+
+`iroha app kaigi show` prints a call's public view. `iroha app kaigi standing` prints the
+configured account's own standing, including its ledger-owned sequence. To use an external
+prover instead, pass `--commitment-hex`, `--nullifier-hex`, `--roster-root-hex` and
+`--proof-hex`.
+
+A call's host must own its domain or hold `CanModifyDomainMetadata` for it. A generated
+developer localnet enables private calls out of the box, and its client may host them in
+`universal.universal`. Any other network must
+install both verifying keys in genesis and select them in its `zk_validity_policy_v1`: the
+default executor refuses post-genesis key registration, even with `CanManageVerifyingKeys`.
+See `scripts/kaigi_demo.sh` for a complete call against a disposable local network.
+
 ### ZK vote tally (app API convenience)
 
 The CLI provides helpers for app‑facing ZK endpoints. For example, to fetch a vote tally for an election id via Torii:

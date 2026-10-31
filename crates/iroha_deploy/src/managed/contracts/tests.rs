@@ -214,3 +214,22 @@ fn view_requests_parse_exact_selectors_named_arguments_and_positive_gas() {
         .to_string();
     assert!(error.contains("64 KiB"), "{error}");
 }
+
+#[test]
+fn printed_grant_command_names_the_selected_client_configuration() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, selected, _) = selected_config(&temporary.path().join("state"));
+    let message = format!(
+        "iroha --config {} account permission grant",
+        iroha_contract_deploy::call::CLIENT_CONFIG_PLACEHOLDER
+    );
+    assert_eq!(
+        with_client_config(&message, &selected),
+        format!(
+            "iroha --config '{}' account permission grant",
+            selected.client_config.display()
+        )
+    );
+    assert_eq!(with_client_config("unrelated", &selected), "unrelated");
+}

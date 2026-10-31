@@ -472,9 +472,10 @@ mod accepted_receipt_regressions {
                 }
                 1 => changed.instruction.account_id = receipt.fi.fi_account_id.clone(),
                 2 => {
-                    changed.asset_incarnation =
-                        AxtAssetIncarnationV1::try_from_bytes(*Hash::new(b"other incarnation").as_ref())
-                            .unwrap()
+                    changed.asset_incarnation = AxtAssetIncarnationV1::try_from_bytes(
+                        *Hash::new(b"other incarnation").as_ref(),
+                    )
+                    .unwrap()
                 }
                 3 => changed.execution_call_hash = Hash::new(b"other call"),
                 4 => changed.transcript_index += 1,
@@ -531,7 +532,9 @@ mod accepted_receipt_regressions {
                     None,
                 ))),
             ] {
-                assert!(decode_receipt_response(&reply, &query, network, MAX_RESPONSE_BYTES).is_err());
+                assert!(
+                    decode_receipt_response(&reply, &query, network, MAX_RESPONSE_BYTES).is_err()
+                );
             }
         }
         for reply in [
@@ -555,7 +558,9 @@ mod accepted_receipt_regressions {
         let network = crate::client::test_network_id();
         for rows in [vec![], vec![receipt]] {
             let mut reply = response(rows.clone(), false, None);
-            assert!(decode_receipt_response(&reply, &query, network, reply.body().len() - 1).is_err());
+            assert!(
+                decode_receipt_response(&reply, &query, network, reply.body().len() - 1).is_err()
+            );
             reply
                 .headers_mut()
                 .insert(CONTENT_TYPE, "application/json".parse().unwrap());

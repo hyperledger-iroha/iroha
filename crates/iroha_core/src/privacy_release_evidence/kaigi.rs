@@ -5,7 +5,7 @@
 //! or grants authority. Callers must obtain the complete record and NetworkId from the real
 //! network and submit every resulting instruction with the correct account signature.
 //! Fixed private fixture blindings are unsuitable for production; no witness bytes are exported.
-//! TODO: Run and qualify the real four-validator lifecycle against the exact candidate daemon.
+//! TODO: Qualify the four-validator lifecycle with release-profile evidence for the exact candidate.
 
 use crate::zk::hash_vk;
 use ff::PrimeField as _;

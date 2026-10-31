@@ -23952,6 +23952,29 @@ async fn handler_kaigi_call(
     routing::handle_v1_kaigi_call(app.state.clone(), call_id).await
 }
 #[cfg(feature = "app_api")]
+async fn handler_kaigi_call_participation(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    AxPath(call_raw): AxPath<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/kaigi/calls/{call_id}/participation",
+        )
+        .await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call_participation(app.state.clone(), call_id, verified.account).await
+}
+#[cfg(feature = "app_api")]
 async fn handler_kaigi_call_signals(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -38689,6 +38712,7 @@ impl Torii {
             EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => optional_canonical_signature_get(handler_explorer_instruction_detail);
             EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => optional_canonical_signature_get(handler_explorer_instruction_contract_view);
             KAIGI_CALLS_BY_CALL_ID_GET => public_get(handler_kaigi_call);
+            KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET => canonical_account_get(handler_kaigi_call_participation, app_state, 0);
             KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => canonical_account_get(handler_kaigi_call_signals, app_state, 0);
             KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => canonical_account_get(handler_kaigi_call_events_sse, app_state, 0);
             KAIGI_RELAYS_GET => operator_get(handler_kaigi_relays, app_state);

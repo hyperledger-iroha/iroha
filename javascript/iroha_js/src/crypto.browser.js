@@ -13,9 +13,14 @@ import {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
 } from "./cryptoAlgorithms.js";
+import {
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
+  sampleKaigiBlindingV1,
+} from "./kaigiScalarV1.js";
 
 export {
   CRYPTO_ALGORITHMS,
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
   normalizeCryptoAlgorithm,
 };
 
@@ -301,6 +306,12 @@ export function verifySm2() {
 }
 
 const clearKaigiBlindingV1 = Uint8Array.prototype.fill;
+
+export function generateKaigiBlindingV1() {
+  return sampleKaigiBlindingV1((bytes) => {
+    globalThis.crypto.getRandomValues(bytes);
+  });
+}
 
 export function buildKaigiAuthorizationProofV1(options) {
   const blinding = options?.blinding;

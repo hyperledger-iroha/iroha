@@ -46,6 +46,15 @@ to its parent. Restricted FullReplica lanes do not satisfy that privacy contract
 Contract deployment accepts `.ko`, `.to`, and existing Musubi packages. Without a
 selected environment it starts the default localnet in the same invocation.
 
+A managed context belongs to the enclosing git repository or Musubi workspace, so every
+subdirectory selects the same network; `--workspace` selects another. Before a new generation
+starts, the selected daemon checks its generated configuration with `--check-config`, so a
+frontend and daemon built from different sources fail with that cause and retain nothing. A
+generation that never became ready is replaced once the binaries change. A stopped standard
+localnet moves to rebuilt binaries when the new daemon still accepts its signed genesis, and
+keeps its ledger; otherwise `up` refuses and names `localnet reset`. Storage-enabled networks and
+private roots stay bound to the binaries that created them.
+
 ## Optional managed storage services
 
 `kagami localnet up registry --with-storage` explicitly creates a local network

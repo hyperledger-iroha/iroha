@@ -419,8 +419,8 @@
     {
       "path": "examples/hello/hello.to",
       "mode": "0644",
-      "size": 2081,
-      "sha256": "ce706c83be3b353714abfe8ec011022d69f5aa0b8c7b78c5cacd9696fc45da8d"
+      "size": 2009,
+      "sha256": "c2892168ed4b5463ccc0e8d2bc2706ced1e5d10e7ae1f22860a4e68bcb6aeadd"
     },
     {
       "path": "examples/map/map.to",

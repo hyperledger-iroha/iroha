@@ -14,7 +14,7 @@ class RegisterKaigiRelayInstruction(
     @JvmField val hpkePublicKeyBase64: String,
     @JvmField val bandwidthClass: Int,
     arguments: Map<String, String>? = null,
-) : InstructionTemplate {
+) : KaigiWireInstructionV1 {
 
     private val _arguments: Map<String, String> =
         KaigiInstructionUtils.immutableArguments(canonicalArguments())

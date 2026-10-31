@@ -18,7 +18,8 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - JVM attestation tooling: from `kotlin`, run `./gradlew :tools:test :tools:installDist --console=plain`; the repository shell launcher invokes the same Kotlin-owned command.
 - Android managed consumers: from `kotlin`, run `./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest --console=plain` with JDK 21 and the Android SDK configured.
 - Android consumers of host JNI: from `kotlin`, run `IROHA_NATIVE_LIBRARY_PATH=<absolute-rebuilt-host-library-directory> ./gradlew :client-android:testDebugHostNative :kagemusha-wallet-android:testDebugHostNative --console=plain`. Missing native artifacts fail; this is separate from physical-device qualification.
-- Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
+- Check this machine's tools: `make doctor`.
+- Scripts dependencies (Python 3.11+): `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
 - Sumeragi core and simulator: `cargo test -p iroha_sumeragi --features sim`; mutation gate: `python3 scripts/sumeragi_mutation_gate.py --jobs 4`.
 

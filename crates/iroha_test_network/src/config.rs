@@ -2235,33 +2235,17 @@ mod tests {
                     .is::<iroha_data_model::isi::TransferBox>())
         );
     }
-    #[test]
-    fn generated_global_bootstrap_preserves_caller_batches_at_exact_input_limit() {
-        use iroha_data_model::{Level, isi::Log};
-
-        init_instruction_registry();
-        let extra = (0..3)
-            .map(|index| {
-                vec![InstructionBox::from(Log::new(
-                    Level::INFO,
-                    format!("before-{index}"),
-                ))]
-            })
-            .collect::<Vec<_>>();
-        let post = (0..2)
-            .map(|index| {
-                vec![
-                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-first"))),
-                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-second"))),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let (topology, entries) = genesis_committee();
+    fn unexecuted_bootstrap_with_caller_batches(
+        extra: Vec<Vec<InstructionBox>>,
+        post: Vec<Vec<InstructionBox>>,
+        topology: UniqueVec<PeerId>,
+        entries: Vec<GenesisTopologyEntry>,
+    ) -> (GenesisBlock, RawGenesisTransaction) {
         let (block, _, _, _, raw) = build_minimal_genesis_unexecuted_with_post_topology(
-            extra.clone(),
-            post.clone(),
+            extra,
+            post,
             topology,
-            entries.clone(),
+            entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             crate::config::GenesisPolicyConfig {
@@ -2277,6 +2261,45 @@ mod tests {
                 preview_cadence_ms: None,
                 ..Default::default()
             },
+        );
+        (block, raw)
+    }
+    /// Caller room left under the fixed limit. An optional prebuilt executor adds a generated
+    /// input, so derive this from the generator rather than pinning its current count.
+    fn caller_inputs_under_bootstrap_limit() -> usize {
+        let (topology, entries) = genesis_committee();
+        let (generated, _) =
+            unexecuted_bootstrap_with_caller_batches(Vec::new(), Vec::new(), topology, entries);
+        iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS as usize
+            - generated.0.external_transactions().count()
+    }
+    #[test]
+    fn generated_global_bootstrap_preserves_caller_batches_at_exact_input_limit() {
+        use iroha_data_model::{Level, isi::Log};
+
+        init_instruction_registry();
+        let post = (0..2)
+            .map(|index| {
+                vec![
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-first"))),
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-second"))),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let extra = (0..caller_inputs_under_bootstrap_limit() - post.len())
+            .map(|index| {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("before-{index}"),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let (topology, entries) = genesis_committee();
+        let (block, raw) = unexecuted_bootstrap_with_caller_batches(
+            extra.clone(),
+            post.clone(),
+            topology,
+            entries.clone(),
         );
         assert_eq!(
             block.0.external_transactions().count(),
@@ -2317,7 +2340,7 @@ mod tests {
         use iroha_data_model::{Level, isi::Log};
 
         init_instruction_registry();
-        let extra = (0..6)
+        let extra = (0..=caller_inputs_under_bootstrap_limit())
             .map(|index| {
                 vec![InstructionBox::from(Log::new(
                     Level::INFO,
@@ -2328,29 +2351,9 @@ mod tests {
         let original = extra.clone();
         let (topology, entries) = genesis_committee();
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_minimal_genesis_unexecuted_with_post_topology(
-                extra.clone(),
-                Vec::new(),
-                topology,
-                entries,
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
-                super::chain_id(),
-                crate::config::GenesisPolicyConfig {
-                    genesis_crypto: test_network_crypto_admission_policy(),
-                    da_proof_policies: None,
-                    nexus_config: None,
-                    zk_config: None,
-                    consensus_handshake_meta: None,
-                    consensus_mode_override: None,
-                    confidential_policy_hash: Some(
-                        iroha_core::state::default_genesis_confidential_policy_hash(),
-                    ),
-                    preview_cadence_ms: None,
-                    ..Default::default()
-                },
-            )
+            unexecuted_bootstrap_with_caller_batches(extra.clone(), Vec::new(), topology, entries)
         }))
-        .expect_err("the generator must refuse a twelfth caller-authored input");
+        .expect_err("the generator must refuse a twelfth network input");
         let message = failure
             .downcast_ref::<String>()
             .map(String::as_str)

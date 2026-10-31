@@ -6,7 +6,7 @@ use axum::{
     response::Response,
 };
 use http_body_util::BodyExt;
-use iroha_core::{kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, state::State};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId, Registrable,
@@ -16,8 +16,9 @@ use iroha_data_model::{
     },
     domain::Domain,
     kaigi::{
-        KaigiId, KaigiRecord, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
-        NewKaigi, kaigi_metadata_key, kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KaigiId, KaigiRecord, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayHpkeSuiteV1,
+        KaigiRelayRegistration, NewKaigi, encode_kaigi_relay_hpke_key_v1, kaigi_metadata_key,
+        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
     prelude::AccountId,
     sns::{NameControllerV1, NameRecordV1},
@@ -25,7 +26,6 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_primitives::{json::Json, time::TimeSource};
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;
@@ -33,6 +33,15 @@ use tower::ServiceExt;
 mod fixtures;
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
+fn relay_hpke_key() -> Vec<u8> {
+    let suite = KaigiRelayHpkeSuiteV1::MlKem768AuthPsk;
+    encode_kaigi_relay_hpke_key_v1(suite, &vec![0xAA; suite.public_key_len()])
+        .expect("the key has its suite's exact length")
+}
+fn relay_hpke_key_b64() -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(relay_hpke_key())
+}
 fn checked_kaigi_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Kaigi Ed25519 fixture keypair")
@@ -94,33 +103,29 @@ fn kaigi_ed25519_fixture_uses_checked_key_generation() {
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
 fn build_app() -> (
-    iroha_torii::TestApiRouterRuntime,
+    fixtures::CommittedToriiRouterRuntime,
     AccountId,
     AccountId,
     KeyPair,
     iroha_torii::test_utils::TestDataDirGuard,
 ) {
-    let (app, relay, owner, operator, data_dir, _network, _owner_key) =
+    let (app, relay, owner, operator, data_dir, _network, _owner_key, _relay_key) =
         build_app_with_stream_signer();
     (app, relay, owner, operator, data_dir)
 }
 fn build_app_with_stream_signer() -> (
-    iroha_torii::TestApiRouterRuntime,
+    fixtures::CommittedToriiRouterRuntime,
     AccountId,
     AccountId,
     KeyPair,
     iroha_torii::test_utils::TestDataDirGuard,
     NetworkId,
     KeyPair,
+    KeyPair,
 ) {
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let chain_id = cfg.common.chain.clone();
-    let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     // Prepare domain, accounts, and metadata.
     let domain_id: DomainId = DomainId::try_new("kaigi", "universal").expect("domain id");
     let owner_kp = checked_kaigi_ed25519_key_fixture();
@@ -131,7 +136,7 @@ fn build_app_with_stream_signer() -> (
     let relay = Account::new(relay_id.clone()).build(&owner_id);
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
-        hpke_public_key: vec![0xAA, 0xBB],
+        hpke_public_key: relay_hpke_key(),
         bandwidth_class: 5,
     };
     let feedback = KaigiRelayFeedback {
@@ -168,14 +173,21 @@ fn build_app_with_stream_signer() -> (
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
     seed_relay_primary_alias(&mut world, &domain_id, &relay_id);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+    let native_chain = fixtures::commit_genesis_fixture(
         world,
-        kura.clone(),
-        query,
         chain_id.clone(),
-        network_id,
-    ));
+        &cfg.common.key_pair,
+        Vec::new(),
+        None,
+        TimeSource::new_system(),
+    );
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let network_id = native_chain.network_id();
+    let local_peer_id = native_chain.validators()[0].0.clone();
+    cfg.genesis.expected_hash = native_chain.genesis().hash();
+    cfg.genesis.public_key = cfg.common.key_pair.public_key().clone();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(64).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -208,7 +220,7 @@ fn build_app_with_stream_signer() -> (
         state.clone(),
         kura.clone(),
         queue.clone(),
-        (peers_rx.clone(), local_peer_id),
+        (peers_rx.clone(), local_peer_id.clone()),
         time_source,
         false,
     )
@@ -240,21 +252,26 @@ fn build_app_with_stream_signer() -> (
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii Kaigi fixture");
+    .expect("valid Torii Kaigi fixture")
+    .with_local_peer_id(local_peer_id);
     (
-        torii
-            .api_router_for_tests()
-            .expect("test Torii router initializes"),
+        fixtures::CommittedToriiRouterRuntime::new(
+            torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
+            native_chain,
+        ),
         relay_id,
         owner_id,
         operator_key_pair,
         data_dir,
         network_id,
         owner_kp,
+        relay_kp,
     )
 }
 async fn get_kaigi(
-    app: &axum::Router,
+    app: &fixtures::CommittedToriiRouterRuntime,
     operator_key_pair: &KeyPair,
     uri: impl Into<String>,
     accept: Option<&str>,
@@ -263,12 +280,9 @@ async fn get_kaigi(
     if let Some(accept) = accept {
         builder = builder.header("Accept", accept);
     }
-    let request = fixtures::operator_signed_request(
-        operator_key_pair,
-        builder.body(Body::empty()).unwrap(),
-        &[],
-    );
-    app.clone().oneshot(request).await.unwrap()
+    let request =
+        app.operator_signed_request(operator_key_pair, builder.body(Body::empty()).unwrap(), &[]);
+    axum::Router::clone(app).oneshot(request).await.unwrap()
 }
 async fn json_body(resp: Response) -> norito::json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -284,13 +298,23 @@ async fn text_body(resp: Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 #[tokio::test]
+async fn kaigi_fixture_has_applied_global_root_authority() {
+    let (app, _relay_account, _owner_account, _operator_key_pair, _data_dir) = build_app();
+    assert_eq!(app.state().view().height(), 1);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state().view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+    );
+    app.shutdown().await;
+}
+#[tokio::test]
 async fn kaigi_endpoints_report_metadata() {
     let (app, relay_account, _owner_account, operator_key_pair, _data_dir) = build_app();
     let relay_literal = relay_account.to_string();
     // Summary endpoint
     let resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays", None).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let summary = norito_json_body(resp).await;
+    let summary = json_body(resp).await;
     assert_eq!(summary["total"].as_u64(), Some(1));
     assert_eq!(
         summary["items"][0]["relay_id"].as_str().unwrap(),
@@ -298,14 +322,14 @@ async fn kaigi_endpoints_report_metadata() {
     );
     assert_eq!(
         summary["items"][0]["hpke_fingerprint_hex"].as_str(),
-        Some("b9a7b866cdb0df5d6eacf2c0f43ab30a7940cf259b1beaaa954bb79d89fab58f")
+        Some("a05c5cade188bf6ea4db2234d63c75adf186d40ce7d044cac79a8148c00395d7")
     );
     assert_eq!(summary["items"][0]["status"].as_str(), Some("healthy"));
     // Detail endpoint
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
     assert_eq!(detail_resp.status(), StatusCode::OK);
-    let detail = norito_json_body(detail_resp).await;
+    let detail = json_body(detail_resp).await;
     assert_eq!(
         detail["relay"]["hpke_fingerprint_hex"]
             .as_str()
@@ -314,11 +338,14 @@ async fn kaigi_endpoints_report_metadata() {
         64
     );
     assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
-    assert_eq!(detail["hpke_public_key_b64"].as_str().unwrap(), "qrs=");
+    assert_eq!(
+        detail["hpke_public_key_b64"].as_str(),
+        Some(relay_hpke_key_b64().as_str())
+    );
     // Health snapshot
     let health_resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays/health", None).await;
     assert_eq!(health_resp.status(), StatusCode::OK);
-    let health = norito_json_body(health_resp).await;
+    let health = json_body(health_resp).await;
     assert_eq!(health["healthy_total"].as_u64(), Some(1));
     assert!(!health["domains"].as_array().unwrap().is_empty());
     app.shutdown().await;
@@ -330,7 +357,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     let owner_literal = owner_account.to_string();
     let resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays", None).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let summary = norito_json_body(resp).await;
+    let summary = json_body(resp).await;
     assert_eq!(
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
@@ -339,7 +366,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
     assert_eq!(detail_resp.status(), StatusCode::OK);
-    let detail = norito_json_body(detail_resp).await;
+    let detail = json_body(detail_resp).await;
     assert_eq!(
         detail["relay"]["relay_id"].as_str(),
         Some(relay_literal.as_str())
@@ -448,7 +475,10 @@ async fn kaigi_endpoints_honor_norito_accept_header() {
         Some(relay_literal.as_str())
     );
     assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
-    assert_eq!(detail["hpke_public_key_b64"].as_str(), Some("qrs="));
+    assert_eq!(
+        detail["hpke_public_key_b64"].as_str(),
+        Some(relay_hpke_key_b64().as_str())
+    );
     let health_resp = get_kaigi(
         &app,
         &operator_key_pair,
@@ -704,9 +734,22 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
 }
 #[tokio::test]
 async fn kaigi_sse_accepts_i105_relay_filter() {
-    let (app, relay_account, owner_account, _operator, _data_dir, network_id, owner_key) =
-        build_app_with_stream_signer();
-    let uri = format!("/v1/kaigi/relays/events?relay={relay_account}");
+    let (
+        app,
+        relay_account,
+        owner_account,
+        _operator,
+        _data_dir,
+        network_id,
+        owner_key,
+        _relay_key,
+    ) = build_app_with_stream_signer();
+    // The canonical literal is not ASCII, and a query carries it percent-encoded.
+    let relay_literal = relay_account.to_string();
+    let uri = format!(
+        "/v1/kaigi/relays/events?relay={}",
+        urlencoding::encode(&relay_literal)
+    );
     let unsigned = app
         .clone()
         .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
@@ -721,7 +764,11 @@ async fn kaigi_sse_accepts_i105_relay_filter() {
         &[],
     );
     let resp = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // A stream never ends, so only a refused request has a whole body to report.
+    if resp.status() != StatusCode::OK {
+        let status = resp.status();
+        panic!("{status}: {}", text_body(resp).await);
+    }
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
         Some(&HeaderValue::from_static("text/event-stream"))
@@ -731,7 +778,7 @@ async fn kaigi_sse_accepts_i105_relay_filter() {
 }
 #[tokio::test]
 async fn kaigi_sse_rejects_invalid_relay_filter() {
-    let (app, _relay, owner_account, _operator, _data_dir, network_id, owner_key) =
+    let (app, _relay, owner_account, _operator, _data_dir, network_id, owner_key, _relay_key) =
         build_app_with_stream_signer();
     let request = fixtures::app_signed_request(
         &network_id,
@@ -745,6 +792,77 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
     );
     let resp = app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
+}
+#[tokio::test]
+async fn kaigi_call_participation_reports_only_the_signed_account() {
+    let (app, relay_account, owner_account, _operator, _data_dir, network_id, owner_key, relay_key) =
+        build_app_with_stream_signer();
+    let uri = "/v1/kaigi/calls/kaigi.universal:demo/participation";
+    let unsigned = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+
+    let signed = |account: &AccountId, key: &KeyPair, uri: &str| {
+        fixtures::app_signed_request(
+            &network_id,
+            account,
+            key,
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+            &[],
+        )
+    };
+    let hosted = app
+        .clone()
+        .oneshot(signed(&owner_account, &owner_key, uri))
+        .await
+        .unwrap();
+    assert_eq!(hosted.status(), StatusCode::OK);
+    assert_eq!(
+        hosted.headers().get(axum::http::header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("private, no-store")),
+        "a per-account response must not reach a shared cache"
+    );
+    let hosted = json_body(hosted).await;
+    assert_eq!(hosted["call_id"].as_str(), Some("kaigi.universal:demo"));
+    assert_eq!(hosted["privacy_mode"].as_str(), Some("transparent"));
+    assert_eq!(hosted["is_host"].as_bool(), Some(true));
+    assert_eq!(hosted["active"].as_bool(), Some(true));
+    assert_eq!(hosted["segments_recorded"].as_u64(), Some(0));
+    assert!(hosted["host_account_id"].is_string());
+    assert_eq!(hosted["original_account_id"], hosted["host_account_id"]);
+    assert!(hosted.get("sequence").is_none());
+
+    // An unrelated account learns its own standing and nothing about the host.
+    let bystander = app
+        .clone()
+        .oneshot(signed(&relay_account, &relay_key, uri))
+        .await
+        .unwrap();
+    assert_eq!(bystander.status(), StatusCode::OK);
+    let bystander = json_body(bystander).await;
+    assert_eq!(bystander["is_host"].as_bool(), Some(false));
+    assert_eq!(bystander["active"].as_bool(), Some(false));
+    assert!(bystander.get("host_account_id").is_none());
+    assert!(bystander["original_account_id"].is_string());
+    assert_ne!(
+        bystander["original_account_id"],
+        hosted["original_account_id"]
+    );
+
+    let missing = app
+        .clone()
+        .oneshot(signed(
+            &owner_account,
+            &owner_key,
+            "/v1/kaigi/calls/kaigi.universal:absent/participation",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     app.shutdown().await;
 }
 

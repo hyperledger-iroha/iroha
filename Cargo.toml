@@ -353,6 +353,7 @@ default-members = [
     "crates/iroha",
     "crates/irohad",
     "crates/iroha_cli",
+    "crates/iroha_kagami",
     "crates/ivm",
     "crates/ivm_abi",
     "crates/kotodama_lang",

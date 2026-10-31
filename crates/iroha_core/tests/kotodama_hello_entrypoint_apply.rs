@@ -33,10 +33,56 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
+/// Writes a detail on the authority directly. The host applies it here as that authority; a real
+/// contract call runs under a scoped authority and is refused, so `examples/hello` does not do it.
+const DETAIL_WRITER: &str = r#"
+seiyaku Hello {
+    permission Admin;
+    hajimari() {
+        debug::info("Hello from Kotodama");
+    }
+    kotoage fn main() authorize(Admin) {
+        debug::info("Hello from Kotodama");
+        set_example_detail();
+    }
+    fn set_example_detail() {
+        ledger::account::set_metadata(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+}
+"#;
+/// The README deploys this example and calls it with no grants, so it must stay callable.
+#[test]
+fn published_hello_example_needs_no_permission_grant() {
+    let program = KotodamaCompiler::new()
+        .compile_source(include_str!("../../../examples/hello/hello.ko"))
+        .expect("compile hello contract");
+    let metadata = ProgramMetadata::parse(&program).expect("parse hello artifact");
+    let interface = metadata
+        .contract_interface
+        .as_ref()
+        .expect("hello artifact embeds CNTR");
+    assert!(interface.permissions.is_empty());
+    for name in ["greet", "count"] {
+        let entrypoint = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == name)
+            .unwrap_or_else(|| panic!("hello is missing `{name}`"));
+        assert_eq!(
+            entrypoint.authorization,
+            iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
+            "`{name}` must be callable without a grant"
+        );
+    }
+}
 #[test]
 fn selected_kotodama_hello_main_entrypoint_writes_expected_detail() {
     let program = KotodamaCompiler::new()
-        .compile_source(include_str!("../../../examples/hello/hello.ko"))
+        .compile_source(DETAIL_WRITER)
         .expect("compile hello contract");
     let authority = seeded_authority(7);
     let mut vm = IVM::new(5_000_000);

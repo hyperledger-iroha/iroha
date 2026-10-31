@@ -4881,7 +4881,7 @@
       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn reconcile_expired_private_settlement_staged_locks_v1("},
       {
        "path": "crates/iroha_core/src/state.rs",
-       "symbol": "|| expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()",
+       "symbol": ".validate_admission(",
        "within": "pub(crate) fn apply_private_settlement_prepare_locks_v1("
       }
      ],

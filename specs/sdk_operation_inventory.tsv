@@ -110,6 +110,7 @@ application.internal_accounts_by_account_id_get	GET	/v1/internal/accounts/{accou
 application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get	GET	/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}	public	torii_default	public	read	http	feature(app_api)	false	false	false	false
 application.kaigi_calls_by_call_id_events_get	GET	/v1/kaigi/calls/{call_id}/events	protocol	canonical_account_signature	authenticated_account	stream	sse	feature(app_api)	false	false	false	true
 application.kaigi_calls_by_call_id_get	GET	/v1/kaigi/calls/{call_id}	public	torii_default	public	read	http	feature(app_api)	true	false	false	false
+application.kaigi_calls_by_call_id_participation_get	GET	/v1/kaigi/calls/{call_id}/participation	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 application.kaigi_calls_by_call_id_signals_get	GET	/v1/kaigi/calls/{call_id}/signals	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	false	false	true
 application.kaigi_relays_by_relay_id_get	GET	/v1/kaigi/relays/{relay_id}	public	operator_signature	operator	read	http	feature(app_api)	true	true	false	true
 application.kaigi_relays_events_get	GET	/v1/kaigi/relays/events	protocol	canonical_account_signature	authenticated_account	stream	sse	feature(app_api)	false	true	false	true

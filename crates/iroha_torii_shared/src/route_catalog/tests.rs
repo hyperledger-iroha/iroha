@@ -1665,6 +1665,19 @@ mod tests {
         assert_eq!(validate_catalog(&[route]), Ok(()));
     }
     #[test]
+    fn kaigi_participation_is_a_private_per_account_read() {
+        let route = application_api::KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET;
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.projections().sdk());
+        assert!(!route.projections().openapi());
+        assert_eq!(validate_catalog(&[route]), Ok(()));
+    }
+    #[test]
     fn contract_and_application_routes_exclude_retired_spellings() {
         let routes = contract_and_application_routes();
         let openapi = RouteCatalog::new(CATALOGED_ROUTES).project(

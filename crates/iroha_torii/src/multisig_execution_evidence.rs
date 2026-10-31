@@ -94,8 +94,9 @@ pub async fn handler(
                         terminal,
                         target,
                     );
-                    let body = encode(&payload, format, max_response, &budget)
-                        .map_err(|_| "multisig execution evidence serialization refused".to_owned())?;
+                    let body = encode(&payload, format, max_response, &budget).map_err(|_| {
+                        "multisig execution evidence serialization refused".to_owned()
+                    })?;
                     check_request_stop(deadline, &cancelled)
                         .map_err(|_| "multisig execution evidence request stopped".to_owned())?;
                     Ok(body)
@@ -448,8 +449,7 @@ mod tests {
             pool.generation(),
         )
         .unwrap();
-        let owner =
-            history_producer::HistoryProducerOwner::from_reservation(&reservation).unwrap();
+        let owner = history_producer::HistoryProducerOwner::from_reservation(&reservation).unwrap();
         let consumed = owner.allocation_context().consumed_allocated_bytes();
         let result = certified_tip(
             chain.state(),
@@ -458,7 +458,10 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert!(matches!(result, Err(Error::AppServiceUnavailable { .. })));
-        assert_eq!(owner.allocation_context().consumed_allocated_bytes(), consumed);
+        assert_eq!(
+            owner.allocation_context().consumed_allocated_bytes(),
+            consumed
+        );
         drop(owner);
         drop(reservation);
         assert_eq!(pool.available_bytes(), 48_000_000);
@@ -466,10 +469,16 @@ mod tests {
 
     #[tokio::test]
     async fn mounted_expired_evidence_route_releases_real_admission_without_native_reads() {
-        use iroha_core::{state::World, sumeragi::test_chain::{CertifiedTestChain, TestChainConfig}};
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
         use tower::ServiceExt as _;
-        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
-        while chain.height() < 4 { chain.commit(Vec::new()); }
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        while chain.height() < 4 {
+            chain.commit(Vec::new());
+        }
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let fixture = Arc::get_mut(&mut app).unwrap();
         fixture.state = Arc::clone(chain.state());
@@ -477,41 +486,69 @@ mod tests {
         let query = Arc::clone(&app.query_inflight);
         let heavy = Arc::clone(&app.query_heavy_inflight);
         let pool = app.query_fanout_inflight.clone();
-        let before = (query.available_permits(), heavy.available_permits(), pool.available_bytes());
+        let before = (
+            query.available_permits(),
+            heavy.available_permits(),
+            pool.available_bytes(),
+        );
         // The actual timeout middleware runs outside this fixture's already-expired
         // deadline. The inner extension models a request whose budget was consumed
         // before this handler, without waiting or constructing a replacement worker.
         let router = axum::Router::new()
             .route(ROUTE, axum::routing::get(handler))
-            .layer(Extension(finality_interval::RouteExecutionDeadline(Instant::now())))
+            .layer(Extension(finality_interval::RouteExecutionDeadline(
+                Instant::now(),
+            )))
             .layer(axum::middleware::from_fn(enforce_route_timeout))
             .with_state(app);
         let account = iroha_test_samples::ALICE_ID.to_string();
-        let entrypoint = Hash::new(b"expired evidence route").to_string().to_ascii_lowercase();
+        let entrypoint = Hash::new(b"expired evidence route")
+            .to_string()
+            .to_ascii_lowercase();
         let proposal = "11".repeat(32);
-        let instructions = HashOf::new(&Vec::<InstructionBox>::new()).to_string().to_ascii_lowercase();
-        let uri = format!("/v1/multisig/execution-evidence/{account}/{entrypoint}/{proposal}/{instructions}");
+        let instructions = HashOf::new(&Vec::<InstructionBox>::new())
+            .to_string()
+            .to_ascii_lowercase();
+        let uri = format!(
+            "/v1/multisig/execution-evidence/{account}/{entrypoint}/{proposal}/{instructions}"
+        );
         for accept in ["application/x-norito", "application/json"] {
             chain.kura().reset_canonical_query_reads_for_test();
-            let mut request = axum::http::Request::builder().uri(&uri)
-                .header(axum::http::header::ACCEPT, accept).body(Body::empty()).unwrap();
-            request.extensions_mut().insert(crate::loopback_connect_info());
+            let mut request = axum::http::Request::builder()
+                .uri(&uri)
+                .header(axum::http::header::ACCEPT, accept)
+                .body(Body::empty())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
             let response = router.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             drop(response);
             tokio::time::timeout(Duration::from_secs(2), async {
-                while (query.available_permits(), heavy.available_permits(), pool.available_bytes()) != before {
+                while (
+                    query.available_permits(),
+                    heavy.available_permits(),
+                    pool.available_bytes(),
+                ) != before
+                {
                     tokio::task::yield_now().await;
                 }
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
             assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_evidence_worker_retains_original_admission_until_physical_retirement() {
-        use iroha_core::{state::World, sumeragi::test_chain::{CertifiedTestChain, TestChainConfig}};
-        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
         chain.commit(Vec::new());
         let state = Arc::clone(chain.state());
         let working = 48_000_000;
@@ -519,8 +556,10 @@ mod tests {
         let initial_available = pool.available_bytes();
         let reservation = QueryFanoutMemoryReservation::from_admitted_fanout(
             pool.try_acquire_parts([working as u64]).unwrap(),
-            QueryFanoutMemoryEnvelope::for_bodyless_finality(working).unwrap(), pool.generation(),
-        ).unwrap();
+            QueryFanoutMemoryEnvelope::for_bodyless_finality(working).unwrap(),
+            pool.generation(),
+        )
+        .unwrap();
         let query = Arc::new(tokio::sync::Semaphore::new(1));
         let admission = QueryAdmissionPermit {
             _query: Arc::clone(&query).try_acquire_owned().unwrap(),
@@ -534,16 +573,27 @@ mod tests {
         let (release, held) = std::sync::mpsc::channel();
         let (finished, result) = tokio::sync::oneshot::channel();
         chain.kura().reset_canonical_query_reads_for_test();
-        let request = tokio::spawn(finality_interval::run_with_stop(admission, owner, move |owner, cancelled| {
-            let consumed = owner.allocation_context().consumed_allocated_bytes();
-            started.send(()).unwrap();
-            held.recv_timeout(Duration::from_secs(5)).unwrap();
-            let stopped = matches!(certified_tip(&state, &owner, Instant::now() + Duration::from_secs(60), &cancelled),
-                Err(Error::AppServiceUnavailable { .. }));
-            let debit = owner.allocation_context().consumed_allocated_bytes() - consumed;
-            finished.send((stopped, debit)).unwrap();
-            Ok(())
-        }));
+        let request = tokio::spawn(finality_interval::run_with_stop(
+            admission,
+            owner,
+            move |owner, cancelled| {
+                let consumed = owner.allocation_context().consumed_allocated_bytes();
+                started.send(()).unwrap();
+                held.recv_timeout(Duration::from_secs(5)).unwrap();
+                let stopped = matches!(
+                    certified_tip(
+                        &state,
+                        &owner,
+                        Instant::now() + Duration::from_secs(60),
+                        &cancelled
+                    ),
+                    Err(Error::AppServiceUnavailable { .. })
+                );
+                let debit = owner.allocation_context().consumed_allocated_bytes() - consumed;
+                finished.send((stopped, debit)).unwrap();
+                Ok(())
+            },
+        ));
         entered.await.unwrap();
         // Only this test's request future is cancelled; its native worker closes naturally.
         request.abort();
@@ -556,7 +606,9 @@ mod tests {
             while query.available_permits() != 1 || pool.available_bytes() != initial_available {
                 tokio::task::yield_now().await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
         assert_eq!(frames.reserved_bytes(), 0);
     }

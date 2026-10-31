@@ -944,7 +944,7 @@ typed `networkId`, canonical `callId` and original `hostId`, exact current
 the stored raw `hostCommitment`, and mutable `blinding` bytes. It rejects an
 opening that does not match the stored host C before proving, and returns
 `{ hostCommitment, usageCommitment, preRosterRoot, proof }` only after Core verifies
-the final 25-row usage relation. The supplied blinding is cleared on every call.
+the final 21-row usage relation. The supplied blinding is cleared on every call.
 Use `usageCommitment` and `proof` in `buildRecordKaigiUsageInstruction` with those
 same public metrics. Native authorization and usage cache only each fixed
 circuit's public proving material; caller secrets remain owned by the invocation.
@@ -956,14 +956,6 @@ transaction identifies the participant; a proof binds its opening to the
 retained original account and current action, while ledger validation enforces
 membership and rekey lineage. Local proof construction alone does not establish
 network admission or production qualification.
-
-Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
-by a production confidential wallet or prover. The JavaScript SDK does not
-synthesize a fee spend from an action hash, amount, and verifier key because
-those values do not include the spend key, input-note witnesses, Merkle path,
-or output-note witnesses required for a valid confidential transfer. The
-`ConfidentialProver` creates local proof artifacts when the caller supplies
-complete witness material; it is not an automatic Private Kaigi fee-spend adapter.
 
 For local wallet proving, use `ConfidentialProver` with a network, canonical asset
 ID and mutable 32-byte spend key. `proveTransfer()` and `proveRedemption()` select
@@ -3498,8 +3490,38 @@ registry. Keep signer material runtime-only.
 
 `streamKaigiRelayEvents` yields strongly-typed SSE payloads so you can feed
 operators dashboards without reimplementing filtering/normalisation logic. Its
-SSE handshake remains a separate streaming protocol from the signed snapshot
-reads.
+SSE handshake is signed by an account rather than an operator: configure
+`canonicalRequestAuth` on the client or pass `canonicalAuth`.
+
+### Running a private call
+
+`generateKaigiBlindingV1()` samples the private opening of one participation.
+Keep it under owner-only custody and pass a fresh copy to each proof, because each
+proof clears the buffer it receives. A private create binds the deterministic
+`KAIGI_EMPTY_ROSTER_ROOT_HEX_V1`; every later action reads its context first:
+
+```js
+const standing = await torii.getKaigiCallParticipation(callId);
+const artifacts = buildKaigiAuthorizationProofV1({
+  networkId,
+  callId: { domainId, callName },
+  hostId,
+  subjectId: standing.original_account_id,
+  participationSequence: BigInt(standing.sequence),
+  action: "join",
+  preRosterRoot: Buffer.from(standing.roster_root_hex, "hex"),
+  blinding: Uint8Array.from(blinding),
+});
+```
+
+`getKaigiCallParticipation` is signed and reports only the signing account's own
+standing, from one committed state. It withholds `host_account_id` until the
+account is the host or has a retained participation, so a first join takes the host
+from the invitation. A proof binds the exact roster root, so an action that loses a
+race with another roster change is rejected. The public status route carries no
+rejection reason, so after a `Rejected` status read the standing again: if
+`roster_root_hex` moved, prove again. `streamKaigiCallEvents` also reports `relay_manifest_updated`, after which
+participants should re-read the manifest from `getKaigiCall`, and `usage_updated`.
 
 ## ISO 20022 Bridge
 

@@ -38,16 +38,30 @@ implementation boundaries, SDK modules, and validation owners.
 
 ### Prerequisites
 
-- Rust 1.93.1, pinned by [`rust-toolchain.toml`](./rust-toolchain.toml)
+- Rust, pinned by [`rust-toolchain.toml`](./rust-toolchain.toml); `rustup` installs
+  the right version on the first build
+- For the contributor checks: [ripgrep](https://github.com/BurntSushi/ripgrep) and
+  Python 3.11 or newer, with `python3 -m pip install -r scripts/requirements.txt`
 - Optional: Docker + Docker Compose for local multi-peer runs
+
+Run `make doctor` to check all of this and get the command that fixes anything missing.
 
 ### Build and Test (Workspace)
 
+Everyday commands:
+
 ```bash
-cargo test
+cargo build                # The daemon, CLI, Kagami and the crates they use
+cargo test -p <crate>      # One crate's tests
+make dev-workflow          # Format check, then lint, build and test what your branch changed
+```
+
+Full workspace runs, which take far longer:
+
+```bash
 cargo build --workspace
-cargo test --workspace --features iroha_torii/test-fixtures
 cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --features iroha_torii/test-fixtures
 cargo fmt --all
 ```
 
@@ -153,34 +167,52 @@ cargo test -p <crate> <test_name> -- --nocapture
 
 ### SDK Test Commands
 
-```bash
-cd IrohaSwift
-swift test
-```
+Swift, from the repository root. This builds the native bridge first; plain
+`swift test` needs an already authenticated matching native artifact:
 
 ```bash
-cd java/iroha_android
-JAVA_HOME=$(/usr/libexec/java_home -v 21) \
-ANDROID_HOME=~/Library/Android/sdk \
-ANDROID_SDK_ROOT=~/Library/Android/sdk \
-./gradlew test
+python3.12 scripts/test_swift_local.py
+```
+
+Kotlin and Java consumers, from `kotlin/`. The Android modules also need JDK 21 and
+the Android SDK:
+
+```bash
+cd kotlin
+./gradlew :core-jvm:test --console=plain
+./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest --console=plain
 ```
 
 ## Run a Local Network
 
-Use the matching native CLI package to start or resume a four-validator network
-without supplying configuration files:
+Build the tools from one checkout, then start a four-validator network without
+supplying configuration files:
 
 ```bash
+cargo build -p iroha_kagami -p irohad -p iroha_cli
+export PATH="$PWD/target/debug:$PATH"
+
 kagami localnet up
-kagami contract deploy hello.ko
+kagami contract deploy examples/hello/hello.ko
+kagami contract call Hello::universal --entrypoint hajimari
+kagami contract call Hello::universal --entrypoint greet --readback count
+kagami contract view Hello::universal --entrypoint count
 kagami localnet down
 ```
 
-State and credentials are retained in a private workspace-scoped store. `down`
-stops the owned validators and preserves the ledger. Deployment accepts a `.ko`
-source, `.to` bytecode, or Musubi package directory; it starts the default
-localnet automatically when no context is selected.
+`kagami` and `iroha3d` must come from the same build. `up` checks this before starting
+anything. After a rebuild it keeps a stopped network's ledger when the new binaries can
+still open it, and tells you to run `kagami localnet reset local` when they cannot.
+
+State and credentials are retained in a private store for the enclosing git repository
+or Musubi workspace, so every subdirectory uses the same network. `down` stops the owned
+validators and preserves the ledger. Deployment accepts a `.ko` source, `.to` bytecode,
+or Musubi package directory; it starts the default localnet automatically when no context
+is selected.
+
+`kagami localnet up` prints the network's `client config` path. Pass it to the `iroha`
+CLI to work with the same network, for example
+`iroha --config <client config> ledger domain list`.
 
 For a network of separate machines, `kagami node init --dir ./node` creates each
 validator's keys and starter config on its own host, and `kagami network create` signs

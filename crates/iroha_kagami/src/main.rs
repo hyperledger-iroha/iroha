@@ -9,7 +9,7 @@
     clippy::match_same_arms,
     clippy::unnecessary_debug_formatting
 )]
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
 use iroha_genesis::init_instruction_registry;
 use std::{
@@ -85,11 +85,21 @@ fn run() -> Outcome {
         .display_env_section(false)
         .install()?;
     init_instruction_registry();
-    let cli = Cli::parse();
+    let matches = Cli::command().version(version_text()).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     cli.ui.install();
     let mut writer = BufWriter::new(stdout());
     let outcome = cli.command.run(&mut writer);
     finish_output(&mut writer, outcome)
+}
+
+/// Package version plus the source revision this build recorded, when it recorded one.
+fn version_text() -> &'static str {
+    let version = env!("CARGO_PKG_VERSION");
+    match BUILD_SOURCE_ID.or(option_env!("VERGEN_GIT_SHA")) {
+        Some(source) => Box::leak(format!("{version} (source {source})").into_boxed_str()),
+        None => version,
+    }
 }
 
 // Flush every ordinary command result, retaining its original error if output also fails.
@@ -233,6 +243,11 @@ mod tests {
     fn parse(args: &str) -> Result<Cli, Error> {
         Cli::try_parse_from(args.split(' '))
     }
+    #[test]
+    fn version_text_starts_with_the_package_version() {
+        assert!(super::version_text().starts_with(env!("CARGO_PKG_VERSION")));
+    }
+
     #[test]
     fn verify_args() {
         Cli::command().debug_assert();

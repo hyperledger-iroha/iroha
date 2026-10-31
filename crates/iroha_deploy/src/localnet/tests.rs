@@ -5,7 +5,7 @@ use iroha_data_model::isi::staking::RegisterPublicLaneValidator;
 use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
 use std::fs;
 
-fn private_parent() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn private_parent() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::tempdir().expect("create temporary directory");
     let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
         .expect("create private parent");
@@ -13,7 +13,7 @@ fn private_parent() -> (tempfile::TempDir, PathBuf) {
     (temporary, path)
 }
 
-fn options(out_dir: PathBuf, consensus_mode: SumeragiConsensusMode) -> LocalnetOptions {
+pub(super) fn options(out_dir: PathBuf, consensus_mode: SumeragiConsensusMode) -> LocalnetOptions {
     LocalnetOptions {
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero peer count"),
@@ -43,7 +43,7 @@ fn peer_table(out_dir: &Path, index: usize) -> toml::Table {
         .expect("parse generated peer config")
 }
 
-fn assert_genesis_applies(out_dir: &Path) {
+pub(super) fn assert_genesis_applies(out_dir: &Path) {
     let signed = read_signed_genesis(&out_dir.join("genesis.signed.nrt"))
         .expect("decode generated signed genesis");
     signed

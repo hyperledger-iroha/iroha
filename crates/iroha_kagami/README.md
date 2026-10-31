@@ -6,13 +6,15 @@ use the shared `iroha_deploy` engine and Musubi deployment service.
 
 ## Build
 
-From anywhere in the repository, run:
+From anywhere in the repository, build `kagami` together with the daemon it starts:
 
 ```bash
-cargo build --bin kagami
+cargo build -p iroha_kagami -p irohad
 ```
 
-This places `kagami` in `target/debug/` from the repository root.
+This places both in `target/debug/` from the repository root. `kagami localnet up` runs the
+`iroha3d` beside it, so a `kagami` built on its own cannot start a network, and the two must
+come from the same source. `up` checks that before it starts anything.
 
 The native CLI package builds the matching `iroha` client, Kagami worker and
 standard daemon together in one locked Cargo invocation:
@@ -58,16 +60,31 @@ Start or resume a four-validator localnet without supplying configuration:
 
 ```bash
 kagami localnet up
-kagami contract deploy hello.ko
+kagami contract deploy examples/hello/hello.ko
+kagami contract call Hello::universal --entrypoint hajimari
+kagami contract call Hello::universal --entrypoint greet --readback count
+kagami contract view Hello::universal --entrypoint count
 kagami localnet down
 ```
 
 Install the native CLI package with `kagami` and `iroha3d` side by side.
-State and credentials live outside the project in a private workspace-scoped
-store. `down` retains the ledger; `localnet reset local` deliberately retires it.
-`contract deploy` also accepts `.to` or a Musubi package directory and starts the
-default localnet when no context has been selected. Use `context list`,
-`context show`, or `context use NAME` to inspect or select retained environments.
+State and credentials live outside the project in a private store for the enclosing git
+repository or Musubi workspace, so every subdirectory shares one network; `--workspace`
+selects a different one. `down` retains the ledger; `localnet reset local` deliberately
+retires it. `contract deploy` also accepts `.to` or a Musubi package directory and starts
+the default localnet when no context has been selected. Use `context list`, `context show`,
+or `context use NAME` to inspect or select retained environments. `up` and `context show`
+print the `client config` path to pass to `iroha --config`.
+
+`contract call` caps fees at 1000 units of the network's generated fee asset unless
+`--max-fee` says otherwise. `localnet logs --peer 0` reads a validator's output, and
+`--follow` keeps printing it.
+
+After a rebuild, `up` checks that the new `iroha3d` accepts the stopped network's signed
+genesis. If it does, the network moves to the new binaries and keeps its ledger; if not, `up`
+refuses and names `localnet reset`. A network that never became ready is simply replaced.
+Networks created with `--with-storage` and attached private data spaces stay bound to the
+binaries that created them.
 
 The default network starts four validators and funds a developer account.
 Local storage and package-registry services are explicit:

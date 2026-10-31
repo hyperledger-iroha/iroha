@@ -1343,3 +1343,28 @@ def test_inferred_empty_affected_packages_remain_a_legitimate_noop(monkeypatch, 
     monkeypatch.setattr(rust_ci, "_run", refuse_child)
     rust_ci.run_checks((), ("test",))
     assert capsys.readouterr().out == "No affected Rust packages; Cargo validation is not required.\n"
+
+
+def test_configured_base_ref_reads_the_first_value(tmp_path: Path) -> None:
+    assert rust_ci.configured_base_ref(tmp_path) is None
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci" / "default_base_ref").write_text("# comment\n\norigin/next # why\n")
+    assert rust_ci.configured_base_ref(tmp_path) == "origin/next"
+
+
+def test_repository_compares_against_the_integration_branch() -> None:
+    assert rust_ci.configured_base_ref() == "origin/optimizations"
+
+
+def test_default_base_prefers_the_configured_branch_then_falls_back(tmp_path: Path) -> None:
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci" / "default_base_ref").write_text("origin/next\n")
+    def git(*arguments: str) -> None:
+        subprocess.run(("git", *arguments), cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    assert rust_ci.default_base(tmp_path) == "origin/main"
+    git("update-ref", "refs/remotes/origin/next", "HEAD")
+    assert rust_ci.default_base(tmp_path) == "origin/next"

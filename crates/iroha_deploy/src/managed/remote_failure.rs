@@ -258,6 +258,7 @@ impl From<Error> for ManagedAttachmentFailure {
             // independently retained native sources through this public classification.
             Error::NoSelection
             | Error::Invalid(_)
+            | Error::RuntimeMismatch(_)
             | Error::ContractCall { .. }
             | Error::WorkerFailure { .. } => Self::ContextRejected,
         }

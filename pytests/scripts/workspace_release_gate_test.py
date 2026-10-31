@@ -1614,8 +1614,8 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once(
                 workflow,
-                "    branches: [main]\n",
-                "    branches: [main]\n    paths-ignore: ['**/*.md']\n",
+                "    branches: [main, optimizations]\n",
+                "    branches: [main, optimizations]\n    paths-ignore: ['**/*.md']\n",
             ),
             "PR workflow must classify every change before selectively skipping jobs",
         ),
