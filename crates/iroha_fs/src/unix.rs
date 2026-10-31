@@ -42,6 +42,13 @@ pub fn sync_file_ordered(file: &File) -> io::Result<()> {
 }
 
 /// Persist every ordered sync of this process; the number of devices flushed (Apple only).
+#[cfg_attr(
+    not(target_vendor = "apple"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "shares the fallible Apple durability fence interface"
+    )
+)]
 pub fn durability_fence() -> io::Result<u64> {
     #[cfg(target_vendor = "apple")]
     {
@@ -97,6 +104,7 @@ impl DirectoryAccess {
 
 #[derive(Debug)]
 struct Link {
+    sealed: Option<Arc<sealed_batch::DirectorySeal>>,
     path: PathBuf,
     file: File,
     // Kernel identity of `file`, read when the link was admitted. A retained descriptor
@@ -345,6 +353,11 @@ fn unchanged(before: &fs::Metadata, after: &fs::Metadata) -> bool {
         && before.ctime_nsec() == after.ctime_nsec()
 }
 
+#[path = "unix/directory_move.rs"]
+mod directory_move;
+#[path = "unix/file_move.rs"]
+mod file_move;
+pub use directory_move::MovedDirectory;
 #[path = "unix/private_files.rs"]
 mod private_files;
 
@@ -436,6 +449,7 @@ impl Directory {
         let root = open_directory(Path::new("/"), root_access)?;
         let root_identity = validate_directory(&root, parts.len() == 1 && private)?;
         let mut links = vec![Arc::new(Link {
+            sealed: None,
             path: PathBuf::from("/"),
             file: root,
             identity: root_identity,
@@ -498,6 +512,7 @@ impl Directory {
             let private_link = created || (last && private);
             let held = validate_directory(&file, private_link)?;
             links.push(Arc::new(Link {
+                sealed: None,
                 path: current,
                 file,
                 identity: held,
@@ -518,6 +533,11 @@ impl Directory {
     }
 
     pub(super) fn revalidate(&self) -> io::Result<()> {
+        for link in &self.links {
+            if let Some(sealed) = &link.sealed {
+                sealed.revalidate(&link.file)?;
+            }
+        }
         // A custody transaction that joined this chain observes it at its own boundaries.
         custody_transaction::revalidate(self)
     }
@@ -550,6 +570,9 @@ impl Directory {
     fn revalidate_chain_from(&self, first: usize) -> io::Result<()> {
         crate::custody_work::record_ancestry_walk(self.links.len().saturating_sub(first));
         for (index, link) in self.links.iter().enumerate().skip(first) {
+            if let Some(sealed) = &link.sealed {
+                sealed.revalidate(&link.file)?;
+            }
             // The held descriptor's identity was fixed when the link was admitted. When the
             // freshly named handle has that identity it is the same object, so validating its
             // current ownership, mode and ACL validates the held object too: one metadata and
@@ -587,19 +610,48 @@ impl Directory {
     }
 
     pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        match self.child_reader_admission(name)? {
+            NativeChildOutcome::Present(child) => Ok(child),
+            NativeChildOutcome::InitialAbsence(error) => Err(error),
+        }
+    }
+
+    pub(super) fn child_reader_optional(&self, name: &OsStr) -> io::Result<Option<Self>> {
+        let result = match self.child_reader_admission(name) {
+            Ok(NativeChildOutcome::Present(child)) => return Ok(Some(child)),
+            Ok(NativeChildOutcome::InitialAbsence(_)) => Ok(None),
+            Err(error) => Err(error),
+        };
+        #[cfg(test)]
+        before_child_named_validation(name);
         self.revalidate()?;
-        let file = File::from(rustix::fs::openat(
+        result
+    }
+
+    fn child_reader_admission(&self, name: &OsStr) -> io::Result<NativeChildOutcome<Self>> {
+        self.revalidate()?;
+        let descriptor = match rustix::fs::openat(
             &self.current().file,
             name,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
-        )?);
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => {
+                return Ok(NativeChildOutcome::InitialAbsence(
+                    rustix::io::Errno::NOENT.into(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let file = File::from(descriptor);
         let held = validate_directory(&file, false)?;
         let mut links = self.links.clone();
         if links.len() >= 128 {
             return Err(invalid("private directory depth bound exceeded"));
         }
         links.push(Arc::new(Link {
+            sealed: None,
             path: self.path().join(name),
             file,
             identity: held,
@@ -607,8 +659,10 @@ impl Directory {
             access: DirectoryAccess::Read,
         }));
         let result = Self { links };
+        #[cfg(test)]
+        before_child_named_validation(name);
         result.revalidate()?;
-        Ok(result)
+        Ok(NativeChildOutcome::Present(result))
     }
 
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {
@@ -703,6 +757,7 @@ impl Directory {
             return Err(invalid("private directory depth bound exceeded"));
         }
         links.push(Arc::new(Link {
+            sealed: None,
             path: self.path().join(name),
             file,
             identity: held,
@@ -879,6 +934,10 @@ impl Directory {
     }
 
     pub(super) fn open_regular_native(&self, name: &OsStr) -> io::Result<Option<File>> {
+        self.open_regular_with_links(name, LinkPolicy::Single)
+    }
+
+    fn open_regular_with_links(&self, name: &OsStr, links: LinkPolicy) -> io::Result<Option<File>> {
         let file = match self.open_read(name) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -890,9 +949,9 @@ impl Directory {
                 "artifact is not a regular file",
             ));
         }
-        let before = validate_file(&file, false)?;
+        let before = validate_file_links(&file, false, links)?;
         let named = self.open_read(name)?;
-        if !unchanged(&before, &validate_file(&named, false)?) {
+        if !unchanged(&before, &validate_file_links(&named, false, links)?) {
             return Err(changed());
         }
         Ok(Some(file))
@@ -990,13 +1049,20 @@ impl Directory {
                 return Err(changed());
             }
             match mode {
-                PublishMode::Replace => rustix::fs::renameat(
-                    &self.current().file,
-                    &temporary,
-                    &self.current().file,
-                    name,
-                )?,
-                PublishMode::CreateNew => publish_new(&self.current().file, &temporary, name)?,
+                PublishMode::Replace => {
+                    rustix::fs::renameat(
+                        &self.current().file,
+                        &temporary,
+                        &self.current().file,
+                        name,
+                    )?;
+                    before(AtomicWriteStep::Published, &self.path().join(name))?;
+                }
+                PublishMode::CreateNew => {
+                    publish_new_observed(&self.current().file, &temporary, name, || {
+                        before(AtomicWriteStep::Published, &self.path().join(name))
+                    })?
+                }
             }
             before(AtomicWriteStep::SyncDirectory, self.path())?;
             self.revalidate()?;
@@ -1025,35 +1091,72 @@ impl Directory {
 
     // The public removal bracket owns full entry and every-result exit custody.
     pub(super) fn remove_private_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, true)
+        self.remove_file_native(name, true, None, LinkPolicy::Single)
+    }
+
+    pub(super) fn remove_private_if_snapshot_native(
+        &self,
+        name: &OsStr,
+        expected: &FileSnapshot,
+    ) -> io::Result<bool> {
+        self.remove_file_native(name, true, Some(expected), LinkPolicy::Single)
     }
 
     pub(super) fn remove_regular_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, false)
+        self.remove_file_native(name, false, None, LinkPolicy::Single)
     }
 
-    fn remove_file_native(&self, name: &OsStr, private: bool) -> io::Result<bool> {
+    pub(super) fn remove_build_output_native(&self, name: &OsStr) -> io::Result<bool> {
+        self.remove_file_native(name, false, None, LinkPolicy::BuildInput)
+    }
+
+    fn remove_file_native(
+        &self,
+        name: &OsStr,
+        private: bool,
+        expected: Option<&FileSnapshot>,
+        links: LinkPolicy,
+    ) -> io::Result<bool> {
         let snapshot = |file: &File| {
             if private {
                 journal_snapshot(file)
             } else {
-                snapshot_file(file, false)
+                validate_file_links(file, false, links)
+                    .map(|value| FileSnapshot::from_metadata(&value))
             }
         };
         let admitted = if private {
             self.open_readonly_native(name, true)?
         } else {
-            self.open_regular_native(name)?
+            self.open_regular_with_links(name, links)?
         };
         let Some(file) = admitted else {
             return Ok(false);
         };
         let before = snapshot(&file)?;
+        if expected.is_some_and(|expected| *expected != before) {
+            return Err(changed());
+        }
+        #[cfg(test)]
+        if links == LinkPolicy::BuildInput {
+            crate::build_output::before_named_removal(name);
+        }
         self.revalidate()?;
         if snapshot(&file)? != before || snapshot(&self.open_read(name)?)? != before {
             return Err(changed());
         }
         rustix::fs::unlinkat(&self.current().file, name, AtFlags::empty())?;
+        if links == LinkPolicy::BuildInput {
+            let after = FileSnapshot::from_metadata(&file.metadata()?);
+            let mut expected = before;
+            expected.links = before.links.checked_sub(1).ok_or_else(changed)?;
+            // Unlink authors change time and exactly one link decrement; all
+            // other identity, ownership, mode, extent and write-time fields stay.
+            expected.changed = after.changed;
+            if expected != after {
+                return Err(changed());
+            }
+        }
         self.current().sync()?;
         Ok(true)
     }
@@ -1149,6 +1252,28 @@ impl Directory {
         self.current().file.sync_all()?;
         self.revalidate()?;
         Ok(file)
+    }
+
+    pub(super) fn create_private_file_into(
+        &self,
+        name: &OsStr,
+        original: &mut Option<File>,
+    ) -> io::Result<()> {
+        self.revalidate()?;
+        let descriptor = rustix::fs::openat(
+            &self.current().file,
+            name,
+            OFlags::RDWR
+                | OFlags::CREATE
+                | OFlags::EXCL
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?;
+        // Nothing fallible may occur between native creation and installing its owner.
+        *original = Some(File::from(descriptor));
+        Ok(())
     }
 
     pub(super) fn open_exact_lock(&self, name: &OsStr, create_new: bool) -> io::Result<File> {
@@ -1286,6 +1411,7 @@ impl Directory {
                 }
                 let mut links = self.links.clone();
                 links.push(Arc::new(Link {
+                    sealed: None,
                     path: self.path().join(name),
                     file,
                     identity: held,
@@ -1319,6 +1445,10 @@ enum PublicationAuthority {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent retained-file custody and exact sealing capabilities"
+)]
 pub struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     directory: D,
     name: N,
@@ -1328,6 +1458,7 @@ pub struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     private: bool,
     writable: bool,
     read_only: bool,
+    executable: bool,
     publication: PublicationAuthority,
     ancestry: AncestryCheck,
 }
@@ -1470,6 +1601,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: private || create_new,
             writable: create_new,
             read_only: false,
+            executable: false,
             publication: if create_new {
                 PublicationAuthority::ExclusiveCreation
             } else {
@@ -1520,6 +1652,9 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         if self.read_only {
             private_files::validate_read_only(&self.file)?;
         }
+        if self.executable {
+            private_files::validate_executable(&self.file)?;
+        }
         if identity(&self.file)? != self.identity()?
             || (!self.writable && !unchanged(&self.before, &after))
         {
@@ -1540,20 +1675,36 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     }
 }
 
-#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
 fn publish_new(parent: &File, temporary: &str, name: &OsStr) -> io::Result<()> {
-    Ok(rustix::fs::renameat_with(
+    publish_new_observed(parent, temporary, name, || Ok(()))
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+fn publish_new_observed(
+    parent: &File,
+    temporary: &str,
+    name: &OsStr,
+    published: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    rustix::fs::renameat_with(
         parent,
         temporary,
         parent,
         name,
         rustix::fs::RenameFlags::NOREPLACE,
-    )?)
+    )?;
+    published()
 }
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
-fn publish_new(parent: &File, temporary: &str, name: &OsStr) -> io::Result<()> {
+fn publish_new_observed(
+    parent: &File,
+    temporary: &str,
+    name: &OsStr,
+    published: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     rustix::fs::linkat(parent, temporary, parent, name, AtFlags::empty())?;
+    published()?;
     rustix::fs::unlinkat(parent, temporary, AtFlags::empty())?;
     Ok(())
 }
@@ -1685,3 +1836,54 @@ mod private_child_parent_sharing_tests {
         }
     }
 }
+
+#[path = "unix/sealed_batch.rs"]
+mod sealed_batch;
+
+impl Directory {
+    #[allow(
+        unsafe_code,
+        reason = "the child-only callback performs only async-signal-safe fchdir on its captured original"
+    )]
+    pub(crate) fn bind_current_directory(
+        &self,
+        command: &mut std::process::Command,
+    ) -> io::Result<()> {
+        #[cfg(not(target_os = "fuchsia"))]
+        {
+            use std::os::unix::process::CommandExt as _;
+            self.revalidate()?;
+            let original = self.clone();
+            // SAFETY: the original and all ancestors are captured in the parent.
+            // No allocation, lock, namespace lookup or destructor runs after fork.
+            // The original descriptor stays CLOEXEC; fchdir never changes the parent.
+            unsafe {
+                command.pre_exec(move || {
+                    rustix::process::fchdir(&original.current().file).map_err(Into::into)
+                });
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "fuchsia")]
+        {
+            let _ = command;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "retained working-directory selection is unavailable on this Unix host",
+            ))
+        }
+    }
+}
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use sealed_batch::flat_batch_command;
+pub use sealed_batch::{FlatBatchCreation, FlatBatchFile, seal_flat_batch};
+
+#[path = "unix/inherited_descriptors.rs"]
+mod inherited_descriptors;
+pub use inherited_descriptors::inherit_descriptors;
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[path = "unix/build_input_command.rs"]
+mod build_input_command;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use build_input_command::build_input_environment;

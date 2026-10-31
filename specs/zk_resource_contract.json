@@ -805,6 +805,41 @@
       ]
     },
     {
+      "id": "transaction.controlled_asset_lock_max_key_bytes",
+      "group": "transaction",
+      "what": "Largest opaque application key accepted by the native controlled-asset lock host and open instruction. Empty keys are also rejected.",
+      "unit": "bytes",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/escrow/control.rs",
+        "symbol": "MAX_CONTROLLED_ASSET_LOCK_KEY_BYTES_V1",
+        "kind": "const",
+        "expr": "4096"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/controlled_asset_locks.rs",
+          "contains": "if key.payload.is_empty() || key.payload.len() > MAX_CONTROLLED_ASSET_LOCK_KEY_BYTES_V1 {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/smartcontracts/isi/escrow/controlled.rs",
+          "contains": "if instruction.key.is_empty() || instruction.key.len() > MAX_CONTROLLED_ASSET_LOCK_KEY_BYTES_V1"
+        }
+      ],
+      "note": "The named host regression rejects empty and 4097-byte keys without queued effects. It does not establish an exact-4096-byte positive boundary or real-network qualification.",
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host/controlled_asset_locks.rs",
+          "name": "lock_calls_reject_missing_frame_bad_key_and_unowned_table_without_effects"
+        }
+      ]
+    },
+    {
       "id": "transaction.norito_header_bytes",
       "group": "transaction",
       "what": "Norito frame header counted in every framed length the contract measures.",
@@ -11484,6 +11519,94 @@
       ],
       "test_note": "These tests exercise exact/one-short bounded certificate serialization, not a maximum admitted transaction and execution output through this route. That route-level acceptance gap remains open in the relation.",
       "note": "HistoryProducerOwner keeps the same admitted pool across bounded JSON encoding and response custody. A full response returns local capacity without altering payment execution or finality; no current measurement proves every allowed input/output JSON projection fits this ceiling."
+    },
+    {
+      "id": "transaction.parliament_candidate_testing_policy_wire_max_bytes",
+      "group": "transaction",
+      "what": "Largest complete canonical Norito frame accepted or produced by the candidate-selection policy codec. This standalone authoring/read representation selects only the fixed supported policy version and profile; original signed genesis carries its separately bounded JSON custom parameter. Neither representation grants production qualification, finality or enactment authority.",
+      "unit": "bytes",
+      "value": 256,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+        "symbol": "MAX_WIRE_BYTES",
+        "kind": "const",
+        "expr": "256"
+      },
+      "inclusive": true,
+      "framing": "Includes the complete canonical header-framed Norito policy; this is not a ballot-proof or transaction-envelope cap.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+          "contains": "enc_bounded(\n            self,\n            \"candidate-testing policy\",\n            Self::MAX_WIRE_BYTES,\n        )"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+          "contains": "decode_enc_bounded(bytes, \"candidate-testing policy\", Self::MAX_WIRE_BYTES)?"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_policy_roundtrips_canonical_norito_and_json"
+        },
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_policy_refuses_truncation_trailing_layout_and_size"
+        },
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_binary_reader_preserves_original_enclosing_field_refusal"
+        }
+      ],
+      "test_note": "The supported fixed policy round-trips within the cap; the size test rejects a 257-byte frame before decoding. It does not construct a valid policy of exactly 256 bytes. The enclosing-field test preserves the original local decoder refusal instead of treating it as invalid policy."
+    },
+    {
+      "id": "transaction.parliament_candidate_testing_policy_json_max_bytes",
+      "group": "transaction",
+      "what": "Largest canonical JSON payload of the reserved parliament_candidate_testing_v1 custom parameter. Authoring and extraction enforce the same fixed cap; authenticated original-genesis extraction supplies the exact selection consumed by immutable native Core installation. This is a schema validity bound, not a node-local allocation allowance or proof-verifier budget.",
+      "unit": "bytes",
+      "value": 256,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+        "symbol": "MAX_JSON_BYTES",
+        "kind": "const",
+        "expr": "256"
+      },
+      "inclusive": true,
+      "framing": "Counts UTF-8 bytes of the canonical JSON payload, excluding the custom parameter identity and outer transaction framing.",
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+          "contains": "let payload = Json::try_new(*self)?;\n        if payload.get().len() > Self::MAX_JSON_BYTES {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing.rs",
+          "contains": "let payload = parameter.payload();\n        if payload.get().len() > Self::MAX_JSON_BYTES {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_policy_roundtrips_canonical_norito_and_json"
+        },
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_parameter_rejects_wrong_identity_malformed_unknown_and_oversized_json"
+        },
+        {
+          "path": "crates/iroha_data_model/src/governance/anonymous_ballot/candidate_testing/tests.rs",
+          "name": "candidate_testing_extraction_preserves_original_json_resource_refusal"
+        }
+      ],
+      "test_note": "The supported fixed policy round-trips within the cap. The oversized JSON control serializes a 256-character string, whose JSON quotes make the payload 258 bytes, and requires JsonTooLarge. No valid exactly-256-byte or exactly-257-byte policy is constructed. The separate original-owner test preserves a JSON resource refusal; these source references are not a fresh runtime test claim."
     }
   ],
   "relations": [
@@ -11602,11 +11725,7 @@
           "path": "crates/iroha_core/src/state/deserialize_core.rs",
           "contains": "crate::resource_coherence::validate_restored_policy(&previous_world, previous_height)"
         }
-      ],
-      "open": {
-        "owner": "X.2",
-        "summary": "Run the four-validator agreement test (integration_tests/tests/resource_policy_network.rs, ignored) on a same-source daemon: every validator rejects incoherent MaxTxBytes/MaxBlockBytes/privacy proposals with the same result and unchanged parameters, applies the exact coherent tightening in either order, commits the exact 10,485,760-byte transaction, refuses the first excess byte, and restarts onto the same policy."
-      }
+      ]
     },
     {
       "id": "proof_ceiling_leaves_one_mib_of_context",
@@ -24946,6 +25065,36 @@
             }
           }
         ]
+      },
+      {
+        "reason": "Optional Torii multisig ExecuteTrigger display projection: the retained native JSON argument bytes are checked before parsing, and oversized arguments omit the derived intent. The original proposal remains the approval and instruction-hash authority. This local read-response allocation ceiling does not admit or reject transactions, change their execution, or replace transaction/proof resource bounds.",
+        "path": "crates/iroha_torii/src/routing.rs",
+        "symbols": [
+          "MULTISIG_EXECUTE_TRIGGER_DISPLAY_MAX_ARGS_BYTES"
+        ],
+        "exprs": {
+          "MULTISIG_EXECUTE_TRIGGER_DISPLAY_MAX_ARGS_BYTES": "64 * 1024"
+        }
+      },
+      {
+        "reason": "KAGEMUSHA observation-only admission history: each thread retains the last eight already-decided capacity-check observations and overwrites older details while preserving its cumulative count. The ring never chooses admission, reserves resources, or changes the existing capacity result; this retention ceiling is not a wallet or validator validity bound.",
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/admission.rs",
+        "symbols": [
+          "NATIVE_ADMISSION_RECORDS_V1"
+        ],
+        "exprs": {
+          "NATIVE_ADMISSION_RECORDS_V1": "8"
+        }
+      },
+      {
+        "reason": "KAGEMUSHA mobile diagnostic JSON response ceiling, enforced by connect_norito_bridge observation selector 4 after serializing the in-memory public metrics. Oversize produces a local diagnostic failure. No admission, scheduling, retry, cancellation, custody, proof, or transaction-validity decision reads this diagnostic output; classifying the response cap does not qualify wallet resource boundaries.",
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics.rs",
+        "symbols": [
+          "FOLD_METRICS_MAX_BYTES_V1"
+        ],
+        "exprs": {
+          "FOLD_METRICS_MAX_BYTES_V1": "131_072"
+        }
       }
     ],
     "literals": {
@@ -28235,6 +28384,17 @@
               "path": "crates/iroha_data_model/src/governance/anonymous_ballot/context.rs",
               "sites": {
                 "commitments + bodies + 512 <= 2 * BALLOT_CONTEXT_MAX_BYTES_V1": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Asset UID Jerusalem-calendar semantic coverage floor: years before 2013 are rejected because this calendar pins the daylight-saving rule from that year. This is a deterministic date-domain rule, not a byte, count, allocation, or work budget; its exclusion does not waive calendar validation.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/asset/uid.rs",
+              "sites": {
+                "year < 2013": 1
               }
             }
           ]

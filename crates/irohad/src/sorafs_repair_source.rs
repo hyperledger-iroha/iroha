@@ -87,7 +87,6 @@ fn distinct_chunks<'a>(
     }
     Ok(unique)
 }
-#[cfg(unix)]
 fn load_key(
     path: &std::path::Path,
     authority: &AccountId,
@@ -119,7 +118,6 @@ impl NativeRepairSourceV1 {
     ///
     /// # Errors
     /// Rejects invalid origins, malformed provider identities and unsafe or mismatched credentials.
-    #[cfg(unix)]
     pub fn new(
         config: &SorafsRepairSource,
         state: Arc<State>,
@@ -152,16 +150,6 @@ impl NativeRepairSourceV1 {
             timeout: Duration::from_millis(config.timeout_ms),
         })
     }
-    #[cfg(not(unix))]
-    /// Reject platforms without the descriptor-authenticated credential reader.
-    pub fn new(
-        _: &SorafsRepairSource,
-        _: Arc<State>,
-        _: SharedSoraFsProviderCache,
-    ) -> Result<Self, RepairOrchestratorError> {
-        Err(rejected())
-    }
-
     fn authorize(
         &self,
         request: &RepairSourceRequestV1,
@@ -357,6 +345,161 @@ mod tests {
             assert!(load_key(&path, &authority).is_err());
         }
     }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_repair_source_initializes_with_both_supported_private_keys() {
+        use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+        use iroha_torii::sorafs::{AdmissionRegistry, ProviderAdvertCache};
+
+        let temporary = tempfile::tempdir().expect("native repair source fixture");
+        let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
+            .expect("private native credential directory");
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let cache = Arc::new(tokio::sync::RwLock::new(ProviderAdvertCache::new(
+            [],
+            Arc::new(AdmissionRegistry::from_state(Arc::clone(&state))),
+        )));
+        for (index, algorithm) in [Algorithm::Ed25519, Algorithm::MlDsa]
+            .into_iter()
+            .enumerate()
+        {
+            let key = KeyPair::try_from_seed(vec![0x61; 32], algorithm).unwrap();
+            let authority = AccountId::new(key.public_key().clone());
+            let encoded = zeroize::Zeroizing::new(format!(
+                "{}\n",
+                ExposedPrivateKey(key.private_key().clone())
+                    .try_to_multihash_string()
+                    .unwrap()
+            ));
+            let leaf = format!("credential-{index}");
+            private
+                .write_atomic(&leaf, encoded.as_bytes(), iroha_fs::PublishMode::CreateNew)
+                .expect("publish native credential");
+            let config = SorafsRepairSource {
+                origins: BTreeMap::from([(hex::encode([1; 32]), "https://repair.example/".into())]),
+                authority: authority.clone(),
+                credential: private.path().join(&leaf),
+                timeout_ms: 100,
+            };
+            let reader = NativeRepairSourceV1::new(&config, Arc::clone(&state), Arc::clone(&cache))
+                .expect("native authenticated repair reader");
+            assert_eq!(reader.authority, authority);
+            assert_eq!(reader.key.public_key(), key.public_key());
+            assert_eq!(reader.timeout, Duration::from_millis(100));
+            assert_eq!(reader.origins[&[1; 32]].as_str(), "https://repair.example/");
+            assert!(Arc::ptr_eq(&reader.state, &state));
+            assert!(Arc::ptr_eq(&reader.cache, &cache));
+
+            let mut invalid = config.clone();
+            invalid.authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x62; 32], algorithm)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            assert!(
+                NativeRepairSourceV1::new(&invalid, Arc::clone(&state), Arc::clone(&cache))
+                    .is_err()
+            );
+            for timeout_ms in [99, 120_001] {
+                let mut invalid = config.clone();
+                invalid.timeout_ms = timeout_ms;
+                assert!(
+                    NativeRepairSourceV1::new(&invalid, Arc::clone(&state), Arc::clone(&cache))
+                        .is_err()
+                );
+            }
+            for origins in [
+                BTreeMap::new(),
+                BTreeMap::from([(hex::encode([0; 32]), "https://repair.example/".into())]),
+                BTreeMap::from([(hex::encode([1; 32]), "http://repair.example/".into())]),
+                BTreeMap::from([(hex::encode([1; 32]), "https://repair.example/path".into())]),
+            ] {
+                let mut invalid = config.clone();
+                invalid.origins = origins;
+                assert!(
+                    NativeRepairSourceV1::new(&invalid, Arc::clone(&state), Arc::clone(&cache))
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_repair_credentials_reject_unsafe_originals_and_noncanonical_bytes() {
+        let temporary = tempfile::tempdir().expect("native repair credential fixture");
+        let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
+            .expect("private native credential directory");
+        let key = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).unwrap();
+        let authority = AccountId::new(key.public_key().clone());
+        let encoded = zeroize::Zeroizing::new(format!(
+            "{}\n",
+            ExposedPrivateKey(key.private_key().clone())
+                .try_to_multihash_string()
+                .unwrap()
+        ));
+        private
+            .write_atomic(
+                "credential",
+                encoded.as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let path = private.path().join("credential");
+        assert_eq!(
+            load_key(&path, &authority).unwrap().public_key(),
+            key.public_key()
+        );
+
+        let writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(load_key(&path, &authority).is_err());
+        drop(writer);
+        assert!(load_key(&path, &authority).is_ok());
+        let linked = private.path().join("linked");
+        std::fs::hard_link(&path, &linked).unwrap();
+        assert!(load_key(&path, &authority).is_err());
+        assert!(load_key(&linked, &authority).is_err());
+        std::fs::remove_file(&linked).unwrap();
+        assert!(load_key(&path, &authority).is_ok());
+        assert_eq!(std::fs::read(&path).unwrap(), encoded.as_bytes());
+
+        let mut missing_newline = encoded.as_bytes().to_vec();
+        missing_newline.pop();
+        for (index, bytes) in [
+            missing_newline,
+            format!("{}\n", encoded.as_str()).into_bytes(),
+            vec![b'x'; 16 * 1024 + 257],
+            vec![],
+            vec![0xff, b'\n'],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let leaf = format!("invalid-{index}");
+            private
+                .write_atomic(&leaf, &bytes, iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+            assert!(load_key(&private.path().join(leaf), &authority).is_err());
+        }
+        let changed = std::process::Command::new("icacls.exe")
+            .arg(&path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .expect("grant unsafe fixture read access");
+        assert!(
+            changed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&changed.stderr)
+        );
+        assert!(load_key(&path, &authority).is_err());
+    }
+
     #[test]
     fn repeated_content_is_requested_once_and_conflicting_lengths_are_rejected() {
         let first = ChunkFileRecord {

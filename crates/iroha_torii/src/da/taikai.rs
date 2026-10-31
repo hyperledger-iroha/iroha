@@ -1327,8 +1327,17 @@ pub(crate) mod taikai_ingest {
         io::Error::new(ErrorKind::InvalidData, message.into())
     }
     fn sync_dir(path: &Path) -> io::Result<()> {
-        let file = fs::File::open(path)?;
-        file.sync_all()
+        #[cfg(windows)]
+        {
+            let directory = iroha_fs::OwnerDirectory::open(path)?;
+            directory.sync()?;
+            directory.revalidate()
+        }
+        #[cfg(not(windows))]
+        {
+            let file = fs::File::open(path)?;
+            file.sync_all()
+        }
     }
     fn build_lineage_hint_bytes(
         alias_namespace: &str,
@@ -3546,6 +3555,26 @@ pub(crate) mod taikai_ingest {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[cfg(windows)]
+        #[test]
+        fn native_artifact_publication_syncs_parent_and_preserves_exact_retry() {
+            let directory = tempfile::tempdir().expect("native Taikai artifact fixture");
+            let target = directory.path().join("artifact.norito");
+            let staged = directory.path().join("artifact.tmp");
+            let bytes = b"exact Taikai artifact";
+            write_temp_artifact(&staged, bytes).expect("write and flush native artifact");
+            install_artifact_without_overwrite(&staged, &target, bytes, "native fixture")
+                .expect("publish native artifact and synchronize parent");
+            assert!(!staged.exists());
+            assert_eq!(fs::read(&target).expect("published bytes"), bytes);
+            write_temp_artifact(&staged, bytes).expect("stage exact retry");
+            install_artifact_without_overwrite(&staged, &target, bytes, "native fixture")
+                .expect("accept exact existing artifact");
+            assert!(!staged.exists());
+            assert_eq!(fs::read(&target).expect("retry bytes"), bytes);
+            sync_dir(&target).expect_err("an artifact is not a directory");
+            assert_eq!(fs::read(&target).expect("bytes after refusal"), bytes);
+        }
         fn anchor_worker_config(poll_interval: Duration) -> DaTaikaiAnchor {
             DaTaikaiAnchor {
                 endpoint: reqwest::Url::parse("https://anchor.example")

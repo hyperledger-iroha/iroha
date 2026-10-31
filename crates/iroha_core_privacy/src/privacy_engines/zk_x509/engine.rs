@@ -7,7 +7,7 @@
 //! envelope. A native reference check, projection-only proof, or collection of unbound subproofs is
 //! never accepted as a credential proof.
 #[cfg(test)]
-use super::prover_observation::{PhaseTimerV1, PhaseV1};
+use super::prover_observation::{CompletionPhaseV1, PhaseTimerV1, PhaseV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{ZkX509CaAccumulatorProofErrorV1, stages::commit_ca_through_auxiliary_v1},
@@ -430,6 +430,36 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     encoded_witness: &[u8],
     rng: &mut R,
 ) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
+    #[cfg(test)]
+    let mut envelope_completion = CompletionPhaseV1::default();
+    let result = prove_zk_x509_credential_proof_observed_v1_with_rng(
+        statement,
+        authoritative_state,
+        trusted_block_timestamp_ms,
+        consensus_limits,
+        genesis_hash,
+        encoded_witness,
+        rng,
+        #[cfg(test)]
+        &mut envelope_completion,
+    );
+    #[cfg(test)]
+    let result = envelope_completion.finish_v1(result);
+    result
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[allow(clippy::too_many_arguments)]
+fn prove_zk_x509_credential_proof_observed_v1_with_rng<R: TryCryptoRng>(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
+    trusted_block_timestamp_ms: u64,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    genesis_hash: [u8; 32],
+    encoded_witness: &[u8],
+    rng: &mut R,
+    #[cfg(test)] envelope_completion: &mut CompletionPhaseV1,
+) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
     if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
         return Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain.into());
     }
@@ -489,7 +519,7 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     let (main_aggregate, ca_subproof, joint_openings) =
         finish_joint_main_ca_v1(main_phase, ca_phase, &mut checked_rng)?;
     #[cfg(test)]
-    let envelope_timer = PhaseTimerV1::start_v1(PhaseV1::EnvelopeAndSelfCheck);
+    envelope_completion.start_v1(PhaseV1::EnvelopeAndSelfCheck);
     let encoded = encode_zk_x509_credential_envelope_v1(
         proof_instance,
         consensus_public.credential_binding,
@@ -532,8 +562,6 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         );
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
-    #[cfg(test)]
-    envelope_timer.complete_v1();
     Ok(encoded)
 }
 fn compiled_profile_fields_v1<'a>(
@@ -1066,6 +1094,54 @@ mod tests {
             ZkX509EngineErrorV1::CredentialProof(ZkX509CredentialProofErrorV1::InvalidStatement)
         );
         assert_eq!(rng.requests, 0, "credential preflight consumed entropy");
+    }
+
+    #[test]
+    fn credential_preflight_rejection_interrupts_only_its_actual_phase() {
+        let fixture = super::super::relation::release_fixture::build_zk_x509_reference_fixture_v1()
+            .expect("canonical reference fixture");
+        let mut rng = PreflightEntropyV1::default();
+        let observation = super::super::prover_observation::ObservationV1::begin_v1();
+        let error = prove_zk_x509_credential_proof_v1_with_rng(
+            &fixture.statement,
+            &fixture.authoritative_state,
+            fixture.statement.presentation_not_before_unix_seconds * 1_000,
+            &PrivacyConsensusLimitsV1::taira_default(),
+            *fixture.statement.context.network_id.as_bytes(),
+            &[],
+            &mut rng,
+        )
+        .expect_err("invalid witness cannot reach a proving phase");
+        assert_eq!(
+            error,
+            ZkX509EngineErrorV1::WitnessCodec(ZkX509WitnessCodecErrorV1::Truncated)
+        );
+        assert_eq!(rng.requests, 0);
+        observation.record_failure_v1("producer", "witness_rejected");
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().expect("actual phase record");
+        assert_eq!(record.outcome, iroha_measurement::RunOutcome::Failed);
+        assert_eq!(
+            record.phase_tree.nodes.len(),
+            2,
+            "root and reached preflight only"
+        );
+        let preparation = record
+            .phase_tree
+            .nodes
+            .iter()
+            .find(|node| node.label == "Preparation")
+            .expect("actual preparation call");
+        assert_eq!(
+            (
+                preparation.calls,
+                preparation.completed,
+                preparation.interrupted,
+                preparation.unwound
+            ),
+            (1, 0, 1, 0)
+        );
+        assert_eq!(preparation.parent, Some(0));
     }
 
     #[test]

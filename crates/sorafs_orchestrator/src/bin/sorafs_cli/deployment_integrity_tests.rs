@@ -1,6 +1,91 @@
 //! Native publisher payload-binding and bounded HTTP-read regression tests.
 use super::*;
 
+#[test]
+fn car_pack_directory_emits_exact_archive_plan_and_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let site = root.join("site");
+    fs::create_dir_all(site.join("assets")).expect("site directory");
+    let entries = vec![
+        sorafs_car::FileEntry {
+            path: vec!["index.html".into()],
+            data: b"<html>directory publisher</html>".to_vec(),
+        },
+        sorafs_car::FileEntry {
+            path: vec!["assets".into(), "app.js".into()],
+            data: b"console.log('directory');".to_vec(),
+        },
+        sorafs_car::FileEntry {
+            path: vec!["empty.txt".into()],
+            data: Vec::new(),
+        },
+    ];
+    for entry in &entries {
+        let path = entry
+            .path
+            .iter()
+            .fold(site.clone(), |path, part| path.join(part));
+        fs::write(path, &entry.data).expect("fixture file");
+    }
+    let (plan, payload) = CarBuildPlan::from_files(entries).expect("explicit reference plan");
+    let mut archive = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .expect("reference writer")
+        .write_to(&mut archive)
+        .expect("reference archive");
+    let car_path = root.join("site.car");
+    let plan_path = root.join("plan.json");
+    let summary_path = root.join("summary.json");
+    car_pack(vec![
+        format!("--input={}", site.display()),
+        format!("--car-out={}", car_path.display()),
+        format!("--plan-out={}", plan_path.display()),
+        format!("--summary-out={}", summary_path.display()),
+    ])
+    .expect("directory pack command");
+    assert_eq!(fs::read(car_path).expect("archive bytes"), archive);
+    let emitted_plan: Value =
+        norito::json::from_slice(&fs::read(plan_path).expect("plan bytes")).expect("plan JSON");
+    let parsed = sorafs_car::fetch_plan::chunk_fetch_plan_from_json(&emitted_plan)
+        .expect("canonical emitted fetch plan");
+    assert_eq!(parsed.payload_digest, *plan.payload_digest.as_bytes());
+    assert_eq!(
+        parsed.chunk_fetch_specs,
+        plan.try_chunk_fetch_specs().expect("reference specs")
+    );
+    let summary: Value = norito::json::from_slice(&fs::read(summary_path).expect("summary bytes"))
+        .expect("summary JSON");
+    assert_eq!(
+        summary.get("input_kind").and_then(Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(summary.get("file_count").and_then(Value::as_u64), Some(3));
+    assert_eq!(
+        summary.get("payload_bytes").and_then(Value::as_u64),
+        Some(payload.len() as u64)
+    );
+    for (name, expected) in [
+        (
+            "car_digest_hex",
+            hex_encode(blake3::hash(&archive).as_bytes()),
+        ),
+        (
+            "chunk_digest_sha3_256_hex",
+            hex_encode(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks)),
+        ),
+        (
+            "por_root_hex",
+            hex_encode(compute_por_root(&payload, &plan).expect("reference PoR")),
+        ),
+    ] {
+        assert_eq!(
+            summary.get(name).and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+}
+
 fn site_fixture(root: &Path) -> (PathBuf, CarBuildPlan, Vec<u8>, ManifestV1) {
     let site = root.join("site");
     fs::create_dir_all(site.join("assets")).expect("create site");

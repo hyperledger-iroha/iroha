@@ -366,6 +366,7 @@ def test_norito_rpc_fixtures_have_one_closed_two_root_owner() -> None:
         "tools/norito_codegen_exporter/Cargo.toml",
         "tools/norito_codegen_exporter/src/lib.rs",
         "tools/norito_codegen_exporter/src/norito_rpc.rs",
+        "tools/norito_codegen_exporter/src/norito_rpc/settlement_sources.rs",
         "xtask/Cargo.toml",
         "xtask/src/main.rs",
         "xtask/src/norito_rpc.rs",

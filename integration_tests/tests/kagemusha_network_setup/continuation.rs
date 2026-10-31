@@ -539,6 +539,7 @@ mod settlement;
 
 #[test]
 #[ignore = "owns four actual validators through retained-genesis catalog, genuine native ABC, settlement and retained-C confirmation; explicit controller required"]
+#[cfg(unix)]
 fn execute_four_validator_monetary_continuation() -> Result<()> {
     init_instruction_registry();
     let root = PathBuf::from(

@@ -44,7 +44,7 @@ use super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
 #[cfg(test)]
 use super::proof_instance::TEST_PROOF_INSTANCE_V1;
 use super::proof_instance::ZkX509ProofInstanceV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_local_residues_over_field_v1;
 use super::{
     accumulator_air::{
@@ -8768,6 +8768,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -8775,6 +8776,24 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         fixed_current: &[F],
         fixed_next: &[F],
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
+        let mut residues = Vec::new();
+        self.emit_constraint_residues_v1(
+            registration,
+            opening,
+            fixed_current,
+            fixed_next,
+            &mut residues,
+        )?;
+        Ok(residues)
+    }
+    fn emit_constraint_residues_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        residues: &mut impl super::sha_residue_output::ShaResidueSinkV1<F>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
         let registration_index = self.source.registration_index_v1(registration)?;
         if fixed_current.len() != registration.segment.fixed_width
             || fixed_next.len() != registration.segment.fixed_width
@@ -8794,58 +8813,62 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let residues = match registration_index {
-            0 => super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
-                opening
-                    .base_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .base_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                fixed_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                fixed_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                &self.source.post_base.der(),
-                self.der_public,
-            )
-            .map_err(ZkX509StarkErrorV1::from)?,
-            1 => evaluate_zk_x509_rfc5280_local_residues_v1(
-                opening
-                    .base_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .base_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                fixed_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                self.source.post_base.der(),
-                self.source.post_base.rfc5280(),
-            )
-            .map_err(map_main_rfc_source_error_v1)?,
+        match registration_index {
+            0 => residues.extend_residues(
+                super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
+                    opening
+                        .base_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .base_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .aux_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .aux_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    &self.source.post_base.der(),
+                    self.der_public,
+                )
+                .map_err(ZkX509StarkErrorV1::from)?,
+            ),
+            1 => residues.extend_residues(
+                evaluate_zk_x509_rfc5280_local_residues_v1(
+                    opening
+                        .base_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .base_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .aux_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    opening
+                        .aux_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    self.source.post_base.der(),
+                    self.source.post_base.rfc5280(),
+                )
+                .map_err(map_main_rfc_source_error_v1)?,
+            ),
             2..=5 => {
                 let segment = registration_index - 2;
                 let current = ZkX509ShaBatchRowV1 {
@@ -8864,25 +8887,32 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 };
-                evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
+                super::sha_call_bus_stark::emit_sha_batch_relation_v1(
                     &current,
                     &next,
                     self.source.post_base.sha_word(),
                     self.source.post_base.sha(),
                     self.source.post_base.rfc5280(),
                     u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    None,
+                    residues,
                 )
                 .map_err(map_main_sha_source_error_v1)?
             }
             _ => {
                 let _binding = self.source.p256_binding_v1(registration)?;
-                p256_opened_residues_v1(registration, opening, fixed_current, self.p256_challenges)?
+                residues.extend_residues(p256_opened_residues_v1(
+                    registration,
+                    opening,
+                    fixed_current,
+                    self.p256_challenges,
+                )?)
             }
         };
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        Ok(residues)
+        Ok(())
     }
     #[cfg(test)]
     fn composition_value_v1(

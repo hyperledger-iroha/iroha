@@ -175,7 +175,27 @@ fn state_root(path: &Path, create: bool) -> Result<PathBuf> {
     Ok(parent.join(name))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn state_root(path: &Path, create: bool) -> Result<iroha_fs::PrivateDirectory> {
+    let path = std::path::absolute(path)?;
+    let parent = iroha_fs::OwnerDirectory::open(
+        path.parent()
+            .ok_or_else(|| eyre!("state root has no parent"))?,
+    )?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| eyre!("state root has no name"))?;
+    if create {
+        match parent.create_private_child(name) {
+            Ok(directory) => return Ok(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(parent.open_private_child(name)?)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn state_root(_: &Path, _: bool) -> Result<PathBuf> {
     eyre::bail!("durable dataspace deployment requires Unix filesystem custody")
 }
@@ -292,7 +312,21 @@ fn replace_unplanned_definition(
     result
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn replace_unplanned_definition(
+    journal: &Journal,
+    expected: &DefinitionBinding,
+    replacement: &DefinitionBinding,
+) -> Result<()> {
+    journal.require_definition_only()?;
+    journal.refresh_native(
+        "definition.json",
+        &json::to_vec(expected)?,
+        &json::to_vec(replacement)?,
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
 fn replace_unplanned_definition(
     _: &Journal,
     _: &DefinitionBinding,
@@ -304,11 +338,16 @@ fn replace_unplanned_definition(
 /// Read-only chain evidence binds every semantic/trust field except the spending cap.
 /// Spending authorization remains bound to the exact definition and any retained plan.
 pub(super) fn preflight_identity(journal: &Journal) -> Result<(String, NetworkId, String)> {
-    let mut binding: DefinitionBinding = journal.read_json("definition.json")?;
+    let binding: DefinitionBinding = journal.read_json("definition.json")?;
     require(
         journal.path.file_name() == Some(std::ffi::OsStr::new(&binding.operation_id()?)),
         "preflight definition belongs to another operation directory",
     )?;
+    preflight_binding_identity(&binding)
+}
+
+fn preflight_binding_identity(binding: &DefinitionBinding) -> Result<(String, NetworkId, String)> {
+    let mut binding = binding.clone();
     binding.max_fee = Quantity::zero();
     Ok((
         digest(&json::to_vec(&binding)?),
@@ -317,7 +356,7 @@ pub(super) fn preflight_identity(journal: &Journal) -> Result<(String, NetworkId
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(super) fn preflight_test_journal(
     root: &Path,
     trust: &DeploymentTrustV1,
@@ -511,12 +550,20 @@ pub(super) fn run<C: RunContext>(
         requested_state_root(args.state.as_deref(), std::env::home_dir().as_deref())?;
     // Status never creates state, selects a lane, refreshes quotes or prepares a transaction.
     let root = state_root(&requested_root, !status)?;
+    #[cfg(not(windows))]
     let directory = root.join(&id);
+    #[cfg(windows)]
+    let directory = root.path().join(&id);
+    #[cfg(not(windows))]
     let journal = if status {
         Journal::open(&directory, false)?
     } else {
         Journal::open_unpublished(&directory)?
     };
+    #[cfg(windows)]
+    let journal = Journal::open_native_child(&root, std::ffi::OsStr::new(&id), !status, !status)?;
+    #[cfg(windows)]
+    journal.recover_native_refresh(!apply && !status, &preflight_binding_identity(&binding)?)?;
     retain_definition(
         &journal,
         &binding,
@@ -1079,7 +1126,6 @@ mod tests {
 
     #[test]
     fn preflight_child_recovers_interrupted_empty_creation_but_never_replaces_a_lost_lock() {
-        use std::os::unix::fs::PermissionsExt as _;
         let reference = fixture_plan();
         for orphan in [
             None,
@@ -1094,12 +1140,15 @@ mod tests {
                 reference.manifest.network_id,
             );
             let path = parent.path.join("preflight-finality");
-            fs::create_dir(&path).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            let private = iroha_fs::PrivateDirectory::open_or_create(&path).unwrap();
             if let Some(name) = orphan {
-                let evidence = path.join(name);
-                fs::write(&evidence, b"retained evidence after a lost lock").unwrap();
-                fs::set_permissions(&evidence, fs::Permissions::from_mode(0o600)).unwrap();
+                private
+                    .write_atomic(
+                        name,
+                        b"retained evidence after a lost lock",
+                        iroha_fs::PublishMode::CreateNew,
+                    )
+                    .unwrap();
                 assert!(parent.require_definition_only().is_err(), "{name}");
                 assert!(
                     finality::Preflight::new(
@@ -1273,6 +1322,23 @@ mod tests {
             .collect();
         let full = LaneLifecycleStatusV1::new(&catalog, &incarnations, None).unwrap();
         assert!(select_lane(&full, &Parameters::default()).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_state_root_is_private_original_and_status_never_creates_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let requested = parent.path().join("state");
+        assert!(state_root(&requested, false).is_err());
+        assert!(!requested.exists());
+        let root = state_root(&requested, true).unwrap();
+        let reopened = state_root(&requested, false).unwrap();
+        assert_eq!(root.identity().unwrap(), reopened.identity().unwrap());
+        assert!(fs::rename(root.path(), parent.path().join("displaced")).is_err());
+        let unsafe_root = parent.path().join("inherited");
+        fs::create_dir(&unsafe_root).unwrap();
+        assert!(state_root(&unsafe_root, true).is_err());
+        assert!(iroha_fs::PrivateDirectory::open(&unsafe_root).is_err());
     }
 
     #[cfg(unix)]

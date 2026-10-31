@@ -1760,7 +1760,7 @@ qualified seal/signer/inventory semantics. It is not relabeled native software c
 startup rejects injected external substitutions, and non-native journal activation remains closed.
 
 `MusubiProviderAttestationJournalFileStoreV1` is the inert public local-store
-adapter for that CAS contract. On Linux and macOS it binds one root-fenced
+adapter for that CAS contract. On Linux, macOS and native Windows NTFS it binds one root-fenced
 two-slot layout with a fixed 128 MiB checkpoint/payload ceiling to the exact
 genesis-derived `NetworkId` and provider ID. Descriptor-relative identity
 checks, canonical checkpoint and generation validation, durable two-slot
@@ -1806,7 +1806,10 @@ store wrapper, transition engine, and runtime constructor remain crate-private.
 The public file-store initialization/open paths consume the store, enforce the
 exact scope and retained policy, and return only the bounded journal runtime.
 The implementation remains inert and is not wired into stock `irohad`; targets
-other than Linux and macOS fail closed.
+other than Linux, macOS and Windows NTFS fail closed. Windows binds the full 64-bit volume
+and 128-bit file identities in the local V1 headers, retaining the current-user owner SID and
+exact protected DACL of both slots and the initialization lock. Native component checks do not
+qualify daemon activation, complete-node behavior or power-loss recovery.
 
 Restart discovery uses exclusive `(insertion sequence, approval ID)` pages for
 due approvals, due handoffs, and dead letters. Claims are fenced by the exact

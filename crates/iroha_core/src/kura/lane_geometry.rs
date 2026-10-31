@@ -1127,6 +1127,7 @@ fn exact_public_reset_storage_marker(store_root: &Path) -> bool {
 fn exact_public_reset_storage_marker(_store_root: &Path) -> bool {
     false
 }
+#[cfg(not(windows))]
 fn write_initial_configured_catalog_temp(
     store_root: &Path,
     root_identity: GeometryFileIdentity,
@@ -1165,6 +1166,202 @@ fn write_initial_configured_catalog_temp(
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
     Ok(identity)
 }
+#[cfg(windows)]
+fn write_initial_configured_catalog_temp(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    temp_path: &Path,
+    bytes: &[u8],
+) -> Result<GeometryFileIdentity> {
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    if temp_path != store_root.join(JOURNAL_TEMP_FILE_NAME) {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "configured-catalog creator requires its reserved publication temp",
+        ));
+    }
+    let owner = iroha_fs::OwnerDirectory::open(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let mut original = None;
+    let result = (|| {
+        owner
+            .create_private_journal_into(JOURNAL_TEMP_FILE_NAME, &mut original)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        let file = original.as_mut().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::other("private creator did not install its original"),
+                temp_path.to_path_buf(),
+            )
+        })?;
+        let metadata = secure_file_metadata::from_file(file)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        let identity = checked_geometry_file_identity(&metadata, temp_path)?;
+        file.write_all(bytes)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        file.sync_all()
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        owner
+            .require_same_lock(JOURNAL_TEMP_FILE_NAME, file)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        let final_metadata = secure_file_metadata::from_file(file)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        if checked_geometry_file_identity(&final_metadata, temp_path)? != identity
+            || final_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "configured-catalog startup temp changed while being persisted",
+            ));
+        }
+        Ok(identity)
+    })();
+    // Creation installs the original before any fallible validation. Keep that
+    // original until every final check, including a failed write or sync, completes.
+    let custody = original.as_ref().map_or(Ok(()), |file| {
+        owner
+            .require_same_lock(JOURNAL_TEMP_FILE_NAME, file)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))
+    });
+    let parent = owner
+        .revalidate()
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()));
+    let root = configured_catalog_require_store_root_identity(store_root, root_identity);
+    match result {
+        Ok(identity) => custody.and(parent).and(root).map(|()| identity),
+        Err(error) => Err(error),
+    }
+}
+
+// This single-link private admission deliberately occurs after the exact startup
+// hard-link recovery has removed its second reserved name. That recovery protocol
+// itself remains unchanged; an unrelated alias or inherited DACL is never admitted.
+#[cfg(windows)]
+fn require_native_configured_catalog_original(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    path: &Path,
+    identity: GeometryFileIdentity,
+    expected: &[u8],
+) -> Result<()> {
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    if path.parent() != Some(store_root) {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "configured-catalog private admission requires a direct child",
+        ));
+    }
+    let owner = iroha_fs::OwnerDirectory::open(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let name = path.file_name().ok_or_else(|| {
+        configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "configured-catalog file has no leaf",
+        )
+    })?;
+    let mut original = owner
+        .open_private_journal_optional(name)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        .ok_or_else(|| Error::IO(ErrorKind::NotFound.into(), path.to_path_buf()))?;
+    let result = (|| {
+        let before = iroha_fs::FileSnapshot::private_journal(&original)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let metadata = secure_file_metadata::from_file(&original)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if checked_geometry_file_identity(&metadata, path)? != identity
+            || metadata.len() != u64::try_from(expected.len()).unwrap_or(u64::MAX)
+        {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "configured-catalog private original changed before admission",
+            ));
+        }
+        let mut scratch = [0_u8; 16 * 1024];
+        for expected_chunk in expected.chunks(scratch.len()) {
+            let current = &mut scratch[..expected_chunk.len()];
+            original
+                .read_exact(current)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            if current != expected_chunk {
+                return Err(configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "configured-catalog private original changed while being read",
+                ));
+            }
+        }
+        let mut eof = [0_u8; 1];
+        if original
+            .read(&mut eof)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?
+            != 0
+            || iroha_fs::FileSnapshot::private_journal(&original)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?
+                != before
+        {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "configured-catalog private original changed while being read",
+            ));
+        }
+        Ok(())
+    })();
+    let custody = owner
+        .require_same_lock(name, &original)
+        .map_err(|error| Error::IO(error, path.to_path_buf()));
+    let parent = owner
+        .revalidate()
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()));
+    let root = configured_catalog_require_store_root_identity(store_root, root_identity);
+    result.and(custody).and(parent).and(root)
+}
+
+#[cfg(windows)]
+struct NativeGeometryPublication {
+    owner: iroha_fs::OwnerDirectory,
+    original: File,
+    predecessor: Option<File>,
+    predecessor_identity: Option<iroha_fs::FileIdentity>,
+}
+
+#[cfg(windows)]
+impl NativeGeometryPublication {
+    fn revalidate(&self, path: &Path) -> Result<()> {
+        let current = self
+            .owner
+            .require_same_lock(
+                path.file_name()
+                    .ok_or_else(|| Error::IO(ErrorKind::InvalidInput.into(), path.to_path_buf()))?,
+                &self.original,
+            )
+            .map_err(|error| Error::IO(error, path.to_path_buf()));
+        let previous = self
+            .predecessor
+            .as_ref()
+            .map_or(Ok(()), |file| {
+                self.owner.require_retired_private_journal(file)?;
+                if Some(iroha_fs::FileIdentity::of(file)?) != self.predecessor_identity {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "displaced geometry original identity changed",
+                    ));
+                }
+                Ok(())
+            })
+            .map_err(|error| Error::IO(error, path.to_path_buf()));
+        let parent = self
+            .owner
+            .revalidate()
+            .map_err(|error| Error::IO(error, self.owner.path().to_path_buf()));
+        current.and(previous).and(parent)
+    }
+}
+
 fn configured_catalog_reserved_temp_identity(
     store_root: &Path,
     root_identity: GeometryFileIdentity,
@@ -1397,6 +1594,14 @@ impl Kura {
                     "authoritative configured-catalog journal changed during temp cleanup",
                 ));
             }
+            #[cfg(windows)]
+            require_native_configured_catalog_original(
+                store_root,
+                root_identity,
+                &journal_path,
+                authoritative.identity,
+                &authoritative.bytes,
+            )?;
             configured_catalog_require_store_root_identity(store_root, root_identity)?;
             return Ok(());
         }
@@ -1462,6 +1667,14 @@ impl Kura {
             Some(&publication_temp),
             authenticated_lock_identity,
         )?;
+        #[cfg(windows)]
+        require_native_configured_catalog_original(
+            store_root,
+            root_identity,
+            &publication_temp_path,
+            publication_temp_identity,
+            &expected_bytes,
+        )?;
         promote_initial_configured_catalog_temp(
             store_root,
             root_identity,
@@ -1490,6 +1703,14 @@ impl Kura {
                 "established configured-catalog baseline journal differs from the exact startup value",
             ));
         }
+        #[cfg(windows)]
+        require_native_configured_catalog_original(
+            store_root,
+            root_identity,
+            &journal_path,
+            established.identity,
+            &expected_bytes,
+        )?;
         configured_catalog_require_store_root_identity(store_root, root_identity)
     }
     /// Canonical storage is chain-scoped and never belongs to a lane binding.
@@ -2967,7 +3188,12 @@ impl Kura {
 
     fn sync_geometry_path_contents(&self, path: &Path, directory: bool) -> Result<()> {
         if !directory {
-            let file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            let file = OpenOptions::new()
+                .read(true)
+                // FlushFileBuffers requires write access on Windows.
+                .write(cfg!(windows))
+                .open(path)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
             self.verify_open_geometry_file(path, &file)?;
             file.sync_all()
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -3019,8 +3245,11 @@ impl Kura {
                 if file_type.is_dir() {
                     pending.push((child, depth.saturating_add(1)));
                 } else if file_type.is_file() {
-                    let file =
-                        File::open(&child).map_err(|error| Error::IO(error, child.clone()))?;
+                    let file = OpenOptions::new()
+                        .read(true)
+                        .write(cfg!(windows))
+                        .open(&child)
+                        .map_err(|error| Error::IO(error, child.clone()))?;
                     self.verify_open_geometry_file(&child, &file)?;
                     file.sync_all().map_err(|error| Error::IO(error, child))?;
                 } else {
@@ -4099,23 +4328,150 @@ impl Kura {
             self.validate_path_kind(parent, true)?;
             self.sync_geometry_parent(Some(parent))?;
         }
-        let file = match fs::symlink_metadata(temp) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                    return Err(Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::AlreadyExists,
-                            "geometry sidecar temp collision has an unsafe file type",
-                        ),
-                        temp.to_path_buf(),
-                    ));
+        #[cfg(windows)]
+        let native_originals = self.atomic_write_private_geometry_contents(path, temp, bytes)?;
+        #[cfg(not(windows))]
+        let _geometry_original = {
+            let file = match fs::symlink_metadata(temp) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                "geometry sidecar temp collision has an unsafe file type",
+                            ),
+                            temp.to_path_buf(),
+                        ));
+                    }
+                    let mut stale = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(temp)
+                        .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+                    self.verify_open_geometry_file(temp, &stale)?;
+                    let intended_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                    if metadata.len() != intended_len {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                "geometry sidecar temp collision differs from the intended write",
+                            ),
+                            temp.to_path_buf(),
+                        ));
+                    }
+                    let mut stale_bytes = Vec::with_capacity(bytes.len());
+                    (&mut stale)
+                        .take(intended_len.saturating_add(1))
+                        .read_to_end(&mut stale_bytes)
+                        .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+                    if stale_bytes != bytes {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                "geometry sidecar temp collision differs from the intended write",
+                            ),
+                            temp.to_path_buf(),
+                        ));
+                    }
+                    stale
                 }
-                let mut stale = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(temp)
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    let mut created = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(temp)
+                        .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+                    self.verify_open_geometry_file(temp, &created)?;
+                    created
+                        .write_all(bytes)
+                        .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+                    created
+                }
+                Err(error) => return Err(Error::IO(error, temp.to_path_buf())),
+            };
+            // Geometry intents and incarnation markers are correctness barriers even when ordinary
+            // block fsync is deferred by batching. Always synchronize the file before its directory
+            // entry.
+            file.sync_all()
+                .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+            self.verify_open_geometry_file(temp, &file)?;
+            fs::rename(temp, path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            self.verify_open_geometry_file(path, &file)?;
+            file.sync_all()
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            self.sync_geometry_parent(path.parent())?;
+            file
+        };
+        let completion = (|| {
+            let after = self
+                .accounted_atomic_geometry_file_len(path)?
+                .saturating_add(self.accounted_atomic_geometry_file_len(temp)?);
+            self.update_disk_usage_delta(before, after);
+            accounting_mutation.finish();
+            Ok(())
+        })();
+        #[cfg(windows)]
+        {
+            let custody = native_originals.revalidate(path);
+            completion.and(custody)
+        }
+        #[cfg(not(windows))]
+        completion
+    }
+    #[cfg(windows)]
+    fn atomic_write_private_geometry_contents(
+        &self,
+        path: &Path,
+        temp: &Path,
+        bytes: &[u8],
+    ) -> Result<NativeGeometryPublication> {
+        let parent = path.parent().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "geometry sidecar has no retained parent",
+            )
+        })?;
+        let owner = iroha_fs::OwnerDirectory::open(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let name = path.file_name().ok_or_else(|| {
+            self.geometry_error(ErrorKind::InvalidInput, "geometry sidecar has no leaf")
+        })?;
+        let temp_name = temp.file_name().ok_or_else(|| {
+            self.geometry_error(ErrorKind::InvalidInput, "geometry sidecar temp has no leaf")
+        })?;
+        let mut predecessor = None;
+        let mut predecessor_identity = None;
+        let mut original = None;
+        let mut published = false;
+        let result = (|| {
+            predecessor = owner
+                .open_private_journal_optional(name)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            predecessor_identity = predecessor
+                .as_ref()
+                .map(iroha_fs::FileIdentity::of)
+                .transpose()
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            original = owner
+                .open_private_journal_optional(temp_name)
+                .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+            let recovered = original.is_some();
+            if !recovered {
+                owner
+                    .create_private_journal_into(temp_name, &mut original)
                     .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
-                self.verify_open_geometry_file(temp, &stale)?;
+            }
+            let file = original.as_mut().ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::other("private geometry original was not installed"),
+                    temp.to_path_buf(),
+                )
+            })?;
+            self.verify_open_geometry_file(temp, file)?;
+            if recovered {
+                let metadata = secure_file_metadata::from_file(file)
+                    .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
                 let intended_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                 if metadata.len() != intended_len {
                     return Err(Error::IO(
@@ -4126,12 +4482,12 @@ impl Kura {
                         temp.to_path_buf(),
                     ));
                 }
-                let mut stale_bytes = Vec::with_capacity(bytes.len());
-                (&mut stale)
+                let mut actual = Vec::with_capacity(bytes.len());
+                (&mut *file)
                     .take(intended_len.saturating_add(1))
-                    .read_to_end(&mut stale_bytes)
+                    .read_to_end(&mut actual)
                     .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
-                if stale_bytes != bytes {
+                if actual != bytes {
                     return Err(Error::IO(
                         std::io::Error::new(
                             ErrorKind::AlreadyExists,
@@ -4140,41 +4496,75 @@ impl Kura {
                         temp.to_path_buf(),
                     ));
                 }
-                stale
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                let mut created = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .open(temp)
+            } else {
+                file.write_all(bytes)
                     .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
-                self.verify_open_geometry_file(temp, &created)?;
-                created
-                    .write_all(bytes)
-                    .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
-                created
             }
-            Err(error) => return Err(Error::IO(error, temp.to_path_buf())),
-        };
-        // Geometry intents and incarnation markers are correctness barriers even when ordinary
-        // block fsync is deferred by batching. Always synchronize the file before its directory
-        // entry.
-        file.sync_all()
-            .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
-        self.verify_open_geometry_file(temp, &file)?;
-        fs::rename(temp, path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        self.verify_open_geometry_file(path, &file)?;
-        file.sync_all()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        self.sync_geometry_parent(path.parent())?;
-        let after = self
-            .accounted_atomic_geometry_file_len(path)?
-            .saturating_add(self.accounted_atomic_geometry_file_len(temp)?);
-        self.update_disk_usage_delta(before, after);
-        accounting_mutation.finish();
-        Ok(())
+            file.sync_all()
+                .map_err(|error| Error::IO(error, temp.to_path_buf()))?;
+            self.verify_open_geometry_file(temp, file)?;
+            owner
+                .publish_private_journal_observed(
+                    temp_name,
+                    name,
+                    file,
+                    predecessor.as_ref(),
+                    &mut published,
+                    |_| Ok(()),
+                )
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            self.verify_open_geometry_file(path, file)?;
+            file.sync_all()
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            self.sync_geometry_parent(Some(parent))
+        })();
+        // The publication latch selects the actual name even after a post-rename
+        // refusal. Neither the pending original nor its displaced predecessor is
+        // dropped before independent final custody checks; failures do not clean up.
+        let current = original.as_ref().map_or(Ok(()), |file| {
+            owner
+                .require_same_lock(if published { name } else { temp_name }, file)
+                .map_err(|error| {
+                    Error::IO(error, if published { path } else { temp }.to_path_buf())
+                })
+        });
+        let previous = predecessor.as_ref().map_or(Ok(()), |file| {
+            let check = (|| {
+                if published {
+                    owner.require_retired_private_journal(file)?;
+                } else {
+                    owner.require_same_lock(name, file)?;
+                }
+                if Some(iroha_fs::FileIdentity::of(file)?) != predecessor_identity {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "geometry predecessor identity changed",
+                    ));
+                }
+                Ok(())
+            })();
+            check.map_err(|error| Error::IO(error, path.to_path_buf()))
+        });
+        let custody = owner
+            .revalidate()
+            .map_err(|error| Error::IO(error, parent.to_path_buf()));
+        result.and(current).and(previous).and(custody)?;
+        // Keep both originals and the parent through the caller's final resource
+        // accounting, just as the non-Windows branch retains its original File.
+        let original = original.ok_or_else(|| {
+            Error::IO(
+                std::io::Error::other("published geometry original is missing"),
+                path.to_path_buf(),
+            )
+        })?;
+        Ok(NativeGeometryPublication {
+            owner,
+            original,
+            predecessor,
+            predecessor_identity,
+        })
     }
+
     fn sync_geometry_parent(&self, parent: Option<&Path>) -> Result<()> {
         let Some(mut directory) = parent else {
             return Ok(());
@@ -4239,6 +4629,56 @@ mod tests {
     include!("lane_geometry_tests/08_raw_attempt.rs");
     include!("lane_geometry_tests/07_guarded_publication.rs");
     include!("lane_geometry_tests/09_recovery_releases.rs");
+    #[cfg(windows)]
+    include!("lane_geometry_tests/10_private_creator_windows.rs");
+
+    #[cfg(windows)]
+    #[test]
+    fn native_geometry_file_sync_preserves_direct_original_and_bytes() {
+        let kura = Kura::blank_kura_for_testing();
+        let path = kura.store_root.join("geometry-sync-direct.bin");
+        let expected = b"original geometry file";
+        fs::write(&path, expected).unwrap();
+        let identity = kura.geometry_path_identity(&path, false).unwrap();
+
+        kura.sync_geometry_path_contents(&path, false)
+            .expect("sync the original regular file with native write access");
+
+        kura.require_geometry_path_identity(&path, false, identity)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_geometry_file_sync_preserves_recursive_originals_and_bytes() {
+        let kura = Kura::blank_kura_for_testing();
+        let root = kura.store_root.join("geometry-sync-tree");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let direct = root.join("direct.bin");
+        let child = nested.join("child.bin");
+        fs::write(&direct, b"direct contents").unwrap();
+        fs::write(&child, b"nested contents").unwrap();
+        let root_identity = kura.geometry_path_identity(&root, true).unwrap();
+        let nested_identity = kura.geometry_path_identity(&nested, true).unwrap();
+        let direct_identity = kura.geometry_path_identity(&direct, false).unwrap();
+        let child_identity = kura.geometry_path_identity(&child, false).unwrap();
+        let before = native_observation_tree(&root);
+
+        kura.sync_geometry_path_contents(&root, true)
+            .expect("sync nested regular files and retained directory boundaries");
+
+        kura.require_geometry_path_identity(&root, true, root_identity)
+            .unwrap();
+        kura.require_geometry_path_identity(&nested, true, nested_identity)
+            .unwrap();
+        kura.require_geometry_path_identity(&direct, false, direct_identity)
+            .unwrap();
+        kura.require_geometry_path_identity(&child, false, child_identity)
+            .unwrap();
+        assert_eq!(native_observation_tree(&root), before);
+    }
 }
 
 include!("geometry_request.rs");

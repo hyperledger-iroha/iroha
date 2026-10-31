@@ -18,6 +18,7 @@ use sorafs_manifest::{
     PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError, PdpMerkleTreeV1,
     PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
 };
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::fs::OpenOptions;
@@ -41,6 +42,12 @@ pub mod bundle_archive;
 pub mod chunk_store_cli;
 pub mod chunker_registry;
 mod chunker_registry_data;
+#[cfg(windows)]
+mod directory_plan_windows;
+#[cfg(all(test, windows))]
+mod directory_plan_windows_tests;
+#[cfg(windows)]
+mod directory_sink_windows;
 pub mod fetch_plan;
 pub mod fixtures;
 #[cfg(feature = "manifest")]
@@ -823,12 +830,12 @@ fn metadata_is_symlink(metadata: &fs::Metadata) -> bool {
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     metadata.nlink() == 1
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn unsupported_secure_filesystem_error() -> io::Error {
-    // Non-Unix hosts fail closed: stable handle identity and no-follow are required.
+    // Other native hosts fail closed: stable handle identity and no-follow are required.
     io::Error::new(
         io::ErrorKind::Unsupported,
-        "secure SoraFS file-backed payloads require Unix file identities and no-follow opens",
+        "secure SoraFS file-backed payloads require supported native retained custody",
     )
 }
 /// Planning structure describing the chunks required to build a CAR payload.
@@ -871,7 +878,7 @@ pub const CAR_PLAN_MAX_CHUNKS: usize = 4_194_304;
 /// Maximum authentication-path depth for the canonical chunk Merkle tree.
 pub const POR_CHUNK_MERKLE_MAX_DEPTH: usize = 22;
 const CAR_PLAN_MAX_FILES: usize = 1_000_000;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const CAR_DIRECTORY_MAX_ENTRIES: usize = 1_000_000;
 // Directory scanning and canonical DAG materialisation recurse once per logical component. Keep
 // the protocol depth comfortably below platform thread-stack limits before descending into an
@@ -879,9 +886,9 @@ const CAR_DIRECTORY_MAX_ENTRIES: usize = 1_000_000;
 const CAR_LOGICAL_PATH_MAX_COMPONENTS: usize = 64;
 const CAR_LOGICAL_PATH_COMPONENT_MAX_BYTES: usize = 255;
 const CAR_LOGICAL_PATH_MAX_BYTES: usize = 4 * 1024;
-/// Default upper bound for heap retained or temporarily allocated while ingesting one CAR plan.
+/// Default limit for the checked estimate of allocations derived from one CAR plan.
 pub const DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES: usize = 512 * 1024 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const CAR_EAGER_DIRECTORY_MAX_BYTES: u64 = DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES as u64;
 /// Allocation geometry returned after a complete, allocation-free CAR plan validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -895,7 +902,10 @@ impl CarPlanValidation {
     pub fn max_chunk_len(self) -> usize {
         self.max_chunk_len
     }
-    /// Conservative checked estimate of peak heap used by chunk-store ingestion.
+    /// Conservative checked estimate of plan-dependent chunk-store allocations.
+    ///
+    /// Platform filesystem custody and root-path storage are bounded separately and excluded,
+    /// as is allocator overhead. This estimate is not a total-process resident-memory limit.
     #[must_use]
     pub fn estimated_ingest_heap_bytes(self) -> usize {
         self.estimated_ingest_heap_bytes
@@ -1565,11 +1575,11 @@ pub enum DirectoryPublicationStatus {
     /// records and reconcile durability on restart rather than attempting the ingest again.
     PublishedButDurabilityUncertain,
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const ATOMIC_PATH_RETRIES: usize = 32;
 // Keep original writer handles until durability errors have been checked. The fixed array
 // bounds descriptor use without adding plan-sized allocations to the sink's heap budget.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const DIRECTORY_SYNC_BATCH_CHUNKS: usize = 64;
 #[cfg(unix)]
 fn normalized_parent(path: &Path) -> Result<&Path, ChunkStoreError> {
@@ -1830,10 +1840,12 @@ fn chunk_io_context(
 /// never replaced. The final same-filesystem rename therefore exposes either no directory or the
 /// complete immutable chunk set, including across a process crash. Private writes are flushed
 /// in bounded batches; all chunk data and staging entries are durable before publication.
-/// Secure publication is currently Unix-only; other platforms fail closed.
+/// Unix and Windows retain native publication authority; other platforms fail closed.
 #[derive(Debug)]
 pub struct DirectoryChunkSink {
     root: PathBuf,
+    #[cfg(windows)]
+    native: directory_sink_windows::NativeSink,
     max_estimated_heap_bytes: usize,
     #[cfg(unix)]
     records: Vec<PersistedChunkRecord>,
@@ -1880,6 +1892,8 @@ impl DirectoryChunkSink {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
+            #[cfg(windows)]
+            native: directory_sink_windows::NativeSink::new(),
             max_estimated_heap_bytes: DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
             #[cfg(unix)]
             records: Vec::new(),
@@ -2328,7 +2342,12 @@ impl ChunkSink for DirectoryChunkSink {
         self.staging_before = Some(staging_before);
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
+        self.native
+            .prepare(&self.root, plan, self.max_estimated_heap_bytes)
+    }
+    #[cfg(not(any(unix, windows)))]
     fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
@@ -2407,7 +2426,16 @@ impl ChunkSink for DirectoryChunkSink {
         }
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn write_chunk(
+        &mut self,
+        index: usize,
+        chunk: &CarChunk,
+        data: &[u8],
+    ) -> Result<(), ChunkStoreError> {
+        self.native.write_chunk(index, chunk, data)
+    }
+    #[cfg(not(any(unix, windows)))]
     fn write_chunk(
         &mut self,
         _index: usize,
@@ -2444,7 +2472,11 @@ impl ChunkSink for DirectoryChunkSink {
             publication,
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn finish(self) -> Result<Self::Output, ChunkStoreError> {
+        self.native.finish()
+    }
+    #[cfg(not(any(unix, windows)))]
     fn finish(self) -> Result<Self::Output, ChunkStoreError> {
         Err(ChunkStoreError::Io(unsupported_secure_filesystem_error()))
     }
@@ -2906,9 +2938,9 @@ impl ChunkStore {
         }
         Ok(output)
     }
-    /// Ingests chunk metadata while persisting chunk bytes to `directory` on Unix.
+    /// Ingests chunk metadata while persisting chunk bytes to `directory` on Unix and Windows.
     ///
-    /// Non-Unix platforms fail closed before inspecting or creating `directory`.
+    /// Other platforms fail closed before inspecting or creating `directory`.
     pub fn ingest_plan_to_directory<P: PayloadSource>(
         &mut self,
         plan: &CarBuildPlan,
@@ -2919,9 +2951,9 @@ impl ChunkStore {
             .with_max_estimated_heap_bytes(self.max_estimated_heap_bytes)?;
         self.ingest_plan_source_with_sink(plan, source, sink)
     }
-    /// Streams chunk metadata from `reader`, persisting chunk bytes to `directory` on Unix.
+    /// Streams chunk metadata from `reader`, persisting chunk bytes to `directory` on Unix and Windows.
     ///
-    /// Non-Unix platforms fail closed before inspecting or creating `directory`.
+    /// Other platforms fail closed before inspecting or creating `directory`.
     pub fn ingest_plan_stream_to_directory<R: Read>(
         &mut self,
         plan: &CarBuildPlan,
@@ -4546,11 +4578,11 @@ fn try_clone_car_byte_vectors(
     }
     Ok(clone)
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn format_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn directory_plan_io(path: &Path, source: io::Error) -> CarPlanError {
     CarPlanError::DirectoryIo {
         path: format_path(path),
@@ -4580,7 +4612,7 @@ fn try_owned_plan_string(value: &str, context: &'static str) -> Result<String, C
     owned.push_str(value);
     Ok(owned)
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn try_clone_logical_path(path: &[String]) -> Result<Vec<String>, CarPlanError> {
     let mut clone = Vec::new();
     try_reserve_plan(&mut clone, path.len(), "logical file path")?;
@@ -4842,7 +4874,14 @@ fn gather_files_secure(
     scan.validate_root()?;
     Ok(scan.files)
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn gather_files_secure(
+    root: &Path,
+    on_file_opened: &mut dyn FnMut(&Path) -> io::Result<()>,
+) -> Result<Vec<FileEntry>, CarPlanError> {
+    directory_plan_windows::gather_files_secure(root, on_file_opened)
+}
+#[cfg(not(any(unix, windows)))]
 fn gather_files_secure(
     _root: &Path,
     _on_file_opened: &mut dyn FnMut(&Path) -> io::Result<()>,
@@ -4850,11 +4889,11 @@ fn gather_files_secure(
     Err(CarPlanError::SecureDirectoryUnsupported)
 }
 const fn require_secure_directory_platform() -> Result<(), CarPlanError> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         Err(CarPlanError::SecureDirectoryUnsupported)
     }
@@ -6306,13 +6345,17 @@ impl CarBuildPlan {
     /// Builds a CAR plan for every regular file under `root`, preserving
     /// lexicographic order and returning the concatenated payload.
     ///
-    /// Secure directory traversal is currently qualified only on Unix.
+    /// Traversal uses no-follow Unix reads or retained native Windows readers on local NTFS.
+    /// Windows inputs must satisfy the native owner custody policy; no input permissions are
+    /// repaired. Each file is checked while read and each directory around its traversal.
+    /// Previously closed files are not held until completion, so this is not an atomic snapshot
+    /// of the entire directory tree. The eager payload bound does not bound total process memory.
     ///
     /// # Errors
     ///
-    /// Returns [`CarPlanError::SecureDirectoryUnsupported`] on non-Unix targets before inspecting
-    /// `root`. On Unix, returns an error for an unsafe directory tree, invalid input, or a plan
-    /// outside the fixed resource bounds.
+    /// Returns [`CarPlanError::SecureDirectoryUnsupported`] on targets other than Unix and Windows
+    /// before inspecting `root`. On supported targets, returns an error for an unsafe directory
+    /// tree, unsupported native filesystem, invalid input, or a plan outside the fixed bounds.
     pub fn from_directory(root: &Path) -> Result<(Self, Vec<u8>), CarPlanError> {
         Self::from_directory_with_profile(root, ChunkProfile::DEFAULT)
     }
@@ -6320,9 +6363,9 @@ impl CarBuildPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`CarPlanError::SecureDirectoryUnsupported`] on non-Unix targets before inspecting
-    /// `root`. On Unix, returns an error for an invalid profile, unsafe directory tree, invalid
-    /// input, or a plan outside the fixed resource bounds.
+    /// Returns [`CarPlanError::SecureDirectoryUnsupported`] on targets other than Unix and Windows
+    /// before inspecting `root`. On supported targets, rejects an invalid profile before opening
+    /// the root, then rejects unsafe custody, unsupported storage, invalid inputs or excess bounds.
     pub fn from_directory_with_profile(
         root: &Path,
         profile: ChunkProfile,
@@ -6513,7 +6556,9 @@ pub struct FileEntry {
 mod tests {
     use super::*;
     use sorafs_chunker::fixtures::FixtureProfile;
-    use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
+    #[cfg(not(windows))]
+    use std::fs;
+    use std::{cell::Cell, collections::HashSet, io::Cursor, rc::Rc};
     use tempfile::tempdir;
     include!("lib/decode_test_helpers.rs");
     #[derive(Debug)]
@@ -8770,9 +8815,9 @@ mod tests {
             }) if bytes == CAR_EAGER_DIRECTORY_MAX_BYTES + 1
         ));
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
-    fn from_directory_fails_closed_without_secure_unix_file_identity() {
+    fn from_directory_fails_closed_on_unsupported_hosts() {
         assert!(matches!(
             CarBuildPlan::from_directory(Path::new("payload")),
             Err(CarPlanError::SecureDirectoryUnsupported)
@@ -9554,9 +9599,9 @@ mod tests {
         assert!(source.read_exact(0, &mut bytes).is_err());
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
-    fn directory_chunk_sink_fails_closed_without_side_effects_on_non_unix() {
+    fn directory_chunk_sink_fails_closed_without_side_effects_on_unsupported_hosts() {
         let temp = tempdir().expect("tempdir");
         let missing = temp.path().join("missing");
         let sentinel = temp.path().join("sentinel");
@@ -9573,7 +9618,7 @@ mod tests {
                 sink.write_chunk(0, &plan.chunks[0], b"payload"),
                 Err(ChunkStoreError::Io(error)) if error.kind() == io::ErrorKind::Unsupported
             ),
-            "direct writes must retain the non-Unix fail-closed policy"
+            "direct writes must retain the unsupported-host fail-closed policy"
         );
         assert!(matches!(
             sink.finish(),

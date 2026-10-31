@@ -1463,11 +1463,41 @@
       {"literal":"zk-ace-pq-authorization-v1","owner":"use:name","sources":{"crates/iroha_data_model/src/privacy.rs":3,"crates/iroha_data_model/src/privacy/protocol.rs":1}}
     ],
     "other_domains": [
-      {"use":"record","reason":"Typed numeric movement transcript bindings for one owner-linked FI transfer or controlled-lock waterfall. They bind the selected movement, immutable lock terms and current owner link, not the complete State or an independent State-read authority","literals":[
+      {"use":"name","reason":"Native FI relationship, asset UID policy/enrollment/reader and controlled-lock storage-key prefixes in world.smart_contract_state. They name canonical record paths; these literals compute no digest or independent State root","literals":[
+        "asset_fi_link_attestation_v1/",
+        "asset_fi_link_v1/",
+        "asset_fi_v1/",
+        "asset_lock_control_v1/",
+        "asset_uid_binding_v1/",
+        "asset_uid_enrollment_v1/",
+        "asset_uid_policy_v1/",
+        "asset_uid_reader_v1/",
+        "asset_uid_system_v1/",
+        "asset_uid_usage_v1/"
+      ]},
+      {"use":"name","reason":"Exact first-release instruction wire identities for native FI relationships, asset UID policy/enrollment/reader grants and controlled locks. They select instruction layouts in the model and dispatch registry and compute no digest","literals":[
+        "iroha.asset.fi.link.attestation.set.v1",
+        "iroha.asset.fi.link.set.v1",
+        "iroha.asset.fi.link.transfer.v1",
+        "iroha.asset.fi.set.v1",
+        "iroha.asset.lock.controlled.cancel.v1",
+        "iroha.asset.lock.controlled.drawdown.v1",
+        "iroha.asset.lock.controlled.expire.v1",
+        "iroha.asset.lock.controlled.open.v1",
+        "iroha.asset.uid.enrollment.activate.v1",
+        "iroha.asset.uid.policy.reader.set.v1",
+        "iroha.asset.uid.policy.set.v1",
+        "iroha.asset.uid.system.set.v1"
+      ]},
+      {"use":"name","reason":"Snapshot validation error field labels for native controlled-lock and asset UID records in world.smart_contract_state; these diagnostics name the failing record family and compute no digest","literals":[
+        "world.smart_contract_state.asset_lock_control_v1",
+        "world.smart_contract_state.asset_uid_v1"
+      ]},
+      {"use":"record","reason":"Typed numeric-movement purpose labels for an authenticated owner-linked FI transfer and a controlled-lock owner waterfall. They bind one authorized movement transcript, including supplied lock, policy and owner-link records; they do not authenticate a State table or replace keyed State witnesses","literals":[
         "controlled-lock-owner-waterfall-v1",
         "owner-linked-fi-transfer-v1"
       ]},
-      {"use":"seed","reason":"Controlled asset lock identifier derived from one contract address and caller-supplied key, with the reserved namespace prefix. It identifies one lock; it does not hash lock State or authorize custody","literals":[
+      {"use":"seed","reason":"Contract-scoped controlled-lock identifier derived from the canonical controller address and opaque application key, with a reserved namespace prefix. It addresses one lock and grants no authority independently of native admission","literals":[
         "iroha:controlled-asset-lock:v1\\0"
       ]},
       {"use":"record","reason":"Anonymous Parliament ballot model digests bind one canonical account authority, proposal, envelope, sealed registration mapping, roster preimage or closure record. Current Core has no anonymous-ballot State integration; these supplied-record identities authenticate no State table or general State read","literals":[
@@ -1863,8 +1893,6 @@
         "iroha:state:zk-verifying-key-ref:v1",
         "iroha:state:zk:v1",
         "musubi.v0.aliases",
-        "world.smart_contract_state.asset_lock_control_v1",
-        "world.smart_contract_state.asset_uid_v1",
         "world.smart_contract_state.retail_day_v1"
       ]},
       {"use":"name","reason":"Instruction, proposal and wire-schema identifiers, custom-parameter identifiers, metadata keys and capability names: names, not hash domains","literals":[
@@ -1872,21 +1900,9 @@
         "gas.parity.v1",
         "instruction.log.v1",
         "instruction.upgrade.v1",
-        "iroha.asset.fi.link.attestation.set.v1",
-        "iroha.asset.fi.link.set.v1",
-        "iroha.asset.fi.link.transfer.v1",
-        "iroha.asset.fi.set.v1",
-        "iroha.asset.lock.controlled.cancel.v1",
-        "iroha.asset.lock.controlled.drawdown.v1",
-        "iroha.asset.lock.controlled.expire.v1",
-        "iroha.asset.lock.controlled.open.v1",
         "iroha.asset.retail_day.activate.v1",
         "iroha.asset.retail_day.identity.bind.v1",
         "iroha.asset.retail_day.monetary_movement.v1",
-        "iroha.asset.uid.enrollment.activate.v1",
-        "iroha.asset.uid.policy.reader.set.v1",
-        "iroha.asset.uid.policy.set.v1",
-        "iroha.asset.uid.system.set.v1",
         "iroha.bpng.retail-identity.v1",
         "iroha.consensus.threshold-key-lifecycle.apply.v1",
         "iroha.faucet.claim.consumed.key.v1\\0",
@@ -2071,16 +2087,6 @@
         "zk-ace-pq-authorization-v1"
       ]},
       {"use":"name","reason":"Prefixes and derivations of State storage keys (contract-state paths and reserved native key spaces) and of local file names: keys of rows, not commitments","literals":[
-        "asset_fi_link_attestation_v1/",
-        "asset_fi_link_v1/",
-        "asset_fi_v1/",
-        "asset_lock_control_v1/",
-        "asset_uid_binding_v1/",
-        "asset_uid_enrollment_v1/",
-        "asset_uid_policy_v1/",
-        "asset_uid_reader_v1/",
-        "asset_uid_system_v1/",
-        "asset_uid_usage_v1/",
         "blocks.data.eviction-v1",
         "blocks.index.eviction-v1",
         "committed.replay.v1",

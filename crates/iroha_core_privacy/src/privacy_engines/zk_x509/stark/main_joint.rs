@@ -87,11 +87,34 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Every actual ordinary registration uses the narrowed joint cache plan.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn commit_joint_oracles_v1<R: TryRngCore>(
-        mut self,
+        self,
         ca: &CaAwaitingMainAuxiliaryV1,
         auxiliary: JointAuxiliaryBindingV1,
         rng: &mut R,
     ) -> Result<MainAwaitingJointPointV1<'a>, ZkX509StarkErrorV1> {
+        #[cfg(test)]
+        let mut mask_completion = CompletionPhaseV1::default();
+        let result = self.commit_joint_oracles_observed_v1(
+            ca,
+            auxiliary,
+            rng,
+            #[cfg(test)]
+            &mut mask_completion,
+        );
+        #[cfg(test)]
+        let result = mask_completion.finish_v1(result);
+        result
+    }
+
+    fn commit_joint_oracles_observed_v1<R: TryRngCore>(
+        mut self,
+        ca: &CaAwaitingMainAuxiliaryV1,
+        auxiliary: JointAuxiliaryBindingV1,
+        rng: &mut R,
+        #[cfg(test)] mask_completion: &mut CompletionPhaseV1,
+    ) -> Result<MainAwaitingJointPointV1<'a>, ZkX509StarkErrorV1> {
+        #[cfg(test)]
+        let joint_preparation_timer = PhaseTimerV1::start_v1(PhaseV1::MainJointOraclePreparation);
         let proof_instance = self.binding.proof_instance_v1();
         self.validate_v1()?;
         if auxiliary != self.joint_auxiliary_binding_v1(ca)? {
@@ -120,6 +143,8 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         )?;
         let ca_alphas = ca_plan.derive_alphas_v1(&mut self.transcript)?;
         self.composition_transcript_state = self.transcript.state();
+        #[cfg(test)]
+        joint_preparation_timer.complete_v1();
         #[cfg(test)]
         let composition_timer = PhaseTimerV1::start_v1(PhaseV1::Composition);
         #[cfg(test)]
@@ -191,6 +216,8 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
         commitment_timer.complete_v1();
         #[cfg(test)]
         composition_timer.complete_v1();
+        #[cfg(test)]
+        mask_completion.start_v1(PhaseV1::MainFriMaskCommitment);
         let fri_masks = aggregate::build_fri_mask_oracles_v1(
             AGGREGATE_PARAMETERS_V1,
             &main_domains_v1(proof_instance),
@@ -254,6 +281,8 @@ impl<'a> MainAwaitingJointPointV1<'a> {
         mut self,
         point: JointPointV1,
     ) -> Result<MainAwaitingJointOpeningsV1<'a>, ZkX509StarkErrorV1> {
+        #[cfg(test)]
+        let point_preparation_timer = PhaseTimerV1::start_v1(PhaseV1::MainJointPointPreparation);
         let z = point.point_v1();
         let shared = self.phase.layout.as_shared()?;
         if !self.phase.key_plan.admissible_v1(z, &shared)? || !self.ca_plan.admissible_v1(z)? {
@@ -262,6 +291,8 @@ impl<'a> MainAwaitingJointPointV1<'a> {
         point
             .absorb_v1(JointSubproofV1::Main, &mut self.phase.transcript)
             .map_err(map_transparent_error_v1)?;
+        #[cfg(test)]
+        point_preparation_timer.complete_v1();
         #[cfg(test)]
         let timer = PhaseTimerV1::start_v1(PhaseV1::DeepAndFri);
         let sources = MainTraceReplaySourcesV1::Bound {
@@ -361,8 +392,25 @@ impl MainAwaitingJointOpeningsV1<'_> {
     /// Use the common original FRI/query/codec path with the24 supplemental
     /// divided differences accumulated before its original FRI evaluation.
     pub(crate) fn finish_v1(
-        mut self,
+        self,
         binding: JointDeepBindingV1,
+    ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
+        #[cfg(test)]
+        let mut encoding_completion = CompletionPhaseV1::default();
+        let result = self.finish_observed_v1(
+            &binding,
+            #[cfg(test)]
+            &mut encoding_completion,
+        );
+        #[cfg(test)]
+        let result = encoding_completion.finish_v1(result);
+        result
+    }
+
+    fn finish_observed_v1(
+        mut self,
+        binding: &JointDeepBindingV1,
+        #[cfg(test)] encoding_completion: &mut CompletionPhaseV1,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         if !self.bound
             || !binding.matches_v1(JointSubproofV1::Main, &self.oracles.phase.transcript)
@@ -400,6 +448,8 @@ impl MainAwaitingJointOpeningsV1<'_> {
             }),
             #[cfg(test)]
             self.timer,
+            #[cfg(test)]
+            encoding_completion,
         )
     }
 }
@@ -773,14 +823,26 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     ca: CaAwaitingMainAuxiliaryV1,
     rng: &mut R,
 ) -> Result<(Vec<u8>, Vec<u8>, JointOriginalOpeningsV1), ZkX509StarkErrorV1> {
+    #[cfg(test)]
+    let auxiliary_timer = PhaseTimerV1::start_v1(PhaseV1::JointAuxiliaryBinding);
     let auxiliary = main.joint_auxiliary_binding_v1(&ca)?;
+    #[cfg(test)]
+    auxiliary_timer.complete_v1();
     // CA local LDE/composition working owners are created only after the final
     // ordinary MAIN registration and its restricted cache have been dropped.
     let main = main.commit_joint_oracles_v1(&ca, auxiliary, rng)?;
+    #[cfg(test)]
+    let ca_commitment_timer = PhaseTimerV1::start_v1(PhaseV1::CaJointOracleCommitment);
     let ca = ca
         .commit_joint_oracles_v1(auxiliary, rng)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+    #[cfg(test)]
+    ca_commitment_timer.complete_v1();
+    #[cfg(test)]
+    let point_timer = PhaseTimerV1::start_v1(PhaseV1::JointPointDerivation);
     let point = main.derive_joint_point_v1(&ca)?;
+    #[cfg(test)]
+    point_timer.complete_v1();
     let mut main = main.open_joint_point_v1(point)?;
     let mut ca = ca
         .open_joint_point_v1(point)
@@ -790,9 +852,13 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
     // Finish MAIN first so its large coefficient and LDE owners are released
     // before the complete CA row trees and local FRI are constructed.
     let main = main.finish_v1(binding)?;
+    #[cfg(test)]
+    let ca_finalization_timer = PhaseTimerV1::start_v1(PhaseV1::CaJointFinalization);
     let ca = ca
         .finish_v1(binding)
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+    #[cfg(test)]
+    ca_finalization_timer.complete_v1();
     Ok((main, ca, openings))
 }
 

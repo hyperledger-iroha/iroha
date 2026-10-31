@@ -1,14 +1,15 @@
 #[test]
 fn sidecar_index_rejects_overflowing_based_header() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
-    fs::write(&data_path, []).expect("create sidecar data");
+    let mut sidecars = IndexedSidecarSession::default();
+    sidecar_test_write(&data_path, []).expect("create sidecar data");
     let mut index_bytes = SidecarIndexLayout::base_header(u64::MAX - 1).to_vec();
     let empty_entry = SidecarIndexEntry { offset: 0, len: 0 }.to_bytes();
     index_bytes.extend_from_slice(&empty_entry);
     index_bytes.extend_from_slice(&empty_entry);
-    fs::write(&index_path, &index_bytes).expect("write overflowing based index");
+    sidecar_test_write(&index_path, &index_bytes).expect("write overflowing based index");
     let payload = norito::to_bytes(&DummySidecar {
         height: u64::MAX - 1,
     })
@@ -17,7 +18,7 @@ fn sidecar_index_rejects_overflowing_based_header() {
         Kura::indexed_sidecar_height_range(&index_path, "dummy lane sidecar").is_none(),
         "overflowing based indexes must fail closed during scans"
     );
-    assert!(!Kura::append_indexed_sidecar(
+    assert!(!sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         u64::MAX - 1,
@@ -34,14 +35,15 @@ fn sidecar_index_rejects_overflowing_based_header() {
 }
 #[test]
 fn sidecar_index_rejects_corrupt_base_header_checksum() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
-    fs::write(&data_path, []).expect("create sidecar data");
+    let mut sidecars = IndexedSidecarSession::default();
+    sidecar_test_write(&data_path, []).expect("create sidecar data");
     let mut index_bytes = SidecarIndexLayout::base_header(10_000).to_vec();
     index_bytes[INDEXED_SIDECAR_BASE_HEADER_SIZE - 1] ^= 0x01;
     index_bytes.extend_from_slice(&SidecarIndexEntry { offset: 0, len: 0 }.to_bytes());
-    fs::write(&index_path, &index_bytes).expect("write corrupt based index");
+    sidecar_test_write(&index_path, &index_bytes).expect("write corrupt based index");
     let payload = norito::to_bytes(&DummySidecar { height: 10_000 }).expect("encode sidecar");
     assert!(
         Kura::read_indexed_sidecar_from_paths(
@@ -53,7 +55,7 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
         )
         .is_none()
     );
-    assert!(!Kura::append_indexed_sidecar(
+    assert!(!sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         10_000,
@@ -66,14 +68,15 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
 }
 #[test]
 fn indexed_sidecars_prune_to_retention() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     for height in 1..=4 {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode dummy sidecar");
         assert!(
-            Kura::append_indexed_sidecar(
+            sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 height,

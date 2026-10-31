@@ -20,14 +20,12 @@ use iroha_data_model::{
     consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
     sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
 };
+use iroha_fs::ProcessStdio as Stdio;
 use norito::derive::JsonSerialize;
 use std::{
     os::{
-        fd::AsRawFd as _,
-        unix::{
-            fs::{MetadataExt as _, OpenOptionsExt as _},
-            process::CommandExt as _,
-        },
+        fd::{AsFd as _, BorrowedFd},
+        unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     },
     time::Instant,
 };
@@ -650,63 +648,23 @@ fn write_owner_private_key(path: &Path, signer: &KeyPair) -> Result<fs::File> {
     Ok(file)
 }
 
-#[allow(
-    unsafe_code,
-    reason = "the disposable supervisor transfers already opened owner-private inputs to fixed native child descriptors"
-)]
 fn inherit_native_descriptors<const N: usize>(
-    command: &mut tokio::process::Command,
-    descriptors: [(i32, i32); N],
-) {
-    // Every native destination in this module is below this duplication floor.
-    assert!(descriptors.iter().all(|(_, target)| *target <= FINALITY_FD));
-    unsafe {
-        command.as_std_mut().pre_exec(move || {
-            // Pin all inputs before replacing a destination. Even identity mappings
-            // use a distinct source so dup2 clears close-on-exec on the fixed target.
-            // These descriptor operations are async-signal-safe and allocate nothing.
-            let mut pinned = [-1; N];
-            for (index, (source, _)) in descriptors.into_iter().enumerate() {
-                let descriptor =
-                    nix::libc::fcntl(source, nix::libc::F_DUPFD_CLOEXEC, FINALITY_FD + 1);
-                if descriptor < 0 {
-                    let error = std::io::Error::last_os_error();
-                    for descriptor in pinned {
-                        if descriptor >= 0 {
-                            nix::libc::close(descriptor);
-                        }
-                    }
-                    return Err(error);
-                }
-                pinned[index] = descriptor;
-            }
-            for (source, (_, target)) in pinned.into_iter().zip(descriptors) {
-                if nix::libc::dup2(source, target) < 0 {
-                    let error = std::io::Error::last_os_error();
-                    for descriptor in pinned {
-                        nix::libc::close(descriptor);
-                    }
-                    return Err(error);
-                }
-            }
-            for descriptor in pinned {
-                nix::libc::close(descriptor);
-            }
-            Ok(())
-        });
-    }
+    command: &mut ResolvedCommand,
+    descriptors: [(BorrowedFd<'_>, i32); N],
+) -> std::io::Result<()> {
+    command.inherit_descriptors(&descriptors).map(|_| ())
 }
 
 fn inherit_rotation_descriptors(
-    command: &mut tokio::process::Command,
-    key: i32,
-    public: i32,
-    finality: i32,
-) {
+    command: &mut ResolvedCommand,
+    key: BorrowedFd<'_>,
+    public: BorrowedFd<'_>,
+    finality: BorrowedFd<'_>,
+) -> std::io::Result<()> {
     inherit_native_descriptors(
         command,
         [(key, KEY_FD), (public, PUBLIC_FD), (finality, FINALITY_FD)],
-    );
+    )
 }
 
 // Open the child input as read-only without waiting for a writer. Retain the
@@ -724,7 +682,7 @@ fn open_native_phase_fifo(path: &Path) -> Result<(fs::File, fs::File)> {
 }
 
 fn spawn_seat(
-    binary: &Path,
+    binary: &ResolvedProgram,
     seat: &NetworkPeer,
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
@@ -758,7 +716,7 @@ fn spawn_seat(
             .mode(0o600)
             .open(owner_root.path().join(name))?)
     };
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
@@ -798,11 +756,11 @@ fn spawn_seat(
         .kill_on_drop(true);
     inherit_rotation_descriptors(
         &mut command,
-        key.as_raw_fd(),
-        public_fifo.as_raw_fd(),
-        finality_fifo.as_raw_fd(),
-    );
-    let child = command.spawn()?;
+        key.as_fd(),
+        public_fifo.as_fd(),
+        finality_fifo.as_fd(),
+    )?;
+    let child = command.spawn_async()?;
     drop(key);
     drop(public_fifo);
     drop(finality_fifo);
@@ -901,7 +859,7 @@ fn genesis_dkg_session(
 }
 
 fn spawn_genesis_seat(
-    binary: &Path,
+    binary: &ResolvedProgram,
     seat: &NetworkPeer,
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
@@ -941,7 +899,7 @@ fn spawn_genesis_seat(
             .mode(0o600)
             .open(owner_root.path().join(name))?)
     };
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
@@ -981,11 +939,11 @@ fn spawn_genesis_seat(
         .kill_on_drop(true);
     inherit_rotation_descriptors(
         &mut command,
-        provision_key.as_raw_fd(),
-        public_fifo.as_raw_fd(),
-        finality_fifo.as_raw_fd(),
-    );
-    let child = command.spawn().map_err(|error| {
+        provision_key.as_fd(),
+        public_fifo.as_fd(),
+        finality_fifo.as_fd(),
+    )?;
+    let child = command.spawn_async().map_err(|error| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
         error
     })?;
@@ -1215,7 +1173,7 @@ fn read_owner_private_genesis_config_key(
 }
 
 fn spawn_genesis_config_seat(
-    binary: &Path,
+    binary: &ResolvedProgram,
     seat: &DisposableGenesisConfigSeat,
     signer_index: u16,
     session: &GlobalThresholdBeaconDkgSessionV1,
@@ -1257,7 +1215,7 @@ fn spawn_genesis_config_seat(
             .mode(0o600)
             .open(owner_root.path().join(name))?)
     };
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
@@ -1297,11 +1255,11 @@ fn spawn_genesis_config_seat(
         .kill_on_drop(true);
     inherit_rotation_descriptors(
         &mut command,
-        provision_key.as_raw_fd(),
-        public_fifo.as_raw_fd(),
-        finality_fifo.as_raw_fd(),
-    );
-    let child = command.spawn().map_err(|error| {
+        provision_key.as_fd(),
+        public_fifo.as_fd(),
+        finality_fifo.as_fd(),
+    )?;
+    let child = command.spawn_async().map_err(|error| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
         error
     })?;
@@ -1461,22 +1419,19 @@ fn native_public_command_status_line(
 }
 
 async fn run_genesis_public_command(
-    binary: &Path,
+    binary: &ResolvedProgram,
     arguments: &[String],
     phase: NativePublicCommandPhase,
 ) -> Result<()> {
-    let waited = timeout(
-        PROCESS_TIMEOUT,
-        tokio::process::Command::new(binary)
-            .args(arguments)
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .status(),
-    )
-    .await;
+    let mut command = binary.command()?;
+    command
+        .args(arguments)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let waited = timeout(PROCESS_TIMEOUT, command.status_async()).await;
     let (outcome, exit_code, signal) = match &waited {
         Ok(Ok(status)) => {
             use std::os::unix::process::ExitStatusExt as _;
@@ -1508,7 +1463,7 @@ async fn run_genesis_public_command(
 async fn sign_genesis_draft(
     chain_id: &ChainId,
     limits: NativeFinalityLimits,
-    binary: &Path,
+    binary: &ResolvedProgram,
     network: NetworkId,
     discriminant: u16,
     public_bundle: &Path,
@@ -1520,7 +1475,7 @@ async fn sign_genesis_draft(
         &seat._owner_root.path().join("identity.private"),
         &one_shot_path,
     )?;
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
@@ -1545,8 +1500,8 @@ async fn sign_genesis_draft(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    inherit_native_descriptors(&mut command, [(key.as_raw_fd(), KEY_FD)]);
-    let waited = timeout(PROCESS_TIMEOUT, command.status()).await;
+    inherit_native_descriptors(&mut command, [(key.as_fd(), KEY_FD)])?;
+    let waited = timeout(PROCESS_TIMEOUT, command.status_async()).await;
     let consumed = retire_one_shot_genesis_descriptor(&one_shot_path)?;
     let status = waited??;
     ensure!(
@@ -1561,7 +1516,7 @@ async fn sign_genesis_draft(
     reason = "the disposable supervisor passes one already opened owner-private BLS descriptor to the native signer"
 )]
 async fn sign_rotation_draft(
-    binary: &Path,
+    binary: &ResolvedProgram,
     seat: &NetworkPeer,
     public_bundle: &Path,
     proof_args: &[String],
@@ -1574,7 +1529,7 @@ async fn sign_rotation_draft(
         seat.bls_key_pair()
             .ok_or_else(|| eyre!("incumbent signer has no real BLS identity"))?,
     )?;
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
@@ -1594,8 +1549,8 @@ async fn sign_rotation_draft(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    inherit_native_descriptors(&mut command, [(key.as_raw_fd(), KEY_FD)]);
-    let status = timeout(PROCESS_TIMEOUT, command.status()).await??;
+    inherit_native_descriptors(&mut command, [(key.as_fd(), KEY_FD)])?;
+    let status = timeout(PROCESS_TIMEOUT, command.status_async()).await??;
     ensure!(
         status.success(),
         "native incumbent signature failed: {status}"
@@ -1681,7 +1636,7 @@ pub async fn prepare_disposable_pending_custody(
         })
         .transpose()?;
     let output = root.path().join("prepared-generation");
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = binary.command()?;
     command
         .arg("beacon-prepare-custody")
         .args(credential_memory_args(input.credential_max_memory_bytes))
@@ -1715,13 +1670,13 @@ pub async fn prepare_disposable_pending_custody(
     if let Some(path) = &catalog_path {
         command.arg("--current-catalog").arg(path);
     }
-    let retained_fd = current.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
+    let retained_fd = current.as_ref().map(std::os::fd::AsFd::as_fd);
     if let Some(source) = retained_fd {
-        inherit_native_descriptors(&mut command, [(share.as_raw_fd(), KEY_FD), (source, 200)]);
+        inherit_native_descriptors(&mut command, [(share.as_fd(), KEY_FD), (source, 200)])?;
     } else {
-        inherit_native_descriptors(&mut command, [(share.as_raw_fd(), KEY_FD)]);
+        inherit_native_descriptors(&mut command, [(share.as_fd(), KEY_FD)])?;
     }
-    let status = timeout(PROCESS_TIMEOUT, command.status()).await??;
+    let status = timeout(PROCESS_TIMEOUT, command.status_async()).await??;
     ensure!(
         status.success(),
         "native pending custody preparation failed: {status}"
@@ -1812,7 +1767,7 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     network_id: NetworkId,
     chain_id: &ChainId,
     seats: &[DisposableGenesisConfigSeat],
-    native_binary: &Path,
+    native_binary: &ResolvedProgram,
     limits: NativeFinalityLimits,
     certificate_height: u64,
     next_finality: F,
@@ -1923,14 +1878,14 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     mut verifier: NativeJournalCursor,
     certificate_height: u64,
     mut next_finality: F,
-    binary: &Path,
+    binary: &ResolvedProgram,
     mut spawn_seat: S,
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64, RetainedGlobalThresholdBeaconDkgSnapshotV1, Instant) -> Fut,
     Fut: Future<Output = Result<NativeFinalityJournal>>,
     S: FnMut(
-        &Path,
+        &ResolvedProgram,
         &PeerId,
         u16,
         &GlobalThresholdBeaconDkgSessionV1,
@@ -2446,6 +2401,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::AsRawFd as _;
 
     #[test]
     fn rotation_incumbent_seats_require_the_complete_exact_verified_peer_order() {
@@ -2623,18 +2579,64 @@ mod tests {
         );
     }
 
-    /// Exercise the production handoff in a child without modifying parent descriptors.
-    #[allow(
-        unsafe_code,
-        reason = "the fixture owns the duplicated descriptors and only installs them in its child before exec"
-    )]
+    /// Execute fixed descriptor setup in an isolated test process, leaving parent slots untouched.
     async fn observe_rotation_descriptor_handoff(
         source_targets: [i32; 3],
         close_on_exec: bool,
         destinations: usize,
     ) -> std::process::Output {
-        use std::os::fd::{FromRawFd as _, OwnedFd};
+        let module = module_path!().split_once("::").unwrap().1;
+        let mut command = iroha_fs::ProcessCommand::new(std::env::current_exe().unwrap()).unwrap();
+        command
+            .args([
+                "--exact",
+                &format!("{module}::native_descriptor_fixture_subprocess"),
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(
+                "IROHA_ROTATION_DESCRIPTOR_FIXTURE",
+                format!(
+                    "{},{},{},{},{}",
+                    source_targets[0],
+                    source_targets[1],
+                    source_targets[2],
+                    u8::from(close_on_exec),
+                    destinations
+                ),
+            );
+        let output = crate::ResolvedCommand::from_development_command(command)
+            .output_async()
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "exact descriptor fixture did not pass one test: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
 
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "isolated descriptor fixture explicitly executed by the four native handoff controls"]
+    #[allow(
+        unsafe_code,
+        reason = "test owns exact fcntl-created descriptors in its isolated process; production receives borrowed owned inputs"
+    )]
+    async fn native_descriptor_fixture_subprocess() {
+        use std::os::fd::{AsFd as _, FromRawFd as _, OwnedFd};
+        let parameters = std::env::var("IROHA_ROTATION_DESCRIPTOR_FIXTURE").unwrap();
+        let parameters = parameters
+            .split(',')
+            .map(|value| value.parse::<i32>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(parameters.len(), 5);
+        let source_targets = [parameters[0], parameters[1], parameters[2]];
+        let close_on_exec = parameters[3] == 1;
+        assert!((0..=1).contains(&parameters[3]));
+        let destinations = parameters[4];
+        assert!((1..=3).contains(&destinations));
         let root = tempfile::tempdir().unwrap();
         let mut owned = Vec::new();
         for (index, bytes) in [b"key-record".as_slice(), b"public-frame", b"finality-frame"]
@@ -2644,89 +2646,70 @@ mod tests {
             let path = root.path().join(format!("input-{index}"));
             fs::write(&path, bytes).unwrap();
             let file = fs::File::open(path).unwrap();
+            // F_DUPFD_CLOEXEC does not overwrite an occupied slot. This isolated
+            // fixture must acquire exactly its declared original source numbers.
             let copy = unsafe {
                 nix::libc::fcntl(
                     file.as_raw_fd(),
                     nix::libc::F_DUPFD_CLOEXEC,
-                    FINALITY_FD + 1,
+                    source_targets[index],
                 )
             };
-            assert!(
-                copy > FINALITY_FD,
-                "pin fixture descriptors above all destinations"
+            assert!(copy >= 0, "duplicate original fixture input");
+            let input = unsafe { OwnedFd::from_raw_fd(copy) };
+            assert_eq!(
+                copy, source_targets[index],
+                "isolated fixture source slot occupied"
             );
-            owned.push(unsafe { OwnedFd::from_raw_fd(copy) });
-        }
-        let originals = [
-            owned[0].as_raw_fd(),
-            owned[1].as_raw_fd(),
-            owned[2].as_raw_fd(),
-        ];
-        let script = match destinations {
-            1 => {
-                r#"set -eu
- test "$(/bin/cat /dev/fd/198)" = key-record
-"#
+            if !close_on_exec {
+                assert_eq!(unsafe { nix::libc::fcntl(copy, nix::libc::F_SETFD, 0) }, 0);
             }
+            owned.push(input);
+        }
+        let script = match destinations {
+            1 => "set -eu\ntest \"$(/bin/cat /dev/fd/198)\" = key-record\n",
             2 => {
-                r#"set -eu
- test "$(/bin/cat /dev/fd/198)" = key-record
- test "$(/bin/cat /dev/fd/200)" = public-frame
-"#
+                "set -eu\ntest \"$(/bin/cat /dev/fd/198)\" = key-record\ntest \"$(/bin/cat /dev/fd/200)\" = public-frame\n"
             }
             3 => {
-                r#"set -eu
- test "$(/bin/cat /dev/fd/198)" = key-record
- test "$(/bin/cat /dev/fd/201)" = public-frame
- test "$(/bin/cat /dev/fd/202)" = finality-frame
-"#
+                "set -eu\ntest \"$(/bin/cat /dev/fd/198)\" = key-record\ntest \"$(/bin/cat /dev/fd/201)\" = public-frame\ntest \"$(/bin/cat /dev/fd/202)\" = finality-frame\n"
             }
-            _ => panic!("fixture supports the exact one-, two- and three-input native commands"),
+            _ => unreachable!("validated destination count"),
         };
-        let mut command = tokio::process::Command::new("/bin/sh");
+        let mut command = ResolvedProgram::development(PathBuf::from("/bin/sh"))
+            .command()
+            .unwrap();
         command
-            .arg("-c")
-            .arg(script)
+            .args(["-c", script])
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        unsafe {
-            command.as_std_mut().pre_exec(move || {
-                for index in 0..originals.len() {
-                    if nix::libc::dup2(originals[index], source_targets[index]) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if close_on_exec
-                        && nix::libc::fcntl(
-                            source_targets[index],
-                            nix::libc::F_SETFD,
-                            nix::libc::FD_CLOEXEC,
-                        ) < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
-            });
-        }
         match destinations {
-            1 => inherit_native_descriptors(&mut command, [(source_targets[0], KEY_FD)]),
+            1 => inherit_native_descriptors(&mut command, [(owned[0].as_fd(), KEY_FD)]),
             2 => inherit_native_descriptors(
                 &mut command,
-                [(source_targets[0], KEY_FD), (source_targets[1], 200)],
+                [(owned[0].as_fd(), KEY_FD), (owned[1].as_fd(), 200)],
             ),
             3 => inherit_rotation_descriptors(
                 &mut command,
-                source_targets[0],
-                source_targets[1],
-                source_targets[2],
+                owned[0].as_fd(),
+                owned[1].as_fd(),
+                owned[2].as_fd(),
             ),
-            _ => unreachable!("fixture checked its exact destination count"),
+            _ => unreachable!("validated destination count"),
         }
-        let output = command.output().await.unwrap();
+        .unwrap();
+        // The canonical command already owns duplicates above every destination.
+        // Closing these overlapping originals tests that custody, and leaves all
+        // fixed child slots absent as the new explicit launch contract requires.
         drop(owned);
-        output
+        let output = command.output_async().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2779,10 +2762,9 @@ mod tests {
         let root =
             super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
                 .unwrap();
-        let python = std::process::Command::new("python3")
-            .args(["-c", "import sys; print(sys.executable)"])
-            .output()
-            .unwrap();
+        let mut python = crate::development_process_command("python3").unwrap();
+        python.args(["-c", "import sys; print(sys.executable)"]);
+        let python = python.output().unwrap();
         assert!(python.status.success());
         let python = String::from_utf8(python.stdout).unwrap();
         let python = format!("'{}'", python.trim().replace('\'', "'\"'\"'"));
@@ -2826,7 +2808,7 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
             let paths =
                 ["request", "manifest", "signed", "public-key"].map(|name| root.path().join(name));
             spawn_genesis_seat(
-                &script,
+                &ResolvedProgram::development(script.clone()),
                 seat,
                 1,
                 &session,
@@ -2844,7 +2826,7 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
                 transition_id: CryptoHash::new(b"native rotation descriptor fixture"),
             };
             spawn_seat(
-                &script,
+                &ResolvedProgram::development(script.clone()),
                 seat,
                 1,
                 &session,
@@ -3564,10 +3546,10 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
         let (seat, _, network, chain) =
             genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
         let script = root.path().join("observe-key-handoff.sh");
-        let python = std::process::Command::new("python3")
-            .args(["-c", "import sys; print(sys.executable)"])
-            .output()
+        let mut python = crate::development_process_command("python3")
             .expect("Python 3 is required to inspect inherited native FIFO access modes");
+        python.args(["-c", "import sys; print(sys.executable)"]);
+        let python = python.output().unwrap();
         assert!(
             python.status.success(),
             "resolve the Python 3 test interpreter"
@@ -3621,7 +3603,7 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
         };
         let original = fs::read(&seat.config_path).unwrap();
         let mut process = spawn_genesis_config_seat(
-            &script,
+            &ResolvedProgram::development(script.clone()),
             &seat,
             1,
             &session,

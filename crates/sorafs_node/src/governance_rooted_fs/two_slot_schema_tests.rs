@@ -148,3 +148,20 @@ fn fixed_two_slot_regions_keep_distinct_headers_and_exact_layout_lengths() {
     );
     assert!(decode_two_slot_value::<TwoSlotHeaderRegionV1>(&record_bytes, "wrong region").is_err());
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_local_identity_frame_preserves_all_volume_and_file_id_bits() {
+    let expected = TwoSlotFileIdentityV1 {
+        platform: 2,
+        first: 0xfedc_ba98_7654_3210,
+        second: [0xa5, 0x5a, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0xff],
+    };
+    let mut binding = zero_two_slot_binding_material();
+    binding.init_lock_identity = expected;
+    binding.slot_identities = [expected; 2];
+    let bytes = encode_two_slot_value(&binding, "full Windows local binding").unwrap();
+    let decoded: TwoSlotBindingMaterialV1 = decode_two_slot_value(&bytes,
+        "full Windows local binding").unwrap();
+    assert_eq!(decoded, binding);
+}

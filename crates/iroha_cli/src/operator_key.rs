@@ -4,12 +4,17 @@ use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use std::path::Path;
 use zeroize::Zeroizing;
 const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
+
+#[cfg(windows)]
+mod windows;
 /// Load one canonical operator private key from an owner-only runtime file.
 ///
 /// The operator credential is intentionally unavailable through environment variables, client
 /// TOML, or the account signer. On Unix, the final path component is opened with `O_NOFOLLOW` and
 /// the opened descriptor must remain a stable, singly linked, owner-only regular file throughout
-/// the bounded read.
+/// the bounded read. Windows uses the shared retained private-file owner: local-disk ancestry,
+/// the original single-link file and its protected current-user ACL remain admitted through the
+/// bounded read and canonical parse. Neither implementation repairs input permissions.
 pub(crate) fn load_operator_key_pair(path: &Path) -> Result<KeyPair> {
     load_private_key_file(path).wrap_err("invalid operator private-key file")
 }
@@ -31,7 +36,11 @@ fn load_private_key_file(path: &Path) -> Result<KeyPair> {
     {
         load_private_key_file_unix(path)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::load(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         bail!(
@@ -271,7 +280,9 @@ fn parse_private_key(bytes: &[u8]) -> Result<KeyPair> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+    #[cfg(unix)]
     use std::{fs, path::Path};
     #[cfg(unix)]
     fn write_private_key(path: &Path, contents: &[u8]) {
@@ -360,6 +371,66 @@ mod tests {
         write_private_key(&invalid, sensitive.as_bytes());
         let error = load_operator_key_pair(&invalid).expect_err("invalid operator key must fail");
         assert!(!format!("{error:#}").contains(sensitive));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_operator_file_preserves_exact_mode_and_canonical_parser_policy() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().expect("operator file policy directory");
+        let path = directory.path().join("operator.key");
+        let expected = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519).unwrap();
+        let encoded = ExposedPrivateKey(expected.private_key().clone()).to_string();
+        write_private_key(&path, encoded.as_bytes());
+        for mode in [0o400, 0o640, 0o1600] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let error = load_operator_key_pair(&path)
+                .err()
+                .expect("exact mode required");
+            assert!(format!("{error:#}").contains("exact mode 0600"));
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                mode
+            );
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        for body in [
+            encoded.as_bytes().to_vec(),
+            format!("{encoded}\n").into_bytes(),
+        ] {
+            write_private_key(&path, &body);
+            assert_eq!(
+                load_operator_key_pair(&path).unwrap().public_key(),
+                expected.public_key()
+            );
+            assert!(
+                fs::read(&path).unwrap() == body,
+                "file bytes must remain unchanged"
+            );
+        }
+        for body in [
+            Vec::new(),
+            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize + 1],
+            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize],
+            format!(" {encoded}").into_bytes(),
+            format!("{encoded}\r\n").into_bytes(),
+            format!("{encoded}\n\n").into_bytes(),
+            vec![0xff],
+        ] {
+            write_private_key(&path, &body);
+            let error = load_operator_key_pair(&path)
+                .err()
+                .expect("invalid file must refuse");
+            assert!(!format!("{error:#}").contains(&encoded));
+            assert!(
+                fs::read(&path).unwrap() == body,
+                "refusal must not alter bytes"
+            );
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                0o600
+            );
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

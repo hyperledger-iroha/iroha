@@ -370,7 +370,35 @@ impl Kura {
         self.validate_membership_segment(control)
     }
 
-    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    #[cfg(windows)]
+    fn open_membership_segment(
+        &self,
+        control: &mut SegmentControl,
+    ) -> Result<(), MembershipStorageError> {
+        if control.file.is_none() {
+            if !self.bound_storage_directory_unchanged(&self.store_root_directory) {
+                return Err(MembershipStorageError::NamespaceChanged);
+            }
+            let mutation = self.begin_total_disk_usage_mutation();
+            // The canonical creator installs the original before any fallible post-create
+            // validation or sync. An error leaves that same handle and reservation owned.
+            self.store_root_directory
+                .native_owner
+                .create_private_file_into(SEGMENT_NAME, &mut control.file)
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::AlreadyExists {
+                        MembershipStorageError::RecoveryRequired
+                    } else {
+                        MembershipStorageError::Io(error)
+                    }
+                })?;
+            self.validate_membership_segment(control)?;
+            self.finish_membership_disk_mutation(mutation, 0, 0);
+        }
+        self.validate_membership_segment(control)
+    }
+
+    #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
     fn open_membership_segment(
         &self,
         _: &mut SegmentControl,
@@ -411,7 +439,29 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    #[cfg(windows)]
+    fn validate_membership_segment_identity(
+        &self,
+        control: &SegmentControl,
+    ) -> Result<(), MembershipStorageError> {
+        if !self.bound_storage_directory_unchanged(&self.store_root_directory) {
+            return Err(MembershipStorageError::NamespaceChanged);
+        }
+        let file = control
+            .file
+            .as_ref()
+            .ok_or(MembershipStorageError::RecoveryRequired)?;
+        // Exact protected current-user writable DACL, regular single-link original,
+        // complete native identity, and its name under the retained original parent.
+        iroha_fs::FileSnapshot::private_journal(file)
+            .map_err(|_| MembershipStorageError::NamespaceChanged)?;
+        self.store_root_directory
+            .native_owner
+            .require_same_lock(SEGMENT_NAME, file)
+            .map_err(|_| MembershipStorageError::NamespaceChanged)
+    }
+
+    #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
     fn validate_membership_segment_identity(
         &self,
         _: &SegmentControl,
@@ -545,15 +595,7 @@ impl<'kura> MembershipAppendRange<'kura> {
         let present = usize::try_from(after.min(request_end).saturating_sub(request.offset))
             .map_err(|_| MembershipStorageError::Bounds)?;
         let mut actual = [0; MEMBERSHIP_RECORD_CAPACITY];
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::FileExt as _;
-            file.read_exact_at(&mut actual[..present], request.offset)?;
-        }
-        #[cfg(not(unix))]
-        {
-            return Err(MembershipStorageError::Unsupported);
-        }
+        iroha_fs::read_exact_at(file, &mut actual[..present], request.offset)?;
         if actual[..present] != request.bytes[..present] {
             return Err(MembershipStorageError::NamespaceChanged);
         }
@@ -652,16 +694,7 @@ impl<'kura> MembershipAppendRange<'kura> {
             .file
             .as_ref()
             .ok_or(MembershipStorageError::RecoveryRequired)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::FileExt as _;
-            file.read_exact_at(frame, offset)?;
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (file, frame, offset);
-            return Err(MembershipStorageError::Unsupported);
-        }
+        iroha_fs::read_exact_at(file, frame, offset)?;
         if self.completed_end.is_none() {
             self.kura.validate_membership_segment(&control)
         } else {
@@ -726,7 +759,12 @@ impl<'kura> MembershipAppendRange<'kura> {
             use std::os::unix::fs::FileExt as _;
             file.write_at(bytes, offset)
         };
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let result = {
+            use std::os::windows::fs::FileExt as _;
+            file.seek_write(bytes, offset)
+        };
+        #[cfg(not(any(unix, windows)))]
         let result: io::Result<usize> = Err(io::ErrorKind::Unsupported.into());
         #[cfg(test)]
         if let Some(length) = EXTEND_MEMBERSHIP_POST_WRITE.with(|fault| fault.take()) {

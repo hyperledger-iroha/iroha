@@ -6,11 +6,11 @@ use iroha_data_model::NetworkId;
 use std::{cell::Cell, path::Path};
 
 fn root() -> tempfile::TempDir {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sccp-continuation");
-    std::fs::create_dir_all(&path).unwrap();
+    // Use the native temporary filesystem: source paths may contain traversal
+    // components or name a Windows UNC checkout, neither of which is journal custody.
     tempfile::Builder::new()
         .prefix("wallet-flow-")
-        .tempdir_in(path)
+        .tempdir()
         .unwrap()
 }
 

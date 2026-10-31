@@ -57,7 +57,7 @@ fn unsigned_material_frame_preserves_current_owner_and_finality() {
 }
 #[test]
 fn exact_replay_is_idempotent_and_byte_identical() {
-    let root = TempDir::new().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
     let provider_id = provider(1);
     let batch = proof_only_batch(
@@ -89,7 +89,7 @@ fn exact_replay_is_idempotent_and_byte_identical() {
 }
 #[test]
 fn unified_journal_replay_is_byte_identical_and_advances_all_semantic_sources() {
-    let root = TempDir::new().expect("journal state root");
+    let root = private_state_tempdir().expect("journal state root");
     let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
     let provider_id = provider(12);
     let batch = journal_only_batch(vec![journal_page(vec![

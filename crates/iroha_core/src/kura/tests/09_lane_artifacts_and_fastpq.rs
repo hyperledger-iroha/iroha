@@ -30,7 +30,7 @@ fn fast_pipeline_read_leaves_recovery_artifacts_byte_exact() {
     )
     .encode_framed()
     .expect("encode staged recovery sidecar");
-    fs::write(&temp_data_path, &staged).expect("write staged recovery payload");
+    sidecar_test_write(&temp_data_path, &staged).expect("write staged recovery payload");
     let mut staged_index = SidecarIndexLayout::base_header(1).to_vec();
     staged_index.extend_from_slice(
         &SidecarIndexEntry {
@@ -39,7 +39,7 @@ fn fast_pipeline_read_leaves_recovery_artifacts_byte_exact() {
         }
         .to_bytes(),
     );
-    fs::write(&temp_index_path, &staged_index).expect("write staged recovery index");
+    sidecar_test_write(&temp_index_path, &staged_index).expect("write staged recovery index");
 
     let paths = [&data_path, &index_path, &temp_data_path, &temp_index_path];
     let before = paths
@@ -807,23 +807,29 @@ fn pipeline_sidecar_promotes_temp_index_on_read() {
     let payload = sidecar.encode_framed().expect("encode sidecar");
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-    fs::write(&data_path, &payload).expect("write sidecar data");
-    std::fs::File::create(&index_path).expect("create empty index");
+    sidecar_test_write(&data_path, &payload).expect("write sidecar data");
+    sidecar_test_create(&index_path).expect("create empty index");
     let temp_index_path = index_path.with_extension("index.tmp");
     let entry = SidecarIndexEntry {
         offset: 0,
         len: payload.len() as u64,
     }
     .to_bytes();
-    let mut temp = std::fs::File::create(&temp_index_path).expect("create temp index");
+    let mut temp = sidecar_test_create(&temp_index_path).expect("create temp index");
     temp.write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     temp.write_all(&entry).expect("write temp index entry");
     temp.flush().expect("flush temp index");
     temp.sync_data().expect("sync temp index");
+    drop(temp);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     assert_eq!(got.block_hash, block_hash);
     assert!(!temp_index_path.exists(), "temp index should be promoted");
@@ -837,11 +843,12 @@ fn pipeline_sidecar_promotes_temp_index_on_read() {
 }
 #[test]
 fn indexed_sidecar_recovery_promotes_canonical_header_only_rewrite() {
-    let temp_dir = TempDir::new().expect("create sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let payload = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode initial sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         1,
@@ -852,10 +859,10 @@ fn indexed_sidecar_recovery_promotes_canonical_header_only_rewrite() {
     ));
     let temp_data_path = data_path.with_extension("norito.tmp");
     let temp_index_path = index_path.with_extension("index.tmp");
-    fs::write(&temp_data_path, []).expect("stage empty compacted data");
+    sidecar_test_write(&temp_data_path, []).expect("stage empty compacted data");
     let expected_header = SidecarIndexLayout::base_header(2);
-    fs::write(&temp_index_path, expected_header).expect("stage header-only V1 index");
-    assert!(Kura::recover_indexed_sidecar_artifacts(
+    sidecar_test_write(&temp_index_path, expected_header).expect("stage header-only V1 index");
+    assert!(sidecars.recover_indexed_sidecar_artifacts(
         &data_path,
         &index_path,
         "header-only rewrite recovery test",
@@ -901,11 +908,16 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
     let temp_payload = temp_sidecar.encode_framed().expect("encode temp sidecar");
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let temp_index_path = index_path.with_extension("index.tmp");
-    let mut data_file = std::fs::File::create(&data_path).expect("create sidecar data");
+    let mut data_file = sidecar_test_create(&data_path).expect("create sidecar data");
     data_file.write_all(&payload).expect("write sidecar data");
     let temp_offset = payload.len() as u64;
     data_file
@@ -918,7 +930,7 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
         len: payload.len() as u64,
     }
     .to_bytes();
-    let mut index = std::fs::File::create(&index_path).expect("create sidecar index");
+    let mut index = sidecar_test_create(&index_path).expect("create sidecar index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
@@ -930,13 +942,16 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
         len: temp_payload.len() as u64,
     }
     .to_bytes();
-    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    let mut temp_index = sidecar_test_create(&temp_index_path).expect("create temp index");
     temp_index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write temp V1 index header");
     temp_index.write_all(&temp_entry).expect("write temp index");
     temp_index.flush().expect("flush temp index");
     temp_index.sync_data().expect("sync temp index");
+    drop(data_file);
+    drop(index);
+    drop(temp_index);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     assert_eq!(got.block_hash, hashes[0]);
     assert_eq!(got.dag.fingerprint, [1u8; 32]);
@@ -986,7 +1001,7 @@ fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let temp_data_path = data_path.with_extension("norito.tmp");
     let temp_index_path = index_path.with_extension("index.tmp");
-    let mut temp_data = std::fs::File::create(&temp_data_path).expect("create temp data");
+    let mut temp_data = sidecar_test_create(&temp_data_path).expect("create temp data");
     temp_data
         .write_all(&recovered_payload)
         .expect("write temp data");
@@ -997,13 +1012,15 @@ fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
         len: recovered_payload.len() as u64,
     }
     .to_bytes();
-    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    let mut temp_index = sidecar_test_create(&temp_index_path).expect("create temp index");
     temp_index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write temp V1 index header");
     temp_index.write_all(&entry).expect("write temp index");
     temp_index.flush().expect("flush temp index");
     temp_index.sync_data().expect("sync temp index");
+    drop(temp_data);
+    drop(temp_index);
     let got = kura.read_pipeline_metadata(1).expect("recovered sidecar");
     assert_eq!(got.dag.fingerprint, [2u8; 32]);
     assert!(!temp_data_path.exists(), "temp data should be promoted");
@@ -1044,7 +1061,7 @@ fn pipeline_sidecar_recovery_sync_failure_does_not_expose_new_data_with_old_inde
     let old_index = std::fs::read(&index_path).expect("read old index");
     let temp_data_path = data_path.with_extension("norito.tmp");
     let temp_index_path = index_path.with_extension("index.tmp");
-    let mut temp_data = std::fs::File::create(&temp_data_path).expect("create temp data");
+    let mut temp_data = sidecar_test_create(&temp_data_path).expect("create temp data");
     temp_data
         .write_all(&new_payload)
         .expect("write new temp data");
@@ -1055,7 +1072,7 @@ fn pipeline_sidecar_recovery_sync_failure_does_not_expose_new_data_with_old_inde
         len: new_payload.len() as u64,
     }
     .to_bytes();
-    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+    let mut temp_index = sidecar_test_create(&temp_index_path).expect("create temp index");
     temp_index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write new temp V1 index header");
@@ -1066,6 +1083,8 @@ fn pipeline_sidecar_recovery_sync_failure_does_not_expose_new_data_with_old_inde
     temp_index.sync_data().expect("sync new temp index");
     sync_dir(&pipeline_dir).expect("sync recovery markers");
     fail_next_sidecar_promotion_dir_sync_for_tests();
+    drop(temp_data);
+    drop(temp_index);
     assert!(
         kura.read_pipeline_metadata(1).is_none(),
         "a failed data-promotion sync must fail closed before the old index can expose new data"
@@ -1094,9 +1113,15 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
     let hashes = store_dummy_blocks(&kura, 2);
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     for (index, block_hash) in hashes.into_iter().enumerate() {
         let height = (index + 1) as u64;
         let sidecar = PipelineRecoverySidecar::new(
@@ -1109,7 +1134,7 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
             Vec::new(),
         );
         let payload = sidecar.encode_framed().expect("encode sidecar");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -1123,7 +1148,7 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
     let old_index = std::fs::read(&index_path).expect("read old index");
     fail_next_sidecar_temp_marker_dir_sync_for_tests();
     assert!(
-        !Kura::prune_indexed_sidecars(
+        !sidecars.prune_indexed_sidecars(
             &data_path,
             &index_path,
             NonZeroUsize::new(1).expect("non-zero retention"),
@@ -1143,7 +1168,7 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
     );
     assert!(data_path.with_extension("norito.tmp").exists());
     assert!(index_path.with_extension("index.tmp").exists());
-    assert!(Kura::recover_indexed_sidecar_artifacts(
+    assert!(sidecars.recover_indexed_sidecar_artifacts(
         &data_path,
         &index_path,
         "pipeline sidecar test",
@@ -1177,7 +1202,7 @@ fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
     pipeline_dir.push(PIPELINE_DIR_NAME);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let temp_index_path = index_path.with_extension("index.tmp");
-    std::fs::write(&temp_index_path, [0u8; 3]).expect("write corrupt temp index");
+    sidecar_test_write(&temp_index_path, [0u8; 3]).expect("write corrupt temp index");
     assert!(
         kura.read_pipeline_metadata(1).is_none(),
         "ambiguous recovery state must not expose the old data/index pair"
@@ -1215,7 +1240,7 @@ fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
     pipeline_dir.push(PIPELINE_DIR_NAME);
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let temp_data_path = data_path.with_extension("norito.tmp");
-    fs::write(&temp_data_path, &payload).expect("write temp data");
+    sidecar_test_write(&temp_data_path, &payload).expect("write temp data");
     assert!(
         kura.read_pipeline_metadata(1).is_none(),
         "temp data without a recovery index is ambiguous and must fail closed"
@@ -1226,9 +1251,15 @@ fn pipeline_sidecar_rejects_height_mismatch() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; 32]));
     let sidecar = PipelineRecoverySidecar::new(
         2,
@@ -1241,7 +1272,7 @@ fn pipeline_sidecar_rejects_height_mismatch() {
     );
     let payload = sidecar.encode_framed().expect("encode sidecar");
     assert!(
-        Kura::append_indexed_sidecar(
+        sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             1,
@@ -1322,12 +1353,13 @@ fn pipeline_sidecars_append_to_single_store() {
 }
 #[test]
 fn pipeline_sidecar_overwrite_updates_entry() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let payload1 = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar 1");
     assert!(
-        Kura::append_indexed_sidecar(
+        sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             1,
@@ -1340,7 +1372,7 @@ fn pipeline_sidecar_overwrite_updates_entry() {
     );
     let payload2 = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode dummy sidecar 2");
     assert!(
-        Kura::append_indexed_sidecar(
+        sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             1,
@@ -1379,7 +1411,12 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let sidecar1 = PipelineRecoverySidecar::new(
@@ -1403,7 +1440,7 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
     let payload1 = sidecar1.encode_framed().expect("encode sidecar1");
     let payload2 = sidecar2.encode_framed().expect("encode sidecar2");
     assert_eq!(payload1.len(), payload2.len(), "payload lengths must match");
-    fs::write(&data_path, &payload2).expect("write payload data");
+    sidecar_test_write(&data_path, &payload2).expect("write payload data");
     let entry1 = SidecarIndexEntry {
         offset: 0,
         len: payload1.len() as u64,
@@ -1412,12 +1449,13 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
         offset: 0,
         len: payload2.len() as u64,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
+    drop(index);
     assert!(
         kura.read_pipeline_metadata(2).is_none(),
         "overlapping offsets should be rejected"
@@ -1428,7 +1466,12 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let hashes = store_dummy_blocks(&kura, 2);
@@ -1452,7 +1495,7 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
     );
     let payload1 = sidecar1.encode_framed().expect("encode sidecar1");
     let payload2 = sidecar2.encode_framed().expect("encode sidecar2");
-    let mut data = std::fs::File::create(&data_path).expect("create data file");
+    let mut data = sidecar_test_create(&data_path).expect("create data file");
     data.write_all(&payload2).expect("write payload2");
     data.write_all(&payload1).expect("write payload1");
     let entry1 = SidecarIndexEntry {
@@ -1463,12 +1506,14 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
         offset: 0,
         len: payload2.len() as u64,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
+    drop(data);
+    drop(index);
     let got = kura.read_pipeline_metadata(2).expect("sidecar exists");
     assert_eq!(got.height, 2);
     assert_eq!(got.block_hash, sidecar2.block_hash);
@@ -1478,7 +1523,12 @@ fn pipeline_sidecar_allows_misaligned_index() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let block_hash = store_dummy_blocks(&kura, 1)[0];
@@ -1492,24 +1542,25 @@ fn pipeline_sidecar_allows_misaligned_index() {
         Vec::new(),
     );
     let payload = sidecar.encode_framed().expect("encode sidecar");
-    fs::write(&data_path, &payload).expect("write payload");
+    sidecar_test_write(&data_path, &payload).expect("write payload");
     let entry = SidecarIndexEntry {
         offset: 0,
         len: payload.len() as u64,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     index.write_all(&entry.to_bytes()).expect("write entry");
     index.write_all(&[0u8; 3]).expect("write padding");
+    drop(index);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     assert_eq!(got.height, 1);
     assert_eq!(got.block_hash, sidecar.block_hash);
 }
 #[test]
 fn sidecar_reader_rejects_oversized_payloads() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let store_root = temp_dir.path().join("kura");
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
     let kura =
@@ -1518,11 +1569,16 @@ fn sidecar_reader_rejects_oversized_payloads() {
             .0;
     let mut dir = kura.store_dir().expect("store dir");
     dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&dir)
+        .expect("retain private native pipeline directory");
     let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let pipeline_limit = u64::try_from(MAX_PIPELINE_RECOVERY_SIDECAR_BYTES).unwrap_or(u64::MAX);
-    std::fs::File::create(&data_path)
+    sidecar_test_create(&data_path)
         .and_then(|file| file.set_len(pipeline_limit + 1))
         .expect("create sparse oversized sidecar data file");
     let entry = SidecarIndexEntry {
@@ -1532,7 +1588,7 @@ fn sidecar_reader_rejects_oversized_payloads() {
     .to_bytes();
     let mut index_bytes = SidecarIndexLayout::base_header(1).to_vec();
     index_bytes.extend_from_slice(&entry);
-    std::fs::write(&index_path, index_bytes).expect("write oversized index entry");
+    sidecar_test_write(&index_path, index_bytes).expect("write oversized index entry");
     let decoder_called = std::cell::Cell::new(false);
     assert!(
         Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit::<(), _>(
@@ -1606,7 +1662,12 @@ fn pipeline_sidecar_ignores_invalid_prev_entry() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+    #[cfg(windows)]
+    let _pipeline_directory = kura
+        .ensure_native_pipeline_directory(&pipeline_dir)
+        .expect("retain private native pipeline directory");
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
     let hashes = store_dummy_blocks(&kura, 2);
@@ -1620,7 +1681,7 @@ fn pipeline_sidecar_ignores_invalid_prev_entry() {
         Vec::new(),
     );
     let payload2 = sidecar2.encode_framed().expect("encode sidecar2");
-    fs::write(&data_path, &payload2).expect("write payload2");
+    sidecar_test_write(&data_path, &payload2).expect("write payload2");
     let bogus_prev = SidecarIndexEntry {
         offset: 0,
         len: payload2.len() as u64 + 10,
@@ -1629,7 +1690,7 @@ fn pipeline_sidecar_ignores_invalid_prev_entry() {
         offset: 0,
         len: payload2.len() as u64,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
@@ -1637,30 +1698,33 @@ fn pipeline_sidecar_ignores_invalid_prev_entry() {
         .write_all(&bogus_prev.to_bytes())
         .expect("write bogus entry");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
+    drop(index);
     let got = kura.read_pipeline_metadata(2).expect("sidecar exists");
     assert_eq!(got.height, 2);
     assert_eq!(got.block_hash, sidecar2.block_hash);
 }
 #[test]
 fn sidecar_append_truncates_misaligned_index() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let payload1 = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar 1");
     let payload2 = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode dummy sidecar 2");
-    fs::write(&data_path, &payload1).expect("write payload1");
+    sidecar_test_write(&data_path, &payload1).expect("write payload1");
     let entry1 = SidecarIndexEntry {
         offset: 0,
         len: payload1.len() as u64,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&[0u8; 3]).expect("write padding");
+    drop(index);
     assert!(
-        Kura::append_indexed_sidecar(
+        sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             2,
@@ -1693,15 +1757,16 @@ fn sidecar_append_truncates_misaligned_index() {
 }
 #[test]
 fn sidecar_prune_truncates_misaligned_index() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     let payloads = (1_u64..=3)
         .map(|height| norito::to_bytes(&DummySidecar { height }).expect("encode dummy sidecar"))
         .collect::<Vec<_>>();
     let mut entries = Vec::new();
-    let mut data = std::fs::File::create(&data_path).expect("create data");
+    let mut data = sidecar_test_create(&data_path).expect("create data");
     let mut offset = 0u64;
     for payload in &payloads {
         data.write_all(payload).expect("write payload");
@@ -1711,7 +1776,7 @@ fn sidecar_prune_truncates_misaligned_index() {
         });
         offset = offset.saturating_add(payload.len() as u64);
     }
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
@@ -1719,8 +1784,10 @@ fn sidecar_prune_truncates_misaligned_index() {
         index.write_all(&entry.to_bytes()).expect("write entry");
     }
     index.write_all(&[0u8; 3]).expect("write padding");
+    drop(data);
+    drop(index);
     assert!(
-        Kura::prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
+        sidecars.prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
         "prune should tolerate misaligned index"
     );
     let index_len = fs::metadata(&index_path).expect("index metadata").len();
@@ -1759,12 +1826,13 @@ fn sidecar_prune_truncates_misaligned_index() {
 }
 #[test]
 fn sidecar_prune_skips_entries_past_data_len() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+    let mut sidecars = IndexedSidecarSession::default();
     let retention = NonZeroUsize::new(1).expect("non-zero retention");
     let payload1 = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode sidecar");
-    fs::write(&data_path, &payload1).expect("write payload");
+    sidecar_test_write(&data_path, &payload1).expect("write payload");
     let entry1 = SidecarIndexEntry {
         offset: 0,
         len: payload1.len() as u64,
@@ -1773,14 +1841,15 @@ fn sidecar_prune_skips_entries_past_data_len() {
         offset: payload1.len() as u64 + 8,
         len: 4,
     };
-    let mut index = std::fs::File::create(&index_path).expect("create index");
+    let mut index = sidecar_test_create(&index_path).expect("create index");
     index
         .write_all(&SidecarIndexLayout::base_header(1))
         .expect("write V1 index header");
     index.write_all(&entry1.to_bytes()).expect("write entry1");
     index.write_all(&entry2.to_bytes()).expect("write entry2");
+    drop(index);
     assert!(
-        Kura::prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
+        sidecars.prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
         "prune should drop invalid entries"
     );
     let mut index = std::fs::File::open(&index_path).expect("index exists");
@@ -1802,14 +1871,15 @@ fn sidecar_prune_skips_entries_past_data_len() {
 }
 #[test]
 fn sidecar_retention_window_advances_base_and_bounds_index() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("bounded-history-dummy.norito");
     let index_path = temp_dir.path().join("bounded-history-dummy.index");
+    let mut sidecars = IndexedSidecarSession::default();
     let retention = NonZeroUsize::new(2).expect("non-zero Native evidence retention");
     for height in 41_u64..=44 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy Native evidence");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -1818,7 +1888,7 @@ fn sidecar_retention_window_advances_base_and_bounds_index() {
             FsyncMode::Always,
             None,
         ));
-        assert!(Kura::prune_indexed_sidecars_to_retention_window(
+        assert!(sidecars.prune_indexed_sidecars_to_retention_window(
             &data_path,
             &index_path,
             retention,
@@ -1866,14 +1936,15 @@ fn sidecar_retention_window_advances_base_and_bounds_index() {
 }
 #[test]
 fn terminal_frontier_compaction_retains_every_later_pending_slot() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("terminal-history.norito");
     let index_path = temp_dir.path().join("terminal-history.index");
+    let mut sidecars = IndexedSidecarSession::default();
     let retention = NonZeroUsize::new(32).expect("non-zero terminal retention");
     for height in 1_u64..=600 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -1883,7 +1954,7 @@ fn terminal_frontier_compaction_retains_every_later_pending_slot() {
             None,
         ));
     }
-    assert!(Kura::prune_indexed_sidecars_through_terminal_frontier(
+    assert!(sidecars.prune_indexed_sidecars_through_terminal_frontier(
         &data_path,
         &index_path,
         550,
@@ -1925,13 +1996,14 @@ fn terminal_frontier_compaction_retains_every_later_pending_slot() {
 }
 #[test]
 fn terminal_frontier_compaction_retains_sparse_required_evidence() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("terminal-required.norito");
     let index_path = temp_dir.path().join("terminal-required.index");
+    let mut sidecars = IndexedSidecarSession::default();
     for height in 1_u64..=600 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -1943,7 +2015,7 @@ fn terminal_frontier_compaction_retains_sparse_required_evidence() {
     }
     let required_heights = BTreeSet::from([7_u64, 400]);
     assert!(
-        Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+        sidecars.prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
             &data_path,
             &index_path,
             550,
@@ -1990,13 +2062,14 @@ fn terminal_frontier_compaction_retains_sparse_required_evidence() {
 }
 #[test]
 fn terminal_frontier_compaction_missing_required_evidence_is_byte_exact() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("terminal-required-missing.norito");
     let index_path = temp_dir.path().join("terminal-required-missing.index");
+    let mut sidecars = IndexedSidecarSession::default();
     for height in 1_u64..=10 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -2009,7 +2082,7 @@ fn terminal_frontier_compaction_missing_required_evidence_is_byte_exact() {
     let original_data = fs::read(&data_path).expect("read original required data");
     let original_index = fs::read(&index_path).expect("read original required index");
     assert!(
-        !Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+        !sidecars.prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
             &data_path,
             &index_path,
             10,
@@ -2032,13 +2105,14 @@ fn terminal_frontier_compaction_missing_required_evidence_is_byte_exact() {
 }
 #[test]
 fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("terminal-required-recovery.norito");
     let index_path = temp_dir.path().join("terminal-required-recovery.index");
+    let mut sidecars = IndexedSidecarSession::default();
     for height in 1_u64..=3 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -2054,8 +2128,8 @@ fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
         norito::to_bytes(&DummySidecar { height: 3 }).expect("encode temp retained payload");
     let temp_data_path = data_path.with_extension("norito.tmp");
     let temp_index_path = index_path.with_extension("index.tmp");
-    fs::write(&temp_data_path, &retained_payload).expect("write compacted temp data");
-    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create compacted index");
+    sidecar_test_write(&temp_data_path, &retained_payload).expect("write compacted temp data");
+    let mut temp_index = sidecar_test_create(&temp_index_path).expect("create compacted index");
     temp_index
         .write_all(&SidecarIndexLayout::base_header(3))
         .expect("write compacted index header");
@@ -2071,8 +2145,9 @@ fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
     temp_index.flush().expect("flush compacted index");
     temp_index.sync_data().expect("sync compacted index");
 
+    drop(temp_index);
     assert!(
-        !Kura::recover_indexed_sidecar_artifacts_with_required_heights(
+        !sidecars.recover_indexed_sidecar_artifacts_with_required_heights(
             &data_path,
             &index_path,
             &BTreeSet::from([1_u64]),
@@ -2092,13 +2167,14 @@ fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
 }
 #[test]
 fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() {
-    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let temp_dir = sidecar_test_directory();
     let data_path = temp_dir.path().join("terminal-malformed.norito");
     let index_path = temp_dir.path().join("terminal-malformed.index");
+    let mut sidecars = IndexedSidecarSession::default();
     for height in 1_u64..=3 {
         let payload =
             norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -2125,7 +2201,7 @@ fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() 
     let corrupted_index = std::fs::read(&index_path).expect("read forged index");
     let original_data = std::fs::read(&data_path).expect("read original data");
     assert!(
-        !Kura::prune_indexed_sidecars_through_terminal_frontier(
+        !sidecars.prune_indexed_sidecars_through_terminal_frontier(
             &data_path,
             &index_path,
             2,

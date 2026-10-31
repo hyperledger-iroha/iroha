@@ -78,7 +78,8 @@ fn windows_atomic_replacement_source_contract_is_non_destructive() {
     assert!(source.contains("(*info).replace_or_flags = 0;"));
     assert!(source.contains("without replacement: {error}"));
     assert!(source.contains("Windows governance existing-target replacement is disabled"));
-    assert!(source.contains("metadata.number_of_links() != Some(1)"));
+    assert!(source.contains("metadata.links() != 1"));
+    assert!(source.contains("iroha_fs::FileMetadata::of(handle)"));
     let destructive_match = ["matches!(&expected, ExpectedFile::", "Identity(_))"].concat();
     assert!(!source.contains(&destructive_match));
 }

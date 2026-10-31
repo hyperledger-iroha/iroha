@@ -167,18 +167,21 @@ pub enum Command {
     /// and the recommended `[gov]` profile (`specs/sccp.md` §4.14.5).
     SeatParliament(parliament_seating::SeatParliament),
     /// Preflight or execute the strictly authorized compiled public reset.
+    #[cfg(unix)]
     PublicReset(crate::taira_public_reset::PublicReset),
     /// Reconcile empty stopped Inrou owners under the active routine updater lock.
+    #[cfg(unix)]
     StoppedOwnerMaintenance(crate::taira_public_reset::StoppedOwnerMaintenance),
     /// Remove only retired validator configuration under the routine updater owner.
+    #[cfg(unix)]
     RetireValidatorConfig(crate::taira_public_reset::RetireValidatorConfig),
     /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from AArch64 guest assets.
     InrouWorkspace(InrouWorkspace),
-    /// Build the canonical offline artifact stage that operators preseed into all validators.
+    /// Build and bind the canonical offline artifact stage through the Unix host coordinator.
     InrouStage(InrouStage),
-    /// Register an exact preseeded stage, mutate explicitly, and verify the four-replica Inrou canary.
+    /// Prepare, submit, or recover one Inrou canary operation through the Unix host coordinator.
     InrouCanary(InrouCanary),
     /// Revalidate an exact retained stage and verify its live four-replica service without mutation.
     InrouCheck(InrouCheck),
@@ -189,12 +192,15 @@ impl Run for Command {
             Self::Account(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::SeatParliament(cmd) => cmd.run(context),
+            #[cfg(unix)]
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
             ),
+            #[cfg(unix)]
             Self::StoppedOwnerMaintenance(_) => eyre::bail!(
                 "`taira stopped-owner-maintenance` must run before client configuration is loaded"
             ),
+            #[cfg(unix)]
             Self::RetireValidatorConfig(_) => eyre::bail!(
                 "`taira retire-validator-config` must run before client configuration is loaded"
             ),
@@ -1042,7 +1048,24 @@ impl InrouProbeScope {
         Ok(())
     }
 }
-/// Canonical offline Taira Inrou artifact staging.
+// Both coordinated operations already require Unix-only host facilities. Admit that
+// boundary before staging artifacts, reading client authority or contacting a node.
+fn require_inrou_coordinator_platform() -> Result<()> {
+    #[cfg(unix)]
+    {
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Taira Inrou coordinated staging and canary operations require the Unix host coordinator and inherited-descriptor protocol",
+        )
+        .into())
+    }
+}
+
+/// Canonical offline Taira Inrou artifact staging for the Unix host coordinator.
 #[derive(clap::Args, Debug)]
 pub struct InrouStage {
     /// Build the exact deploy or upgrade revision; no mutation mode is inferred.
@@ -1077,6 +1100,7 @@ pub struct InrouStage {
 }
 impl Run for InrouStage {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        require_inrou_coordinator_platform()?;
         ensure_canonical_taira_client_identity(context.config())?;
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         let placement_targets = self
@@ -1314,7 +1338,7 @@ struct ValidatedPreparedInrouV1 {
     stage: crate::soracloud::TairaInrouStageIdentity,
 }
 
-/// Canonical Taira Inrou exact-transaction preparation and recovery.
+/// Canonical Taira Inrou exact-transaction preparation and recovery through the Unix coordinator.
 #[derive(clap::Args, Debug)]
 #[command(group(
     clap::ArgGroup::new("prepared_action")
@@ -1381,6 +1405,7 @@ pub struct InrouCanary {
 }
 impl Run for InrouCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        require_inrou_coordinator_platform()?;
         let receipt = run_inrou_canary_exact(context, &self)?;
         render_report(context, self.json, &receipt)?;
         if report_status(&receipt) != Some("ok") {
@@ -1389,6 +1414,10 @@ impl Run for InrouCanary {
         Ok(())
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "taira_inrou_platform_tests.rs"]
+mod inrou_platform_tests;
 
 impl InrouCanary {
     fn prepared_action(&self) -> Result<PreparedEnvelopeAction> {
@@ -6037,69 +6066,16 @@ fn read_onboarding_token_fd(fd: u32) -> Result<Zeroizing<String>> {
     validate_onboarding_token(token)?;
     Ok(Zeroizing::new(token.to_owned()))
 }
-#[cfg(unix)]
-fn validate_onboarding_token_file_metadata(metadata: &fs::Metadata) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    if metadata.uid() != rustix::process::geteuid().as_raw() {
-        eyre::bail!("account onboarding token file must be owned by the current user");
-    }
-    let mode = metadata.permissions().mode();
-    if mode & 0o077 != 0 {
-        eyre::bail!("account onboarding token file must not grant group or other access");
-    }
-    if mode & 0o400 == 0 {
-        eyre::bail!("account onboarding token file must be owner-readable");
-    }
-    Ok(())
-}
-#[cfg(not(unix))]
-fn validate_onboarding_token_file_metadata(_metadata: &fs::Metadata) -> Result<()> {
-    Ok(())
-}
 fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
     let before =
         fs::symlink_metadata(path).wrap_err("failed to inspect account onboarding token file")?;
     if before.file_type().is_symlink() || !before.file_type().is_file() {
         eyre::bail!("account onboarding token file must be a regular non-symlink file");
     }
-    validate_onboarding_token_file_metadata(&before)?;
-    #[cfg(unix)]
-    let mut file = {
-        let descriptor = rustix::fs::open(
-            path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::empty(),
-        )
-        .wrap_err("failed to securely open account onboarding token file")?;
-        fs::File::from(descriptor)
-    };
-    #[cfg(not(unix))]
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .open(path)
-        .wrap_err("failed to open account onboarding token file")?;
-    let opened = file
-        .metadata()
-        .wrap_err("failed to inspect opened account onboarding token file")?;
-    if !opened.file_type().is_file() {
-        eyre::bail!("account onboarding token file must remain a regular file");
-    }
-    validate_onboarding_token_file_metadata(&opened)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        if opened.dev() != before.dev() || opened.ino() != before.ino() {
-            eyre::bail!("account onboarding token file changed during secure open");
-        }
-    }
-    let mut raw = Zeroizing::new(Vec::with_capacity(257));
-    std::io::Read::by_ref(&mut file)
-        .take(257)
-        .read_to_end(&mut raw)
-        .wrap_err("failed to read account onboarding token file")?;
-    if raw.len() > 256 {
-        eyre::bail!("account onboarding token file exceeds the maximum credential length");
-    }
+    // The shared owner retains the original file and every ancestor, checks native private
+    // permissions and single-link identity, and bounds the read before returning secret bytes.
+    let raw = iroha_fs::read_private(path, 256)
+        .wrap_err("failed to read private account onboarding token file")?;
     let token = std::str::from_utf8(&raw)
         .map_err(|_| eyre!("account onboarding token file must contain printable ASCII"))?;
     validate_onboarding_token(token)?;
@@ -9643,18 +9619,33 @@ mod tests {
         }
     }
 
-    fn test_onboarding_token_file() -> NamedTempFile {
-        let mut file = NamedTempFile::new().expect("create onboarding token file");
-        file.write_all(TEST_ONBOARDING_TOKEN.as_bytes())
-            .expect("write onboarding token file");
-        file.flush().expect("flush onboarding token file");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
-                .expect("set onboarding token file mode");
+    struct TestOnboardingTokenFile {
+        _root: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    impl TestOnboardingTokenFile {
+        fn path(&self) -> &Path {
+            &self.path
         }
-        file
+    }
+
+    fn test_onboarding_token_file() -> TestOnboardingTokenFile {
+        let root = tempfile::tempdir().expect("create onboarding token directory");
+        let private = root.path().join("private");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(&private)
+            .expect("create native private token directory");
+        directory
+            .write_atomic(
+                "onboarding.token",
+                TEST_ONBOARDING_TOKEN.as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .expect("publish private onboarding token");
+        TestOnboardingTokenFile {
+            _root: root,
+            path: private.join("onboarding.token"),
+        }
     }
 
     fn fixture_write_canary_args(operation: WriteCanaryOperation) -> WriteCanary {
@@ -12473,13 +12464,16 @@ mod tests {
             InrouProbeScope::Public,
         )
         .expect("status and route probes use their distinct configured origins");
-        crate::taira_public_reset::validate_inrou_checks_for_test(&report, InrouProbeScope::Public)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "active public probe output must satisfy the host receipt contract: \
+        crate::taira_inrou_validation::validate_inrou_checks(
+            &report,
+            InrouProbeScope::Public.label(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "active public probe output must satisfy the host receipt contract: \
                      {error:?}; report: {report:?}"
-                )
-            });
+            )
+        });
         assert_eq!(report_status(&report), Some("ok"));
         assert_eq!(route_index.load(Ordering::Acquire), 4);
 
@@ -12580,7 +12574,7 @@ mod tests {
                 expected_checks
             );
             let accepted =
-                crate::taira_public_reset::validate_inrou_checks_for_test(&report, scope);
+                crate::taira_inrou_validation::validate_inrou_checks(&report, scope.label());
             let requests = finish_mock(server);
             if scope == InrouProbeScope::Candidate {
                 assert_eq!(report_status(&report), Some("ok"));
@@ -12591,9 +12585,9 @@ mod tests {
                     "/v1/soracloud/status" | "/api/v1/inrou-canary/health"
                 )));
                 assert!(
-                    crate::taira_public_reset::validate_inrou_checks_for_test(
+                    crate::taira_inrou_validation::validate_inrou_checks(
                         &report,
-                        InrouProbeScope::Public
+                        InrouProbeScope::Public.label()
                     )
                     .is_err(),
                     "candidate evidence must never qualify public cutover"
@@ -13412,7 +13406,12 @@ mod tests {
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640)).expect("unsafe mode");
         assert!(read_onboarding_token_fd(fd).is_err());
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600)).expect("private mode");
-        let writable_fd = u32::try_from(file.as_raw_fd()).expect("writable descriptor");
+        let writable = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file.path())
+            .expect("open writable token descriptor");
+        let writable_fd = u32::try_from(writable.as_raw_fd()).expect("writable descriptor");
         assert!(read_onboarding_token_fd(writable_fd).is_err());
         let directory = tempfile::tempdir().expect("directory");
         let directory_fd = File::open(directory.path()).expect("open directory");
@@ -13555,7 +13554,7 @@ mod tests {
                 .expect("set unsafe permissions");
             let error = read_onboarding_token_file(file.path())
                 .expect_err("group-readable token file must fail closed");
-            assert!(format!("{error:#}").contains("group or other"));
+            assert!(format!("{error:#}").contains("private"));
             fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
                 .expect("restore safe permissions");
             let directory = tempfile::tempdir().expect("token symlink directory");
@@ -13570,6 +13569,31 @@ mod tests {
             .expect_err("directory token path must fail closed");
         assert!(format!("{error:#}").contains("regular non-symlink"));
     }
+    #[test]
+    fn onboarding_token_file_rejects_hard_links_and_oversized_credentials() {
+        let file = test_onboarding_token_file();
+        let link = file.path().with_file_name("token.alias");
+        fs::hard_link(file.path(), &link).expect("create second token name");
+        assert!(read_onboarding_token_file(file.path()).is_err());
+        assert!(read_onboarding_token_file(&link).is_err());
+        fs::remove_file(link).expect("remove second token name");
+        fs::write(file.path(), "T".repeat(257)).expect("write oversized credential");
+        let error = read_onboarding_token_file(file.path()).expect_err("bounded token read");
+        assert!(!format!("{error:#}").contains(&"T".repeat(257)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn onboarding_token_file_rejects_inherited_windows_permissions() {
+        let root = tempfile::tempdir().expect("create inherited-permission directory");
+        let path = root.path().join("onboarding.token");
+        fs::write(&path, TEST_ONBOARDING_TOKEN).expect("write inherited-permission token");
+        let error = read_onboarding_token_file(&path)
+            .expect_err("inherited Windows token permissions must fail closed");
+        assert!(format!("{error:#}").contains("private"));
+        assert!(!format!("{error:#}").contains(TEST_ONBOARDING_TOKEN));
+    }
+
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];

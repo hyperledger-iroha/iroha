@@ -4,11 +4,12 @@
 //! emit deterministic Norito artefacts with the expected digests and metadata.
 use blake3::Hasher;
 use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
+use iroha_fs::{ProcessCommand as Command, ProcessStdio as Stdio};
 use norito::json::Value;
 use std::{
     fs, io,
     path::Path,
-    process::{Command, ExitStatus, Stdio},
+    process::ExitStatus,
     thread,
     time::{Duration, Instant},
 };
@@ -18,7 +19,8 @@ fn cli_binary() -> &'static str {
 const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
-    command.stdin(Stdio::null());
+    command.stdin(Stdio::null()).kill_on_drop(true);
+    let description = format!("{command:?}");
     let mut child = command.spawn()?;
     let started = Instant::now();
     loop {
@@ -31,7 +33,7 @@ fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
             let _ = child.wait();
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!("command {command:?} timed out after {CLI_COMMAND_TIMEOUT:?}"),
+                format!("command {description} timed out after {CLI_COMMAND_TIMEOUT:?}"),
             ));
         }
         let remaining = CLI_COMMAND_TIMEOUT.saturating_sub(elapsed);
@@ -53,7 +55,7 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     let receipt_path = dir.path().join("cek_receipt.to");
     let receipt_json = dir.path().join("cek_receipt.json");
     let hkdf_salt_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let mut receipt_command = Command::new(cli_binary());
+    let mut receipt_command = Command::new(cli_binary()).expect("absolute Cargo CLI image");
     receipt_command.args([
         "app",
         "taikai",
@@ -106,7 +108,7 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     );
     let rpt_path = dir.path().join("rpt.to");
     let rpt_json = dir.path().join("rpt.json");
-    let mut rpt_command = Command::new(cli_binary());
+    let mut rpt_command = Command::new(cli_binary()).expect("absolute Cargo CLI image");
     rpt_command.args([
         "app",
         "taikai",

@@ -1253,24 +1253,11 @@ pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Meta
         && left.modified().ok() == right.modified().ok()
 }
 /// Whether two metadata snapshots name the same filesystem object.
-#[cfg(unix)]
-pub fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-/// Whether two metadata snapshots name the same filesystem object.
-#[cfg(windows)]
-pub(crate) fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-/// Platforms without a stable file identity never report an alias.
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn same_file_identity(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
-    false
+pub(crate) fn same_file_identity(
+    left: &iroha_fs::FileMetadata,
+    right: &iroha_fs::FileMetadata,
+) -> bool {
+    left.identity() == right.identity()
 }
 /// Whether two snapshots describe the same unchanged single-link regular input file.
 #[cfg(unix)]

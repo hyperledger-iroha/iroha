@@ -24,6 +24,12 @@ mod selected_coset;
 pub(super) struct MainTransformReceiptV1 {
     cpu_columns: usize,
     metal_columns: usize,
+    #[cfg(test)]
+    observe_full_cpu_routes: bool,
+    #[cfg(test)]
+    full_dense_cpu_columns: usize,
+    #[cfg(test)]
+    full_prefix_cpu_columns: usize,
 }
 
 pub(super) struct MainTraceCosetEvaluatorV1 {
@@ -177,17 +183,31 @@ impl MainTraceCosetEvaluatorV1 {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
         if self.device_columns == 0 {
+            // Only the complete public eight-column batch has measured prefix
+            // benefit. Tail batches retain the original dense owner.
+            let prefix_full_batch = selected.is_none() && columns.len() == 8;
             let result = columns
                 .par_iter()
                 .map(|column| match selected {
                     Some(indices) => {
                         selected_coset::evaluate_v1(column, native_log, common_log, indices)
                     }
+                    None if prefix_full_batch => {
+                        selected_coset::evaluate_full_v1(column, native_log, common_log)
+                    }
                     None => masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
                         .map(Column::from_vec_v1)
                         .map_err(aggregate::map_transparent_error_v1),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            #[cfg(test)]
+            if self.receipt.observe_full_cpu_routes && selected.is_none() {
+                if prefix_full_batch {
+                    self.receipt.full_prefix_cpu_columns += columns.len();
+                } else {
+                    self.receipt.full_dense_cpu_columns += columns.len();
+                }
+            }
             self.receipt.cpu_columns += columns.len();
             #[cfg(test)]
             prover_observation::completed_transform_v1(false, columns.len());
@@ -652,3 +672,7 @@ mod tests {
 #[cfg(test)]
 #[path = "main_common22_coarse_diagnostic_tests.rs"]
 mod common22_coarse_diagnostic_tests;
+
+#[cfg(test)]
+#[path = "main_full_dispatch_tests.rs"]
+mod full_dispatch_tests;

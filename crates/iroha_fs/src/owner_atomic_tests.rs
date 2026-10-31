@@ -25,6 +25,7 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
             AtomicWriteStep::WriteTail,
             AtomicWriteStep::SyncFile,
             AtomicWriteStep::Publish,
+            AtomicWriteStep::Published,
             AtomicWriteStep::SyncDirectory
         ]
     );
@@ -33,6 +34,8 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
     file.read_to_end(&mut actual).unwrap();
     retained.require_same_regular_file("frame", &file).unwrap();
     assert_eq!(actual, bytes);
+    // The completed read must release its Windows no-delete-sharing fence before removal.
+    drop(file);
     assert!(retained.open_regular_optional("absent").unwrap().is_none());
     let mut names = Vec::new();
     retained
@@ -53,6 +56,56 @@ fn observed_writer_retains_all_real_boundaries_and_exact_bytes() {
     assert!(retained.remove_private("frame").unwrap());
     assert!(!retained.remove_private("frame").unwrap());
     directory.require_same_lock("lock", &lock).unwrap();
+}
+
+#[test]
+fn observed_writer_distinguishes_refusal_before_and_after_publication() {
+    for mode in [PublishMode::CreateNew, PublishMode::Replace] {
+        for boundary in [AtomicWriteStep::Publish, AtomicWriteStep::Published] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = OwnerDirectory::open(root.path()).unwrap();
+            if mode == PublishMode::Replace {
+                directory
+                    .write_atomic("frame", b"previous", PublishMode::CreateNew)
+                    .unwrap();
+            }
+            let mut published = false;
+            let mut steps = Vec::new();
+            let result = directory.write_atomic_observed(
+                "frame",
+                b"complete replacement",
+                mode,
+                16,
+                |step, _| {
+                    steps.push(step);
+                    if step == AtomicWriteStep::Published {
+                        published = true;
+                    }
+                    if step == boundary {
+                        return Err(io::Error::other("injected publication interruption"));
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(published, boundary == AtomicWriteStep::Published);
+            assert_eq!(steps.last(), Some(&boundary));
+            assert!(!steps.contains(&AtomicWriteStep::SyncDirectory));
+            let observed = directory.read_private_optional("frame", 1024).unwrap();
+            let expected = if published {
+                Some(b"complete replacement".as_slice())
+            } else if mode == PublishMode::Replace {
+                Some(b"previous".as_slice())
+            } else {
+                None
+            };
+            assert_eq!(observed.as_ref().map(|bytes| bytes.as_slice()), expected);
+            assert_eq!(
+                directory.entries(16).unwrap().len(),
+                usize::from(expected.is_some())
+            );
+        }
+    }
 }
 
 #[test]

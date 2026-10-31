@@ -10,6 +10,8 @@ pub(crate) mod history_checkpoints;
 mod lane_geometry;
 mod lane_storage;
 mod membership_storage;
+#[cfg(windows)]
+mod native_sidecar_transaction;
 use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
@@ -128,6 +130,8 @@ const EVICTION_FILE_DIGEST_DOMAIN: &[u8] = b"iroha:kura:eviction-file:v1\0";
 include!("kura/storage_identity.rs");
 include!("kura/read_only_evidence.rs");
 include!("kura/bound_progress_and_retained_support.rs");
+#[cfg(windows)]
+include!("kura/windows_evidence.rs");
 #[cfg(test)]
 std::thread_local! {
     static AUTONOMOUS_ATTEMPT_FRAME_DECODES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
@@ -247,7 +251,7 @@ pub struct Kura {
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
     /// Opened canonical store-root owner used to mint descriptor-relative WAL storage.
-    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
     store_root_directory: BoundProgressDirectory,
     /// The block storage
     block_store: Mutex<BlockStore>,
@@ -289,6 +293,11 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: PublicationMutex,
+    /// One bounded native pipeline operation retains its originals through ordinary failures.
+    /// The existing sidecar publication fence is always acquired before this mutex.
+    #[cfg(windows)]
+    native_pipeline_publication:
+        ResidentMutex<Option<native_sidecar_transaction::NativeSidecarTransaction>>,
     /// Opaque permission for audited immutable reads of this exact sidecar fence.
     _sidecar_read_permit: crate::publication_lock::PublicationReadPermit,
     /// Queue of pipeline sidecar writes flushed by the Kura writer thread.
@@ -1315,6 +1324,8 @@ impl Kura {
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory =
             Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
+        #[cfg(windows)]
+        let store_root_directory = Self::open_bound_progress_directory(&store_root, &store_root)?;
         if config.init_mode == InitMode::Strict {
             Self::reject_retired_commit_roster_artifacts(&store_root)?;
         }
@@ -1491,7 +1502,7 @@ impl Kura {
             membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
-            #[cfg(all(unix, not(target_os = "espidf")))]
+            #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
@@ -1514,6 +1525,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock,
+            #[cfg(windows)]
+            native_pipeline_publication: ResidentMutex::new(None, &resource_inventory),
             _sidecar_read_permit: sidecar_read_permit,
             pipeline_sidecar_queue: ResidentMutex::new(VecDeque::new(), &resource_inventory),
             pipeline_sidecar_queue_cap: AtomicUsize::new(blocks_in_memory.get()),
@@ -1690,7 +1703,7 @@ impl Kura {
         block_store
             .create_files_if_they_do_not_exist()
             .expect("initialize empty canonical Kura journal for tests");
-        #[cfg(all(unix, not(target_os = "espidf")))]
+        #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
         let store_root_directory = Self::open_bound_progress_directory(&store_root, &store_root)
             .expect("bind temporary Kura store-root directory");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
@@ -1714,7 +1727,7 @@ impl Kura {
             ),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
-            #[cfg(all(unix, not(target_os = "espidf")))]
+            #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
             store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
@@ -1735,6 +1748,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock,
+            #[cfg(windows)]
+            native_pipeline_publication: ResidentMutex::new(None, &resource_inventory),
             _sidecar_read_permit: sidecar_read_permit,
             pipeline_sidecar_queue: ResidentMutex::new(VecDeque::new(), &resource_inventory),
             pipeline_sidecar_queue_cap: AtomicUsize::new(default_pipeline_sidecar_queue_cap()),
@@ -1865,7 +1880,9 @@ impl Kura {
         self.pipeline_sidecar_queue.lock().len()
     }
     /// Retain this Kura's original opened directory for native context publication.
-    pub(crate) fn native_context_archive_root(&self) -> std::io::Result<std::fs::File> {
+    pub(crate) fn native_context_archive_root(
+        &self,
+    ) -> std::io::Result<crate::query::native_context_archive::ArchiveDirectory> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             if !self.instance_identity().matches(self)
@@ -1878,7 +1895,23 @@ impl Kura {
             }
             self.store_root_directory.file.try_clone()
         }
-        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        #[cfg(windows)]
+        {
+            if !self.instance_identity().matches(self)
+                || !self.bound_storage_directory_unchanged(&self.store_root_directory)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "opened Kura root changed before native context archive binding",
+                ));
+            }
+            Ok(
+                crate::query::native_context_archive::ArchiveDirectory::from_owner(
+                    self.store_root_directory.native_owner.retain()?,
+                ),
+            )
+        }
+        #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
         {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -2766,7 +2799,12 @@ impl Kura {
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?,
         );
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let file = immediate
+            .native_owner
+            .open_existing_lock(file_name)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        #[cfg(not(any(unix, windows)))]
         let file = {
             let _ = file_name;
             let mut options = std::fs::OpenOptions::new();
@@ -2792,6 +2830,8 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
+        #[cfg(windows)]
+        Self::native_evidence_original(namespace, path, &file)?;
         Ok(file)
     }
     fn open_optional_bound_progress_file(
@@ -3366,7 +3406,10 @@ impl Kura {
                     "injected bound progress append-intent directory sync failure",
                 ));
             }
+            #[cfg(not(windows))]
             directory.file.sync_all()?;
+            #[cfg(windows)]
+            directory.native_owner.sync()?;
         }
         Ok(())
     }
@@ -3483,11 +3526,12 @@ impl Kura {
             })
         }
     }
-    fn publish_bound_progress_append_intent(
+    fn publish_bound_progress_append_intent_with_io(
         namespace: &BoundProgressNamespace,
         index_path: &Path,
         intent: &BoundProgressAppendIntentV1,
         kind: &str,
+        storage: &mut impl bound_progress_io::BoundProgressIo,
     ) -> Option<std::fs::File> {
         let build_path = Self::bound_progress_append_build_path(index_path);
         let intent_path = Self::bound_progress_append_intent_path(index_path);
@@ -3512,7 +3556,7 @@ impl Kura {
                 return None;
             }
         };
-        let mut build = match Self::create_new_bound_progress_temp(namespace, &build_path) {
+        let mut build = match storage.create_build(namespace, &build_path) {
             Ok(build) => build,
             Err(error) => {
                 warn!(
@@ -3521,6 +3565,7 @@ impl Kura {
                     kind,
                     "failed to create progress append-intent build"
                 );
+                storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
                 return None;
             }
         };
@@ -3535,8 +3580,9 @@ impl Kura {
                 kind,
                 "failed to persist progress append-intent build"
             );
+            storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
             drop(build);
-            let _ = Self::remove_bound_progress_temp_if_present(namespace, &build_path);
+            let _ = storage.retire(namespace, &build_path);
             let _ = Self::sync_bound_progress_intent_directories(namespace);
             return None;
         }
@@ -3544,12 +3590,7 @@ impl Kura {
         if should_fail_after_bound_progress_append_build_for_tests() {
             return None;
         }
-        if let Err(error) = Self::promote_bound_progress_temp_noreplace(
-            namespace,
-            &build_path,
-            &intent_path,
-            &build,
-        ) {
+        if let Err(error) = storage.publish(namespace, &build_path, &intent_path, &build, false) {
             warn!(
                 source = ?error.source,
                 published = error.published,
@@ -3558,9 +3599,11 @@ impl Kura {
                 kind,
                 "failed to publish progress append intent"
             );
+            let published = error.published;
+            storage.retain_failure(Error::IO(error.source, build_path.clone()));
             drop(build);
-            if !error.published {
-                let _ = Self::remove_bound_progress_temp_if_present(namespace, &build_path);
+            if !published {
+                let _ = storage.retire(namespace, &build_path);
                 let _ = Self::sync_bound_progress_intent_directories(namespace);
             }
             return None;
@@ -3572,6 +3615,7 @@ impl Kura {
                 kind,
                 "failed to sync progress append-intent publication"
             );
+            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
             return None;
         }
         Some(build)
@@ -3629,12 +3673,35 @@ impl Kura {
                 expected_path.to_path_buf(),
             ));
         }
+        #[cfg(windows)]
+        let native_owner = {
+            let owner = iroha_fs::OwnerDirectory::open(expected_path)
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            let original = iroha_fs::FileMetadata::of(&file)
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            if owner
+                .identity()
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?
+                != original.identity()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress directory native owner differs from original descriptor",
+                    ),
+                    expected_path.to_path_buf(),
+                ));
+            }
+            owner
+        };
         Ok(BoundProgressDirectory {
             expected_path: expected_path.to_path_buf(),
             canonical_path,
             entry_name: None,
             file,
             metadata,
+            #[cfg(windows)]
+            native_owner,
         })
     }
     /// Return whether a progress pair's immediate directory is durably absent
@@ -3797,7 +3864,21 @@ impl Kura {
                 metadata,
             });
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let owner = parent
+                .native_owner
+                .open_child(name)
+                .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
+            let mut child = Self::bind_native_progress_directory(store_root, expected_path, owner)?;
+            child.entry_name = Some(name.to_os_string());
+            parent
+                .native_owner
+                .revalidate()
+                .map_err(|error| Error::IO(error, parent.expected_path.clone()))?;
+            Ok(child)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let mut child = Self::open_bound_progress_directory(store_root, expected_path)?;
             child.entry_name = Some(name.to_os_string());
@@ -3854,7 +3935,17 @@ impl Kura {
                 sidecar_dir.to_path_buf(),
             ));
         };
+        #[cfg(not(windows))]
         let root = Self::open_bound_progress_directory(&self.store_root, root_path)?;
+        #[cfg(windows)]
+        let root = Self::bind_native_progress_directory(
+            &self.store_root,
+            root_path,
+            self.store_root_directory
+                .native_owner
+                .retain()
+                .map_err(|error| Error::IO(error, root_path.clone()))?,
+        )?;
         let mut directories = Vec::with_capacity(directory_paths.len());
         directories.push(root);
         for path in directory_paths.iter().skip(1) {
@@ -3989,6 +4080,10 @@ impl Kura {
             .iter()
             .enumerate()
             .all(|(directory_index, directory)| {
+                #[cfg(windows)]
+                if !self.bound_storage_directory_unchanged(directory) {
+                    return false;
+                }
                 #[cfg(not(unix))]
                 let _ = directory_index;
                 let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
@@ -6258,6 +6353,7 @@ impl Kura {
         block_store.read_block_data(index.start, &mut bytes)?;
         Ok(bytes)
     }
+    #[cfg(not(windows))]
     fn read_bound_regular_file_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -6312,6 +6408,7 @@ impl Kura {
         }
         Ok(Some(bytes))
     }
+    #[cfg(not(windows))]
     fn open_bound_regular_file_with_exact_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -6353,6 +6450,7 @@ impl Kura {
         Ok((file, metadata))
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(windows))]
     fn verify_bound_open_regular_file_exact_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -6363,6 +6461,8 @@ impl Kura {
         max_bytes: usize,
         kind: &str,
     ) -> Result<()> {
+        #[cfg(windows)]
+        let native_original = Self::native_evidence_original(namespace, path, file)?;
         let directory = path.parent().ok_or_else(|| {
             Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
@@ -6397,9 +6497,17 @@ impl Kura {
         }
         file.seek(SeekFrom::Start(0))
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        #[cfg(windows)]
+        if Self::native_evidence_original(namespace, path, file)? != native_original {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "native exact original changed",
+            ));
+        }
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(windows))]
     fn verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -6410,6 +6518,8 @@ impl Kura {
         max_bytes: usize,
         kind: &str,
     ) -> Result<()> {
+        #[cfg(windows)]
+        let native_original = Self::native_evidence_original(namespace, path, file)?;
         let directory = path.parent().ok_or_else(|| {
             Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
@@ -6446,8 +6556,16 @@ impl Kura {
         }
         file.seek(SeekFrom::Start(0))
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        #[cfg(windows)]
+        if Self::native_evidence_original(namespace, path, file)? != native_original {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "native original changed after namespace mutation",
+            ));
+        }
         Ok(())
     }
+    #[cfg(not(windows))]
     fn publish_bound_noclobber_file_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -7230,6 +7348,16 @@ impl Kura {
 impl Kura {}
 impl Kura {}
 include!("kura/sidecar_physical_resource_accounting.rs");
+mod bound_progress_io;
+#[cfg(windows)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect strict progress only after caller admission and custody qualification"
+    )
+)]
+mod native_bound_progress_transaction;
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/native_execution_reads.rs");
 #[cfg(test)]
@@ -7238,6 +7366,7 @@ mod native_compaction_recovery_tests;
 #[cfg(test)]
 #[path = "kura/native_journal_tests.rs"]
 mod native_journal_tests;
+include!("kura/indexed_sidecar_rewrite_io.rs");
 include!("kura/indexed_sidecar_rewrite.rs");
 impl BlockStore {
     /// Create a new block store in `path`.
@@ -8934,6 +9063,8 @@ impl BlockStore {
         std::fs::rename(&temporary_path, &path).map_err(|error| Error::IO(error, path.clone()))?;
         let persisted = std::fs::OpenOptions::new()
             .read(true)
+            // FlushFileBuffers requires write access on Windows, even after a synced rename.
+            .write(cfg!(windows))
             .open(&path)
             .map_err(|error| Error::IO(error, path.clone()))?;
         persisted
@@ -10927,6 +11058,7 @@ pub(crate) mod tests {
     include!("kura/tests/05b_canonical_physical_resource_tests.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");
     include!("kura/tests/07e_autonomous_publication_temp_recovery_tests.rs");
+    include!("kura/tests/indexed_sidecar_session.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
@@ -10937,7 +11069,10 @@ pub(crate) mod tests {
     include!("kura/tests/14b_metadata_physical_resource_tests.rs");
     include!("kura/tests/15_remaining_physical_writer_tests.rs");
     include!("kura/tests/16_resource_file_admission_tests.rs");
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     include!("kura/tests/17_read_only_evidence_tests.rs");
     include!("kura/tests/18_block_hash_ranges.rs");
     include!("kura/tests/19_transaction_history_budget.rs");

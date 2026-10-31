@@ -25,7 +25,10 @@ use sorafs_manifest::operator_preseed::{
     OPERATOR_PRESEED_STORE_RECEIPT_DIR_V1, OperatorPreseedSessionReceiptV1,
 };
 
+use crate::governance_rooted_fs::{NativeMetadata, named_metadata, native_metadata};
 use crate::store::StorageBackend;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 /// Maximum canonical bytes accepted for one durable V1 preseed qualification.
 pub const OPERATOR_PRESEED_STORE_RECEIPT_MAX_BYTES_V1: u64 = 1024 * 1024;
@@ -96,11 +99,46 @@ pub fn install_operator_preseed_store_receipt_staging(
             "operator-preseed destination digest must be exactly 32 lowercase hex bytes".to_owned(),
         );
     }
-    crate::governance_rooted_fs::rename_path_exclusive(staging, destination).map_err(|error| {
+    install_qualification_no_replace(staging, destination).map_err(|error| {
         format!(
             "failed to atomically install operator-preseed qualification without replacement: {error}"
         )
     })
+}
+
+#[cfg(not(windows))]
+fn install_qualification_no_replace(staging: &Path, destination: &Path) -> std::io::Result<()> {
+    crate::governance_rooted_fs::rename_path_exclusive(staging, destination)
+}
+
+#[cfg(windows)]
+fn install_qualification_no_replace(staging: &Path, destination: &Path) -> std::io::Result<()> {
+    let parent = staging.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    if destination.parent() != Some(parent) {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    let private = iroha_fs::PrivateDirectory::open(parent)?;
+    let owner = iroha_fs::OwnerDirectory::open(parent)?;
+    let source = open_operator_preseed_file_nofollow(staging)?;
+    let original = iroha_fs::FileSnapshot::of(&source, true)?;
+    let movable = owner.open_movable_regular(
+        staging
+            .file_name()
+            .ok_or(std::io::ErrorKind::InvalidInput)?,
+    )?;
+    if movable.snapshot()? != original {
+        return Err(std::io::Error::other(
+            "operator-preseed staging custody changed before publication",
+        ));
+    }
+    let moved = movable.move_no_replace(
+        &owner,
+        destination
+            .file_name()
+            .ok_or(std::io::ErrorKind::InvalidInput)?,
+    )?;
+    moved.require_source_absent()?;
+    private.revalidate()
 }
 
 fn decode_canonical_operator_preseed_receipt(
@@ -129,9 +167,21 @@ fn open_operator_preseed_file_nofollow(path: &Path) -> std::io::Result<fs::File>
         .open(path)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
 fn open_operator_preseed_file_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    fs::File::open(path)
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    crate::fs_flags::set_no_follow_flag(&mut options);
+    options.open(path)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn open_operator_preseed_file_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let _ = path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "operator-preseed custody is unsupported",
+    ))
 }
 
 /// Read and validate one canonical durable qualification file.
@@ -142,7 +192,14 @@ fn open_operator_preseed_file_nofollow(path: &Path) -> std::io::Result<fs::File>
 pub fn read_operator_preseed_store_receipt(
     path: &Path,
 ) -> Result<(OperatorPreseedSessionReceiptV1, Vec<u8>), String> {
-    let before = fs::symlink_metadata(path).map_err(|error| {
+    #[cfg(windows)]
+    let _receipt_custody = iroha_fs::RetainedFile::open_private(path)
+        .and_then(|file| {
+            file.require_current_owner()?;
+            Ok(file)
+        })
+        .map_err(|error| format!("operator-preseed private receipt custody: {error}"))?;
+    let before = named_metadata(path).map_err(|error| {
         format!(
             "failed to inspect operator-preseed qualification {}: {error}",
             path.display()
@@ -168,7 +225,7 @@ pub fn read_operator_preseed_store_receipt(
             path.display()
         )
     })?;
-    let opened = file.metadata().map_err(|error| {
+    let opened = native_metadata(&file).map_err(|error| {
         format!(
             "failed to inspect opened operator-preseed qualification {}: {error}",
             path.display()
@@ -199,13 +256,13 @@ pub fn read_operator_preseed_store_receipt(
             path.display()
         ));
     }
-    let after = fs::symlink_metadata(path).map_err(|error| {
+    let after = named_metadata(path).map_err(|error| {
         format!(
             "failed to re-inspect operator-preseed qualification {}: {error}",
             path.display()
         )
     })?;
-    let after_open = file.metadata().map_err(|error| {
+    let after_open = native_metadata(&file).map_err(|error| {
         format!(
             "failed to re-inspect opened operator-preseed qualification {}: {error}",
             path.display()
@@ -228,6 +285,10 @@ pub fn read_operator_preseed_store_receipt(
             path.display()
         ));
     }
+    #[cfg(windows)]
+    _receipt_custody
+        .revalidate()
+        .map_err(|error| format!("operator-preseed receipt changed during validation: {error}"))?;
     Ok((receipt, bytes))
 }
 
@@ -248,7 +309,7 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
     mut after_stage_read: impl FnMut(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
     let directory = operator_preseed_store_receipt_dir(store_root);
-    let metadata = match fs::symlink_metadata(&directory) {
+    let metadata = match named_metadata(&directory) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
@@ -265,7 +326,10 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
         ));
     }
     validate_qualification_directory_custody(&directory, &metadata)?;
-    let directory_handle = fs::File::open(&directory).map_err(|error| {
+    #[cfg(windows)]
+    let directory_custody = iroha_fs::PrivateDirectory::open(&directory)
+        .map_err(|error| format!("operator-preseed private directory custody: {error}"))?;
+    let directory_handle = open_qualification_directory(&directory).map_err(|error| {
         format!(
             "failed to retain operator-preseed qualification directory {}: {error}",
             directory.display()
@@ -273,7 +337,7 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
     })?;
     if !same_file_snapshot(
         &metadata,
-        &directory_handle.metadata().map_err(|error| {
+        &native_metadata(&directory_handle).map_err(|error| {
             format!("failed to inspect retained operator-preseed qualification directory: {error}")
         })?,
     ) {
@@ -311,7 +375,7 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
             continue;
         }
         let path = entry.path();
-        let stage_metadata = fs::symlink_metadata(&path).map_err(|error| {
+        let stage_metadata = named_metadata(&path).map_err(|error| {
             format!(
                 "failed to inspect operator-preseed staging file {}: {error}",
                 path.display()
@@ -350,7 +414,7 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
                 path.display()
             )
         })?;
-        let opened_metadata = stage_file.metadata().map_err(|error| {
+        let opened_metadata = native_metadata(&stage_file).map_err(|error| {
             format!(
                 "failed to inspect opened operator-preseed staging file {}: {error}",
                 path.display()
@@ -383,13 +447,13 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
                 path.display()
             ));
         }
-        let read_handle_metadata = stage_file.metadata().map_err(|error| {
+        let read_handle_metadata = native_metadata(&stage_file).map_err(|error| {
             format!(
                 "failed to re-inspect opened operator-preseed staging file {}: {error}",
                 path.display()
             )
         })?;
-        let read_path_metadata = fs::symlink_metadata(&path).map_err(|error| {
+        let read_path_metadata = named_metadata(&path).map_err(|error| {
             format!(
                 "failed to re-inspect operator-preseed staging path {}: {error}",
                 path.display()
@@ -408,13 +472,13 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
         }
         decode_canonical_operator_preseed_receipt(&bytes)?;
         after_stage_read(&path)?;
-        let install_path_metadata = fs::symlink_metadata(&path).map_err(|error| {
+        let install_path_metadata = named_metadata(&path).map_err(|error| {
             format!(
                 "failed to inspect operator-preseed staging path {} before installation: {error}",
                 path.display()
             )
         })?;
-        let install_handle_metadata = stage_file.metadata().map_err(|error| {
+        let install_handle_metadata = native_metadata(&stage_file).map_err(|error| {
             format!(
                 "failed to inspect opened operator-preseed staging file {} before installation: {error}",
                 path.display()
@@ -464,6 +528,16 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
                         destination.display()
                     )
                 })?;
+            #[cfg(windows)]
+            if !same_file_snapshot(
+                &native_metadata(&stage_file).map_err(|error| error.to_string())?,
+                &named_metadata(&destination).map_err(|error| error.to_string())?,
+            ) {
+                return Err(
+                    "recovered operator-preseed qualification is not the original staging object"
+                        .to_owned(),
+                );
+            }
             if installed_bytes != bytes {
                 return Err(format!(
                     "recovered operator-preseed qualification {} differs from the exact decoded staging bytes",
@@ -474,13 +548,13 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
         recovered = true;
     }
     if recovered {
-        directory_handle.sync_all().map_err(|error| {
+        crate::governance_rooted_fs::sync_directory(&directory_handle).map_err(|error| {
             format!(
                 "failed to synchronize recovered operator-preseed qualification directory {}: {error}",
                 directory.display()
             )
         })?;
-        let current = fs::symlink_metadata(&directory).map_err(|error| {
+        let current = named_metadata(&directory).map_err(|error| {
             format!(
                 "failed to recheck recovered operator-preseed qualification directory {}: {error}",
                 directory.display()
@@ -488,7 +562,7 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
         })?;
         if !same_file_snapshot(
             &current,
-            &directory_handle.metadata().map_err(|error| {
+            &native_metadata(&directory_handle).map_err(|error| {
                 format!(
                     "failed to recheck retained operator-preseed qualification directory: {error}"
                 )
@@ -499,12 +573,29 @@ fn recover_operator_preseed_store_receipt_staging_with_hook(
             );
         }
     }
+    #[cfg(windows)]
+    directory_custody
+        .revalidate()
+        .map_err(|error| format!("operator-preseed directory changed during recovery: {error}"))?;
     Ok(())
+}
+
+fn open_qualification_directory(path: &Path) -> std::io::Result<fs::File> {
+    #[cfg(windows)]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).custom_flags(0x8220_0000);
+        options.open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::File::open(path)
+    }
 }
 
 fn validate_qualification_directory_custody(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
 ) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -516,12 +607,23 @@ fn validate_qualification_directory_custody(
             ));
         }
     }
+    #[cfg(windows)]
+    {
+        let directory = iroha_fs::PrivateDirectory::open(path)
+            .map_err(|error| format!("operator-preseed private directory custody: {error}"))?;
+        if directory.identity().map_err(|error| error.to_string())? != metadata.identity() {
+            return Err("operator-preseed qualification directory changed identity".to_owned());
+        }
+        directory.revalidate().map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err("operator-preseed custody is unsupported".to_owned());
     Ok(())
 }
 
 fn validate_private_receipt_file_custody(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &NativeMetadata,
 ) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -534,12 +636,25 @@ fn validate_private_receipt_file_custody(
             ));
         }
     }
+    #[cfg(windows)]
+    {
+        let file = iroha_fs::RetainedFile::open_private(path)
+            .map_err(|error| format!("operator-preseed private receipt custody: {error}"))?;
+        file.require_current_owner()
+            .map_err(|error| error.to_string())?;
+        if file.identity().map_err(|error| error.to_string())? != metadata.identity() {
+            return Err("operator-preseed qualification changed identity".to_owned());
+        }
+        file.revalidate().map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err("operator-preseed custody is unsupported".to_owned());
     Ok(())
 }
 
 fn qualification_paths(store_root: &Path, allow_missing: bool) -> Result<Vec<PathBuf>, String> {
     let directory = operator_preseed_store_receipt_dir(store_root);
-    let metadata = match fs::symlink_metadata(&directory) {
+    let metadata = match named_metadata(&directory) {
         Ok(metadata) => metadata,
         Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Vec::new());
@@ -558,6 +673,9 @@ fn qualification_paths(store_root: &Path, allow_missing: bool) -> Result<Vec<Pat
         ));
     }
     validate_qualification_directory_custody(&directory, &metadata)?;
+    #[cfg(windows)]
+    let directory_custody = iroha_fs::PrivateDirectory::open(&directory)
+        .map_err(|error| format!("operator-preseed private directory custody: {error}"))?;
     let entries = fs::read_dir(&directory).map_err(|error| {
         format!(
             "failed to read operator-preseed qualification directory {}: {error}",
@@ -585,6 +703,10 @@ fn qualification_paths(store_root: &Path, allow_missing: bool) -> Result<Vec<Pat
             paths.len()
         ));
     }
+    #[cfg(windows)]
+    directory_custody
+        .revalidate()
+        .map_err(|error| error.to_string())?;
     Ok(paths)
 }
 
@@ -787,7 +909,7 @@ pub fn validate_operator_preseed_store_receipts(
 }
 
 #[cfg(unix)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_file_snapshot(left: &NativeMetadata, right: &NativeMetadata) -> bool {
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -806,9 +928,9 @@ mod tests {
         BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy, StorageClass,
         operator_preseed::{OperatorPreseedArtifactReceiptV1, OperatorPreseedTargetReceiptV1},
     };
+    use std::io;
     #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-    use std::{io, io::Write as _};
+    use std::os::unix::fs::PermissionsExt as _;
 
     const CAPACITY: u64 = 1024 * 1024;
     const VALIDATOR: &str = "validator-a";
@@ -889,19 +1011,16 @@ mod tests {
 
     fn retain_receipt(store_root: &Path, receipt: &OperatorPreseedSessionReceiptV1) -> Vec<u8> {
         let directory = operator_preseed_store_receipt_dir(store_root);
-        fs::create_dir_all(&directory).expect("create qualification directory");
-        #[cfg(unix)]
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .expect("set qualification directory mode");
+        let directory_owner = iroha_fs::PrivateDirectory::open_or_create(&directory)
+            .expect("create canonical private qualification directory");
         let bytes = norito::json::to_vec(receipt).expect("encode receipt");
         let path = operator_preseed_store_receipt_path(store_root, &bytes);
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        options
-            .open(path)
-            .and_then(|mut file| file.write_all(&bytes))
+        directory_owner
+            .write_atomic(
+                path.file_name().unwrap(),
+                &bytes,
+                iroha_fs::PublishMode::CreateNew,
+            )
             .expect("retain test qualification");
         bytes
     }
@@ -1179,11 +1298,184 @@ mod tests {
                 .contains("exactly one hard link")
         );
     }
+    #[cfg(windows)]
+    fn change_everyone_read(path: &Path, grant: bool) {
+        assert!(
+            std::process::Command::new("icacls")
+                .arg(path)
+                .arg(if grant { "/grant" } else { "/remove:g" })
+                .arg(if grant { "*S-1-1-0:R" } else { "*S-1-1-0" })
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_qualification_custody_rejects_private_acl_drift_and_hardlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let receipt = receipt(
+            &root,
+            "peer-current",
+            CAPACITY,
+            vec![synthetic_artifact(17)],
+        );
+        let bytes = retain_receipt(&root, &receipt);
+        let directory = operator_preseed_store_receipt_dir(&root);
+        let path = operator_preseed_store_receipt_path(&root, &bytes);
+        assert_eq!(read_operator_preseed_store_receipt(&path).unwrap().1, bytes);
+        for changed in [&path, &directory] {
+            change_everyone_read(changed, true);
+            assert!(read_operator_preseed_store_receipts(&root).is_err());
+            change_everyone_read(changed, false);
+        }
+        let alias = root.join("alias");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(read_operator_preseed_store_receipt(&path).is_err());
+        fs::remove_file(alias).unwrap();
+        assert_eq!(read_operator_preseed_store_receipt(&path).unwrap().1, bytes);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_qualification_recovery_retains_original_identity_and_rejects_substitution() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let receipt = receipt(
+            &root,
+            "peer-current",
+            CAPACITY,
+            vec![synthetic_artifact(19)],
+        );
+        let bytes = norito::json::to_vec(&receipt).unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(operator_preseed_store_receipt_dir(&root))
+                .unwrap();
+        let staging_name = ".qualification.2.0.tmp";
+        let staging = directory.path().join(staging_name);
+        directory
+            .write_atomic(staging_name, &bytes, iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let identity = named_metadata(&staging).unwrap().identity();
+        recover_operator_preseed_store_receipt_staging(&root).unwrap();
+        let destination = operator_preseed_store_receipt_path(&root, &bytes);
+        assert_eq!(named_metadata(&destination).unwrap().identity(), identity);
+        assert_eq!(
+            read_operator_preseed_store_receipt(&destination).unwrap().1,
+            bytes
+        );
+        directory
+            .write_atomic(staging_name, &bytes, iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let result = recover_operator_preseed_store_receipt_staging_with_hook(&root, |path| {
+            fs::rename(path, directory.path().join("preserved-original"))
+                .map_err(|error| error.to_string())?;
+            directory
+                .write_atomic(staging_name, &bytes, iroha_fs::PublishMode::CreateNew)
+                .map_err(|error| error.to_string())
+        });
+        assert!(result.is_err());
+        assert!(staging.exists());
+        assert!(directory.path().join("preserved-original").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_equal_bytes_in_distinct_files_have_distinct_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(temp.path().join("private")).unwrap();
+        for name in ["one", "two"] {
+            directory
+                .write_atomic(name, b"equal", iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+        }
+        assert!(!same_file_snapshot(
+            &named_metadata(directory.path().join("one")).unwrap(),
+            &named_metadata(directory.path().join("two")).unwrap()
+        ));
+        let inherited = temp.path().join("inherited");
+        fs::create_dir(&inherited).unwrap();
+        assert!(
+            validate_qualification_directory_custody(
+                &inherited,
+                &named_metadata(&inherited).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_qualification_install_never_replaces_or_follows_a_junction_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let receipt = receipt(
+            &root,
+            "peer-current",
+            CAPACITY,
+            vec![synthetic_artifact(23)],
+        );
+        let bytes = norito::json::to_vec(&receipt).unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(operator_preseed_store_receipt_dir(&root))
+                .unwrap();
+        let destination = operator_preseed_store_receipt_path(&root, &bytes);
+        directory
+            .write_atomic(
+                destination.file_name().unwrap(),
+                b"original",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let staging = directory.path().join(".qualification.3.0.tmp");
+        directory
+            .write_atomic(
+                staging.file_name().unwrap(),
+                &bytes,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        assert!(install_operator_preseed_store_receipt_staging(&staging, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
+        assert_eq!(fs::read(&staging).unwrap(), bytes);
+        let linked_store = root.join("linked-store");
+        fs::create_dir(&linked_store).unwrap();
+        let junction = operator_preseed_store_receipt_dir(&linked_store);
+        assert!(
+            std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&junction)
+                .arg(directory.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            install_operator_preseed_store_receipt_staging(
+                &junction.join(staging.file_name().unwrap()),
+                &junction.join(format!("{}.json", "ab".repeat(32))),
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&staging).unwrap(), bytes);
+    }
 }
 
-#[cfg(not(unix))]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file() == right.is_file()
+#[cfg(windows)]
+fn same_file_snapshot(left: &NativeMetadata, right: &NativeMetadata) -> bool {
+    left.identity() == right.identity()
+        && left.links() == right.links()
         && left.len() == right.len()
-        && left.permissions().readonly() == right.permissions().readonly()
+        && left.file_attributes() == right.file_attributes()
+        && left.creation_time() == right.creation_time()
+        && left.last_write_time() == right.last_write_time()
+}
+#[cfg(not(any(unix, windows)))]
+fn same_file_snapshot(_left: &NativeMetadata, _right: &NativeMetadata) -> bool {
+    false
 }

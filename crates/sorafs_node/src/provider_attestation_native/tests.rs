@@ -5,20 +5,36 @@ use crate::provider_attestation_journal::{
     tests::native_inventory_test_attestation,
 };
 
+struct PrivateFixtureRoot {
+    directory: PrivateDirectory,
+    // Declared after the directory so its native handles close before recursive cleanup.
+    _temporary: tempfile::TempDir,
+}
+impl PrivateFixtureRoot {
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
 fn fixture() -> (
-    tempfile::TempDir,
+    PrivateFixtureRoot,
     NetworkId,
     ProviderId,
     MusubiProviderAttestationJournalPolicyV1,
 ) {
-    let root = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+    let root = PrivateFixtureRoot {
+        directory,
+        _temporary: temporary,
+    };
     let value = native_inventory_test_attestation(9, 3);
     let network = value.payload.binding.network_id;
     let provider = value.payload.binding.provider_id;
     let policy = MusubiProviderAttestationJournalPolicyV1::default();
     (root, network, provider, policy)
 }
-fn initialize() -> (tempfile::TempDir, NativeMusubiProviderAttestationCustodyV1) {
+fn initialize() -> (PrivateFixtureRoot, NativeMusubiProviderAttestationCustodyV1) {
     let (root, network, provider, policy) = fixture();
     NativeMusubiProviderAttestationCustodyV1::initialize(root.path(), network, provider, policy)
         .unwrap();

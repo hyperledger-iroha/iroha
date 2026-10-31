@@ -477,6 +477,7 @@ pub(super) fn matched_workload_record(
     .map_err(Into::into)
 }
 
+#[cfg(unix)]
 pub(super) fn publish_matched_workload(
     request: &RealProcessBenchmarkRequestV1,
     request_sha: &str,

@@ -135,6 +135,60 @@ impl PublicInput {
     }
 }
 
+#[cfg(windows)]
+pub(crate) struct PublicInput {
+    file: iroha_fs::RetainedFile,
+    snapshot: iroha_fs::FileSnapshot,
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(windows)]
+impl PublicInput {
+    pub(crate) fn read(path: &Path) -> Result<Self> {
+        let name = path
+            .file_name()
+            .ok_or_else(|| eyre!("public profile input has no direct filename"))?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let directory = iroha_fs::ReaderDirectory::open(parent)?;
+        let mut file = directory.open_retained_regular(name)?;
+        let snapshot = file.snapshot()?;
+        require(
+            snapshot.local_parts().2 <= MAX_BYTES as u64,
+            "public profile input exceeds bound",
+        )?;
+        let mut bytes = Vec::new();
+        std::io::Read::by_ref(file.file_mut())
+            .take((MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        require(
+            bytes.len() <= MAX_BYTES,
+            "public profile input exceeds bound",
+        )?;
+        let input = Self {
+            file,
+            snapshot,
+            bytes,
+        };
+        input.revalidate()?;
+        directory.revalidate()?;
+        Ok(input)
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<()> {
+        self.file.revalidate()?;
+        require(
+            self.file.snapshot()? == self.snapshot
+                && self.snapshot.local_parts().2 == self.bytes.len() as u64,
+            "public profile input changed during custody",
+        )?;
+        self.file.revalidate()?;
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 pub(super) fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
@@ -213,8 +267,59 @@ pub(super) fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+#[cfg(windows)]
+pub(super) fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::path::{Component, Prefix};
+
+    require(
+        path.is_absolute()
+            && path.components().all(|part| match part {
+                Component::Prefix(prefix) => {
+                    matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+                }
+                Component::RootDir | Component::Normal(_) => true,
+                _ => false,
+            }),
+        "profile output must be an absolute normal local file path",
+    )?;
+    require(
+        bytes.len() <= MAX_BYTES,
+        "public profile output exceeds bound",
+    )?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| eyre!("profile output has no name"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("profile output has no parent"))?;
+    // This admission never repairs an inherited or permissive output ACL. Both
+    // publication and readback use the same original private parent and ancestry.
+    let directory = iroha_fs::PrivateDirectory::open(parent)?;
+    directory.write_atomic(name, bytes, iroha_fs::PublishMode::CreateNew)?;
+    let mut published = directory.open_retained_private(name)?;
+    let snapshot = published.snapshot()?;
+    require(
+        snapshot.local_parts().2 == bytes.len() as u64,
+        "published profile length differs",
+    )?;
+    let mut observed = Vec::new();
+    std::io::Read::by_ref(published.file_mut())
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut observed)?;
+    require(
+        observed == bytes,
+        "published profile differs from selected bytes",
+    )?;
+    require(
+        published.snapshot()? == snapshot,
+        "published profile changed during readback",
+    )?;
+    directory.revalidate()?;
+    Ok(())
+}
+
 impl ExportProfile {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn run_without_client_config(&self, mut output: impl std::io::Write) -> Result<()> {
         let wire = PublicInput::read(&self.genesis_signed)?;
         let key = PublicInput::read(&self.genesis_public_key)?;
@@ -251,9 +356,155 @@ impl ExportProfile {
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn run_without_client_config(&self, _: impl std::io::Write) -> Result<()> {
-        eyre::bail!("native profile export requires Unix filesystem custody")
+        eyre::bail!("native profile export requires Unix or Windows filesystem custody")
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use clap::Parser as _;
+    use iroha_fs::{PrivateDirectory, PublishMode};
+
+    fn fixture() -> (tempfile::TempDir, ExportProfile, DeploymentTrustV1) {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("profile")).unwrap();
+        let trust = finality::test_trust();
+        let args = ExportProfile {
+            network_id: finality::test_network_id(),
+            chain: trust.chain.clone(),
+            chain_discriminant: trust.account_chain_discriminant,
+            genesis_signed: directory.path().join("genesis.signed.nrt"),
+            genesis_public_key: directory.path().join("genesis.public_key"),
+            peers: directory.path().join("peers.json"),
+            output: directory.path().join("profile.json"),
+        };
+        for (name, bytes) in [
+            (
+                "genesis.signed.nrt",
+                hex::decode(&trust.genesis_signed_wire_hex).unwrap(),
+            ),
+            (
+                "genesis.public_key",
+                format!("{}\n", trust.genesis_public_key).into_bytes(),
+            ),
+            ("peers.json", json::to_vec(&trust.peers).unwrap()),
+        ] {
+            directory
+                .write_atomic(name, &bytes, PublishMode::CreateNew)
+                .unwrap();
+        }
+        (temporary, args, trust)
+    }
+
+    #[test]
+    fn native_export_uses_credential_free_dispatch_and_private_no_clobber_output() {
+        let (_temporary, args, trust) = fixture();
+        let argv = vec![
+            "iroha".to_owned(),
+            "--machine".into(),
+            "dataspace".into(),
+            "export-profile".into(),
+            "--network-id".into(),
+            args.network_id.to_string(),
+            "--chain".into(),
+            args.chain.to_string(),
+            "--chain-discriminant".into(),
+            args.chain_discriminant.to_string(),
+            "--genesis-signed".into(),
+            args.genesis_signed.display().to_string(),
+            "--genesis-public-key".into(),
+            args.genesis_public_key.display().to_string(),
+            "--peers".into(),
+            args.peers.display().to_string(),
+            "--output".into(),
+            args.output.display().to_string(),
+        ];
+        let parsed = crate::Args::try_parse_from(argv).unwrap();
+        let mut output = Vec::new();
+        crate::run_local_dataspace_profile(&parsed, &mut output)
+            .unwrap()
+            .unwrap();
+        let bytes = iroha_fs::read_private(&args.output, MAX_BYTES).unwrap();
+        assert_eq!(
+            json::from_slice::<DeploymentTrustV1>(&bytes).unwrap(),
+            trust
+        );
+        let receipt: json::Value = json::from_slice(&output).unwrap();
+        for (field, path) in [
+            ("signed_genesis_sha256", &args.genesis_signed),
+            ("genesis_public_key_sha256", &args.genesis_public_key),
+            ("peers_sha256", &args.peers),
+            ("profile_sha256", &args.output),
+        ] {
+            assert_eq!(
+                receipt[field].as_str(),
+                Some(hex::encode(Sha256::digest(fs::read(path).unwrap())).as_str())
+            );
+        }
+        assert_eq!(receipt["target_expectation_only"].as_bool(), Some(true));
+        assert_eq!(receipt["authorization_verified"].as_bool(), Some(false));
+        assert_eq!(receipt["deployment_verified"].as_bool(), Some(false));
+        let mut second = Vec::new();
+        assert!(args.run_without_client_config(&mut second).is_err());
+        assert!(second.is_empty());
+        assert_eq!(fs::read(&args.output).unwrap().as_slice(), bytes.as_slice());
+    }
+
+    #[test]
+    fn native_public_input_pins_original_and_rejects_links_and_excessive_length() {
+        let (_temporary, args, _trust) = fixture();
+        let input = PublicInput::read(&args.peers).unwrap();
+        let original = input.bytes.clone();
+        assert!(fs::write(&args.peers, b"[]").is_err());
+        assert!(fs::rename(&args.peers, args.peers.with_extension("displaced")).is_err());
+        assert!(fs::remove_file(&args.peers).is_err());
+        input.revalidate().unwrap();
+        assert_eq!(fs::read(&args.peers).unwrap(), original);
+        drop(input);
+        let hardlink = args.peers.with_extension("hardlink");
+        fs::hard_link(&args.peers, &hardlink).unwrap();
+        assert!(PublicInput::read(&args.peers).is_err());
+        fs::remove_file(&hardlink).unwrap();
+        assert_eq!(PublicInput::read(&args.peers).unwrap().bytes, original);
+        let directory = PrivateDirectory::open(args.output.parent().unwrap()).unwrap();
+        directory
+            .write_atomic("oversized", b"", PublishMode::CreateNew)
+            .unwrap();
+        let oversized = directory.path().join("oversized");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&oversized)
+            .unwrap()
+            .set_len((MAX_BYTES + 1) as u64)
+            .unwrap();
+        assert!(PublicInput::read(&oversized).is_err());
+    }
+
+    #[test]
+    fn native_profile_publication_refuses_unsafe_parent_and_invalid_names() {
+        let (_temporary, args, _trust) = fixture();
+        let parent = args.output.parent().unwrap();
+        assert!(publish_profile(&parent.join("profile.json:stream"), b"{}").is_err());
+        assert!(publish_profile(&parent.join("..\\outside.json"), b"{}").is_err());
+        assert!(publish_profile(Path::new("relative.json"), b"{}").is_err());
+        let status = std::process::Command::new("icacls.exe")
+            .arg(parent)
+            .args(["/grant", "*S-1-5-32-545:(R)"])
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "fixture grants a real non-owner read ACE"
+        );
+        assert!(publish_profile(&args.output, b"{}").is_err());
+        assert!(!args.output.exists());
+        assert_eq!(
+            fs::read(&args.peers).unwrap(),
+            json::to_vec(&finality::test_trust().peers).unwrap()
+        );
     }
 }
 

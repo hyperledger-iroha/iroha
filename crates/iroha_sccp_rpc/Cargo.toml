@@ -13,6 +13,7 @@ workspace = true
 iroha_sccp = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_config = { workspace = true }
+iroha_fs = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Blocking HTTP over rustls only; JSON is parsed with `norito::json`, never reqwest's `json`.
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
@@ -33,3 +34,4 @@ rand = { workspace = true }
 # Builder tests prove events of the synthetic source chains (`test_support`) through the
 # production verifier.
 iroha_sccp = { workspace = true, features = ["test-fixtures"] }
+tempfile = { workspace = true }

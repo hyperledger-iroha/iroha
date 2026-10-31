@@ -30,11 +30,17 @@ ordinary refund controls.
    signing inputs. This handoff task owns the outcomes in the
    [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
    and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
-5. Validate the combined fixture/runtime repairs through fresh workspace,
-   genuine fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, and resolve its proving-time and
-   hardware-specific address-space failures;
+5. Qualify the implemented native fixture and release-owner corrections through
+   a fresh library build, affected-owner runtimes, workspace checks and genuine
+   fixture and native SDK artifacts on one source candidate. Qualify the
+   joint X509 relation and transcript privacy, and resolve proving time and
+   process observation under unchanged memory and address-space limits;
    produce current q77 maximum proofs without widening resource limits.
+
+The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
+track native custody, retained CLI/Core evidence, SDK and package qualification,
+actual instruction execution, and the remaining named-hardware/resource gates.
+Component correctness does not close an installed-release or performance gate.
 
 The [first-release goals](specs/first_release_completion_goals.md),
 [IVM goals](specs/kotodama_ivm_completion.md) and [ZK goals](specs/zk_first_release_goals.md)
@@ -123,10 +129,11 @@ Queue expiry, native AMX time deadlines and CT5 remain separate required control
 simulator's wall-stamped payloads alone do not establish final-payment restart progress.
 External customer credits use durable application inbox/outbox handling; their
 database effects are not claimed to be atomic with ledger settlement. The current
-resource contract's carrier/block inequality holds numerically and X.2's contract
-relations are closed; X.2 still needs four-validator exact/one-over,
-inconsistent-parameter and recovery evidence, and F.4 owns committed policy
-coherence. No compatibility aliases, dummy movements or relaxed fixed proof caps
+resource contract's carrier/block inequality holds numerically. X.2's resource
+agreement is qualified on its recorded four-validator candidate, including
+exact/one-over transactions, inconsistent parameters, restart and startup refusals.
+X.2 remains in progress on F.2 and P.1; X.4 owns actual maximum native-proof
+delivery, and F.4 owns the remaining committed-policy and carrier coherence. No compatibility aliases, dummy movements or relaxed fixed proof caps
 close these milestones.
 
 ## Architecture and build

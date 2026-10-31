@@ -1,11 +1,11 @@
-//! Output-pruned exact-root coset FFT with one clearing full-domain scratch.
+//! Public-prefix and output-pruned exact-root coset FFT over clearing scratch.
 //!
 //! At each radix-two DIF split the even outputs transform `a[j]+a[j+n/2]`,
 //! and the odd outputs transform `(a[j]-a[j+n/2])*root^j`, at root squared.
 //! Only public selected indices and coefficient lengths select work. A public
 //! zero suffix stays zero in both DIF children outside the inherited prefix.
-//! Traversal is bit-reversed;
-//! final gathers restore the caller's strictly increasing global-row order.
+//! Traversal is bit-reversed; a compact gather or an in-place permutation
+//! restores the caller's strictly increasing global-row order.
 
 use super::*;
 
@@ -138,15 +138,100 @@ fn evaluate_prefix_scheduled_with_v1<const INNER_PARALLEL: bool, const PRUNE_ZER
     } else {
         rows
     };
-    prune_v1::<INNER_PARALLEL>(&mut scratch, 0, &output, root, prefix);
+    prune_v1::<INNER_PARALLEL, false>(&mut scratch, 0, &output, root, prefix);
     for (destination, &row) in output.iter_mut().zip(selected) {
         *destination = scratch[reversed(row)];
     }
     Ok(Column::from_vec_v1(output.into_vec()))
 }
 
+/// Evaluate every canonical coset row, omitting only public zero-suffix work.
+///
+/// The CPU owner selects this path only for complete eight-column batches.
+/// Smaller full batches retain dense evaluation; selected rows keep their own schedule.
+/// The coefficient length includes every masking coefficient; no witness value
+/// selects work. One N-cell clearing buffer becomes the returned original column.
+pub(super) fn evaluate_full_v1(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+) -> Result<Column, AggregateStarkErrorV1> {
+    evaluate_full_with_v1(coefficients, native_log, common_log, |_| Ok(()), |_| Ok(()))
+}
+
+fn evaluate_full_with_v1(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+    after_scale: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+    after_transform: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+) -> Result<Column, AggregateStarkErrorV1> {
+    use crate::privacy_engines::transparent_stark::TransparentStarkErrorV1;
+
+    // Preserve the original dense helper's refusal order and aggregate mapping.
+    // Its InvalidDomain maps to InternalInvariant; the outer evaluator separately
+    // retains its earlier public-layout admission and InvalidLayout errors.
+    let invalid_domain =
+        || aggregate::map_transparent_error_v1(TransparentStarkErrorV1::InvalidDomain);
+    let native_rows = 1usize
+        .checked_shl(u32::from(native_log))
+        .ok_or_else(invalid_domain)?;
+    let rows = 1usize
+        .checked_shl(u32::from(common_log))
+        .ok_or_else(invalid_domain)?;
+    if coefficients.is_empty() || coefficients.len() > rows || rows <= native_rows {
+        return Err(invalid_domain());
+    }
+    let root =
+        goldilocks_primitive_root_v1(common_log).map_err(aggregate::map_transparent_error_v1)?;
+    let shift = F(GOLDILOCKS_GENERATOR_V1);
+    if shift.pow(native_rows as u128) == F::ONE || shift.pow(rows as u128) == F::ONE {
+        return Err(invalid_domain());
+    }
+    if coefficients
+        .iter()
+        .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(AggregateStarkErrorV1::NonCanonicalField);
+    }
+    let mut values = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+    values
+        .try_reserve_exact(rows)
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+    if values.capacity() != rows {
+        return Err(AggregateStarkErrorV1::AllocationFailure);
+    }
+    values.resize(rows, F::ZERO);
+    let mut power = F::ONE;
+    for (target, &coefficient) in values.iter_mut().zip(coefficients) {
+        *target = coefficient.mul(power);
+        power = power.mul(shift);
+    }
+    after_scale(&values)?;
+    // Keep inner parallelism enabled. Do not reuse the selected-row schedule's
+    // separately measured coarse choice. The owner limits full-prefix dispatch
+    // to complete eight-column batches; smaller batches keep dense evaluation.
+    prune_v1::<true, true>(&mut values, 0, &[], root, coefficients.len());
+    // DIF leaves outputs bit-reversed. The same public involution used by the
+    // dense FFT restores canonical rows in place without another allocation.
+    let mut reversed = 0usize;
+    for index in 1..rows {
+        let mut bit = rows >> 1;
+        while reversed & bit != 0 {
+            reversed ^= bit;
+            bit >>= 1;
+        }
+        reversed ^= bit;
+        if index < reversed {
+            values.swap(index, reversed);
+        }
+    }
+    after_transform(&values)?;
+    Ok(Column::from_vec_v1(values.into_vec()))
+}
+
 /// Infallible public-geometry recursion over disjoint slices of the same scratch.
-fn prune_v1<const INNER_PARALLEL: bool>(
+fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool>(
     values: &mut [F],
     offset: usize,
     destinations: &[F],
@@ -154,14 +239,21 @@ fn prune_v1<const INNER_PARALLEL: bool>(
     nonzero_prefix_bound: usize,
 ) {
     debug_assert!(nonzero_prefix_bound > 0 && nonzero_prefix_bound <= values.len());
-    if destinations.is_empty() || values.len() == 1 {
+    if (!ALL_OUTPUTS && destinations.is_empty()) || values.len() == 1 {
         return;
     }
     let half = values.len() / 2;
-    let split = destinations.partition_point(|index| (index.0 as usize) < offset + half);
+    // Monomorphization preserves the original selected slice/partition path.
+    // Full-output callers pass an empty public slice and need both children;
+    // no runtime destination tag or field value selects the recursion.
+    let split = if ALL_OUTPUTS {
+        0
+    } else {
+        destinations.partition_point(|index| (index.0 as usize) < offset + half)
+    };
     let (even_destinations, odd_destinations) = destinations.split_at(split);
-    let even_needed = !even_destinations.is_empty();
-    let odd_needed = !odd_destinations.is_empty();
+    let even_needed = ALL_OUTPUTS || !even_destinations.is_empty();
+    let odd_needed = ALL_OUTPUTS || !odd_destinations.is_empty();
     let (even, odd) = values.split_at_mut(half);
     // The caller initialized every cell after this public prefix to zero.
     // At j >= min(prefix, half), both input cells are zero, so either child
@@ -209,15 +301,43 @@ fn prune_v1<const INNER_PARALLEL: bool>(
     let child_root = root.mul(root);
     if INNER_PARALLEL && even_needed && odd_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
         rayon::join(
-            || prune_v1::<INNER_PARALLEL>(even, offset, even_destinations, child_root, pairs),
-            || prune_v1::<INNER_PARALLEL>(odd, offset + half, odd_destinations, child_root, pairs),
+            || {
+                prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
+                    even,
+                    offset,
+                    even_destinations,
+                    child_root,
+                    pairs,
+                )
+            },
+            || {
+                prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
+                    odd,
+                    offset + half,
+                    odd_destinations,
+                    child_root,
+                    pairs,
+                )
+            },
         );
     } else {
         if even_needed {
-            prune_v1::<INNER_PARALLEL>(even, offset, even_destinations, child_root, pairs);
+            prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
+                even,
+                offset,
+                even_destinations,
+                child_root,
+                pairs,
+            );
         }
         if odd_needed {
-            prune_v1::<INNER_PARALLEL>(odd, offset + half, odd_destinations, child_root, pairs);
+            prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
+                odd,
+                offset + half,
+                odd_destinations,
+                child_root,
+                pairs,
+            );
         }
     }
 }
@@ -305,3 +425,7 @@ fn evaluate_horner_with_v1(
     after_evaluate(&output);
     Ok(Column::from_vec_v1(output.into_vec()))
 }
+
+#[cfg(test)]
+#[path = "main_full_coset_tests.rs"]
+mod full_tests;

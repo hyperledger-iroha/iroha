@@ -7,6 +7,7 @@
 //! closed instead of producing a digest over mixed state.
 
 use blake3::Hasher;
+use iroha_fs::FileMetadata;
 use std::{
     fmt,
     fs::{self, File, OpenOptions},
@@ -33,7 +34,7 @@ pub const MAX_TAIKAI_POLICY_DOCUMENT_BYTES: u64 = 1024 * 1024;
 /// Fails for symlinks, special files, non-UTF-8 names, and any file or directory that changes
 /// while it is hashed.
 pub fn bundle_digest_v1(path: &Path) -> io::Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
+    let metadata = FileMetadata::symlink_metadata(path)
         .map_err(|err| context(err, format_args!("failed to stat `{}`", path.display())))?;
     let mut hasher = Hasher::new();
     hasher.update(TAIKAI_BUNDLE_DIGEST_DOMAIN_V1);
@@ -63,8 +64,7 @@ pub fn bundle_digest_v1(path: &Path) -> io::Result<[u8; 32]> {
 pub fn file_digest(path: &Path, label: &str) -> io::Result<[u8; 32]> {
     let mut file = open_regular_input(path, label)?;
     let mut hasher = Hasher::new();
-    let initial_metadata = file
-        .metadata()
+    let initial_metadata = FileMetadata::of(&file)
         .map_err(|err| context(err, format_args!("failed to inspect `{}`", path.display())))?;
     hash_file_contents_with_hook(&mut file, path, &mut hasher, &initial_metadata, || Ok(()))?;
     Ok(*hasher.finalize().as_bytes())
@@ -97,7 +97,7 @@ fn open_regular_input_with_hook<F>(path: &Path, label: &str, before_open: F) -> 
 where
     F: FnOnce() -> io::Result<()>,
 {
-    let path_metadata = fs::symlink_metadata(path).map_err(|err| {
+    let path_metadata = FileMetadata::symlink_metadata(path).map_err(|err| {
         context(
             err,
             format_args!("failed to inspect {label} `{}`", path.display()),
@@ -120,7 +120,7 @@ where
             format_args!("failed to open {label} `{}`", path.display()),
         )
     })?;
-    let opened_metadata = file.metadata().map_err(|err| {
+    let opened_metadata = FileMetadata::of(&file).map_err(|err| {
         context(
             err,
             format_args!("failed to inspect opened {label} `{}`", path.display()),
@@ -151,7 +151,7 @@ fn read_policy_document_with_hook<F>(
 where
     F: FnOnce() -> io::Result<()>,
 {
-    let initial_metadata = file.metadata().map_err(|err| {
+    let initial_metadata = FileMetadata::of(file).map_err(|err| {
         context(
             err,
             format_args!("failed to inspect opened {label} `{}`", path.display()),
@@ -183,7 +183,7 @@ where
             path.display()
         )));
     }
-    let final_metadata = file.metadata().map_err(|err| {
+    let final_metadata = FileMetadata::of(file).map_err(|err| {
         context(
             err,
             format_args!(
@@ -214,7 +214,7 @@ where
 }
 
 fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)
+    let metadata = FileMetadata::symlink_metadata(path)
         .map_err(|err| context(err, format_args!("failed to stat `{}`", path.display())))?;
     if metadata.is_file() {
         hash_file_entry(path, relative, hasher)
@@ -231,8 +231,7 @@ fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> io::Res
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> io::Result<()> {
     update_path_marker(relative, b'F', hasher)?;
     let mut file = open_regular_input(path, "bundle file")?;
-    let initial_metadata = file
-        .metadata()
+    let initial_metadata = FileMetadata::of(&file)
         .map_err(|err| context(err, format_args!("failed to inspect `{}`", path.display())))?;
     hasher.update(&initial_metadata.len().to_le_bytes());
     hash_file_contents_with_hook(&mut file, path, hasher, &initial_metadata, || Ok(()))
@@ -242,7 +241,7 @@ fn hash_file_contents_with_hook<F>(
     file: &mut File,
     path: &Path,
     hasher: &mut Hasher,
-    initial_metadata: &fs::Metadata,
+    initial_metadata: &FileMetadata,
     before_read: F,
 ) -> io::Result<()>
 where
@@ -275,7 +274,7 @@ where
             path.display()
         )));
     }
-    let final_metadata = file.metadata().map_err(|err| {
+    let final_metadata = FileMetadata::of(file).map_err(|err| {
         context(
             err,
             format_args!("failed to re-inspect `{}` after hashing", path.display()),
@@ -306,7 +305,7 @@ fn hash_directory_entry_with_hook<F>(
 where
     F: FnOnce() -> io::Result<()>,
 {
-    let initial_metadata = fs::symlink_metadata(path).map_err(|err| {
+    let initial_metadata = FileMetadata::symlink_metadata(path).map_err(|err| {
         context(
             err,
             format_args!("failed to inspect directory `{}`", path.display()),
@@ -346,7 +345,7 @@ where
     for (file_name, child_path) in entries {
         hash_path_entry(&child_path, &relative.join(file_name), hasher)?;
     }
-    let final_metadata = fs::symlink_metadata(path).map_err(|err| {
+    let final_metadata = FileMetadata::symlink_metadata(path).map_err(|err| {
         context(
             err,
             format_args!("failed to re-inspect directory `{}`", path.display()),
@@ -404,8 +403,8 @@ fn canonical_bundle_relative_path(relative: &Path) -> io::Result<String> {
 }
 
 fn ensure_same_file_state(
-    expected: &fs::Metadata,
-    observed: &fs::Metadata,
+    expected: &FileMetadata,
+    observed: &FileMetadata,
     path: &Path,
     label: &str,
     operation: &str,
@@ -421,7 +420,7 @@ fn ensure_same_file_state(
 }
 
 #[cfg(unix)]
-fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn metadata_state_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -434,12 +433,10 @@ fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn metadata_state_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+    left.identity() == right.identity()
+        && left.links() == right.links()
         && left.file_size() == right.file_size()
         && left.file_attributes() == right.file_attributes()
         && left.last_write_time() == right.last_write_time()
@@ -447,11 +444,11 @@ fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_state_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn metadata_state_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
 
-fn is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+fn is_symlink_or_reparse(metadata: &FileMetadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
@@ -545,6 +542,23 @@ mod tests {
     use super::*;
     use std::{io::Write as _, time::Duration};
 
+    #[test]
+    fn native_snapshots_distinguish_equal_bytes_and_preserve_hardlink_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        let alias = directory.path().join("alias");
+        fs::write(&first, b"same bytes").unwrap();
+        fs::write(&second, b"same bytes").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        let original = FileMetadata::symlink_metadata(&first).unwrap();
+        let distinct = FileMetadata::symlink_metadata(&second).unwrap();
+        let linked = FileMetadata::symlink_metadata(&alias).unwrap();
+        assert!(!metadata_state_unchanged(&original, &distinct));
+        assert!(metadata_state_unchanged(&original, &linked));
+        assert!(!is_symlink_or_reparse(&original));
+    }
+
     fn replace_in_place(path: &Path, replacement: &[u8]) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(20));
         let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
@@ -577,7 +591,7 @@ mod tests {
         let path = tmp.path().join("gar.jws");
         fs::write(&path, b"signed-gar-data").expect("write GAR");
         let mut file = open_regular_input(&path, "policy input").expect("open GAR");
-        let initial = file.metadata().expect("inspect GAR");
+        let initial = FileMetadata::of(&file).expect("inspect GAR");
 
         let error =
             hash_file_contents_with_hook(&mut file, &path, &mut Hasher::new(), &initial, || {

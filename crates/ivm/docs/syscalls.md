@@ -578,9 +578,58 @@ asset definition, quantity, inclusive claim deadline, inclusive earliest
 cancellation time, and native expiry. Zero times mean absent. An application
 whose refunds require strictly later time passes `business_expiry + 1`, checked
 for overflow, as native expiry. Claim and cancellation windows are independent.
-Drawing and cancellation retain the native exact-remainder precondition.
+Opening returns the exact native protocol custody `AccountId`, derived from the
+admitted network, controller-scoped lock ID, and asset definition. Contracts can
+retain that identity for per-lock books and movement events. It does not grant
+debit authority or prove settlement before the queued instruction commits. The
+host refuses a missing network and prepares the typed return, full instruction
+plus return-byte gas, whole return allocation, and retained-effect capacity
+before publishing the effect or result. Drawing and cancellation retain the
+native exact-remainder precondition.
 These additions change the IVM ABI hash; compiler, host and contract manifests
 must match. They do not change the privacy bridge ABI version.
+
+The owner-granted `ledger::asset::uid_holding_quote` reader (`0x010224`) returns
+only the asset, requested account, current policy revision, beneficial holdings,
+optional cap and required overflow. Its six-word nominal product retains the
+full unsigned 64-bit revision as an exact Kotodama `int`; the optional quantity
+uses the standard sum handle. The quote never exposes a UID or account roster
+and never grants transfer authority. Every inspected member and escrow row is
+metered, including retained terminal rows, before any result is published.
+
+`ledger::fi::transfer_linked` (`0x010225`) and controlled lock
+`{drawdown,cancel,expire}_with_waterfall` (`0x010226`–`0x010228`) retain full
+policy and approved-link revision pins. The native executor derives the payout
+owner and approved FI and checks current consent, gross funding and UID limits.
+The controlled settlement prepares all custody and existing-wallet overflow
+legs before one escrow decrement; a preceding quote cannot bypass those checks.
+Plain lock settlement keeps its existing behavior without an FI opt-in. All
+five helpers require an authenticated contract frame and are unavailable to
+generic programs. The quote is a ledger read; the four settlements are ledger
+writes. The canonical spec binds exact argument and return layouts into the ABI.
+
+`ledger::fi::link_revision` (`0x010229`) is a separate metered ledger read:
+`(asset_definition: AssetDefinitionId, account: AccountId, expected_fi: AccountId)
+-> int`. The current owner-approved link must name the exact active controller
+and match the asserted FI. Current FI eligibility and attestation revisions
+are checked under the shared query budget. The returned exact unsigned 64-bit
+revision is only a CAS hint; no FI identity or bank reference is disclosed, and
+the assertion never selects a settlement destination. Generic programs cannot
+use the reader. It allocates the typed integer only after whole gas/allocation
+preflight and cannot queue any effect.
+
+`ledger::asset::same_uid` (`0x01022A`) returns only a boolean for two exact
+native retail memberships in one Global asset. Both accounts and current
+policies must exist, and the active contract needs the current enabled
+asset-owner UID reader grant. A false value means valid retail UIDs differ;
+missing, unbound, institutional, corrupt or ungranted inputs are errors. Equal
+account addresses still undergo all checks. A retained FI/system classification
+precludes retail use, including revoked institutional records. It is not a
+universal institutional comparison or exemption. UID membership is append-only;
+closed-wallet transfer restrictions do not erase retained ownership. The helper
+is a metered ledger read with no UID/roster output or queued effect, unavailable
+to generic programs. Source/response gas is checked before publishing the public
+0/1 word; the native settlement kernel independently derives and validates ownership.
 
 Native asset escrow
 - 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
@@ -614,6 +663,11 @@ Soracloud runtime host surface
 
 ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
+  - Core returns canonical zero for an absent Global holding only when the account
+    and asset definition exist and the balance query is authorized. This includes
+    never-funded holdings and holdings removed after full depletion. Unknown
+    entities, denied access, visibility or scope failures, and exhausted query
+    budgets remain errors.
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes. Scheme codes: `1` Ed25519, `2` secp256k1 ECDSA, `3` ML-DSA. Kotodama's `crypto::verify_signature` takes a compile-time `SignatureScheme` value, so compiled seiyaku never pass any other code.
 
 Runtime Summaries / Proof Verification
@@ -952,10 +1006,17 @@ node enforces that policy unconditionally.
 | 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias), r11=request_generation | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10220 | ASSET_LOCK_OPEN | r10=owned public 8-word heap table [&Blob(key:1..4096 bytes), &AccountId(source), &AccountId(destination), &AssetDefinitionId, &Quantity, release_until_ms:u64, cancel_not_before_ms:u64, expires_at_ms:u64]; controller=authenticated frame | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10220 | ASSET_LOCK_OPEN | r10=owned public 8-word heap table [&Blob(key:1..4096 bytes), &AccountId(source), &AccountId(destination), &AssetDefinitionId, &Quantity, release_until_ms:u64, cancel_not_before_ms:u64, expires_at_ms:u64]; controller=authenticated frame | r10=&AccountId(protocol escrow custody derived from actual network, controller-scoped lock ID, and asset definition) | asset:gas/G_sci@ivm.core/v2 + bytes + 1 per complete encoded AccountId return TLV byte |
 | 0x10221 | ASSET_LOCK_DRAWDOWN | r10=&Blob(key:1..4096 bytes), r11=&Quantity(amount), r12=&Quantity(expected_remaining); controller=authenticated frame | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10222 | ASSET_LOCK_CANCEL | r10=&Blob(key:1..4096 bytes), r11=&Quantity(expected_remaining); controller=authenticated frame | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10223 | ASSET_LOCK_EXPIRE | r10=&Blob(key:1..4096 bytes); controller=authenticated frame | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10224 | ASSET_UID_HOLDING_QUOTE | r10=&AssetDefinitionId, r11=&AccountId, r12=&Quantity(incoming); exact active controller and asset-owner reader grant required | r10=owned public six-word AssetUidHoldingQuote heap table [asset_definition_id:&AssetDefinitionId, account_id:&AccountId, policy_revision:&Int(exact u64), beneficial_holdings:&Quantity, holding_limit:Option<Quantity> sum handle, required_overflow:&Quantity] | asset:gas/G_scq@ivm.core/v2 + query items + source and encoded response bytes |
+| 0x10225 | TRANSFER_TO_LINKED_FI | r10=&AssetDefinitionId, r11=&AccountId, r12=&Quantity(amount), r13=policy_revision:u64, r14=link_revision:u64; authenticated controller; current owner-approved FI is native-derived | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10226 | ASSET_LOCK_DRAWDOWN_WATERFALL | r10=&Blob(key:1..4096 bytes), r11=&Quantity(amount), r12=&Quantity(expected_remaining), r13=policy_revision:u64, r14=link_revision:u64; authenticated controller; native derives beneficiary, FI and atomic split | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10227 | ASSET_LOCK_CANCEL_WATERFALL | r10=&Blob(key:1..4096 bytes), r11=&Quantity(expected_remaining), r12=policy_revision:u64, r13=link_revision:u64; authenticated controller; native derives original payer, FI and atomic split | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10228 | ASSET_LOCK_EXPIRE_WATERFALL | r10=&Blob(key:1..4096 bytes), r11=policy_revision:u64, r12=link_revision:u64; authenticated controller; native derives original payer, authoritative remainder, FI and atomic split | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10229 | ASSET_FI_LINK_REVISION | r10=&AssetDefinitionId, r11=&AccountId, r12=&AccountId(expected_fi); exact active link controller, enabled owner grant, expected-FI equality and current native FI/attestation revisions required | r10=&Int(exact current nonzero u64 link revision); no FI identity or reference returned | asset:gas/G_scq@ivm.core/v2 + query items + source and encoded response bytes |
+| 0x1022A | ASSET_SAME_UID | r10=&AssetDefinitionId, r11=&AccountId(source), r12=&AccountId(destination); exact active frame and current asset-owner reader grant; both exact native retail memberships/policies required, institutional or unknown operands fail | r10=0|1 (bool); false only for two valid distinct retail UIDs; no UID or roster returned | asset:gas/G_scq@ivm.core/v2 + query items + source and canonical response bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

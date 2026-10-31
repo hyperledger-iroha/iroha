@@ -18,6 +18,21 @@ pub struct ResourceUsage {
     pub peak_rss_bytes: u64,
 }
 
+/// Raw process instruction counters; validity is checked by the public probe.
+pub struct ProcessInstructionCounters {
+    pub process_id: u32,
+    pub process_start_abstime: u64,
+    pub instructions: u64,
+}
+
+/// An unavailable process instruction counter, without a numeric substitute.
+pub enum InstructionCounterError {
+    #[cfg(any(test, not(all(target_os = "macos", target_arch = "aarch64"))))]
+    Unsupported,
+    #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
+    OperatingSystem(Option<i32>),
+}
+
 /// The `RLIMIT_AS` pair; `None` means unlimited.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AddressSpaceLimit {
@@ -33,6 +48,7 @@ pub const ADDRESS_SPACE_SOURCE: &str = if cfg!(unix) {
 };
 
 /// Convert seconds and a sub-second part into nanoseconds without wrapping.
+#[cfg(any(test, unix))]
 pub fn nanoseconds(seconds: u64, fraction: u64, fraction_per_second: u64) -> u64 {
     let scale = 1_000_000_000 / fraction_per_second.max(1);
     seconds
@@ -41,11 +57,13 @@ pub fn nanoseconds(seconds: u64, fraction: u64, fraction_per_second: u64) -> u64
 }
 
 /// Convert a raw resource limit, where `infinity` means unlimited.
+#[cfg(any(test, unix))]
 pub fn finite_limit(raw: u64, infinity: u64) -> Option<u64> {
     (raw != infinity).then_some(raw)
 }
 
 /// Scale `ru_maxrss` to bytes: kilobytes on Linux, bytes on Apple platforms.
+#[cfg(any(test, unix))]
 pub fn peak_rss_bytes(raw: u64, reported_in_kilobytes: bool) -> u64 {
     if reported_in_kilobytes {
         raw.saturating_mul(1024)
@@ -55,6 +73,7 @@ pub fn peak_rss_bytes(raw: u64, reported_in_kilobytes: bool) -> u64 {
 }
 
 /// Convert a load average to an exact integer in thousandths.
+#[cfg(any(test, unix))]
 pub fn load_to_milli(load: f64) -> Option<u64> {
     if !load.is_finite() || load < 0.0 {
         return None;
@@ -79,6 +98,7 @@ pub fn fixed_point_load(raw: u64) -> f64 {
 ///
 /// macOS numbers the levels consecutively: nominal, moderate, heavy, then
 /// trapping and sleeping.
+#[cfg(any(test, target_os = "macos"))]
 pub fn darwin_pressure_state(level: u64) -> ThermalState {
     match level {
         0 => ThermalState::Nominal,
@@ -205,6 +225,38 @@ mod unix {
         clock_ns(libc::CLOCK_PROCESS_CPUTIME_ID)
     }
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub fn process_instructions()
+    -> Result<super::ProcessInstructionCounters, super::InstructionCounterError> {
+        let process_id = std::process::id();
+        let pid = libc::pid_t::try_from(process_id)
+            .map_err(|_| super::InstructionCounterError::OperatingSystem(None))?;
+        // SAFETY: rusage_info_v4 contains only integer fields and an integer
+        // array, so zero initializes a valid, exclusively owned output buffer.
+        let mut usage: libc::rusage_info_v4 = unsafe { core::mem::zeroed() };
+        // SAFETY: flavor V4 writes exactly a rusage_info_v4. The API typedef
+        // makes the buffer parameter *mut rusage_info_t (a void-pointer type),
+        // but it receives the address of the struct, not an indirect buffer.
+        // The typed buffer remains aligned, writable and alive for this call.
+        let status = unsafe {
+            libc::proc_pid_rusage(
+                pid,
+                libc::RUSAGE_INFO_V4,
+                (&raw mut usage).cast::<libc::rusage_info_t>(),
+            )
+        };
+        if status != 0 {
+            return Err(super::InstructionCounterError::OperatingSystem(
+                std::io::Error::last_os_error().raw_os_error(),
+            ));
+        }
+        Ok(super::ProcessInstructionCounters {
+            process_id,
+            process_start_abstime: usage.ri_proc_start_abstime,
+            instructions: usage.ri_instructions,
+        })
+    }
+
     pub fn resource_usage() -> Option<ResourceUsage> {
         // SAFETY: an all-zero `rusage` is a valid value of this plain C struct.
         let mut usage: libc::rusage = unsafe { core::mem::zeroed() };
@@ -273,6 +325,10 @@ mod unix {
     }
 }
 
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod windows;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
 mod darwin_thermal {
@@ -309,7 +365,11 @@ pub fn thread_cpu_ns() -> Option<u64> {
     {
         unix::thread_cpu_ns()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::thread_cpu_ns()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
     }
@@ -321,7 +381,11 @@ pub fn process_cpu_ns() -> Option<u64> {
     {
         unix::process_cpu_ns()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::process_cpu_ns()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
     }
@@ -333,9 +397,26 @@ pub fn resource_usage() -> Option<ResourceUsage> {
     {
         unix::resource_usage()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::resource_usage()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
+    }
+}
+
+/// Process-wide retired instructions on the supported diagnostic host.
+pub fn process_instructions() -> Result<ProcessInstructionCounters, InstructionCounterError>
+{
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        unix::process_instructions()
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        Err(InstructionCounterError::Unsupported)
     }
 }
 

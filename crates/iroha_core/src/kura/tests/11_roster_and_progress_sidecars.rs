@@ -1,3 +1,127 @@
+#[cfg(windows)]
+mod native_mutation_directory_barriers {
+    //! Native progress barriers retain original directories through failures and retries.
+
+    use super::*;
+
+    fn with_namespace(test: impl FnOnce(&Kura, BoundProgressNamespace)) {
+        let (_temporary, config) =
+            kura_storage_fixture("native mutation directory barriers", BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open native Kura");
+        let parent = kura
+            .store_root()
+            .join("blocks")
+            .join("lane")
+            .join("barriers");
+        fs::create_dir_all(&parent).expect("create native namespace");
+        let data = parent.join("progress.data");
+        let index = parent.join("progress.index");
+        fs::write(&data, b"unchanged payload").unwrap();
+        fs::write(&index, b"unchanged index").unwrap();
+        let namespace = kura
+            .open_bound_progress_namespace(&data, &index)
+            .expect("retain complete native namespace");
+        assert_eq!(namespace.directories.len(), 4);
+        test(&kura, namespace);
+        assert_eq!(fs::read(data).unwrap(), b"unchanged payload");
+        assert_eq!(fs::read(index).unwrap(), b"unchanged index");
+    }
+
+    #[test]
+    fn native_mutation_barriers_sync_original_directories_and_release_ancestry() {
+        with_namespace(|kura, namespace| {
+            let original_ids: Vec<_> = namespace
+                .directories
+                .iter()
+                .map(|directory| directory.native_owner.identity().unwrap())
+                .collect();
+            let leaf = namespace.directories[0].expected_path.clone();
+            let moved = leaf.with_extension("moved");
+            assert!(fs::rename(&leaf, &moved).is_err());
+            assert!(Kura::sync_bound_progress_mutation_directories(
+                &namespace,
+                "native mutation barriers",
+            ));
+            assert!(kura.bound_progress_namespace_unchanged(&namespace));
+            let after_ids: Vec<_> = namespace
+                .directories
+                .iter()
+                .map(|directory| directory.native_owner.identity().unwrap())
+                .collect();
+            assert_eq!(after_ids, original_ids);
+            drop(namespace);
+            fs::rename(&leaf, &moved).expect("release original leaf after namespace drops");
+            fs::rename(&moved, &leaf).unwrap();
+        });
+    }
+
+    #[test]
+    fn native_mutation_barriers_keep_immediate_and_ancestor_failure_order_on_retry() {
+        struct ResetFaults;
+        impl Drop for ResetFaults {
+            fn drop(&mut self) {
+                FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(false));
+                FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| slot.set(None));
+            }
+        }
+        let _reset = ResetFaults;
+        with_namespace(|_, namespace| {
+            for ancestor in 0..namespace.directories.len() - 1 {
+                fail_next_indexed_sidecar_dir_sync_for_tests();
+                fail_progress_sidecar_ancestor_sync_at_for_tests(ancestor);
+                assert!(!Kura::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "immediate failure",
+                ));
+                assert!(!FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(std::cell::Cell::get));
+                assert_eq!(
+                    FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT
+                        .with(|slot| slot.get().map(|fault| fault.remaining_to_target)),
+                    Some(ancestor),
+                    "an immediate failure must not consume a later ancestor barrier",
+                );
+                assert!(!Kura::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "ancestor failure",
+                ));
+                assert!(FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| slot.get().is_none()));
+                assert!(Kura::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "retry every original directory",
+                ));
+            }
+        });
+    }
+
+    #[test]
+    fn native_mutation_barriers_refuse_late_ancestor_acl_changes() {
+        for changed in 0..4 {
+            with_namespace(|_, namespace| {
+                assert!(Kura::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "initial native custody",
+                ));
+                let path = &namespace.directories[changed].expected_path;
+                let status = std::process::Command::new("icacls")
+                    .arg(path)
+                    .args(["/grant", "*S-1-1-0:(W)"])
+                    .status()
+                    .expect("apply actual native directory ACL mutation");
+                assert!(status.success());
+                assert!(!Kura::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "changed native custody",
+                ));
+                assert!(fs::rename(path, path.with_extension("moved")).is_err());
+            });
+        }
+    }
+}
+
 #[derive(Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::tests::DummySidecar")]
 struct DummySidecar {
@@ -53,13 +177,14 @@ fn strict_indexed_sidecar_failure_modes() -> [(&'static str, fn()); 3] {
 }
 fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
     for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = sidecar_test_directory();
+        let mut sidecars = IndexedSidecarSession::default();
         let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
         let payload = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar");
         inject_failure();
         assert!(
-            !Kura::append_indexed_sidecar(
+            !sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 1,
@@ -82,7 +207,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         let first_data_len = fs::metadata(&data_path).expect("data metadata").len();
         inject_failure();
         assert!(
-            !Kura::append_indexed_sidecar(
+            !sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 1,
@@ -94,7 +219,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
             "exact-existing retry must reissue and observe the {label} barrier failure"
         );
         assert!(
-            Kura::append_indexed_sidecar(
+            sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 1,
@@ -114,7 +239,8 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
 }
 fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
     for overwrite_placeholder in [false, true] {
-        let temp_dir = TempDir::new().expect("create temp dir");
+        let temp_dir = sidecar_test_directory();
+        let mut sidecars = IndexedSidecarSession::default();
         let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
         let payload =
@@ -123,7 +249,7 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
             let height_two = norito::to_bytes(&DummySidecar { height: 2 })
                 .expect("encode height-two dummy sidecar");
             assert!(
-                Kura::append_indexed_sidecar(
+                sidecars.append_indexed_sidecar(
                     &data_path,
                     &index_path,
                     2,
@@ -142,7 +268,7 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         };
         fail_next_indexed_sidecar_initial_data_sync_for_tests();
         assert!(
-            !Kura::append_indexed_sidecar(
+            !sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 1,
@@ -172,7 +298,7 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
             "the failed pre-index write must not publish a readable height-one entry"
         );
         assert!(
-            Kura::append_indexed_sidecar(
+            sidecars.append_indexed_sidecar(
                 &data_path,
                 &index_path,
                 1,
@@ -203,14 +329,15 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
     }
 }
 fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
-    let temp_dir = TempDir::new().expect("create temp dir");
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode first payload");
     let replacement =
         norito::to_bytes(&DummySidecar { height: 11 }).expect("encode replacement payload");
     let second = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode second payload");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         1,
@@ -228,7 +355,7 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         data.sync_data().expect("persist crash residue fixture");
     };
     append_residue(b"unpublished-exact-retry");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         1,
@@ -243,7 +370,7 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         "an exact-existing retry must trim a crash suffix before returning"
     );
     append_residue(b"unpublished-replacement");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         1,
@@ -260,7 +387,7 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         "replacement retry must retain one old payload and one replacement only"
     );
     append_residue(b"unpublished-new-height");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         2,
@@ -2859,12 +2986,13 @@ mod progress_witness_durability {
 }
 #[test]
 fn sidecar_append_rejects_zero_height() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: 0 }).expect("encode sidecar");
     assert!(
-        !Kura::append_indexed_sidecar(
+        !sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             0,
@@ -2880,7 +3008,8 @@ fn sidecar_append_rejects_zero_height() {
 }
 #[test]
 fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let high_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 1_000 + 37;
@@ -2888,7 +3017,7 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         height: high_height,
     })
     .expect("encode high sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         high_height,
@@ -2910,6 +3039,11 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
     assert_eq!(layout.height_range(), Some(high_height..=high_height));
     let temp_index_path = index_path.with_extension("index.tmp");
     fs::rename(&index_path, &temp_index_path).expect("stage index as recovery temp");
+    #[cfg(windows)]
+    assert!(
+        sidecars.recover_indexed_sidecar_artifacts(&data_path, &index_path, "dummy lane sidecar"),
+        "retained native session must recover before the observational read"
+    );
     let recovered = Kura::read_indexed_sidecar_from_paths(
         high_height,
         &data_path,
@@ -2932,7 +3066,7 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         height: preceding_height,
     })
     .expect("encode preceding sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         preceding_height,
@@ -2957,7 +3091,7 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         height: sparse_height,
     })
     .expect("encode sparse sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         sparse_height,
@@ -2997,14 +3131,15 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
 }
 #[test]
 fn based_sidecar_index_pruning_preserves_base_height() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let base_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 2 + 11;
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     for height in base_height..=base_height + 2 {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode based sidecar");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -3051,12 +3186,13 @@ fn based_sidecar_index_pruning_preserves_base_height() {
 }
 #[test]
 fn canonical_v1_sidecar_index_keeps_sparse_gaps_readable_from_base_one() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     for height in [1_u64, 4] {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode V1 sidecar");
-        assert!(Kura::append_indexed_sidecar(
+        assert!(sidecars.append_indexed_sidecar(
             &data_path,
             &index_path,
             height,
@@ -3141,12 +3277,13 @@ fn headerless_main_and_temp_indexes_fail_closed_without_mutation() {
 }
 #[test]
 fn sidecar_append_rejects_oversized_gap_without_file_growth() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first_payload =
         norito::to_bytes(&DummySidecar { height: 1 }).expect("encode first sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         1,
@@ -3162,7 +3299,7 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
         height: hostile_height,
     })
     .expect("encode hostile sidecar");
-    assert!(!Kura::append_indexed_sidecar(
+    assert!(!sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         hostile_height,
@@ -3182,7 +3319,8 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
 }
 #[test]
 fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 3 + 17;
@@ -3190,7 +3328,7 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
         height: first_height,
     })
     .expect("encode first based sidecar");
-    assert!(Kura::append_indexed_sidecar(
+    assert!(sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         first_height,
@@ -3206,7 +3344,7 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
         height: hostile_height,
     })
     .expect("encode hostile preceding sidecar");
-    assert!(!Kura::append_indexed_sidecar(
+    assert!(!sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         hostile_height,
@@ -3226,11 +3364,12 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
 }
 #[test]
 fn sidecar_append_rejects_max_height_before_creating_files() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = sidecar_test_directory();
+    let mut sidecars = IndexedSidecarSession::default();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: u64::MAX }).expect("encode max sidecar");
-    assert!(!Kura::append_indexed_sidecar(
+    assert!(!sidecars.append_indexed_sidecar(
         &data_path,
         &index_path,
         u64::MAX,
@@ -3405,6 +3544,7 @@ fn bound_prepend_intent_sizes_match_canonical_frames_at_the_full_window_bound() 
 }
 
 #[test]
+#[cfg(not(windows))]
 fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
     let (_temp, config) = kura_storage_fixture("prepend marker fixture", BLOCKS_IN_MEMORY);
     let (kura, _) =
@@ -3432,5 +3572,55 @@ fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
     fs::copy(&index, index.with_extension("index.prepend.tmp")).unwrap();
     let before = snapshot_regular_test_tree(&kura.store_root());
     assert!(!kura.recover_bound_progress_sidecar_artifacts(&data, &index, "marker test"));
+    assert_eq!(snapshot_regular_test_tree(&kura.store_root()), before);
+}
+
+#[test]
+#[cfg(windows)]
+fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
+    use super::native_bound_progress_transaction::NativeBoundProgressTransaction;
+
+    let (_temp, config) = kura_storage_fixture("prepend marker fixture", BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
+    let root = iroha_fs::OwnerDirectory::open(kura.store_root()).unwrap();
+    let blocks = root.open_child("blocks").unwrap();
+    let marker = blocks.create_child("marker").unwrap();
+    let parent = marker.create_child(PIPELINE_DIR_NAME).unwrap();
+    let data = parent.path().join("window.data");
+    let index = parent.path().join("window.index");
+    let payload = norito::to_bytes(&DummySidecar { height: 2 }).unwrap();
+    let mut transaction = None;
+    NativeBoundProgressTransaction::prepare_into(&mut transaction, &kura, &data, &index).unwrap();
+    assert!(
+        transaction
+            .as_mut()
+            .unwrap()
+            .append(2, 2, &payload, "marker test")
+            .is_ok()
+    );
+    // The initial append is acknowledged before releasing its original owner.
+    drop(transaction.take());
+    let index_bytes = fs::read(&index).unwrap();
+    let marker_path = index.with_extension("index.prepend.tmp");
+    let mut original = None;
+    parent
+        .create_private_journal_into(marker_path.file_name().unwrap(), &mut original)
+        .unwrap();
+    let mut marker_file = original.as_ref().unwrap();
+    marker_file.write_all(&index_bytes).unwrap();
+    marker_file.sync_all().unwrap();
+    drop(original);
+    parent.sync().unwrap();
+    NativeBoundProgressTransaction::prepare_into(&mut transaction, &kura, &data, &index).unwrap();
+    let before = snapshot_regular_test_tree(&kura.store_root());
+    assert!(
+        transaction
+            .as_mut()
+            .unwrap()
+            .recover("marker test")
+            .is_err()
+    );
     assert_eq!(snapshot_regular_test_tree(&kura.store_root()), before);
 }

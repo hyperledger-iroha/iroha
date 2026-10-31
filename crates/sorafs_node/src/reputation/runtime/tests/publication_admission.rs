@@ -2,7 +2,7 @@
 use super::*;
 #[test]
 fn publication_construction_rejects_signer_handle_substitution() {
-    let projector_root = TempDir::new().expect("projector root");
+    let projector_root = private_state_tempdir().expect("projector root");
     let publication_root = TempDir::new().expect("publication root");
     let trust = trust_policy();
     let ingest = ingest_policy(&trust);
@@ -76,7 +76,7 @@ fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
 }
 #[test]
 fn publication_construction_rejects_same_key_different_peer_qualification() {
-    let projector_root = TempDir::new().expect("projector root");
+    let projector_root = private_state_tempdir().expect("projector root");
     let publication_root = TempDir::new().expect("publication root");
     let trust = trust_policy();
     let projector = Arc::new(
@@ -128,8 +128,8 @@ fn publication_construction_rejects_same_key_different_peer_qualification() {
 }
 #[test]
 fn governance_readback_is_discarded_when_provider_qualification_drifts() {
-    let projector_root = TempDir::new().expect("projector root");
-    let publication_root = TempDir::new().expect("publication root");
+    let projector_root = private_state_tempdir().expect("projector root");
+    let publication_root = private_state_tempdir().expect("publication root");
     let trust = trust_policy();
     let projector = Arc::new(
         ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
@@ -182,8 +182,8 @@ fn governance_readback_is_discarded_when_provider_qualification_drifts() {
 }
 #[test]
 fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict() {
-    let projector_root = TempDir::new().expect("projector root");
-    let publication_root = TempDir::new().expect("publication root");
+    let projector_root = private_state_tempdir().expect("projector root");
+    let publication_root = private_state_tempdir().expect("publication root");
     let trust = trust_policy();
     let projector = Arc::new(
         ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))

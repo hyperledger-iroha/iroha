@@ -1,23 +1,25 @@
 //! Shared `kagami` binary resolution helpers for integration tests.
 use crate::process::{build_timeout, output_with_timeout};
 use eyre::{Result, WrapErr, ensure, eyre};
+use iroha_fs::ProcessCommand as Command;
 use iroha_test_network::{
-    ReleasePrebuiltBinary, resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
+    BinaryKind, ResolvedProgram, development_process_command, resolve_development_binary,
+    resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
 };
 use std::{
     env,
     path::{Path, PathBuf},
-    process::Command,
     sync::OnceLock,
 };
 const KAGAMI_BIN_ENV: &str = "KAGAMI_BIN";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
-static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
-/// Resolve the `kagami` binary path for localnet integration tests.
+static KAGAMI_BIN: OnceLock<ResolvedProgram> = OnceLock::new();
+/// Resolve a retained `kagami` program for localnet integration tests.
 ///
-/// Resolution order:
+/// Release admission precedes caches and developer overrides. Without release anchors,
+/// developer resolution uses:
 /// 1. `KAGAMI_BIN`
 /// 2. `CARGO_BIN_EXE_kagami`
 /// 3. a lockfile-constrained build in the isolated test target when
@@ -27,38 +29,40 @@ static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
 /// # Errors
 ///
 /// Returns an error when no suitable binary can be found or built.
-pub fn resolve_kagami_bin() -> Result<PathBuf> {
-    if let Some(path) = KAGAMI_BIN.get() {
-        if let Some(revalidated) =
-            revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami, path)?
-        {
-            return Ok(revalidated);
+pub fn resolve_kagami_bin() -> Result<ResolvedProgram> {
+    // Admit the complete identity before consulting a cache, developer overrides or Cargo.
+    if let Some(program) = resolve_release_prebuilt_binary(BinaryKind::Kagami)? {
+        if let Some(candidate) = env::var_os(KAGAMI_BIN_ENV) {
+            ensure!(
+                candidate == program.diagnostic_path()?.as_os_str(),
+                "KAGAMI_BIN must preserve the exact manifest-attested native spelling"
+            );
         }
-        if path.is_file() {
-            return Ok(path.clone());
+        if let Some(cached) = KAGAMI_BIN.get().filter(|cached| cached.is_release()) {
+            return revalidate_release_prebuilt_binary(BinaryKind::Kagami, cached)?
+                .ok_or_else(|| eyre!("release identity disappeared while rechecking kagami"));
+        }
+        let _ = KAGAMI_BIN.set(program.clone());
+        return Ok(program);
+    }
+    if let Some(cached) = KAGAMI_BIN.get() {
+        // This also refuses a previously qualified selection after its anchors disappear.
+        revalidate_release_prebuilt_binary(BinaryKind::Kagami, cached)?;
+        if cached.diagnostic_path()?.is_file() {
+            return Ok(cached.clone());
         }
     }
-    let resolved = resolve_kagami_bin_uncached()?;
-    let _ = KAGAMI_BIN.set(resolved.clone());
-    Ok(resolved)
+    let path = resolve_development_kagami_bin()?;
+    let program = resolve_development_binary(&path)?;
+    let _ = KAGAMI_BIN.set(program.clone());
+    Ok(program)
 }
-fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
-    if let Some(expected) = resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami)? {
-        if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
-            let candidate = canonicalize_repo_relative(PathBuf::from(path))
-                .wrap_err_with(|| format!("resolve path from {KAGAMI_BIN_ENV}"))?;
-            return revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami, &candidate)?
-                .ok_or_else(|| {
-                    eyre!("release prebuilt contract disappeared while validating {KAGAMI_BIN_ENV}")
-                });
-        }
-        return Ok(expected);
-    }
-    if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
+fn resolve_development_kagami_bin() -> Result<PathBuf> {
+    if let Some(path) = env::var_os(KAGAMI_BIN_ENV) {
         return canonicalize_repo_relative(PathBuf::from(path))
             .wrap_err_with(|| format!("resolve path from {KAGAMI_BIN_ENV}"));
     }
-    if let Ok(path) = env::var("CARGO_BIN_EXE_kagami") {
+    if let Some(path) = env::var_os("CARGO_BIN_EXE_kagami") {
         return canonicalize_repo_relative(PathBuf::from(path))
             .wrap_err("resolve path from CARGO_BIN_EXE_kagami");
     }
@@ -71,8 +75,6 @@ fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
             eyre!("kagami binary not found in target roots and {IROHA_TEST_SKIP_BUILD_ENV}=1")
         });
     }
-    // Existing candidates can predate the current checkout. Always let Cargo
-    // validate/rebuild the source-bound isolated target before selecting one.
     build_kagami(&repo, &profile)?;
     try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
 }
@@ -140,9 +142,13 @@ fn skip_build_enabled() -> bool {
 fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let target_dir = kagami_build_target_dir(repo);
-    let mut command = kagami_build_command(&cargo, repo, &target_dir, profile);
-    let output =
-        output_with_timeout(&mut command, build_timeout()).wrap_err("build kagami binary")?;
+    let command = kagami_build_command(
+        development_process_command(&cargo)?,
+        repo,
+        &target_dir,
+        profile,
+    );
+    let output = output_with_timeout(command, build_timeout()).wrap_err("build kagami binary")?;
     ensure!(
         output.status.success(),
         "failed to build kagami: {}",
@@ -150,8 +156,12 @@ fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     );
     Ok(())
 }
-fn kagami_build_command(cargo: &str, repo: &Path, target_dir: &Path, profile: &str) -> Command {
-    let mut command = Command::new(cargo);
+fn kagami_build_command(
+    mut command: Command,
+    repo: &Path,
+    target_dir: &Path,
+    profile: &str,
+) -> Command {
     command
         .current_dir(repo)
         .arg("build")
@@ -194,7 +204,12 @@ mod tests {
     fn kagami_build_command_is_locked_and_uses_isolated_target() {
         let repo = Path::new("/workspace/iroha");
         let target = Path::new("/workspace/target/programs");
-        let command = kagami_build_command("fake-cargo", repo, target, "release");
+        let command = kagami_build_command(
+            Command::new(env::current_exe().unwrap()).unwrap(),
+            repo,
+            target,
+            "release",
+        );
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -224,7 +239,7 @@ mod tests {
     #[test]
     fn kagami_debug_build_command_uses_default_profile() {
         let command = kagami_build_command(
-            "fake-cargo",
+            Command::new(env::current_exe().unwrap()).unwrap(),
             Path::new("/workspace/iroha"),
             Path::new("/workspace/target/programs"),
             "debug",

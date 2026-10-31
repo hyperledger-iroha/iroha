@@ -18,6 +18,7 @@
 //! share the same subgroup and masking polynomial.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::credential_pre_aux::ZkX509CredentialPreAuxBindingV1;
+use super::sha_residue_output::ShaResidueSinkV1;
 #[cfg(test)]
 use super::sha256_word_air::derive_sha256_word_memory_challenges_v1;
 use super::{
@@ -35,6 +36,8 @@ use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
     TransparentTranscriptV1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use sha2::{Digest as _, Sha256};
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -1339,13 +1342,11 @@ pub fn build_sha_word_capacity_base_source_v1(
     let maximum_local_rows = fixed_schedule.maximum_local_rows();
     let maximum_memory_rows = fixed_schedule.maximum_memory_rows();
     let maximum_logical_rows = fixed_schedule.logical_rows();
-    let actual_circuit = build_sha256_word_circuit_v1(message)?;
     let actual_statement = ZkX509ShaWordStarkStatementV1 {
         message_len: message.len(),
-        digest: actual_circuit.digest(),
+        digest: <[u8; 32]>::from(Sha256::digest(message)),
     };
     let mut actual = build_sha_word_stark_base_v1(actual_statement, message)?;
-    drop(actual_circuit);
     if actual.local_rows != capacity_local_rows_v1(active_blocks)?
         || actual.execution.len() != capacity_memory_rows_v1(active_blocks)?
     {
@@ -2677,6 +2678,7 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_v1(
 }
 /// Evaluate the raw SHA-word polynomial over the base or extension field.
 #[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; SHA_WORD_BASE_WIDTH_V1],
     next: &[A; SHA_WORD_BASE_WIDTH_V1],
@@ -2685,6 +2687,30 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
+    let mut residues = Vec::new();
+    emit_zk_x509_sha_word_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+        &mut residues,
+    )?;
+    Ok(residues)
+}
+
+/// Emit the unchanged ordered relation into its caller-owned output.
+#[allow(clippy::too_many_lines)]
+pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
+    challenges: ZkX509ShaWordStarkChallengesV1,
+    residues: &mut impl ShaResidueSinkV1<A>,
+) -> Result<(), ZkX509ShaWordStarkErrorV1> {
     validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
@@ -2870,8 +2896,8 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     if base_error_count != SHA_WORD_STARK_BASE_ERROR_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let mut residues = Vec::with_capacity(SHA_WORD_STARK_CONSTRAINT_COUNT_V1);
-    residues.extend(folded_base);
+    residues.reserve(SHA_WORD_STARK_CONSTRAINT_COUNT_V1);
+    residues.extend_residues(folded_base);
     for lane in 0..SHA_WORD_COPY_LANES_V1 {
         let challenge = challenges.memory.lanes[lane];
         let packed_input = pack_bits(&current[..32]);
@@ -3067,7 +3093,7 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     if residues.len() != SHA_WORD_STARK_CONSTRAINT_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    Ok(residues)
+    Ok(())
 }
 /// Evaluate the fixed-capacity SHA-word relation for one opened row.
 ///
@@ -3098,6 +3124,7 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_v1(
 /// This shares the complete polynomial implementation with the scalar API. It
 /// does not implement the enclosing SHA call-bus AIR or enable a MAIN Fp4 proof.
 #[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
     next: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
@@ -3106,6 +3133,30 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
+    let mut residues = Vec::new();
+    emit_zk_x509_sha_word_capacity_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+        &mut residues,
+    )?;
+    Ok(residues)
+}
+
+/// Emit the unchanged ordered relation into its caller-owned output.
+#[allow(clippy::too_many_lines)]
+pub(super) fn emit_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
+    challenges: ZkX509ShaWordStarkChallengesV1,
+    residues: &mut impl ShaResidueSinkV1<A>,
+) -> Result<(), ZkX509ShaWordStarkErrorV1> {
     validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
@@ -3200,13 +3251,14 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     let next_aux_raw: &[A; SHA_WORD_AUX_WIDTH_V1] = next_aux[..SHA_WORD_AUX_WIDTH_V1]
         .try_into()
         .expect("raw aux prefix");
-    let mut residues = evaluate_zk_x509_sha_word_stark_residues_over_field_v1(
+    emit_zk_x509_sha_word_stark_residues_over_field_v1(
         current_raw,
         next_raw,
         current_aux_raw,
         next_aux_raw,
         &effective_fixed,
         challenges,
+        residues,
     )?;
     let boolean_error = |value: A| value.mul(value.sub(A::ONE));
     residues.push(boolean_error(row_active));
@@ -3257,8 +3309,8 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
                 .add(inactive_memory.mul(*value));
         }
     }
-    residues.extend(folded_inactive_compute);
-    residues.extend(folded_inactive_memory);
+    residues.extend_residues(folded_inactive_compute);
+    residues.extend_residues(folded_inactive_memory);
     let block_first = fixed[SHA_WORD_CAPACITY_BLOCK_FIRST_V1];
     let block_continue = fixed[SHA_WORD_CAPACITY_BLOCK_CONTINUE_V1];
     let block_last = fixed[SHA_WORD_CAPACITY_BLOCK_LAST_V1];
@@ -3463,7 +3515,7 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     if residues.len() != SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    Ok(residues)
+    Ok(())
 }
 #[cfg(test)]
 fn validate_sigma_row(
@@ -5057,8 +5109,378 @@ mod tests {
             ZkX509ShaWordStarkErrorV1::LocalConstraint
         );
     }
+
+    fn assert_constructor_sources_equal(
+        actual: &ZkX509ShaWordCapacityBaseSourceV1,
+        original: &ZkX509ShaWordCapacityBaseSourceV1,
+    ) {
+        assert_eq!(
+            (
+                actual.message_len,
+                actual.maximum_message_len,
+                actual.exact_length,
+                actual.active_blocks,
+                actual.maximum_blocks,
+                actual.maximum_local_rows,
+                actual.maximum_memory_rows,
+                actual.actual_compute_rows,
+                actual.maximum_compute_rows
+            ),
+            (
+                original.message_len,
+                original.maximum_message_len,
+                original.exact_length,
+                original.active_blocks,
+                original.maximum_blocks,
+                original.maximum_local_rows,
+                original.maximum_memory_rows,
+                original.actual_compute_rows,
+                original.maximum_compute_rows
+            )
+        );
+        assert_eq!(actual.base_rows, original.base_rows);
+        assert_eq!(actual.fixed_rows, original.fixed_rows);
+        assert_eq!(actual.local_events, original.local_events);
+        assert_eq!(actual.execution, original.execution);
+        assert_eq!(actual.sorted, original.sorted);
+    }
+
+    fn constructor_message(length: usize) -> Vec<u8> {
+        (0..length)
+            .map(|index| {
+                u8::try_from(index % 256)
+                    .unwrap()
+                    .wrapping_mul(37)
+                    .wrapping_add(11)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sha_constructor_native_digest_matches_circuit_and_every_owner_cell_event_terminal() {
+        for (length, capacity, exact) in [
+            (0, 0, true),
+            (0, 63, false),
+            (1, 63, false),
+            (55, 63, false),
+            (56, 63, false),
+            (63, 63, true),
+            (64, 64, true),
+            (65, 128, false),
+            (119, 128, false),
+            (120, 128, false),
+            (4096, 4096, true),
+            (
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+                true,
+            ),
+            (
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1 - 1,
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+                false,
+            ),
+        ] {
+            let message = constructor_message(length);
+            let circuit = build_sha256_word_circuit_v1(&message).unwrap();
+            assert_eq!(
+                circuit.digest(),
+                <[u8; 32]>::from(<Sha256 as sha2::Digest>::digest(&message))
+            );
+            drop(circuit);
+            let actual = build_sha_word_capacity_base_source_v1(&message, capacity, exact).unwrap();
+            let original =
+                original_build_sha_word_capacity_base_source_v1(&message, capacity, exact).unwrap();
+            assert_constructor_sources_equal(&actual, &original);
+            let mut actual = actual.bind_memory_challenges_v1(challenges()).unwrap();
+            let mut original = original.bind_memory_challenges_v1(challenges()).unwrap();
+            assert_eq!(actual.base_rows, original.base_rows);
+            assert_eq!(actual.fixed_rows, original.fixed_rows);
+            assert_eq!(actual.aux_rows, original.aux_rows);
+            assert_eq!(actual.aux_rows.last(), original.aux_rows.last());
+            actual.zeroize_private_cells_v1();
+            assert!(
+                actual
+                    .base_rows
+                    .iter()
+                    .flatten()
+                    .chain(actual.aux_rows.iter().flatten())
+                    .all(|value| *value == F::ZERO)
+            );
+            assert_eq!(actual.fixed_rows, original.fixed_rows);
+            actual.zeroize_private_v1();
+            original.zeroize_private_v1();
+            assert!(actual.private_is_zeroized_v1() && original.private_is_zeroized_v1());
+        }
+    }
+
+    #[test]
+    fn sha_constructor_refusals_and_late_terminal_failure_preserve_clearing() {
+        use super::super::private_table::inspection::observe_v1;
+        for (length, capacity, exact, expected) in [
+            (1, 0, false, ZkX509ShaWordStarkErrorV1::Resource),
+            (
+                0,
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1 + 1,
+                false,
+                ZkX509ShaWordStarkErrorV1::Resource,
+            ),
+            (1, 2, true, ZkX509ShaWordStarkErrorV1::Topology),
+        ] {
+            let message = constructor_message(length);
+            assert_eq!(
+                build_sha_word_capacity_base_source_v1(&message, capacity, exact).unwrap_err(),
+                expected
+            );
+            assert_eq!(
+                original_build_sha_word_capacity_base_source_v1(&message, capacity, exact)
+                    .unwrap_err(),
+                expected
+            );
+        }
+        let message = constructor_message(63);
+        let mut statement = ZkX509ShaWordStarkStatementV1 {
+            message_len: message.len(),
+            digest: <[u8; 32]>::from(<Sha256 as sha2::Digest>::digest(&message)),
+        };
+        statement.digest[0] ^= 1;
+        assert_eq!(
+            build_sha_word_stark_base_v1(statement, &message).unwrap_err(),
+            ZkX509ShaWordStarkErrorV1::Topology
+        );
+        for original in [true, false] {
+            let mut source = if original {
+                original_build_sha_word_capacity_base_source_v1(&message, 63, true)
+            } else {
+                build_sha_word_capacity_base_source_v1(&message, 63, true)
+            }
+            .unwrap();
+            let cells = source.logical_rows() * SHA_WORD_CAPACITY_AUX_WIDTH_V1;
+            source.execution[0].value = source.execution[0].value.add(F::ONE);
+            let (result, erasures) = observe_v1(|| source.bind_memory_challenges_v1(challenges()));
+            assert!(matches!(result, Err(ZkX509ShaWordStarkErrorV1::LocalCopy)));
+            assert!(erasures.iter().any(|erasure| erasure.cells == cells
+                && erasure.nonzero_before > 0
+                && erasure.nonzero_after == 0));
+        }
+    }
+
+    /// Actual complete constructor timing; two retained output owners permit every-cell comparison.
+    #[test]
+    #[ignore = "component timing requires a coordinated compiler-idle window"]
+    fn sha_constructor_reports_original_and_candidate_creation_timings_with_full_parity() {
+        use std::time::Instant;
+        for (length, capacity, exact) in [
+            (0, 63, false),
+            (63, 63, true),
+            (64, 64, true),
+            (511, 1024, false),
+            (4096, 4096, true),
+            (
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+                ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+                true,
+            ),
+            (0, ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, false),
+        ] {
+            let message = constructor_message(length);
+            for round in 0..3 {
+                let candidate_first = (round + length) % 2 == 0;
+                let run = |original| {
+                    let start = Instant::now();
+                    let source = if original {
+                        original_build_sha_word_capacity_base_source_v1(&message, capacity, exact)
+                    } else {
+                        build_sha_word_capacity_base_source_v1(&message, capacity, exact)
+                    }
+                    .unwrap();
+                    (source, start.elapsed().as_nanos())
+                };
+                let ((original, original_ns), (candidate, candidate_ns)) = if candidate_first {
+                    let candidate = run(false);
+                    (run(true), candidate)
+                } else {
+                    let original = run(true);
+                    (original, run(false))
+                };
+                assert_constructor_sources_equal(&candidate, &original);
+                eprintln!(
+                    "SHA_CONSTRUCTOR_CREATION_DIAGNOSTIC_V1 length={length} capacity={capacity} exact={exact} round={round} candidate_first={candidate_first} original_ns={original_ns} candidate_ns={candidate_ns} parity=exact"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "sha_word_stark_polynomial_tests.rs"]
 mod polynomial_tests;
+
+/// Original full constructor retained only for independent candidate controls.
+#[cfg(test)]
+pub(super) fn original_build_sha_word_capacity_base_source_v1(
+    message: &[u8],
+    maximum_message_len: usize,
+    exact_length: bool,
+) -> Result<ZkX509ShaWordCapacityBaseSourceV1, ZkX509ShaWordStarkErrorV1> {
+    if message.len() > maximum_message_len
+        || maximum_message_len > ZK_X509_DER_MAX_DOCUMENT_BYTES_V1
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Resource);
+    }
+    if exact_length && message.len() != maximum_message_len {
+        return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
+    let active_blocks = capacity_blocks_v1(message.len())?;
+    let fixed_schedule =
+        compile_sha_word_capacity_fixed_schedule_v1(maximum_message_len, exact_length)?;
+    let maximum_blocks = fixed_schedule.maximum_blocks();
+    let maximum_local_rows = fixed_schedule.maximum_local_rows();
+    let maximum_memory_rows = fixed_schedule.maximum_memory_rows();
+    let maximum_logical_rows = fixed_schedule.logical_rows();
+    let actual_circuit = build_sha256_word_circuit_v1(message)?;
+    let actual_statement = ZkX509ShaWordStarkStatementV1 {
+        message_len: message.len(),
+        digest: actual_circuit.digest(),
+    };
+    let mut actual = build_sha_word_stark_base_v1(actual_statement, message)?;
+    drop(actual_circuit);
+    if actual.local_rows != capacity_local_rows_v1(active_blocks)?
+        || actual.execution.len() != capacity_memory_rows_v1(active_blocks)?
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
+    let maximum_compute_rows = fixed_schedule.maximum_compute_rows;
+    let actual_compute_rows = actual
+        .local_rows
+        .checked_sub(SHA_WORD_CAPACITY_LOCAL_ROWS_PER_CALL_V1)
+        .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?;
+    if maximum_compute_rows
+        != maximum_blocks * SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1
+            + SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1
+        || actual_compute_rows
+            != active_blocks * SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1
+                + SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
+    let mut base_rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
+    let mut fixed_rows = Vec::new();
+    base_rows
+        .try_reserve_exact(maximum_logical_rows)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    fixed_rows
+        .try_reserve_exact(maximum_logical_rows)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    for index in 0..maximum_local_rows {
+        let active_compute = index < actual_compute_rows;
+        let digest_index = index
+            .checked_sub(maximum_compute_rows)
+            .filter(|digest| *digest < SHA_WORD_CAPACITY_LOCAL_ROWS_PER_CALL_V1);
+        let mut base = [F::ZERO; SHA_WORD_CAPACITY_BASE_WIDTH_V1];
+        if active_compute {
+            base[..SHA_WORD_BASE_WIDTH_V1]
+                .copy_from_slice(&capacity_raw_base_row_v1(&actual.base_rows[index])?);
+            base[SHA_WORD_CAPACITY_ROW_ACTIVE_V1] = F::ONE;
+        } else if let Some(digest_index) = digest_index {
+            let actual_index = actual_compute_rows + digest_index;
+            base[..SHA_WORD_BASE_WIDTH_V1]
+                .copy_from_slice(&capacity_raw_base_row_v1(&actual.base_rows[actual_index])?);
+            base[SHA_WORD_CAPACITY_ROW_ACTIVE_V1] = F::ONE;
+            let ShaWordFixedRowV1::Digest { address, .. } = actual
+                .fixed_rows
+                .get(actual_index)
+                .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?
+            else {
+                return Err(ZkX509ShaWordStarkErrorV1::Topology);
+            };
+            base[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1] =
+                F(u64::try_from(*address).map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?);
+        }
+        if index >= SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1 && index < maximum_compute_rows
+        {
+            let block_row = index
+                .checked_sub(SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1)
+                .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?;
+            let block = block_row / SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1;
+            base[SHA_WORD_CAPACITY_FINAL_BLOCK_V1] =
+                F(u64::from(active_compute && block + 1 == active_blocks));
+        }
+        let fixed = fixed_schedule.fixed_row_v1(index)?;
+        if active_compute && fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE {
+            let input_word = usize::try_from(fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
+                .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+            for byte in 0..4 {
+                let byte_index = input_word
+                    .checked_mul(4)
+                    .and_then(|offset| offset.checked_add(byte))
+                    .ok_or(ZkX509ShaWordStarkErrorV1::Resource)?;
+                if byte_index < message.len() {
+                    base[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte] = F::ONE;
+                } else if byte_index == message.len() {
+                    base[SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte] = F::ONE;
+                }
+            }
+        }
+        base_rows.push(base);
+        fixed_rows.push(fixed);
+    }
+    for value in actual.base_rows.iter_mut().flatten() {
+        value.zeroize_v1();
+    }
+    drop(core::mem::take(&mut actual.base_rows));
+    for fixed in &mut actual.fixed_rows {
+        if let ShaWordFixedRowV1::Digest { expected, .. } = fixed {
+            zeroize::Zeroize::zeroize(expected);
+        }
+    }
+    drop(core::mem::take(&mut actual.fixed_rows));
+    for memory_index in 0..maximum_memory_rows {
+        let index = maximum_local_rows + memory_index;
+        let memory_active = memory_index < actual.execution.len();
+        let mut base = [F::ZERO; SHA_WORD_CAPACITY_BASE_WIDTH_V1];
+        if memory_active {
+            let execution = actual.execution[memory_index];
+            let sorted = actual.sorted[memory_index];
+            base[0] = execution.address;
+            base[1] = execution.value;
+            base[2] = execution.is_write;
+            base[3] = sorted.address;
+            base[4] = sorted.value;
+            base[5] = sorted.is_write;
+            base[SHA_WORD_CAPACITY_ROW_ACTIVE_V1] = F::ONE;
+            base[SHA_WORD_CAPACITY_SORTED_SAME_NEXT_V1] = F(u64::from(
+                actual
+                    .sorted
+                    .get(memory_index + 1)
+                    .is_some_and(|next| next.address == sorted.address),
+            ));
+        }
+        let fixed = fixed_schedule.fixed_row_v1(index)?;
+        base_rows.push(base);
+        fixed_rows.push(fixed);
+    }
+    drop(fixed_schedule);
+    Ok(ZkX509ShaWordCapacityBaseSourceV1 {
+        message_len: message.len(),
+        #[cfg(test)]
+        maximum_message_len,
+        #[cfg(test)]
+        exact_length,
+        active_blocks,
+        maximum_blocks,
+        maximum_local_rows,
+        maximum_memory_rows,
+        actual_compute_rows,
+        maximum_compute_rows,
+        base_rows: base_rows.into_vec(),
+        fixed_rows,
+        local_events: core::mem::take(&mut actual.local_events),
+        execution: core::mem::take(&mut actual.execution),
+        sorted: core::mem::take(&mut actual.sorted),
+    })
+}
+
+#[cfg(test)]
+#[path = "sha_word_residue_oracles.rs"]
+pub(super) mod residue_oracles;

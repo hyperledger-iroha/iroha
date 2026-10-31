@@ -7,8 +7,24 @@
 //! Request schema `iroha.bridge.retained-network-request.v1` contains the independently selected
 //! network, chain, discriminant and route; pinned signed/raw genesis and role manifest; a contiguous
 //! native JSON proof prefix; and four pinned original JSON attestations with original challenges
-//! and read windows. Every file reference contains an absolute path, SHA-256, bytes and full-nine
-//! metadata. Private configurations and signing keys are never request inputs or public outputs.
+//! and read windows. Every file reference contains an absolute path, SHA-256, bytes and one
+//! explicitly tagged Unix or Windows native metadata/security object. Untagged integer arrays
+//! are not accepted; regenerated inputs require a freshly independently approved request digest.
+//! Private configurations and signing keys are never request inputs or public outputs.
+//!
+//! The mandatory `identity` object is tagged by `platform` (`unix` or `windows`) and contains
+//! one `metadata` object. Unix fields name the original device, inode, mode, uid, gid, links,
+//! length and nanosecond modified/changed times. Windows fields name the volume serial,
+//! complete 128-bit file ID, length, attributes, links, native 100-nanosecond modified/changed
+//! times, owner SID, optional group SID, DACL and security-control flags. IDs and security
+//! bytes use canonical lowercase hexadecimal; numeric fields remain JSON integers. The tag
+//! must match the observing host. Neither representation is portable identity or authority:
+//! the independent approved request digest and actual retained native originals are required.
+//! The request itself is retained under its independently approved digest before decoding.
+//! Windows inputs must use exact absolute local-drive paths with no reparse traversal. Files
+//! and ancestors retain exact security; private ancestors retain full metadata throughout
+//! verification. Shared ancestors may change unrelated namespace timestamps only. No signed
+//! receipt, network protocol, signing transport or current-network liveness claim is added.
 
 use crate::{CliOutputFormat, RunContext};
 use eyre::{Result, ensure, eyre};
@@ -28,10 +44,11 @@ use norito::{
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
-    fs::File,
-    io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::{fs::File, io::Read, path::Component};
 
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL: u64 = 128 * 1024 * 1024;
@@ -48,26 +65,161 @@ pub struct Args {
     request_sha256: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(
+    tag = "platform",
+    content = "metadata",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum NativeIdentity {
+    Unix(UnixIdentity),
+    Windows(WindowsIdentity),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct UnixIdentity {
+    device: u64,
+    inode: u64,
+    mode: u64,
+    uid: u64,
+    gid: u64,
+    links: u64,
+    length: u64,
+    modified_ns: u64,
+    changed_ns: u64,
+}
+
+#[cfg(any(unix, test))]
+impl UnixIdentity {
+    fn from_array(value: [u64; 9]) -> Self {
+        Self {
+            device: value[0],
+            inode: value[1],
+            mode: value[2],
+            uid: value[3],
+            gid: value[4],
+            links: value[5],
+            length: value[6],
+            modified_ns: value[7],
+            changed_ns: value[8],
+        }
+    }
+    fn values(&self) -> [u64; 9] {
+        [
+            self.device,
+            self.inode,
+            self.mode,
+            self.uid,
+            self.gid,
+            self.links,
+            self.length,
+            self.modified_ns,
+            self.changed_ns,
+        ]
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct WindowsIdentity {
+    volume_serial: u64,
+    file_id: String,
+    length: u64,
+    attributes: u64,
+    links: u64,
+    modified_100ns: i64,
+    changed_100ns: i64,
+    owner_sid: String,
+    group_sid: Option<String>,
+    dacl: String,
+    control: u16,
+}
+
+impl WindowsIdentity {
+    fn validate_shape(&self) -> Result<()> {
+        fn raw_hex(value: &str, minimum: usize, maximum: usize) -> bool {
+            value.len() >= minimum * 2
+                && value.len() <= maximum * 2
+                && value.len().is_multiple_of(2)
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }
+        ensure!(
+            raw_hex(&self.file_id, 16, 16)
+                && raw_hex(&self.owner_sid, 8, 68)
+                && self
+                    .group_sid
+                    .as_ref()
+                    .is_none_or(|sid| raw_hex(sid, 8, 68))
+                && raw_hex(&self.dacl, 8, u16::MAX as usize)
+                && self.attributes <= u64::from(u32::MAX),
+            "native public input identity shape is invalid"
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn from_snapshot(snapshot: &iroha_fs::PublicInputSnapshot) -> Self {
+        let (_, (volume_serial, file_id), length, custody, modified, changed) =
+            snapshot.metadata_parts();
+        let (owner, group, dacl, control) = snapshot.security_parts();
+        Self {
+            volume_serial,
+            file_id: hex::encode(file_id),
+            length,
+            attributes: custody[0],
+            links: custody[1],
+            modified_100ns: modified[0],
+            changed_100ns: changed[0],
+            owner_sid: hex::encode(owner),
+            group_sid: group.map(hex::encode),
+            dacl: hex::encode(dacl),
+            control,
+        }
+    }
+}
+
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct PublicFile {
     path: PathBuf,
     sha256: String,
     bytes: u64,
-    identity: Vec<u64>,
+    identity: NativeIdentity,
 }
 
 impl PublicFile {
-    /// Validate the JSON sequence before indexing it or performing any custody I/O.
-    fn identity_array(&self) -> Result<[u64; 9]> {
+    fn validate_identity(&self) -> Result<()> {
+        let length = match &self.identity {
+            NativeIdentity::Unix(value) => {
+                ensure!(cfg!(unix), "Unix public identity is not valid on this host");
+                value.length
+            }
+            NativeIdentity::Windows(value) => {
+                value.validate_shape()?;
+                ensure!(
+                    cfg!(windows),
+                    "Windows public identity is not valid on this host"
+                );
+                value.length
+            }
+        };
         ensure!(
-            self.identity.len() == 9,
-            "public input metadata must contain exactly nine integers"
+            self.bytes > 0 && self.bytes <= MAX_FILE && length == self.bytes,
+            "public input bound/size differs"
         );
-        self.identity
-            .as_slice()
-            .try_into()
-            .map_err(|_| eyre!("public input metadata must contain exactly nine integers"))
+        Ok(())
+    }
+
+    #[cfg(any(unix, test))]
+    fn identity_array(&self) -> Result<[u64; 9]> {
+        match &self.identity {
+            NativeIdentity::Unix(value) => Ok(value.values()),
+            NativeIdentity::Windows(_) => Err(eyre!("Unix public identity is required")),
+        }
     }
 }
 
@@ -114,6 +266,7 @@ fn pin(value: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn absolute(path: &Path) -> Result<()> {
     let text = path
         .to_str()
@@ -130,6 +283,11 @@ fn absolute(path: &Path) -> Result<()> {
         "public input must have an exact absolute path"
     );
     Ok(())
+}
+
+#[cfg(windows)]
+fn absolute(path: &Path) -> Result<()> {
+    iroha_fs::StrictPublicInput::validate_path(path).map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -156,7 +314,10 @@ fn identity(metadata: &std::fs::Metadata) -> Result<[u64; 9]> {
 
 struct HeldPublic {
     reference: PublicFile,
+    #[cfg(unix)]
     file: File,
+    #[cfg(windows)]
+    native: iroha_fs::StrictPublicInput,
     bytes: Vec<u8>,
     #[cfg(unix)]
     parents: Vec<(PathBuf, File, [u64; 9], bool)>,
@@ -177,6 +338,7 @@ impl HeldPublic {
     fn open(reference: &PublicFile) -> Result<Self> {
         use rustix::fs::{Mode, OFlags};
         use std::os::unix::fs::MetadataExt as _;
+        reference.validate_identity()?;
         let expected_identity = reference.identity_array()?;
         absolute(&reference.path)?;
         pin(&reference.sha256)?;
@@ -258,11 +420,57 @@ impl HeldPublic {
         Ok(retained)
     }
 
-    #[cfg(not(unix))]
-    fn open(_: &PublicFile) -> Result<Self> {
-        Err(eyre!(
-            "retained network verification requires Unix public-file custody"
-        ))
+    #[cfg(windows)]
+    fn open(reference: &PublicFile) -> Result<Self> {
+        reference.validate_identity()?;
+        absolute(&reference.path)?;
+        pin(&reference.sha256)?;
+        let native = iroha_fs::StrictPublicInput::open(&reference.path)?;
+        Self::from_native(reference.clone(), native)
+    }
+
+    #[cfg(windows)]
+    fn open_request(path: &Path, approved_sha256: &str) -> Result<Self> {
+        absolute(path)?;
+        pin(approved_sha256)?;
+        let native = iroha_fs::StrictPublicInput::open(path)?;
+        let observed = native.snapshot();
+        let final_check = native.revalidate();
+        let observed = observed.and_then(|value| final_check.map(|()| value))?;
+        let identity = WindowsIdentity::from_snapshot(&observed);
+        let reference = PublicFile {
+            path: path.to_path_buf(),
+            sha256: approved_sha256.to_owned(),
+            bytes: identity.length,
+            identity: NativeIdentity::Windows(identity),
+        };
+        Self::from_native(reference, native)
+    }
+
+    #[cfg(windows)]
+    fn from_native(reference: PublicFile, native: iroha_fs::StrictPublicInput) -> Result<Self> {
+        let result = (|| {
+            reference.validate_identity()?;
+            let actual = WindowsIdentity::from_snapshot(&native.snapshot()?);
+            ensure!(
+                reference.identity == NativeIdentity::Windows(actual),
+                "opened public input differs"
+            );
+            let bytes = native.read(usize::try_from(reference.bytes)?)?;
+            ensure!(
+                bytes.len() as u64 == reference.bytes
+                    && hex::encode(Sha256::digest(&bytes)) == reference.sha256,
+                "public input bytes differ from independently approved digest"
+            );
+            Ok(bytes)
+        })();
+        let final_check = native.revalidate().map_err(eyre::Report::from);
+        let bytes = result.and_then(|bytes| final_check.map(|()| bytes))?;
+        Ok(Self {
+            reference,
+            native,
+            bytes,
+        })
     }
 
     #[cfg(unix)]
@@ -313,9 +521,24 @@ impl HeldPublic {
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     fn check(&self) -> Result<()> {
-        Err(eyre!("Unix public-file custody is required"))
+        let result = (|| {
+            let actual = WindowsIdentity::from_snapshot(&self.native.snapshot()?);
+            ensure!(
+                self.reference.identity == NativeIdentity::Windows(actual),
+                "retained public input metadata changed"
+            );
+            let bytes = self.native.read(usize::try_from(self.reference.bytes)?)?;
+            ensure!(
+                bytes.len() as u64 == self.reference.bytes
+                    && hex::encode(Sha256::digest(&bytes)) == self.reference.sha256,
+                "retained public input bytes changed"
+            );
+            Ok(())
+        })();
+        let final_check = self.native.revalidate().map_err(eyre::Report::from);
+        result.and(final_check)
     }
 }
 
@@ -396,6 +619,7 @@ fn write_report(context: &mut impl RunContext, report: &Report) -> Result<()> {
     context.println_data(json::to_json(report)?)
 }
 
+#[cfg(any(unix, windows))]
 pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     ensure!(
         context.output_format() == CliOutputFormat::Json,
@@ -408,15 +632,17 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
         path: args.request.clone(),
         sha256: args.request_sha256.clone(),
         bytes: std::fs::symlink_metadata(&args.request)?.len(),
-        identity: identity(&std::fs::symlink_metadata(&args.request)?)?.to_vec(),
+        identity: NativeIdentity::Unix(UnixIdentity::from_array(identity(
+            &std::fs::symlink_metadata(&args.request)?,
+        )?)),
     };
-    #[cfg(not(unix))]
-    return Err(eyre!(
-        "retained network verification requires Unix public-file custody"
-    ));
     #[cfg(unix)]
-    {
-        let request_file = HeldPublic::open(&request_ref)?;
+    let request_file = HeldPublic::open(&request_ref)?;
+    #[cfg(windows)]
+    let request_file = HeldPublic::open_request(&args.request, &args.request_sha256)?;
+    let request_ref = &request_file.reference;
+    let mut files = Vec::new();
+    let result = (|| {
         let request: Request = json::from_slice(&request_file.bytes)?;
         ensure!(
             request.schema == "iroha.bridge.retained-network-request.v1"
@@ -459,10 +685,9 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
             total <= MAX_TOTAL,
             "retained public inputs exceed the aggregate bound"
         );
-        let files = refs
-            .iter()
-            .map(|reference| HeldPublic::open(reference))
-            .collect::<Result<Vec<_>>>()?;
+        for reference in refs {
+            files.push(HeldPublic::open(reference)?);
+        }
         iroha_genesis::init_instruction_registry();
         let manifest: iroha_genesis::RawGenesisTransaction = json::from_slice(&files[1].bytes)?;
         let genesis = iroha_genesis::validate_prepared_genesis_bundle(
@@ -531,10 +756,6 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
             let attestation: SumeragiFinalityAttestation = json::from_slice(&file.bytes)?;
             verify_peer(peer, &attestation, request.network_id, &verifier)?;
         }
-        request_file.check()?;
-        for file in &files {
-            file.check()?;
-        }
         let report = Report {
             schema: "iroha.bridge.retained-network-verification.v1",
             request_sha256: args.request_sha256,
@@ -552,8 +773,22 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
             challenge_and_window: true,
             configured_identity: true,
         };
-        write_report(context, &report)
+        Ok(report)
+    })();
+    let mut final_check = request_file.check();
+    for file in &files {
+        let check = file.check();
+        final_check = final_check.and(check);
     }
+    let report = result.and_then(|report| final_check.map(|()| report))?;
+    write_report(context, &report)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(super) fn run(_context: &mut impl RunContext, _args: Args) -> Result<()> {
+    Err(eyre!(
+        "retained network verification requires supported native public-file custody"
+    ))
 }
 
 #[cfg(test)]
@@ -644,7 +879,9 @@ mod tests {
             path: "/public/synthetic-only.json".into(),
             sha256: "11".repeat(32),
             bytes: 14,
-            identity: vec![11, 22, 33152, 501, 20, 1, 14, 88, 99],
+            identity: NativeIdentity::Unix(UnixIdentity::from_array([
+                11, 22, 33152, 501, 20, 1, 14, 88, 99,
+            ])),
         };
         let encoded = json::to_json(&reference).unwrap();
         let decoded: PublicFile = json::from_slice(encoded.as_bytes()).unwrap();
@@ -658,37 +895,30 @@ mod tests {
         );
         for boolean in ["true", "false"] {
             let malformed = format!(
-                r#"{{"path":"/public/must-not-open.json","sha256":"{}","bytes":1,"identity":[1,1,1,1,1,1,1,1,{boolean}]}}"#,
+                r#"{{"path":"/public/must-not-open.json","sha256":"{}","bytes":1,"identity":{{"platform":"unix","metadata":{{"device":1,"inode":1,"mode":1,"uid":1,"gid":1,"links":1,"length":1,"modified_ns":1,"changed_ns":{boolean}}}}}}}"#,
                 "11".repeat(32)
             );
             assert!(json::from_slice::<PublicFile>(malformed.as_bytes()).is_err());
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn malformed_public_file_identity_refuses_before_any_custody_io() {
-        for length in [0, 8, 10] {
-            let reference = PublicFile {
-                // This cannot be a file. Reaching filesystem custody would report a different
-                // error; the exact shape error must win before any metadata/open/read call.
-                path: "/dev/null/malformed-metadata-must-not-open.json".into(),
-                sha256: "11".repeat(32),
-                bytes: 1,
-                identity: vec![1; length],
-            };
-            let encoded = json::to_json(&reference).unwrap();
-            let decoded: PublicFile = json::from_slice(encoded.as_bytes()).unwrap();
-            assert_eq!(decoded.identity.len(), length);
-            let error = HeldPublic::open(&decoded).err().unwrap();
-            assert_eq!(
-                error.to_string(),
-                "public input metadata must contain exactly nine integers"
+        for length in [0, 8, 9, 10] {
+            let metadata = vec![1_u64; length];
+            let input = format!(
+                r#"{{"path":"/dev/null/malformed-metadata-must-not-open.json","sha256":"{}","bytes":1,"identity":{}}}"#,
+                "11".repeat(32),
+                json::to_json(&metadata).unwrap()
+            );
+            assert!(
+                json::from_slice::<PublicFile>(input.as_bytes()).is_err(),
+                "retired array of length {length} must fail before custody I/O"
             );
         }
     }
 
-    fn synthetic_peer() -> (Peer, SumeragiFinalityAttestation, NativeFinalityFixture) {
+    pub(super) fn synthetic_peer() -> (Peer, SumeragiFinalityAttestation, NativeFinalityFixture) {
         let fixture = NativeFinalityFixture::new();
         let signer = KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal);
         let node_id = PeerId::new(signer.public_key().clone());
@@ -741,7 +971,7 @@ mod tests {
                 path: "/public/synthetic-only.json".into(),
                 sha256: "11".repeat(32),
                 bytes: 1,
-                identity: vec![1; 9],
+                identity: NativeIdentity::Unix(UnixIdentity::from_array([1; 9])),
             },
         };
         let attestation = SumeragiFinalityAttestation {
@@ -842,7 +1072,10 @@ mod tests {
         ] {
             assert!(absolute(Path::new(path)).is_err());
         }
+        #[cfg(unix)]
         absolute(Path::new("/public/original.json")).unwrap();
+        #[cfg(windows)]
+        absolute(Path::new(r"C:\public\original.json")).unwrap();
     }
 
     #[cfg(unix)]
@@ -868,9 +1101,9 @@ mod tests {
             path: path.clone(),
             sha256: hex::encode(Sha256::digest(b"public fixture")),
             bytes: 14,
-            identity: identity(&std::fs::symlink_metadata(&path).unwrap())
-                .unwrap()
-                .to_vec(),
+            identity: NativeIdentity::Unix(UnixIdentity::from_array(
+                identity(&std::fs::symlink_metadata(&path).unwrap()).unwrap(),
+            )),
         };
         let held = HeldPublic::open(&reference()).unwrap();
         held.check().unwrap();
@@ -895,3 +1128,7 @@ mod tests {
         std::fs::set_permissions(&physical_root, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "retained_network_windows_tests.rs"]
+mod windows_tests;

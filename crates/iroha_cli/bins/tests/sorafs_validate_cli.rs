@@ -31,6 +31,17 @@ fn workspace_fixture(path: &str) -> PathBuf {
         .join("../../..")
         .join(path)
 }
+fn write_release_test_seed(path: &Path, bytes: &[u8; 32]) {
+    let directory = iroha_fs::OwnerDirectory::open(path.parent().expect("seed parent"))
+        .expect("retain seed directory");
+    directory
+        .write_atomic(
+            path.file_name().expect("seed name"),
+            bytes,
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .expect("create native private signing seed");
+}
 fn run_release_manifest_verify(
     manifest: &Path,
     public_key: &Path,
@@ -1779,7 +1790,7 @@ fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
     fs::write(&public_key, public_key_bytes).expect("write raw public key");
     fs::write(&signature, signing_key.sign(manifest_bytes).to_bytes())
         .expect("write release signature");
-    fs::write(&seed_path, [0x71_u8; 32]).expect("write signing seed");
+    write_release_test_seed(&seed_path, &[0x71_u8; 32]);
     #[cfg(unix)]
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600))
         .expect("secure signing seed");
@@ -1845,7 +1856,7 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
     let public_key_bytes = signing_key.verifying_key().to_bytes();
     let fingerprint = hex::encode(sha256(public_key_bytes));
     fs::write(&manifest, manifest_bytes).expect("write release manifest");
-    fs::write(&seed_path, [0x63_u8; 32]).expect("write raw seed");
+    write_release_test_seed(&seed_path, &[0x63_u8; 32]);
     #[cfg(unix)]
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600)).expect("secure raw seed");
     fs::write(&public_key, public_key_bytes).expect("write raw public key");
@@ -1934,7 +1945,7 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
     let fingerprint = hex::encode(sha256(public_key_bytes));
     fs::write(&manifest, b"canonical release manifest\n").expect("write release manifest");
     fs::write(&public_key, public_key_bytes).expect("write public key");
-    fs::write(&seed_path, [0x64_u8; 32]).expect("write seed");
+    write_release_test_seed(&seed_path, &[0x64_u8; 32]);
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600))
         .expect("secure signing seed");
     symlink(&public_key, &public_key_link).expect("create public key symlink");

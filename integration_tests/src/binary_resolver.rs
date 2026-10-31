@@ -1,13 +1,21 @@
 //! Shared binary resolution helpers for CLI-oriented integration tests.
 use crate::process::{output_with_timeout, process_timeout};
+use iroha_test_network::{
+    BinaryKind, ResolvedProgram, resolve_development_binary, resolve_release_prebuilt_binary,
+};
 use std::{
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
     sync::Once,
     time::SystemTime,
 };
 /// Resolve the `iroha` CLI binary, preferring already-built targets when available.
-pub fn iroha_program() -> eyre::Result<PathBuf> {
+pub fn iroha_program() -> eyre::Result<ResolvedProgram> {
+    if resolve_release_prebuilt_binary(BinaryKind::Iroha)?.is_some() {
+        // Program admission also authenticates any explicit TEST_NETWORK_BIN_IROHA override.
+        return iroha_test_network::Program::Iroha
+            .resolve()
+            .map_err(Into::into);
+    }
     prepare_iroha_cli_test_environment();
     iroha_test_network::Program::Iroha
         .resolve()
@@ -18,10 +26,16 @@ pub fn iroha_program() -> eyre::Result<PathBuf> {
 /// Unlike [`iroha_program`], this helper returns an existing compatible CLI binary immediately
 /// without forcing a freshness rebuild. When no reusable binary is available it falls back to the
 /// normal resolver; callers running under Cargo must provide a top-level prebuilt binary.
-pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
+pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<ResolvedProgram> {
+    if resolve_release_prebuilt_binary(BinaryKind::Iroha)?.is_some() {
+        // Program admission also authenticates any explicit TEST_NETWORK_BIN_IROHA override.
+        return iroha_test_network::Program::Iroha
+            .resolve()
+            .map_err(Into::into);
+    }
     prepare_iroha_cli_test_environment();
     if let Some(path) = find_existing_cli_binary_path() {
-        return Ok(path);
+        return resolve_development_binary(&path).map_err(Into::into);
     }
     iroha_test_network::Program::Iroha
         .resolve()
@@ -29,6 +43,11 @@ pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
 }
 /// Prepare CLI integration tests to reuse already-built binaries when requested.
 pub fn prepare_iroha_cli_test_environment() {
+    // Admission errors are returned by the resolver. Preparation must never probe ambient
+    // executables or rewrite authenticated selections in an active or partial contract.
+    if !matches!(resolve_release_prebuilt_binary(BinaryKind::Iroha), Ok(None)) {
+        return;
+    }
     configure_build_profile_for_tests();
     configure_program_overrides_from_existing_binaries();
 }
@@ -134,9 +153,14 @@ pub const fn irohad_binary_name() -> &'static str {
 }
 /// Check whether an existing CLI binary exposes the training-job command surface.
 pub fn binary_supports_training_job_commands(path: &Path) -> bool {
-    let mut command = ProcessCommand::new(path);
+    let Ok(program) = resolve_development_binary(path) else {
+        return false;
+    };
+    let Ok(mut command) = program.command() else {
+        return false;
+    };
     command.arg("soracloud").arg("model").arg("--help");
-    let output = output_with_timeout(&mut command, process_timeout());
+    let output = output_with_timeout(command, process_timeout());
     let Ok(output) = output else {
         return false;
     };

@@ -9978,6 +9978,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "DomainView",
         "NftView",
         "QueryPage",
+        "AssetUidHoldingQuote",
         "AxtDescriptor",
         "AxtAnchoredSpendV1",
         "ProofBlob",
@@ -10115,7 +10116,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         let parts = value.components(separatedBy: "::")
         if parts.count == 2 {
             if parts[0] == "kotodama" {
-                return coreQueryViewNames.contains(value) || value == "kotodama::QueryPage" || value == "kotodama::StatePage"
+                return coreQueryViewNames.contains(value) || value == "kotodama::QueryPage" || value == "kotodama::StatePage" || value == "kotodama::AssetUidHoldingQuote"
             }
             return parts.allSatisfy(isCanonicalTypeDeclarationIdentifier)
         }
@@ -10455,7 +10456,15 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         return descriptor.fields == expected.0 && childTypeNames == expected.1
     }
 
+    private static func isExactUidHoldingQuote(_ fields: [String], types: [String]) -> Bool {
+        fields == ["asset_definition_id", "account_id", "policy_revision", "beneficial_holdings", "holding_limit", "required_overflow"]
+            && types == ["AssetDefinitionId", "AccountId", "int", "quantity", "Option<quantity>", "quantity"]
+    }
+
     private static func exactDurableBuiltinProduct(_ name: String, fields: [String], types: [String]) -> Bool {
+        if name == "kotodama::AssetUidHoldingQuote" {
+            return isExactUidHoldingQuote(fields, types: types)
+        }
         if coreQueryViewNames.contains(name) {
             return isExactCoreQueryView(.init(name: name, fields: fields), childTypeNames: types)
         }
@@ -10653,6 +10662,12 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                         coreQueryViewName: nil,
                         listCapacity: nil,
                         listElementCoreQueryViewName: nil
+                    )
+                } else if descriptor.name == "kotodama::AssetUidHoldingQuote" {
+                    guard Self.isExactUidHoldingQuote(descriptor.fields, types: childTypeNames) else { return nil }
+                    result = RenderedType(
+                        canonicalTypeName: "AssetUidHoldingQuote",
+                        coreQueryViewName: nil, listCapacity: nil, listElementCoreQueryViewName: nil
                     )
                 } else if Self.coreQueryViewNames.contains(descriptor.name) {
                     guard Self.isExactCoreQueryView(
@@ -23118,21 +23133,73 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return request
     }
 
-    /// Fetch one original ordinary finality proof by height. The height is only a locator;
-    /// the installed Native genesis and authenticated certificate history authenticate it.
-    public func getKagemushaWalletLedgerFinalityOriginalV1(
-        height: UInt64,
+    /// Read the one direct finality original of a retained Activate or Unload attempt. Only the
+    /// typed 404 (not committed, or not this account's attempt) and 503 (retryable) are waits;
+    /// every other status, including an untyped 404, throws. The bytes stay DATA until the
+    /// installed Native wallet verifies them under its own selected epoch.
+    public func getKagemushaWalletLedgerAttemptFinalityV1(
+        selection: ToriiKagemushaWalletLedgerSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         requireCurrentOwner: @escaping @Sendable () async throws -> Void
-    ) async throws -> Data {
-        guard height > 0 else { throw ToriiClientError.invalidPayload("finality height must be positive") }
+    ) async throws -> KagemushaWalletLedgerReadV1 {
+        try Task.checkCancellation()
         try await requireCurrentOwner()
-        var request = try makeRequest(path: "/v1/bridge/finality/\(height)",
+        let request = try makeKagemushaWalletLedgerAttemptRequestV1(
+            path: selection.path + "/finality", canonicalAuth: canonicalAuth)
+        return try await readKagemushaLedgerAttempt(request,
+            maximum: ToriiKagemushaWalletLedgerSelectionV1.finalityMaximumBytes,
+            requireCurrentOwner: requireCurrentOwner)
+    }
+
+    /// Read one epoch boundary below this attempt's inclusion height, chosen from the Native
+    /// wallet's own epoch progress. The certificate grants nothing until Native verifies it.
+    public func getKagemushaWalletLedgerAttemptEpochV1(
+        selection: ToriiKagemushaWalletLedgerSelectionV1,
+        boundaryHeight: UInt64,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> KagemushaWalletLedgerReadV1 {
+        guard boundaryHeight >= 2 else {
+            throw ToriiClientError.invalidPayload("epoch boundary must follow genesis")
+        }
+        try Task.checkCancellation()
+        try await requireCurrentOwner()
+        let request = try makeKagemushaWalletLedgerAttemptRequestV1(
+            path: selection.path + "/epochs/\(boundaryHeight)", canonicalAuth: canonicalAuth)
+        return try await readKagemushaLedgerAttempt(request,
+            maximum: ToriiKagemushaWalletLedgerSelectionV1.epochMaximumBytes,
+            requireCurrentOwner: requireCurrentOwner)
+    }
+
+    /// Sign the exact attempt route; a signature over another attempt or boundary cannot authorize it.
+    func makeKagemushaWalletLedgerAttemptRequestV1(
+        path: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) throws -> URLRequest {
+        var request = try makeCanonicalAccountRequest(path: path, method: .get,
             headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
-                      "Cache-Control": "no-cache, no-store"])
+                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpShouldUsePipelining = false
-        return try await readKagemushaLedgerOriginal(request, maximum: 36 * 1024 * 1024,
-            requireCurrentOwner: requireCurrentOwner)
+        return request
+    }
+
+    private func readKagemushaLedgerAttempt(_ request: URLRequest, maximum: Int,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void) async throws -> KagemushaWalletLedgerReadV1 {
+        try await requireCurrentOwner()
+        let (bytes, response) = try await sendBoundedResponse(request,
+            context: "KAGEMUSHA ledger attempt original", maximumBytes: maximum)
+        try await requireCurrentOwner()
+        // Only the authoritative reject-code header types a wait; a body never does.
+        switch (response.statusCode, rejectCode(from: response)) {
+        case (404, "kagemusha_ledger_entry_not_committed"?):
+            return .notCommitted
+        case (503, "kagemusha_ledger_finality_unavailable"?):
+            return .unavailable
+        default:
+            return .original(try validateKagemushaLedgerOriginal(request, response: response,
+                bytes: bytes, maximum: maximum))
+        }
     }
 
     private func readKagemushaLedgerOriginal(_ request: URLRequest, maximum: Int,
@@ -23261,6 +23328,23 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         request.cachePolicy = .reloadIgnoringLocalCacheData
         try applyCanonicalAuth(canonicalAuth, to: &request, body: nil)
         return request
+    }
+
+    /// Fetch a bounded original proof for the complete retained checkpoint.
+    /// This is transport only; `ValidationFeeFinalityV1.verify` authenticates it.
+    public func getValidationFeePolicyProof(checkpoint: Data,
+                                            canonicalAuth: ToriiCanonicalRequestAuth) async throws -> Data {
+        let body = try ValidationFeeFinalityV1.request(checkpoint: checkpoint)
+        let request = try makeCanonicalAccountRequest(path: "/v1/validation-fee/policy/current/proof",
+            method: .post, body: body,
+            headers: ["Content-Type": "application/x-norito", "Accept": "application/x-norito",
+                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
+        let (data, response) = try await sendBoundedResponse(request, context: "validation fee policy proof",
+            maximumBytes: ValidationFeeFinalityV1.maximumProofBytes)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !data.isEmpty else { throw ToriiClientError.invalidPayload("Validation fee proof is empty.") }
+        return data
     }
 
     private func sendBoundedResponse(

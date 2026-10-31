@@ -5,6 +5,7 @@ use color_eyre::{
     owo_colors::OwoColorize,
 };
 use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
+use iroha_fs::FileMetadata;
 use iroha_genesis::RawGenesisTransaction;
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
 use std::{
@@ -270,11 +271,8 @@ enum JsonConversion {
     JsonToNorito,
 }
 
-fn same_codec_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    #[cfg(any(unix, windows))]
+fn same_codec_file_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     let same_identity = crate::secure_fs::same_file_identity(left, right);
-    #[cfg(not(any(unix, windows)))]
-    let same_identity = true;
 
     same_identity
         && left.is_file() == right.is_file()
@@ -291,7 +289,10 @@ fn reject_codec_input_output_alias(input: Option<&Path>, output: Option<&Path>) 
         (Ok(input), Ok(output)) => input == output,
         _ => false,
     };
-    let same_identity = match (fs::metadata(input), fs::metadata(output)) {
+    let same_identity = match (
+        fs::canonicalize(input).and_then(FileMetadata::symlink_metadata),
+        fs::canonicalize(output).and_then(FileMetadata::symlink_metadata),
+    ) {
         (Ok(input), Ok(output)) => crate::secure_fs::same_file_identity(&input, &output),
         _ => false,
     };
@@ -384,9 +385,21 @@ fn read_codec_input_bounded_with_capacity<R: Read + ?Sized>(
     }
     Ok(bytes)
 }
+fn codec_input_is_indirect(metadata: &FileMetadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    metadata.file_type().is_symlink()
+}
+
 fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
-    let lexical = fs::symlink_metadata(path)?;
-    if !lexical.is_file() || lexical.file_type().is_symlink() {
+    let lexical = FileMetadata::symlink_metadata(path)?;
+    if !lexical.is_file() || codec_input_is_indirect(&lexical) {
         return Err(eyre!(
             "codec input must be a non-symlink regular file: {}",
             path.display()
@@ -399,9 +412,18 @@ fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let mut file = options.open(path)?;
-    let before = file.metadata()?;
-    if !before.is_file() || !same_codec_file_snapshot(&lexical, &before) {
+    let before = FileMetadata::of(&file)?;
+    if !before.is_file()
+        || codec_input_is_indirect(&before)
+        || !same_codec_file_snapshot(&lexical, &before)
+    {
         return Err(eyre!(
             "codec input changed while opening or is not a regular file: {}",
             path.display()
@@ -422,7 +444,7 @@ fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
         "codec input",
         initial_capacity,
     )?;
-    let after = file.metadata()?;
+    let after = FileMetadata::of(&file)?;
     if !same_codec_file_snapshot(&before, &after) || after.len() != bytes.len() as u64 {
         return Err(eyre!(
             "codec input changed while it was being read: {}",
@@ -570,6 +592,24 @@ mod tests {
     use iroha_genesis::RawGenesisTransaction;
     use iroha_schema::{Compact, TypeId};
     use std::{fmt::Write as _, fs, io::BufWriter, path::PathBuf, sync::Arc};
+
+    #[test]
+    fn codec_alias_admission_uses_native_identity_and_preserves_distinct_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        let alias = directory.path().join("alias");
+        fs::write(&first, b"same bytes").unwrap();
+        fs::write(&second, b"same bytes").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        assert!(super::reject_codec_input_output_alias(Some(&first), Some(&alias)).is_err());
+        super::reject_codec_input_output_alias(Some(&first), Some(&second)).unwrap();
+        assert_eq!(read_codec_file_bounded(&first).unwrap(), b"same bytes");
+        let before = iroha_fs::FileMetadata::symlink_metadata(&first).unwrap();
+        let distinct = iroha_fs::FileMetadata::symlink_metadata(&second).unwrap();
+        assert!(!super::same_codec_file_snapshot(&before, &distinct));
+        assert!(!super::codec_input_is_indirect(&before));
+    }
     fn normalize_roundtrip_json(value: &mut norito::json::Value) {
         let norito::json::Value::Object(map) = value else {
             return;

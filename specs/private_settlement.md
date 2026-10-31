@@ -408,12 +408,22 @@ same-effective-user ownership, a single-writer process lease, create-new temp
 files, canonical decode/re-encode, fsync before rename, and directory fsync.
 Startup scanning rejects unknown, noncanonical, substituted, or capacity-
 violating records and reconstructs staged pool/nullifier/output reservations.
+
 Those locks use exact-route keys: pool heads are reserved by
 `(route, pool_id, old_epoch, old_root)`, nullifiers by
 `(route, pool_id, nullifier)`, and outputs by
 `(route, pool_id, commitment)`. Equal opaque values on different routes do not
 alias, while a conflict on the same full route cannot be bypassed by reusing a
 pool identifier.
+
+Windows configured APS storage uses retained private root and `.tmp` owners,
+an exclusive original writer lock, bounded original-file reads and borrowed
+cross-parent journal publication. Failed mutations retain their original handles;
+publication/disposition latches preserve the existing committed-error and restart
+boundary. The canonical records, reservation keys and lifecycle policy are shared
+with Unix. Native source and failure controls still require current-source
+execution and the separate real-process persistence-cut qualification; the
+optional governed APS configuration remains disabled by default.
 
 Access views are least privilege:
 

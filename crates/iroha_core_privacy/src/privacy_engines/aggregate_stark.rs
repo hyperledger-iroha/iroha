@@ -2354,9 +2354,17 @@ impl AsRef<[F]> for ZeroizingFieldColumnV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
+        #[cfg(test)]
+        let observed = field_column_inspection::before_v1(&self.0);
         self.zeroize_v1();
+        #[cfg(test)]
+        field_column_inspection::after_v1(observed, &self.0);
     }
 }
+/// Test-only counts around the original final-column eraser.
+#[cfg(test)]
+#[path = "aggregate_stark/field_column_inspection.rs"]
+pub(crate) mod field_column_inspection;
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.zeroize_v1();

@@ -10,6 +10,19 @@ pub(crate) mod prepared_intents;
 #[cfg(test)]
 pub(crate) mod process_crash;
 mod read;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(crate) use windows::ArchiveDirectory;
+#[cfg(windows)]
+use windows::{
+    ArchiveFile, open_archive_directory_named, open_directory, open_named_record,
+    publish_named_record, verify_archive_directory,
+};
+#[cfg(not(windows))]
+pub(crate) type ArchiveDirectory = File;
+#[cfg(not(windows))]
+type ArchiveFile = File;
 #[cfg(test)]
 pub(crate) use prepared_intents::test_helpers as prepared_intent_test_helpers;
 pub use read::NativeContextRead;
@@ -29,8 +42,9 @@ use iroha_data_model::{
     sumeragi_lanes::SumeragiLaneState,
 };
 
+#[cfg(not(windows))]
+use std::fs::File;
 use std::{
-    fs::File,
     io::{self, Read, Seek, Write},
     num::NonZeroUsize,
     path::Path,
@@ -202,8 +216,8 @@ impl PreparedNativeContext {
 
 /// Mandatory per-Kura context projection archive. It is not finality authority.
 pub struct NativeContextArchive {
-    root: File,
-    directory: File,
+    root: ArchiveDirectory,
+    directory: ArchiveDirectory,
     budget: AllocationBudget,
     maximum: NonZeroUsize,
     writable: bool,
@@ -337,7 +351,7 @@ impl NativeContextArchive {
     /// # Errors
     /// The archive namespace was removed or substituted after acquisition.
     pub fn recheck_namespace(&self) -> Result<(), NativeContextArchiveError> {
-        verify_named_file(&self.root, self.namespace, &self.directory)?;
+        verify_archive_directory(&self.root, self.namespace, &self.directory)?;
         Ok(())
     }
 
@@ -699,8 +713,8 @@ fn open_directory(store_root: &Path, create: bool) -> io::Result<(File, File)> {
     let directory = open_archive_directory(&root, create)?;
     Ok((root, directory))
 }
-#[cfg(unix)]
-fn open_archive_directory(root: &File, create: bool) -> io::Result<File> {
+#[cfg(any(unix, windows))]
+fn open_archive_directory(root: &ArchiveDirectory, create: bool) -> io::Result<ArchiveDirectory> {
     open_archive_directory_named(root, "native-contexts", create)
 }
 #[cfg(unix)]
@@ -732,12 +746,16 @@ fn open_archive_directory_named(root: &File, namespace: &str, create: bool) -> i
     }
     Ok(directory)
 }
-fn verify_bytes(mut file: File, expected: &[u8]) -> io::Result<()> {
+#[cfg(unix)]
+fn verify_bytes(mut file: ArchiveFile, expected: &[u8]) -> io::Result<()> {
     if !file.metadata()?.is_file() || file.metadata()?.len() != expected.len() as u64 {
         return Err(io::Error::other(
             "native context record length or type differs",
         ));
     }
+    verify_stream(&mut file, expected)
+}
+fn verify_stream(file: &mut impl Read, expected: &[u8]) -> io::Result<()> {
     let mut scratch = [0; 4096];
     let mut offset = 0;
     while offset < expected.len() {
@@ -753,9 +771,9 @@ fn verify_bytes(mut file: File, expected: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn publish_record(
-    directory: &File,
+    directory: &ArchiveDirectory,
     height: u64,
     hash: HashOf<BlockHeader>,
     bytes: &[u8],
@@ -855,6 +873,14 @@ fn verify_named_file(directory: &File, name: &str, file: &File) -> io::Result<()
     Ok(())
 }
 #[cfg(unix)]
+fn verify_archive_directory(
+    root: &ArchiveDirectory,
+    namespace: &str,
+    directory: &ArchiveDirectory,
+) -> io::Result<()> {
+    verify_named_file(root, namespace, directory)
+}
+#[cfg(unix)]
 fn remove_matching_stage(directory: &File, name: &str, bytes: &[u8]) -> io::Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags};
     let file = match rustix::fs::openat(
@@ -872,42 +898,42 @@ fn remove_matching_stage(directory: &File, name: &str, bytes: &[u8]) -> io::Resu
     rustix::fs::unlinkat(directory, name, AtFlags::empty())?;
     directory.sync_all()
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_directory(_store_root: &Path, _create: bool) -> io::Result<(File, File)> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor-relative native context archive is required",
     ))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_archive_directory(_root: &File, _create: bool) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor-relative native context archive is required",
     ))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_archive_directory_named(_root: &File, _namespace: &str, _create: bool) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor-relative native context archive is required",
     ))
 }
-#[cfg(not(unix))]
-fn verify_named_file(_directory: &File, _name: &str, _file: &File) -> io::Result<()> {
+#[cfg(not(any(unix, windows)))]
+fn verify_archive_directory(_directory: &File, _name: &str, _file: &File) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor-relative native context archive is required",
     ))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_named_record(_directory: &File, _name: &RecordName) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor-relative native context archive is required",
     ))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn publish_record(
     _directory: &File,
     _height: u64,
@@ -920,7 +946,7 @@ fn publish_record(
     ))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn publish_named_record(
     _directory: &File,
     _target: &RecordName,

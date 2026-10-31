@@ -1266,7 +1266,7 @@ mod native {
     }
 }
 
-pub use native::{Listener, detach, request_as};
+pub(super) use native::{Listener, detach, request_as};
 
 pub fn supported() -> Result<()> {
     if cfg!(any(unix, windows)) {

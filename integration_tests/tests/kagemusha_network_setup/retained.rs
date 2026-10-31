@@ -7,6 +7,7 @@ use iroha_test_network::{NativeGenesisProvisioningBundle, RetainedNetworkGenesis
 
 #[path = "retained/provisioning.rs"]
 mod provisioning;
+#[cfg(unix)]
 pub(super) use provisioning::provision;
 
 const GENESIS_SHA256: &str = "a290b3daecddb94af0c5a3ccf7a849707c8eaa49d2117b6938c39864902240c4";
@@ -136,7 +137,10 @@ pub(super) fn network_builder() -> Result<NetworkBuilder> {
 
 #[test]
 fn retained_selection_refuses_other_genesis_missing_roles_and_unknown_fields() {
-    let selected = norito::json!({"schema":"iroha.kagemusha.retained-four-validator-inputs.v1", "signed_genesis":{"path":"/private/genesis.nrt", "sha256":GENESIS_SHA256}, "manifest":{"path":"/private/genesis.json", "sha256":MANIFEST_SHA256}});
+    let temporary = tempfile::tempdir().expect("native absolute fixture parent");
+    let genesis = temporary.path().join("genesis.nrt");
+    let manifest = temporary.path().join("genesis.json");
+    let selected = norito::json!({"schema":"iroha.kagemusha.retained-four-validator-inputs.v1", "signed_genesis":{"path":(genesis.to_str().expect("UTF-8 native fixture path")), "sha256":GENESIS_SHA256}, "manifest":{"path":(manifest.to_str().expect("UTF-8 native fixture path")), "sha256":MANIFEST_SHA256}});
     require_selection(&selected).unwrap();
     for field in ["signed_genesis", "manifest"] {
         let mut changed = selected.clone();

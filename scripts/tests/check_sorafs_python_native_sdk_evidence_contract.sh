@@ -24,6 +24,12 @@ required_runner_tokens = (
     'tests/staking_preparation_test.py',
     'tests/validator_staking_test.py',
     'SOURCE_RECEIPT_SEAL=',
+    'VENV_SCRIPTS="${SDK_SESSION}/venv/Scripts"',
+    'VENV_PYTHON="${VENV_SCRIPTS}/python.exe"',
+    'os.pathsep.join',
+    'cargo build --locked -p iroha_native_source_delivery',
+    'IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="${NATIVE_HELPER}"',
+    '--native-helper "${NATIVE_HELPER}"',
     'Python native source qualification may not contain skipped tests',
     'verify_source_delivery',
     'IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1 \\\n"${VENV_PYTHON}" -m pytest',
@@ -37,6 +43,14 @@ for token in required_runner_tokens:
         raise SystemExit(f"Python native evidence runner is missing {token!r}")
 if runner.count("--evidence-dir") != 1:
     raise SystemExit("Python native evidence output must have one opt-in binding")
+helper_build = runner.index("cargo build --locked -p iroha_native_source_delivery")
+helper_check = runner.index("assert_build_source_unchanged", helper_build)
+helper_use = runner.index('IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="${NATIVE_HELPER}"')
+if not runner.index("SOURCE_BEFORE_PIN=") < helper_build < helper_check < helper_use:
+    raise SystemExit("Native helper must be built inside the original authenticated source pin")
+backup_selection = runner.split('SOURCE_BACKUP_DIRECTORY="$(', 1)[1].split("SOURCE_RECEIPT_SEAL=", 1)[0]
+if "mkdir" in backup_selection or "mktemp" in backup_selection:
+    raise SystemExit("Only the retained native owner may create the protected backup directory")
 skip_audit = runner.index(
     "SoraFS native Python SDK parity may not contain skipped tests"
 )

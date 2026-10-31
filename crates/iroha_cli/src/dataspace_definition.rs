@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Dispatch definition commands before the general CLI considers `client.toml`.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn run(
     args: &Args,
     output: impl Write,
@@ -102,7 +102,7 @@ pub(crate) fn run(
 }
 
 /// Fail closed on platforms without the required direct-file custody primitives.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn run(_: &Args, _: impl Write, _: impl Write, _: Localizer) -> Result<()> {
     bail!("dataspace definition commands require Unix filesystem custody")
 }
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn network_identity_comes_from_validated_public_genesis() {
         use norito::codec::Encode as _;
-        let (genesis, signer) = crate::taira_public_reset::deployment_genesis_fixture();
+        let (genesis, signer) = crate::deployment_genesis_fixture::deployment_genesis_fixture();
         let peers = iroha_genesis::signed_genesis_validator_pops(&genesis)
             .unwrap()
             .into_keys()

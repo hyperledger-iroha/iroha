@@ -2065,3 +2065,157 @@ def test_workspace_source_observation_pins_one_canonical_root_across_alias_chang
     assert alias.resolve() == first
     assert (first / "source.rs").read_text() == "original candidate\n"
     assert (second / "source.rs").read_text() == "unrelated candidate\n"
+
+
+@pytest.fixture(params=("plain", "descriptor"))
+def retained_scanner_reader(request, tmp_path: Path):
+    """Exercise both scanner readers with a genuine retained file owner."""
+
+    if request.param == "descriptor" and os.name != "posix":
+        pytest.skip("descriptor-relative source readers require POSIX dir_fd")
+    source = load_module()
+    spec = importlib.util.spec_from_file_location(
+        "scanner_reader_keeper", SCRIPT.with_name("workspace_source_keeper.py")
+    )
+    assert spec is not None and spec.loader is not None
+    custody = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(custody)
+    root = tmp_path / "retained-input"
+    root.mkdir(mode=0o700)
+    path = root / "input"
+    path.write_bytes(b"unchanged original source\n")
+    guard = custody.SourceKeeper(root)
+    parent = None
+    token = None
+    try:
+        guard.capture(["input"])
+        token = source._RETAINED_SOURCE.set(guard)
+        if request.param == "descriptor":
+            parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+        def open_reader():
+            if parent is None:
+                return source._stable_regular_reader(
+                    path, maximum_size=1024, label="retained fixture"
+                )
+            return source._stable_regular_reader_at(
+                parent, b"input", path.lstat(), maximum_size=1024,
+                label="retained fixture", source_path=path,
+            )
+
+        yield source, custody, guard, path, open_reader
+    finally:
+        if token is not None:
+            source._RETAINED_SOURCE.reset(token)
+        if parent is not None:
+            os.close(parent)
+        guard.close()
+        assert guard.closed and not guard.reading
+        for original in guard.originals.values():
+            with pytest.raises((RuntimeError, OSError)):
+                original.revalidate()
+
+
+@pytest.mark.parametrize("context", ("normal", "except", "finally"))
+def test_retained_scanner_success_does_not_forward_ambient_exception(
+    retained_scanner_reader, context: str,
+) -> None:
+    """Only an exception from this read may poison its original owner."""
+
+    _, _, guard, path, open_reader = retained_scanner_reader
+    before = path.stat()
+    streams = []
+
+    def read_original():
+        with open_reader() as (stream, metadata):
+            streams.append(stream)
+            assert metadata.st_ino == before.st_ino
+            assert stream.read() == b"unchanged original source\n"
+        assert stream.closed
+        assert not guard.failed and not guard.reading
+        guard.revalidate()
+
+    first = RuntimeError("unrelated outer operation failed")
+    if context == "normal":
+        read_original()
+    elif context == "except":
+        try:
+            raise first
+        except RuntimeError as error:
+            assert error is first
+            read_original()
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            try:
+                raise first
+            finally:
+                read_original()
+        assert raised.value is first
+    assert len(streams) == 1 and streams[0].closed
+    assert not guard.failed and not guard.reading
+    guard.revalidate()
+    assert path.read_bytes() == b"unchanged original source\n"
+    after = path.stat()
+    assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+            after.st_ctime_ns) == (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+
+
+def test_retained_scanner_body_failure_keeps_first_exception_and_refuses(
+    retained_scanner_reader,
+) -> None:
+    """A genuine consumer failure still permanently refuses publication."""
+
+    _, custody, guard, path, open_reader = retained_scanner_reader
+    first = RuntimeError("actual reader body failed")
+    with pytest.raises(RuntimeError) as raised:
+        with open_reader() as (stream, _):
+            assert stream.read() == b"unchanged original source\n"
+            raise first
+    assert raised.value is first
+    assert stream.closed and guard.failed and not guard.reading
+    assert path.read_bytes() == b"unchanged original source\n"
+    with pytest.raises(custody.SourceCustodyError, match="permanently refused"):
+        guard.revalidate()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permits mutation of a retained file")
+def test_retained_scanner_metadata_failure_closes_and_refuses(
+    retained_scanner_reader,
+) -> None:
+    """A real original metadata change retains the scanner's failure path."""
+
+    source, custody, guard, path, open_reader = retained_scanner_reader
+    before = path.stat()
+    with pytest.raises(source.SourceSealError, match="changed while it was read"):
+        with open_reader() as (stream, _):
+            assert stream.read() == b"unchanged original source\n"
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            assert path.stat().st_mtime_ns != before.st_mtime_ns
+    assert stream.closed and guard.failed and not guard.reading
+    assert path.read_bytes() == b"unchanged original source\n"
+    with pytest.raises(custody.SourceCustodyError, match="permanently refused"):
+        guard.revalidate()
+
+
+def test_retained_scanner_actual_read_failure_closes_and_refuses(
+    retained_scanner_reader,
+) -> None:
+    """Reading a genuinely closed duplicate fails without replacing its error."""
+
+    _, custody, guard, _, open_reader = retained_scanner_reader
+    first = None
+    with pytest.raises(ValueError) as raised:
+        with open_reader() as (stream, _):
+            stream.close()
+            try:
+                stream.read()
+            except ValueError as error:
+                first = error
+                raise
+    assert first is not None and raised.value is first
+    assert stream.closed and guard.failed and not guard.reading
+    with pytest.raises(custody.SourceCustodyError, match="permanently refused"):
+        guard.revalidate()

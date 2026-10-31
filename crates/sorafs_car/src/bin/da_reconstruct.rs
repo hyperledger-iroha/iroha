@@ -1,3 +1,4 @@
+//! Reconstruct DA payloads and emit their verified summaries.
 #![allow(clippy::missing_panics_doc)]
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
@@ -6,10 +7,13 @@ use norito::{
     decode_from_bytes,
     json::{Map, Value},
 };
+#[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
+#[cfg(not(windows))]
+use std::io;
 use std::{
     fs::{self, File},
-    io::{self, BufWriter, Read, Write},
+    io::{BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
 };
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
@@ -383,6 +387,16 @@ fn write_summary_json(
     file.write_all(rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write summary `{}`", path.display()))
 }
+#[cfg(windows)]
+#[path = "common/output_fs.rs"]
+mod native_output_fs;
+
+#[cfg(windows)]
+fn open_output_file(path: &Path, label: &str) -> Result<iroha_fs::RetainedOutputFile> {
+    native_output_fs::open_output_file(path, label).map_err(eyre::Report::msg)
+}
+
+#[cfg(not(windows))]
 fn open_output_file(path: &Path, label: &str) -> Result<File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -404,6 +418,7 @@ fn open_output_file(path: &Path, label: &str) -> Result<File> {
     }
     Ok(file)
 }
+#[cfg(not(windows))]
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -414,6 +429,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_output_path(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -944,5 +960,94 @@ mod tests {
             profile.parity_shards,
         );
         (manifest, payload, parity_payloads)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_reconstruction_and_summary_use_retained_outputs() {
+        let (manifest, payload, parity_payloads) = sample_manifest();
+        let plan = build_plan_from_da_manifest(&manifest).unwrap();
+        let (_temporary, root) = canonical_tempdir();
+        for (index, chunk) in plan.chunks.iter().enumerate() {
+            let path = root.join(render_chunk_template(DEFAULT_CHUNK_TEMPLATE, index).unwrap());
+            let start = chunk.offset as usize;
+            fs::write(path, &payload[start..start + chunk.length as usize]).unwrap();
+        }
+        for (index, bytes) in parity_payloads {
+            fs::write(
+                root.join(render_chunk_template(DEFAULT_CHUNK_TEMPLATE, index as usize).unwrap()),
+                bytes,
+            )
+            .unwrap();
+        }
+        let output = root.join("nested/payload");
+        let mut seeded = open_output_file(&output, "payload").unwrap();
+        seeded.write_all(&vec![0xCC; payload.len() + 32]).unwrap();
+        drop(seeded);
+        let original = iroha_fs::RetainedFile::open_regular(&output)
+            .unwrap()
+            .identity()
+            .unwrap();
+        let summary =
+            reconstruct_payload(&manifest, &root, &output, DEFAULT_CHUNK_TEMPLATE).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), payload);
+        assert_eq!(summary.payload_bytes, manifest.total_size);
+        assert_eq!(
+            iroha_fs::RetainedFile::open_regular(&output)
+                .unwrap()
+                .identity()
+                .unwrap(),
+            original
+        );
+        let summary_path = root.join("summary/result.json");
+        write_summary_json(&summary, &manifest, &summary_path).unwrap();
+        let encoded = iroha_fs::read_private(&summary_path, 16 * 1024).unwrap();
+        let decoded: Value = norito::json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            decoded.get("payload_bytes").and_then(Value::as_u64),
+            Some(manifest.total_size)
+        );
+        assert_eq!(
+            decoded.get("blob_hash_hex").and_then(Value::as_str),
+            Some(summary.expected_blob_hash_hex.as_str())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_output_adapter_refuses_unsafe_originals_without_damage() {
+        let (temporary, root) = canonical_tempdir();
+        let output = root.join("original");
+        let mut created = open_output_file(&output, "native output test").unwrap();
+        created.write_all(b"keep original").unwrap();
+        created.flush().unwrap();
+        drop(created);
+        let alias = root.join("alias");
+        fs::hard_link(&output, &alias).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        assert_eq!(fs::read(&alias).unwrap(), b"keep original");
+        fs::remove_file(alias).unwrap();
+        let writer = fs::OpenOptions::new().write(true).open(&output).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(writer);
+        let junction = root.join("junction");
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "native junction fixture creation failed"
+        );
+        assert!(open_output_file(&junction.join("new-output"), "native output test").is_err());
+        assert!(!target.join("new-output").exists());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(temporary);
     }
 }

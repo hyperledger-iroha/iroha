@@ -4,7 +4,9 @@
 //! reports per-attempt process quiescence and never treats completion as acceptance.
 
 use super::*;
+#[cfg(unix)]
 use rustix::fs::{AtFlags, Mode, OFlags, open, openat, statat};
+#[cfg(unix)]
 use std::os::{
     fd::FromRawFd,
     unix::fs::{FileExt, FileTypeExt, MetadataExt},
@@ -185,6 +187,7 @@ fn record_ref(value: &HarnessJsonValue) -> Result<RecordRef> {
     Ok(row)
 }
 
+#[cfg(unix)]
 fn metadata(info: &fs::Metadata) -> (u64, u64, u32, u64, u64, i64, i64, i64, i64) {
     (
         info.dev(),
@@ -199,6 +202,7 @@ fn metadata(info: &fs::Metadata) -> (u64, u64, u32, u64, u64, i64, i64, i64, i64
     )
 }
 
+#[cfg(unix)]
 fn owner_only(info: &fs::Metadata, directory: bool) -> Result<()> {
     ensure!(
         info.uid() == rustix::process::geteuid().as_raw()
@@ -213,12 +217,14 @@ fn owner_only(info: &fs::Metadata, directory: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 struct RecordRoot {
     path: PathBuf,
     directory: File,
     identity: (u64, u64),
 }
 
+#[cfg(unix)]
 impl RecordRoot {
     fn open(path: &Path) -> Result<Self> {
         ensure!(
@@ -648,6 +654,7 @@ fn decode_frame(raw: &[u8]) -> Result<HarnessJsonValue> {
     decode(&raw[4..])
 }
 
+#[cfg(unix)]
 struct Chain {
     identity: HarnessJsonValue,
     direction: &'static str,
@@ -657,6 +664,7 @@ struct Chain {
     prefix: String,
 }
 
+#[cfg(unix)]
 impl Chain {
     fn new(
         identity: HarnessJsonValue,
@@ -816,6 +824,7 @@ impl Chain {
 }
 
 #[allow(unsafe_code)]
+#[cfg(unix)]
 fn take_control_pipes(read_fd: i32, write_fd: i32) -> Result<(File, File)> {
     ensure!(
         read_fd > 2 && write_fd > 2 && read_fd != write_fd,
@@ -841,6 +850,7 @@ fn take_control_pipes(read_fd: i32, write_fd: i32) -> Result<(File, File)> {
     Ok((reader, writer))
 }
 
+#[cfg(unix)]
 pub(super) struct RetainedBenchmarkNetwork {
     pub(super) network: sandbox::SerializedNetwork,
     runtime: tokio::runtime::Runtime,
@@ -850,6 +860,7 @@ pub(super) struct RetainedBenchmarkNetwork {
     initial_inventory: Vec<RealProcessInventoryRowV1>,
 }
 
+#[cfg(unix)]
 impl RetainedBenchmarkNetwork {
     fn start(request: &SessionRequest, workloads: &[MatchedBenchmarkWorkloadV1]) -> Result<Self> {
         let shape = TopologyShape::new(request.participants);
@@ -1095,6 +1106,7 @@ fn validate_network_ports_document(
     Ok(())
 }
 
+#[cfg(unix)]
 impl RetainedBenchmarkNetwork {
     fn network_ports_document(
         &self,
@@ -1187,6 +1199,7 @@ fn validate_attempt_request(
     Ok(request)
 }
 
+#[cfg(unix)]
 fn validate_dispatch(
     root: &RecordRoot,
     message: &HarnessJsonValue,
@@ -1254,6 +1267,7 @@ fn validate_dispatch(
     Ok(())
 }
 
+#[cfg(unix)]
 fn validate_accept(
     root: &RecordRoot,
     message: &HarnessJsonValue,
@@ -1369,6 +1383,7 @@ struct SessionOutcome {
     active: Option<String>,
 }
 
+#[cfg(unix)]
 fn measurement_boundary(
     root: &RecordRoot,
     attempt: &PlannedAttempt,
@@ -1451,6 +1466,7 @@ impl SessionOutcome {
     }
 }
 
+#[cfg(unix)]
 fn run_attempts(
     root: &RecordRoot,
     session: &SessionRequest,
@@ -1583,6 +1599,7 @@ fn run_attempts(
     Ok(())
 }
 
+#[cfg(unix)]
 fn apply_stop(
     root: &RecordRoot,
     message: &HarnessJsonValue,
@@ -1623,6 +1640,7 @@ fn apply_stop(
     Err(eyre!("retained benchmark session stopped: {reason}"))
 }
 
+#[cfg(unix)]
 pub(super) fn run_from_environment() -> Result<()> {
     let required =
         |key: &str| std::env::var(key).wrap_err_with(|| format!("missing session handoff: {key}"));
@@ -1859,6 +1877,7 @@ fn verify_vector_record(
 
 /// Offline economic verification through the exact compiled harness/model codecs.
 /// No validator, coordinator, pipe controller or proof generator is started here.
+#[cfg(unix)]
 pub(super) fn verify_vector_from_environment() -> Result<()> {
     let required = |key: &str| {
         std::env::var(key).wrap_err_with(|| format!("missing native vector handoff: {key}"))
@@ -2112,6 +2131,7 @@ mod tests {
             "plan_sha256":("2".repeat(64)),"session_id":("3".repeat(64)),"session_invocation_nonce":("4".repeat(64)),"session_request_sha256":("5".repeat(64))})
     }
 
+    #[cfg(unix)]
     fn root() -> (tempfile::TempDir, RecordRoot) {
         let temporary = tempfile::tempdir().unwrap();
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -2119,6 +2139,7 @@ mod tests {
         (temporary, root)
     }
 
+    #[cfg(unix)]
     fn mkdir(root: &RecordRoot, name: &str) {
         fs::create_dir_all(root.path.join(name)).unwrap();
         let mut path = root.path.clone();
@@ -2233,6 +2254,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_records_require_exact_bytes_and_single_owner_inode() {
         let (_temporary, root) = root();
         let reference = root.publish("record.json", b"{} ").unwrap();
@@ -2250,6 +2272,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_records_reject_parent_link_and_owner_permission_change() {
         let (_temporary, root) = root();
         mkdir(&root, "records");
@@ -2269,6 +2292,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_control_publishes_exact_frame_before_pipe_write() {
         struct BeforeWrite<'a> {
             root: &'a RecordRoot,
@@ -2303,6 +2327,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_control_partial_frame_poison_is_permanent() {
         let (_temporary, root) = root();
         let mut chain = Chain::new(identity(), &"6".repeat(64), "owner_to_child").unwrap();
@@ -2319,6 +2344,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_control_failed_write_cannot_be_retried() {
         struct Broken;
         impl Write for Broken {
@@ -2353,6 +2379,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_inherited_pipes_are_direction_exact_and_close_on_exec() {
         use std::os::fd::IntoRawFd;
         let mut child = Command::new("cat")
@@ -2386,6 +2413,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_dispatch_requires_exact_durable_start_and_consumed_predecessor() {
         for change in [
             "none",
@@ -2487,6 +2515,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_accept_rejects_failure_timeout_or_substituted_validated_records() {
         for change in [
             "none",
@@ -2610,6 +2639,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_session_stop_preserves_accepted_prefix_and_rejects_timeout_relabel() {
         let (_temporary, root) = root();
         for reason in STOP_REASONS {

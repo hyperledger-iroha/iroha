@@ -4,6 +4,8 @@
 //! files are opened beneath an explicit artefact root without following symbolic
 //! links, verified against their signed fingerprints, decoded with hard Norito
 //! limits, and retained as immutable in-memory values before a service binds.
+//! Windows uses retained local-NTFS readers with safe native custody and no input
+//! permission repair; Unix retains its existing no-follow filesystem policy.
 #[cfg(feature = "cli-orchestrator")]
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
@@ -20,12 +22,13 @@ use iroha_data_model::sorafs::moderation::{
     ModerationTrustPolicyV1,
 };
 use norito::core::DecodeLimits;
+#[cfg(any(unix, test))]
+use std::fs::{self, File};
 #[cfg(unix)]
-use std::fs::OpenOptions;
+use std::fs::{Metadata, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 use std::{
-    fs::{self, File, Metadata},
     io::{self, Read},
     path::{Path, PathBuf},
 };
@@ -42,7 +45,7 @@ struct LoadedModerationModelV1 {
 }
 #[cfg(unix)]
 type FileIdentity = (u64, u64, u64, i64, i64);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 type ValidatedArtifactRoot = PathBuf;
 #[cfg(unix)]
 #[derive(Debug)]
@@ -52,6 +55,11 @@ struct ValidatedArtifactRoot {
     identity: FileIdentity,
     _handle: File,
 }
+#[cfg(windows)]
+#[path = "moderation_runner_windows.rs"]
+mod windows;
+#[cfg(windows)]
+use windows::{load_model, validate_artifact_root, verify_artifact_root};
 /// Immutable manifest-bound moderation engine shared by all runner transports.
 #[derive(Clone, Debug)]
 pub struct LoadedModerationRunnerV1 {
@@ -561,7 +569,7 @@ pub fn fingerprint_model_artifact(
     };
     Ok((fingerprint, bytes))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn validate_artifact_root(_root: &Path) -> Result<PathBuf, ModerationRunnerError> {
     Err(ModerationRunnerError::InvalidArtifactRoot {
         path: _root.to_path_buf(),
@@ -652,9 +660,9 @@ fn verify_artifact_root(root: &ValidatedArtifactRoot) -> Result<(), ModerationRu
     }
     Ok(())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn verify_artifact_root(_root: &PathBuf) -> Result<(), ModerationRunnerError> {
-    unreachable!("non-Unix artifact roots fail closed during validation")
+    unreachable!("unsupported artifact roots fail closed during validation")
 }
 #[cfg(unix)]
 fn load_model(
@@ -734,6 +742,14 @@ where
     }
     reject_linked_artifact(&canonical, &after)?;
     verify_artifact_root(root)?;
+    decode_model(bytes, canonical, fingerprint)
+}
+
+fn decode_model(
+    bytes: Vec<u8>,
+    canonical: PathBuf,
+    fingerprint: &ModerationModelFingerprintV1,
+) -> Result<ModerationModelArtifactV1, ModerationRunnerError> {
     if blake3::hash(&bytes).as_bytes() != &fingerprint.artifact_digest {
         return Err(ModerationRunnerError::ArtifactDigest { path: canonical });
     }
@@ -768,7 +784,7 @@ where
     verify_fingerprint(&canonical, fingerprint, &artifact)?;
     Ok(artifact)
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn load_model(
     root: &ValidatedArtifactRoot,
     _fingerprint: &ModerationModelFingerprintV1,
@@ -778,6 +794,7 @@ fn load_model(
         reason: "secure no-follow artefact loading is unavailable on this platform".to_owned(),
     })
 }
+#[cfg(unix)]
 fn reject_symlink_components(root: &Path, relative: &str) -> Result<(), ModerationRunnerError> {
     let mut current = root.to_path_buf();
     for component in relative.split('/') {
@@ -796,6 +813,7 @@ fn reject_symlink_components(root: &Path, relative: &str) -> Result<(), Moderati
     }
     Ok(())
 }
+#[cfg(unix)]
 fn verify_size(
     path: &Path,
     metadata: &Metadata,
@@ -810,8 +828,8 @@ fn verify_size(
     }
     Ok(())
 }
-fn read_exact_bounded(
-    file: File,
+fn read_exact_bounded<R: Read>(
+    file: R,
     expected: u64,
     path: &Path,
 ) -> Result<Vec<u8>, ModerationRunnerError> {
@@ -1938,4 +1956,6 @@ mod tests {
             Err(ModerationRunnerError::InvalidArtifactRoot { .. })
         ));
     }
+    #[cfg(windows)]
+    include!("moderation_runner_windows_tests.rs");
 }

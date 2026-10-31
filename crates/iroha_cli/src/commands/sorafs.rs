@@ -74,6 +74,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_fs::FileMetadata;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -801,53 +802,6 @@ impl BillingAcknowledgeArgs {
         )
     }
 }
-#[cfg(unix)]
-type BillingProofFileIdentity = (u64, u64);
-#[cfg(windows)]
-type BillingProofFileIdentity = (Option<u32>, Option<u64>);
-#[cfg(not(any(unix, windows)))]
-type BillingProofFileIdentity = ();
-#[cfg(unix)]
-fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
-    use std::os::unix::fs::MetadataExt as _;
-    (metadata.dev(), metadata.ino())
-}
-#[cfg(windows)]
-fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
-    use std::os::windows::fs::MetadataExt as _;
-    (metadata.volume_serial_number(), metadata.file_index())
-}
-#[cfg(not(any(unix, windows)))]
-fn billing_proof_file_identity(_metadata: &fs::Metadata) -> BillingProofFileIdentity {}
-#[cfg(unix)]
-const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
-    true
-}
-#[cfg(windows)]
-const fn billing_proof_file_identity_available(identity: BillingProofFileIdentity) -> bool {
-    identity.0.is_some() && identity.1.is_some()
-}
-#[cfg(not(any(unix, windows)))]
-const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
-    false
-}
-fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 #[cfg(windows)]
 fn billing_proof_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -862,11 +816,11 @@ fn billing_proof_file_is_indirect(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || billing_proof_file_is_reparse_point(metadata)
 }
 #[cfg(unix)]
-fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn billing_proof_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-    billing_proof_file_identity(left) == billing_proof_file_identity(right)
-        && left.nlink() == 1
-        && right.nlink() == 1
+    left.identity() == right.identity()
+        && left.links() == 1
+        && right.links() == 1
         && left.len() == right.len()
         && left.mtime() == right.mtime()
         && left.mtime_nsec() == right.mtime_nsec()
@@ -874,18 +828,17 @@ fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn billing_proof_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    billing_proof_file_identity_available(billing_proof_file_identity(left))
-        && billing_proof_file_identity(left) == billing_proof_file_identity(right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
+    left.identity() == right.identity()
+        && left.links() == 1
+        && right.links() == 1
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn billing_proof_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn billing_proof_metadata_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
 #[cfg(unix)]
@@ -910,6 +863,7 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options
         .read(true)
+        .share_mode(0x1) // FILE_SHARE_READ: keep the original bytes and name stable.
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path).wrap_err_with(|| {
         format!(
@@ -926,7 +880,7 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     ))
 }
 fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
-    let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let path_metadata = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to inspect billing acknowledgement proof `{}`",
             path.display()
@@ -934,8 +888,7 @@ fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
     })?;
     if billing_proof_file_is_indirect(&path_metadata)
         || !path_metadata.file_type().is_file()
-        || !billing_proof_file_identity_available(billing_proof_file_identity(&path_metadata))
-        || !billing_proof_file_is_single_link(&path_metadata)
+        || path_metadata.links() != 1
     {
         return Err(eyre!(
             "billing acknowledgement proof `{}` must be a regular non-symlink file with a stable single-link identity",
@@ -957,7 +910,7 @@ fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
         )
     })?;
     let mut file = open_direct_billing_acknowledgement_proof(path)?;
-    let opened_metadata = file.metadata().wrap_err_with(|| {
+    let opened_metadata = FileMetadata::of(&file).wrap_err_with(|| {
         format!(
             "failed to inspect opened billing acknowledgement proof `{}`",
             path.display()
@@ -973,13 +926,13 @@ fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
         ));
     }
     let bytes = read_billing_acknowledgement_proof_exact(path, &mut file, expected_len)?;
-    let after_file_metadata = file.metadata().wrap_err_with(|| {
+    let after_file_metadata = FileMetadata::of(&file).wrap_err_with(|| {
         format!(
             "failed to re-inspect opened billing acknowledgement proof `{}`",
             path.display()
         )
     })?;
-    let after_path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let after_path_metadata = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to re-inspect billing acknowledgement proof `{}`",
             path.display()
@@ -4954,6 +4907,17 @@ fn load_guard_cache_key_file(path: &Path) -> Result<GuardCacheKey> {
         )
     })
 }
+#[cfg(windows)]
+#[path = "sorafs/native_files_windows.rs"]
+mod native_files_windows;
+
+#[cfg(windows)]
+fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<GuardSet>> {
+    let key = key.ok_or_else(|| eyre!("guard cache authentication key is required"))?;
+    native_files_windows::load_guard_set(path, key)
+}
+
+#[cfg(not(windows))]
 fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<GuardSet>> {
     let key = key.ok_or_else(|| eyre!("guard cache authentication key is required"))?;
     let named_metadata = match fs::symlink_metadata(path) {
@@ -5029,7 +4993,7 @@ fn canonical_guard_cache_path(path: &Path, create_parent: bool) -> Result<PathBu
     validate_guard_cache_parent_chain(&canonical_parent)?;
     Ok(canonical_parent.join(file_name))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn canonical_guard_cache_path(path: &Path, _create_parent: bool) -> Result<PathBuf> {
     Err(eyre!(
         "guard cache `{}` is unsupported because this platform does not expose the required owner/mode/link custody checks",
@@ -5232,7 +5196,12 @@ fn persist_owner_private_guard_cache(path: &Path, payload: &[u8]) -> Result<()> 
     }
     write_result
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn persist_owner_private_guard_cache(path: &Path, payload: &[u8]) -> Result<()> {
+    native_files_windows::persist_guard_cache(path, payload)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn persist_owner_private_guard_cache(path: &Path, _payload: &[u8]) -> Result<()> {
     Err(eyre!(
         "guard cache `{}` is unsupported because this platform does not expose the required owner/mode/link custody checks",
@@ -10792,7 +10761,17 @@ fn read_bounded_direct_handshake_public_file(
     }
     Ok(bytes)
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn read_bounded_direct_handshake_public_file(
+    path: &Path,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Vec<u8>> {
+    native_files_windows::read_public(path, maximum_bytes, exact_bytes, label)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn read_bounded_direct_handshake_public_file(
     path: &Path,
     _maximum_bytes: usize,
@@ -10912,7 +10891,17 @@ fn same_owner_private_handshake_file(left: &fs::Metadata, right: &fs::Metadata) 
     use std::os::unix::fs::MetadataExt as _;
     same_direct_handshake_file(left, right) && left.nlink() == 1 && right.nlink() == 1
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn read_owner_private_handshake_file(
+    path: &Path,
+    maximum_bytes: usize,
+    exact_bytes: Option<usize>,
+    label: &str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    native_files_windows::read_private(path, maximum_bytes, exact_bytes, label)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn read_owner_private_handshake_file(
     path: &Path,
     _maximum_bytes: usize,
@@ -10924,8 +10913,27 @@ fn read_owner_private_handshake_file(
         path.display()
     ))
 }
+#[cfg(windows)]
+fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> Result<()> {
+    native_files_windows::write_token(path, format, bytes)
+}
+
+#[cfg(not(windows))]
 fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> Result<()> {
     let mut file = create_owner_private_token_output(path)?;
+    write_token_encoding(&mut file, format, bytes)?;
+    file.flush()
+        .wrap_err_with(|| format!("failed to flush token output {}", path.display()))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("failed to sync token output {}", path.display()))?;
+    Ok(())
+}
+
+fn write_token_encoding(
+    file: &mut impl Write,
+    format: TokenOutputFormat,
+    bytes: &[u8],
+) -> io::Result<()> {
     match format {
         TokenOutputFormat::Base64 => {
             let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes));
@@ -10941,10 +10949,6 @@ fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> 
             file.write_all(bytes)?;
         }
     }
-    file.flush()
-        .wrap_err_with(|| format!("failed to flush token output {}", path.display()))?;
-    file.sync_all()
-        .wrap_err_with(|| format!("failed to sync token output {}", path.display()))?;
     Ok(())
 }
 #[cfg(unix)]
@@ -10981,7 +10985,7 @@ fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
     }
     Ok(file)
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn create_owner_private_token_output(path: &Path) -> Result<fs::File> {
     Err(eyre!(
         "token output {} is unsupported because this platform does not expose the required owner/mode/link custody checks",

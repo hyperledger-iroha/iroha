@@ -31,24 +31,22 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_manifest::pop_credentials::{POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1};
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
+#[cfg(test)]
+use std::fs;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
+    path::{Component, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 use thiserror::Error;
+#[path = "moderation_orchestrator/checkpoint_io.rs"]
+mod checkpoint_io;
+use checkpoint_io::CheckpointCache;
 #[path = "moderation_orchestrator/checkpoint_store.rs"]
 mod checkpoint_store;
 #[path = "moderation_orchestrator/terminal_handoff.rs"]
@@ -156,21 +154,6 @@ const TERMINAL_ARCHIVE_RECORD_KEY_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.terminal-archive-record-key.v1";
 const EXTERNAL_WORK_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-digest.v1";
 const EXTERNAL_WORK_LEASE_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-lease.v1";
-static CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios"
-    ))
-))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
 const ACTION_LIMITS: DecodeLimits = DecodeLimits::new(
     MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
     MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
@@ -2509,6 +2492,7 @@ impl PreparedExternalWorkV1 {
 /// Finalized-chain moderation orchestrator.
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
+    checkpoint_cache: CheckpointCache,
     network_id: iroha_data_model::NetworkId,
     deps: QualifiedModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
@@ -2549,8 +2533,10 @@ impl ModerationOrchestratorV1 {
             .submitter
             .network_id()
             .map_err(map_runtime_provider_qualification_error)?;
+        let checkpoint_cache = CheckpointCache::open(&config.checkpoint_path)?;
         let (mut state, mut checkpoint_record) = checkpoint_store::open_authoritative_checkpoint(
             &config,
+            &checkpoint_cache,
             &network_id,
             &deps.checkpoint_store,
         )?;
@@ -2570,6 +2556,7 @@ impl ModerationOrchestratorV1 {
         if signer_epochs_changed || expired_work_recovered {
             checkpoint_store::persist_authoritative_checkpoint(
                 &config,
+                &checkpoint_cache,
                 &network_id,
                 &deps.checkpoint_store,
                 &mut checkpoint_record,
@@ -2578,6 +2565,7 @@ impl ModerationOrchestratorV1 {
         }
         Ok(Self {
             config,
+            checkpoint_cache,
             network_id,
             deps,
             state: Mutex::new(state),
@@ -4587,6 +4575,7 @@ impl ModerationOrchestratorV1 {
             .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?;
         if let Err(error) = checkpoint_store::persist_authoritative_checkpoint(
             &self.config,
+            &self.checkpoint_cache,
             &self.network_id,
             &self.deps.checkpoint_store,
             &mut checkpoint_record,
@@ -10444,308 +10433,9 @@ fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOr
         128,
     ))
 }
-fn ensure_secure_parent(path: &Path) -> Result<(), ModerationOrchestratorError> {
-    let parent = path.parent().ok_or_else(|| {
-        ModerationOrchestratorError::InvalidConfiguration(
-            "checkpoint path has no parent".to_owned(),
-        )
-    })?;
-    let mut current = PathBuf::new();
-    for component in parent.components() {
-        current.push(component.as_os_str());
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                        "checkpoint ancestor `{}` must be a real directory",
-                        current.display()
-                    )));
-                }
-                #[cfg(unix)]
-                if metadata.permissions().mode() & 0o022 != 0
-                    && metadata.permissions().mode() & 0o1000 == 0
-                {
-                    return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                        "checkpoint ancestor `{}` is writable by other users",
-                        current.display()
-                    )));
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                builder.mode(0o700);
-                builder.create(&current).map_err(|error| {
-                    ModerationOrchestratorError::CheckpointIo(format!(
-                        "create checkpoint directory `{}`: {error}",
-                        current.display()
-                    ))
-                })?;
-            }
-            Err(error) => {
-                return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                    "inspect checkpoint ancestor `{}`: {error}",
-                    current.display()
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-fn read_bounded_file(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<Option<Vec<u8>>, ModerationOrchestratorError> {
-    let before = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                "inspect checkpoint: {error}"
-            )));
-        }
-    };
-    validate_checkpoint_metadata(path, &before)?;
-    if before.len() > max_bytes {
-        return Err(ModerationOrchestratorError::ResourceExhausted {
-            resource: "checkpoint bytes",
-            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
-        });
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(SAFE_OPEN_FLAGS);
-    let mut file = options.open(path).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!("open checkpoint: {error}"))
-    })?;
-    let opened = file.metadata().map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!("inspect opened checkpoint: {error}"))
-    })?;
-    validate_checkpoint_metadata(path, &opened)?;
-    #[cfg(unix)]
-    if before.dev() != opened.dev() || before.ino() != opened.ino() {
-        return Err(ModerationOrchestratorError::CheckpointIo(
-            "checkpoint changed identity while opening".to_owned(),
-        ));
-    }
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(before.len())
-            .unwrap_or(usize::MAX)
-            .min(usize::try_from(max_bytes).unwrap_or(usize::MAX)),
-    );
-    Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("read checkpoint: {error}"))
-        })?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(ModerationOrchestratorError::ResourceExhausted {
-            resource: "checkpoint bytes",
-            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
-        });
-    }
-    let after = fs::symlink_metadata(path).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!("reinspect checkpoint: {error}"))
-    })?;
-    validate_checkpoint_metadata(path, &after)?;
-    #[cfg(unix)]
-    if before.dev() != after.dev() || before.ino() != after.ino() {
-        return Err(ModerationOrchestratorError::CheckpointIo(
-            "checkpoint changed identity during read".to_owned(),
-        ));
-    }
-    Ok(Some(bytes))
-}
-fn validate_checkpoint_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ModerationOrchestratorError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(ModerationOrchestratorError::CheckpointIo(format!(
-            "checkpoint `{}` must be a non-symlink regular file",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    {
-        if metadata.nlink() != 1 {
-            return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                "checkpoint `{}` must have exactly one hard link",
-                path.display()
-            )));
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(ModerationOrchestratorError::CheckpointIo(format!(
-                "checkpoint `{}` must not be accessible by group or other users",
-                path.display()
-            )));
-        }
-    }
-    Ok(())
-}
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorError> {
-    ensure_secure_parent(path)?;
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        validate_checkpoint_metadata(path, &metadata)?;
-    }
-    let parent = path.parent().ok_or_else(|| {
-        ModerationOrchestratorError::CheckpointIo("checkpoint path has no parent".to_owned())
-    })?;
-    let parent_before = fs::symlink_metadata(parent).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!(
-            "inspect checkpoint parent before write: {error}"
-        ))
-    })?;
-    if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
-        return Err(ModerationOrchestratorError::CheckpointIo(
-            "checkpoint parent must remain a real directory".to_owned(),
-        ));
-    }
-    let mut directory_options = OpenOptions::new();
-    directory_options.read(true);
-    #[cfg(unix)]
-    directory_options.custom_flags(SAFE_OPEN_FLAGS);
-    let parent_directory = directory_options.open(parent).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!(
-            "open checkpoint parent before write: {error}"
-        ))
-    })?;
-    let opened_parent = parent_directory.metadata().map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!(
-            "inspect opened checkpoint parent before write: {error}"
-        ))
-    })?;
-    if !opened_parent.is_dir() {
-        return Err(ModerationOrchestratorError::CheckpointIo(
-            "opened checkpoint parent is not a directory".to_owned(),
-        ));
-    }
-    #[cfg(unix)]
-    if parent_before.dev() != opened_parent.dev() || parent_before.ino() != opened_parent.ino() {
-        return Err(ModerationOrchestratorError::CheckpointIo(
-            "checkpoint parent changed identity while opening".to_owned(),
-        ));
-    }
-    let mut random_nonce = [0_u8; 16];
-    OsRng.try_fill_bytes(&mut random_nonce).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!(
-            "generate atomic checkpoint nonce: {error}"
-        ))
-    })?;
-    let counter = CHECKPOINT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            ModerationOrchestratorError::CheckpointIo(
-                "checkpoint file name is not UTF-8".to_owned(),
-            )
-        })?;
-    let temp = parent.join(format!(
-        ".{file_name}.{}.{counter}.{}.tmp",
-        std::process::id(),
-        hex::encode(random_nonce)
-    ));
-    let result = (|| {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            options.mode(0o600);
-            options.custom_flags(SAFE_OPEN_FLAGS);
-        }
-        let mut file = options.open(&temp).map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("create atomic checkpoint: {error}"))
-        })?;
-        let opened_temp = file.metadata().map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("inspect atomic checkpoint: {error}"))
-        })?;
-        validate_checkpoint_metadata(&temp, &opened_temp)?;
-        file.write_all(bytes).map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("write checkpoint: {error}"))
-        })?;
-        file.sync_all().map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("sync checkpoint: {error}"))
-        })?;
-        let named_temp = fs::symlink_metadata(&temp).map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!(
-                "reinspect atomic checkpoint before rename: {error}"
-            ))
-        })?;
-        validate_checkpoint_metadata(&temp, &named_temp)?;
-        #[cfg(unix)]
-        if opened_temp.dev() != named_temp.dev() || opened_temp.ino() != named_temp.ino() {
-            return Err(ModerationOrchestratorError::CheckpointIo(
-                "atomic checkpoint changed identity before rename".to_owned(),
-            ));
-        }
-        let parent_before_rename = fs::symlink_metadata(parent).map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!(
-                "reinspect checkpoint parent before rename: {error}"
-            ))
-        })?;
-        if parent_before_rename.file_type().is_symlink() || !parent_before_rename.is_dir() {
-            return Err(ModerationOrchestratorError::CheckpointIo(
-                "checkpoint parent changed to a non-directory before rename".to_owned(),
-            ));
-        }
-        #[cfg(unix)]
-        if opened_parent.dev() != parent_before_rename.dev()
-            || opened_parent.ino() != parent_before_rename.ino()
-        {
-            return Err(ModerationOrchestratorError::CheckpointIo(
-                "checkpoint parent changed identity before rename".to_owned(),
-            ));
-        }
-        drop(file);
-        if let Ok(metadata) = fs::symlink_metadata(path) {
-            validate_checkpoint_metadata(path, &metadata)?;
-        }
-        fs::rename(&temp, path).map_err(|error| {
-            ModerationOrchestratorError::CheckpointIo(format!("replace checkpoint: {error}"))
-        })?;
-        let committed = fs::symlink_metadata(path).map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
-                "inspect committed checkpoint after rename: {error}"
-            ))
-        })?;
-        validate_checkpoint_metadata(path, &committed).map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(error.to_string())
-        })?;
-        #[cfg(unix)]
-        if opened_temp.dev() != committed.dev() || opened_temp.ino() != committed.ino() {
-            return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "committed checkpoint changed identity after rename".to_owned(),
-            ));
-        }
-        let parent_after = fs::symlink_metadata(parent).map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
-                "inspect checkpoint parent after rename: {error}"
-            ))
-        })?;
-        if parent_after.file_type().is_symlink() || !parent_after.is_dir() {
-            return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "checkpoint parent changed to a non-directory".to_owned(),
-            ));
-        }
-        #[cfg(unix)]
-        if opened_parent.dev() != parent_after.dev() || opened_parent.ino() != parent_after.ino() {
-            return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "checkpoint parent changed identity during atomic replacement".to_owned(),
-            ));
-        }
-        parent_directory.sync_all().map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
-                "sync checkpoint parent after rename: {error}"
-            ))
-        })
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temp);
-    }
-    result
+#[cfg(test)]
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorError> {
+    CheckpointCache::open(path)?.write(bytes, u64::try_from(bytes.len()).unwrap_or(u64::MAX))
 }
 /// Orchestrator failure.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

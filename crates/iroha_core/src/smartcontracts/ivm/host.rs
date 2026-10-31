@@ -11,8 +11,16 @@ mod contract_calls;
 pub(crate) mod contract_event;
 mod native_events;
 mod controlled_asset_locks;
+mod controlled_waterfall;
+mod linked_fi;
+#[cfg(test)]
+#[path = "host/native_fi_waterfall_tests.rs"]
+mod native_fi_waterfall_tests;
+mod fi_link_revision;
+mod same_uid;
 mod prepared_verifying_key_memo;
 mod tlv_transport;
+mod uid_holding_quote;
 
 use super::cache::PreparedContractCache;
 #[cfg(feature = "telemetry")]
@@ -159,6 +167,13 @@ include!("host/contract_state_namespace.rs");
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     crate::smartcontracts::isi::escrow::controlled::STATE_ROOT,
     crate::state::retail_daily_limit_state::POLICY_ROOT,
+    crate::state::asset_fi::FI_ROOT,
+    crate::state::asset_fi::ATTESTATION_ROOT,
+    crate::state::asset_fi::LINK_ROOT,
+    crate::state::asset_uid_enrollment::ENROLLMENT_ROOT,
+    crate::state::asset_uid_enrollment::SYSTEM_ROOT,
+    crate::state::asset_uid_reader::READER_ROOT,
+
     crate::state::asset_uid::POLICY_ROOT,
     crate::state::asset_uid::BINDING_ROOT,
     crate::state::asset_uid::USAGE_ROOT,
@@ -1093,6 +1108,20 @@ pub trait QueryStateExecute {
     ) -> Result<QueryExecutionResult, ivm::VMError>
     where
         Self: Sized;
+    /// Execute the authorized global-balance query, representing only an absent
+    /// holding of an existing account and global asset definition as zero.
+    ///
+    /// # Errors
+    ///
+    /// Preserves query authorization, scope, budget, and unrelated execution failures.
+    fn execute_account_balance_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<QueryExecutionResult, ivm::VMError>
+    where
+        Self: Sized;
     /// Execute one singular query while representing a missing entity as
     /// `None` instead of a VM failure.
     ///
@@ -1138,6 +1167,14 @@ impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
         budget: Option<QueryExecutionBudget>,
     ) -> Result<QueryExecutionResult, ivm::VMError> {
         QueryStateRef::execute_query_with_budget(self, authority, request, budget)
+    }
+    fn execute_account_balance_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        QueryStateRef::execute_account_balance_query(self, authority, request, budget)
     }
     fn execute_optional_singular_query(
         self,
@@ -1308,6 +1345,67 @@ fn execute_bounded_query_on_state_with_budget<R: StateReadOnly>(
         QueryCountMode::Bounded,
     )
 }
+// The balance syscall alone defines an absent holding as zero. Ordinary singular
+// asset queries still report absence, and no validation failure is converted.
+fn execute_account_balance_query_on_state<R: StateReadOnly>(
+    state: &R,
+    authority: &AccountId,
+    request: QueryRequest,
+    budget: Option<QueryExecutionBudget>,
+) -> Result<QueryExecutionResult, ivm::VMError> {
+    let QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) = &request else {
+        return Err(ivm::VMError::DecodeError);
+    };
+    let asset_id = query.asset_id().clone();
+    let mut validator = HostQueryValidator { authority, state };
+    let validated = ValidQueryRequest::validate_for_ivm(
+        request,
+        &mut validator,
+        QueryLimits::from_pipeline(state.pipeline()),
+    )
+    .map_err(map_query_validation_error)?;
+    let (response, execution_stats) = match validated.execute_ephemeral_with_stats(
+        state.query_handle(),
+        state,
+        authority,
+        budget,
+    ) {
+        Ok(result) => result,
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::Find(iroha_data_model::query::error::FindError::Asset(missing)),
+        )) if *missing == asset_id
+            && *asset_id.scope() == AssetBalanceScope::Global
+            && state.world().accounts().get(asset_id.account()).is_some()
+            && state.world().assets().get(&asset_id).is_none()
+            && state
+                .world()
+                .asset_definitions()
+                .get(asset_id.definition())
+                .is_some_and(|definition| {
+                    definition.balance_scope_policy() == AssetBalancePolicy::Global
+                }) =>
+        {
+            // Charge the synthetic source item and framed response before publishing
+            // a Quantity TLV, just as a real query response is budget-admitted.
+            let output = SingularQueryOutputBox::Asset(Asset::new(asset_id, Quantity::zero()));
+            let mut stats = QueryExecutionStats::default();
+            stats
+                .record_item(&output, budget)
+                .map_err(|error| map_query_execution_error(error.into()))?;
+            let response = QueryResponse::Singular(output);
+            stats
+                .record_response(&response, budget)
+                .map_err(|error| map_query_execution_error(error.into()))?;
+            (response, stats)
+        }
+        Err(error) => return Err(map_query_execution_error(error)),
+    };
+    Ok(QueryExecutionResult {
+        response,
+        processed_items: execution_stats.processed_items(),
+        processed_bytes: execution_stats.processed_bytes(),
+    })
+}
 fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     state: &R,
     authority: &AccountId,
@@ -1468,6 +1566,27 @@ where
             }
         }
     }
+    fn execute_account_balance_query(
+        self,
+        authority: &AccountId,
+        request: QueryRequest,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<QueryExecutionResult, ivm::VMError> {
+        match self {
+            QueryStateRef::View(view) => {
+                execute_account_balance_query_on_state(view, authority, request, budget)
+            }
+            QueryStateRef::QueryView(view) => {
+                execute_account_balance_query_on_state(view, authority, request, budget)
+            }
+            QueryStateRef::Block(block) => {
+                execute_account_balance_query_on_state(block, authority, request, budget)
+            }
+            QueryStateRef::Transaction(tx) => {
+                execute_account_balance_query_on_state(tx, authority, request, budget)
+            }
+        }
+    }
     fn execute_optional_singular_query(
         self,
         authority: &AccountId,
@@ -1556,6 +1675,51 @@ pub trait QueryStateRefOps {
         &self,
         definition_id: &AssetDefinitionId,
     ) -> Result<AssetBalancePolicy, ivm::VMError>;
+    /// Read the exact beneficial-holdings projection for an owner-granted controller.
+    ///
+    /// Every inspected UID member and escrow row consumes the same query budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a VM error when the active controller or owner grant is invalid,
+    /// the native policy is absent, or the deterministic query budget is exhausted.
+    /// Local allocation refusals retain their original deferred-execution owner.
+    fn uid_holding_quote(
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        account: &AccountId,
+        incoming: &Quantity,
+        budget: QueryExecutionBudget,
+    ) -> Result<
+        (iroha_data_model::asset::uid::AssetUidHoldingQuoteV1, QueryExecutionStats),
+        ivm::VMError,
+    >;
+    /// Read an exact current owner-approved FI-link revision after expected-FI equality.
+    ///
+    /// # Errors
+    /// Returns the original local deferral or deterministic authority, relationship,
+    /// canonical-decoding or shared-budget refusal. This is not a transfer grant.
+    fn fi_link_revision(
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        account: &AccountId,
+        expected_fi: &AccountId,
+        budget: QueryExecutionBudget,
+    ) -> Result<(u64, QueryExecutionStats), ivm::VMError>;
+    /// Compare exact current native retail memberships under the owner's reader grant.
+    ///
+    /// # Errors
+    /// Rejects absent/nonretail/invalid membership, foreign frame or revoked grant;
+    /// preserves canonical decode and local resource refusal provenance.
+    fn same_uid(
+        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId, source: &AccountId, destination: &AccountId,
+        budget: QueryExecutionBudget,
+    ) -> Result<(bool, QueryExecutionStats), ivm::VMError>;
     /// Load an asset definition's exact incarnation and require that it was
     /// already live at the beginning of this block.
     ///
@@ -2272,6 +2436,34 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 .map(|definition| definition.balance_scope_policy())
                 .map_err(|_| ivm::VMError::DecodeError),
         }
+    }
+    fn uid_holding_quote(
+        &self,
+        authority: &AccountId,
+        context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId,
+        account: &AccountId,
+        incoming: &Quantity,
+        budget: QueryExecutionBudget,
+    ) -> Result<
+        (iroha_data_model::asset::uid::AssetUidHoldingQuoteV1, QueryExecutionStats),
+        ivm::VMError,
+    > {
+        self.read_uid_holding_quote(authority, context, definition, account, incoming, budget)
+    }
+    fn fi_link_revision(
+        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId, account: &AccountId, expected_fi: &AccountId,
+        budget: QueryExecutionBudget,
+    ) -> Result<(u64, QueryExecutionStats), ivm::VMError> {
+        self.read_fi_link_revision(authority, context, definition, account, expected_fi, budget)
+    }
+    fn same_uid(
+        &self, authority: &AccountId, context: &ContractRuntimeExecutionContext,
+        definition: &AssetDefinitionId, source: &AccountId, destination: &AccountId,
+        budget: QueryExecutionBudget,
+    ) -> Result<(bool, QueryExecutionStats), ivm::VMError> {
+        self.read_same_uid(authority, context, definition, source, destination, budget)
     }
     fn stable_axt_asset_incarnation(
         &self,
@@ -8706,8 +8898,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if budget.max_items() == 0 {
             return Err(ivm::VMError::OutOfGas);
         }
-        let query_result =
-            state_ref.execute_query_with_budget(&self.authority, request, Some(budget))?;
+        let query_result = if syscall == ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE {
+            state_ref.execute_account_balance_query(&self.authority, request, Some(budget))?
+        } else {
+            state_ref.execute_query_with_budget(&self.authority, request, Some(budget))?
+        };
         let output = match query_result.response {
             QueryResponse::Singular(output) => output,
             QueryResponse::Iterable(_) => return Err(ivm::VMError::DecodeError),
@@ -9897,6 +10092,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE
                 | ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS
                 | ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE
+                | ivm::syscalls::SYSCALL_ASSET_UID_HOLDING_QUOTE
+                | ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION
+                | ivm::syscalls::SYSCALL_ASSET_SAME_UID
                 | ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL
                 | ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE
         ) {
@@ -10278,6 +10476,17 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
                     self.apply_fastpq_batch_from_tlv(vm)
                 }
+                ivm::syscalls::SYSCALL_ASSET_UID_HOLDING_QUOTE => {
+                    self.execute_uid_holding_quote(vm, number)
+                }
+                ivm::syscalls::SYSCALL_TRANSFER_TO_LINKED_FI => self.transfer_to_linked_fi(vm),
+                ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN_WATERFALL
+                | ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL_WATERFALL
+                | ivm::syscalls::SYSCALL_ASSET_LOCK_EXPIRE_WATERFALL => {
+                    self.controlled_asset_lock_with_waterfall(vm, number)
+                }
+                ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION => self.execute_fi_link_revision(vm, number),
+                ivm::syscalls::SYSCALL_ASSET_SAME_UID => self.execute_same_uid(vm, number),
                 ivm::syscalls::SYSCALL_ASSET_LOCK_OPEN
                 | ivm::syscalls::SYSCALL_ASSET_LOCK_DRAWDOWN
                 | ivm::syscalls::SYSCALL_ASSET_LOCK_CANCEL

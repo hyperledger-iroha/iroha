@@ -32,11 +32,11 @@ use sorafs_manifest::{
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Read},
     path::{Component, Path, PathBuf},
     process::ExitCode,
     time::{SystemTime, UNIX_EPOCH},
@@ -647,16 +647,17 @@ pub(super) fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode
             Ok(ExitCode::SUCCESS)
         }
         (None, Some(seed_path), Some(signature_out), true) => {
-            let seed_bytes = read_release_input(
+            let seed_bytes = zeroize::Zeroizing::new(read_release_input(
                 &seed_path,
                 "release manifest development signing seed",
                 32,
                 Some(32),
                 true,
-            )?;
-            let seed: [u8; 32] = seed_bytes
-                .try_into()
-                .expect("exact signing seed length checked above");
+            )?);
+            let seed = zeroize::Zeroizing::new(
+                <[u8; 32]>::try_from(seed_bytes.as_slice())
+                    .expect("exact signing seed length checked above"),
+            );
             if seed.iter().all(|byte| *byte == 0) {
                 return Err(CliError::Validation(
                     "release manifest development signing seed must not be all zero".to_owned(),
@@ -1304,40 +1305,22 @@ fn read_release_input(
     secret: bool,
 ) -> Result<Vec<u8>, CliError> {
     let direct_path = release_direct_path(path, label)?;
-    let before = fs::symlink_metadata(&direct_path)
+    // Preserve actionable input diagnostics; only the retained native reader below grants
+    // authority to consume bytes, including after a race with this preliminary inspection.
+    let metadata = iroha_fs::FileMetadata::symlink_metadata(&direct_path)
         .map_err(|err| CliError::Io(format!("failed to inspect {label}: {err}")))?;
-    validate_release_metadata(label, &before, maximum_bytes, secret)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_release_no_follow(&mut options);
-    let mut file = options
-        .open(&direct_path)
-        .map_err(|err| CliError::Io(format!("failed to open {label}: {err}")))?;
-    let opened = file
-        .metadata()
-        .map_err(|err| CliError::Io(format!("failed to inspect open {label}: {err}")))?;
-    validate_release_metadata(label, &opened, maximum_bytes, secret)?;
-    if !release_metadata_matches(&before, &opened) {
-        return Err(CliError::Validation(format!(
-            "{label} changed while being opened"
-        )));
-    }
-    let capacity = usize::try_from(opened.len())
+    validate_release_metadata(label, &metadata, maximum_bytes, secret)?;
+    let maximum = usize::try_from(maximum_bytes)
         .map_err(|_| CliError::Validation(format!("{label} exceeds host size limits")))?;
-    let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
-        .take(maximum_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|err| CliError::Io(format!("failed to read {label}: {err}")))?;
-    let after = fs::symlink_metadata(&direct_path)
-        .map_err(|err| CliError::Io(format!("failed to re-inspect {label}: {err}")))?;
-    validate_release_metadata(label, &after, maximum_bytes, secret)?;
-    if bytes.len() as u64 != opened.len()
-        || !release_metadata_matches(&opened, &after)
-        || !release_metadata_matches(&before, &after)
-    {
+    let bytes = if secret {
+        iroha_fs::read_private(&direct_path, maximum)
+    } else {
+        iroha_fs::read_regular(&direct_path, maximum)
+    }
+    .map_err(|err| CliError::Validation(format!("failed to read stable {label}: {err}")))?;
+    if bytes.is_empty() {
         return Err(CliError::Validation(format!(
-            "{label} changed while being read"
+            "{label} size is outside the supported range"
         )));
     }
     if let Some(expected) = exact_bytes
@@ -1347,7 +1330,7 @@ fn read_release_input(
             "{label} must contain exactly {expected} raw bytes"
         )));
     }
-    Ok(bytes)
+    Ok(bytes.to_vec())
 }
 
 fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
@@ -1385,7 +1368,7 @@ fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
 }
 fn validate_release_metadata(
     label: &str,
-    metadata: &fs::Metadata,
+    metadata: &iroha_fs::FileMetadata,
     maximum_bytes: u64,
     secret: bool,
 ) -> Result<(), CliError> {
@@ -1399,13 +1382,13 @@ fn validate_release_metadata(
             "{label} size is outside the supported range"
         )));
     }
+    if metadata.links() != 1 {
+        return Err(CliError::Validation(format!(
+            "{label} must have exactly one hard link"
+        )));
+    }
     #[cfg(unix)]
     {
-        if metadata.nlink() != 1 {
-            return Err(CliError::Validation(format!(
-                "{label} must have exactly one hard link"
-            )));
-        }
         let mode = metadata.permissions().mode() & 0o777;
         if secret {
             if !matches!(mode, 0o400 | 0o600) {
@@ -1419,93 +1402,52 @@ fn validate_release_metadata(
             )));
         }
     }
+    // Windows access control is checked against the original retained descriptor by
+    // read_private/read_regular, including protected exact-owner policy for secrets.
+    #[cfg(windows)]
+    let _ = secret;
     Ok(())
-}
-#[cfg(unix)]
-fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(not(unix))]
-fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 fn write_release_signature(path: &Path, signature: &[u8; 64]) -> Result<(), CliError> {
-    let direct_path = release_direct_path(path, "release manifest signature output")?;
+    let label = "release manifest signature output";
+    let direct_path = release_direct_path(path, label)?;
     match fs::symlink_metadata(&direct_path) {
         Ok(_) => {
-            return Err(CliError::Validation(
-                "release manifest signature output must not already exist".to_owned(),
-            ));
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(CliError::Io(format!(
-                "failed to inspect release manifest signature output: {err}"
+            return Err(CliError::Validation(format!(
+                "{label} must not already exist"
             )));
         }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(CliError::Io(format!("failed to inspect {label}: {err}"))),
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    set_release_no_follow(&mut options);
-    let mut file = options.open(&direct_path).map_err(|err| {
-        CliError::Io(format!(
-            "failed to create release manifest signature output: {err}"
-        ))
+    let parent = direct_path
+        .parent()
+        .ok_or_else(|| CliError::Validation(format!("{label} requires a parent directory")))?;
+    let name = direct_path
+        .file_name()
+        .ok_or_else(|| CliError::Validation(format!("{label} requires a regular file name")))?;
+    let directory = iroha_fs::OwnerDirectory::open(parent).map_err(|err| {
+        CliError::Validation(format!("failed to retain {label} directory: {err}"))
     })?;
-    file.write_all(signature).map_err(|err| {
-        CliError::Io(format!(
-            "failed to write release manifest signature output: {err}"
-        ))
-    })?;
-    file.sync_all().map_err(|err| {
-        CliError::Io(format!(
-            "failed to sync release manifest signature output: {err}"
-        ))
-    })?;
-    let opened = file.metadata().map_err(|err| {
-        CliError::Io(format!(
-            "failed to inspect release manifest signature output: {err}"
-        ))
-    })?;
-    let after = fs::symlink_metadata(&direct_path).map_err(|err| {
-        CliError::Io(format!(
-            "failed to re-inspect release manifest signature output: {err}"
-        ))
-    })?;
-    if !release_metadata_matches(&opened, &after)
-        || !after.is_file()
-        || after.len() != signature.len() as u64
-    {
-        return Err(CliError::Validation(
-            "release manifest signature output changed while being written".to_owned(),
-        ));
-    }
-    #[cfg(unix)]
-    if let Some(parent) = direct_path.parent() {
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|err| {
-                CliError::Io(format!(
-                    "failed to sync release manifest signature output directory: {err}"
-                ))
-            })?;
-    }
-    Ok(())
+    directory
+        .write_atomic(name, signature, iroha_fs::PublishMode::CreateNew)
+        .map_err(|err| {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                CliError::Validation(format!("{label} must not already exist"))
+            } else {
+                CliError::Io(format!("failed to publish {label}: {err}"))
+            }
+        })
 }
 #[cfg(unix)]
 fn set_release_no_follow(options: &mut OpenOptions) {
     options.custom_flags(release_no_follow_flag());
 }
-#[cfg(not(unix))]
-fn set_release_no_follow(_options: &mut OpenOptions) {}
+#[cfg(windows)]
+fn set_release_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT.
+}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn release_no_follow_flag() -> i32 {
     rustix::fs::OFlags::NOFOLLOW.bits() as i32

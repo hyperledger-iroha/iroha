@@ -1333,6 +1333,104 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         )
     }
 }
+/// Checked public column range for compact execution-row transit only.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct P256ValueExecutionAuxSelectionV1 {
+    first: usize,
+    width: usize,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ValueExecutionAuxSelectionV1 {
+    fn new_v1(first: usize, width: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
+        if width == 0
+            || width > crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || first
+                .checked_add(width)
+                .is_none_or(|end| end > P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1)
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        Ok(Self { first, width })
+    }
+
+    fn copy_flat_v1(
+        self,
+        family_first: usize,
+        source: &[F],
+        output: &mut [F; 8],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        let family_end = family_first
+            .checked_add(source.len())
+            .filter(|&end| end <= P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1)
+            .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+        for column in self.first.max(family_first)..(self.first + self.width).min(family_end) {
+            output[column - self.first] = source[column - family_first];
+        }
+        Ok(())
+    }
+
+    fn copy_writer_v1(
+        self,
+        source: &P256CrossTraceWriterAuxRowV1,
+        output: &mut [F; 8],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        for column in self.first.max(VALUE_WRITER_AUX)
+            ..(self.first + self.width).min(VALUE_ARITHMETIC_COPY_AUX)
+        {
+            output[column - self.first] = writer_aux_cell_v1(source, column - VALUE_WRITER_AUX)?;
+        }
+        Ok(())
+    }
+}
+
+/// Read the canonical flat writer order without materializing another private row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn writer_aux_cell_v1(
+    row: &P256CrossTraceWriterAuxRowV1,
+    column: usize,
+) -> Result<F, P256AggregateAdapterErrorV1> {
+    if column >= P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1 {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    let events = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+    let lanes = P256_CROSS_TRACE_LANES_V1;
+    let powers = super::p256_cross_trace_bus::P256_CROSS_TRACE_WRITER_POWERS_V1;
+    if column < events {
+        return Ok(row.event_values[column]);
+    }
+    let column = column - events;
+    if column < events * lanes * powers {
+        return Ok(
+            row.powers[column / (lanes * powers)][(column / powers) % lanes][column % powers],
+        );
+    }
+    let column = column - events * lanes * powers;
+    if column < events * lanes {
+        return Ok(row.selected_power[column / lanes][column % lanes]);
+    }
+    let column = column - events * lanes;
+    if column < events * lanes {
+        return Ok(row.product_before[column / lanes][column % lanes]);
+    }
+    Ok(row.terminal[column - events * lanes])
+}
+
+/// Keep the canonical typed writer eraser inside the actual zeroizing owner.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256ValueWriterAuxScratchV1(P256CrossTraceWriterAuxRowV1);
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl zeroize::Zeroize for P256ValueWriterAuxScratchV1 {
+    fn zeroize(&mut self) {
+        #[cfg(test)]
+        let before = value_compact_row_tests::writer_before_erase_v1(&self.0);
+        zeroize::Zeroize::zeroize(&mut self.0);
+        #[cfg(test)]
+        value_compact_row_tests::writer_after_erase_v1(before, &self.0);
+    }
+}
+
 /// Constant-memory integrated value-execution base/aux stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub struct P256ValueExecutionAggregateStreamV1<'a> {
@@ -1446,6 +1544,72 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         }
         Ok(Some(*aux))
     }
+    /// Project a compact row while every family still replays and validates.
+    fn next_selected_aux_row_v1(
+        &mut self,
+        selection: P256ValueExecutionAuxSelectionV1,
+    ) -> Result<Option<[F; 8]>, P256AggregateAdapterErrorV1> {
+        self.next_selected_aux_row_with_v1(selection, |_| Ok(()))
+    }
+
+    fn next_selected_aux_row_with_v1(
+        &mut self,
+        selection: P256ValueExecutionAuxSelectionV1,
+        before_return: impl FnOnce(&[F; 8]) -> Result<(), P256AggregateAdapterErrorV1>,
+    ) -> Result<Option<[F; 8]>, P256AggregateAdapterErrorV1> {
+        if self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        let mut aux = P256AggregateAuxRowScratchV1([F::ZERO; 8]);
+        {
+            let native = P256AggregateAuxRowScratchV1(
+                self.value_aux
+                    .as_mut()
+                    .ok_or(P256AggregateAdapterErrorV1::Challenge)?
+                    .next_aux_row_v1()?
+                    .ok_or(P256AggregateAdapterErrorV1::Topology)?,
+            );
+            selection.copy_flat_v1(VALUE_NATIVE_AUX, &native.0, &mut aux.0)?;
+        }
+        {
+            let writer = zeroize::Zeroizing::new(P256ValueWriterAuxScratchV1(
+                self.writer
+                    .as_mut()
+                    .ok_or(P256AggregateAdapterErrorV1::Challenge)?
+                    .next_row_v1()?
+                    .ok_or(P256AggregateAdapterErrorV1::Topology)?,
+            ));
+            selection.copy_writer_v1(&(*writer).0, &mut aux.0)?;
+        }
+        let events = value_arithmetic_copy_events_v1(self.next_row, self.arithmetic_operations)?;
+        {
+            let base = P256AggregateAuxRowScratchV1(self.base.base_row_v1(self.next_row)?);
+            let sources = P256AggregateAuxRowScratchV1(p256_value_bus_opened_values_v1(&base.0));
+            let mut copy =
+                P256AggregateAuxRowScratchV1([F::ZERO; P256_VALUE_ARITHMETIC_COPY_AUX_WIDTH_V1]);
+            self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
+                &events,
+                &sources.0,
+                self.arithmetic_copy_running,
+                self.arithmetic_copy_terminal,
+                self.arithmetic_copy_challenges,
+                &mut copy.0,
+            )?;
+            selection.copy_flat_v1(VALUE_ARITHMETIC_COPY_AUX, &copy.0, &mut aux.0)?;
+        }
+        self.next_row += 1;
+        // This comparison remains mandatory even when no arithmetic-copy
+        // column is requested. Native and writer substreams likewise always run
+        // and retain their own final comparisons and source validation.
+        if self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
+            && self.arithmetic_copy_running != self.arithmetic_copy_terminal
+        {
+            return Err(P256AggregateAdapterErrorV1::Constraint);
+        }
+        before_return(&aux.0)?;
+        Ok(Some(aux.0))
+    }
+
     /// Replay this deterministic stream into one challenge-dependent native
     /// auxiliary column, then drop all row-local state.
     pub(crate) fn fill_aux_column_v1(
@@ -6658,13 +6822,11 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?;
         match registration.local_instance_v1() {
             0 => {
+                let selection = P256ValueExecutionAuxSelectionV1::new_v1(first, outputs.len())?;
                 let mut stream = self.value_execution_aux_stream_v1(registration)?;
-                fill_aggregate_aux_columns_v1::<P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1>(
-                    shape.trace_size,
-                    first,
-                    outputs,
-                    || stream.next_aux_row_v1(),
-                )
+                fill_aggregate_aux_columns_v1::<8>(shape.trace_size, 0, outputs, || {
+                    stream.next_selected_aux_row_v1(selection)
+                })
             }
             1 => {
                 let mut stream = value.sorted_aux_source_v1()?;
@@ -10076,6 +10238,9 @@ mod tests {
 #[cfg(test)]
 #[path = "p256_value_aux_batch_tests.rs"]
 mod value_aux_batch_tests;
+#[cfg(test)]
+#[path = "p256_value_compact_row_tests.rs"]
+mod value_compact_row_tests;
 
 #[cfg(test)]
 #[path = "p256_base_replay_batch_tests.rs"]

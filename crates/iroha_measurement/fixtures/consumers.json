@@ -51,6 +51,10 @@
       "package": "iroha_kagemusha_proof",
       "sites": [
         {
+          "path": "crates/iroha_kagemusha_proof/src/rebuild_measurement.rs",
+          "use": "Unit-test-only ignored real-family rebuild comparison: fallible process CPU, lifetime peak RSS and supported-host instruction counters; no production or proof-verdict dependency."
+        },
+        {
           "path": "crates/iroha_kagemusha_proof/tests/common/proof_fixtures/native_load_measurement.rs",
           "use": "Test-only genuine native single-terminal Load diagnostic: fallible process CPU and absolute kernel lifetime RSS at actual API boundaries; no measurement in production admission."
         },

@@ -2,7 +2,7 @@
 
 #[test]
 fn policy_rotation_rebinds_only_ready_rows_and_preserves_ambiguous_bytes() {
-    let temp = TempDir::new().expect("tempdir");
+    let temp = private_state_tempdir().expect("tempdir");
     let first_policy = journal_authority_policy();
     let first_activation = FINALIZED_AT_MS - 1_000;
     let outbox = Arc::new(

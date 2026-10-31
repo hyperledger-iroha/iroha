@@ -16,11 +16,15 @@
 //! policy-first crash leaves a validated, bounded, immutable cache entry: restart retains and
 //! accounts for it, but it cannot qualify an archive without a referenced anchor. Unix publication
 //! and staged recovery are descriptor-relative and remain bound to the verified directory inode
-//! across hostile ancestor renames. Non-Unix mutation fails closed: Windows needs an audited
-//! `NtCreateFile` `RootDirectory` plus handle-relative `FileLinkInformation` wrapper before this
-//! archive can be production-qualified there.
+//! across hostile ancestor renames. Windows retains native parent and leaf originals, publishes
+//! with no-replace rename, and reconciles explicit staged/disposed phases before readers reopen
+//! canonical files. Hardware and whole-node qualification remain separate from this owner.
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
+};
+#[cfg(windows)]
+use super::finalized_archive_fs::windows::{
+    self as native_archive, NativeArchive, metadata as secure_file_metadata,
 };
 use super::finalized_archive_fs::{
     STAGED_FILE_PREFIX, bounded_bytes_len, canonical_bytes_domain_digest,
@@ -30,10 +34,11 @@ use super::finalized_archive_fs::{
 use super::finalized_archive_fs::{
     create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
 };
+#[cfg(not(windows))]
+use crate::secure_file_metadata::{self, SecureMetadata};
 use crate::{
     kura::Kura,
     query::archive_finality::{ArchiveFinalityError, CertifiedArchiveView},
-    secure_file_metadata::{self, SecureMetadata},
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
 };
@@ -72,14 +77,17 @@ use norito::{
     DecodeLimits, decode_from_bytes_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
+#[cfg(windows)]
+use secure_file_metadata::SecureMetadata;
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
+#[cfg(any(not(windows), test))]
+use std::io::Read;
 #[cfg(any(unix, test))]
 use std::io::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    io::{self, Read},
+    fmt, fs, io,
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
 };
@@ -1903,6 +1911,8 @@ fn persist_admitted_reputation(
     for policy in &mut prepared.policies {
         if policy.accounting.is_some() {
             publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
                 &archive.policies,
                 archive.policies_identity,
                 &policy.path,
@@ -1925,6 +1935,8 @@ fn persist_admitted_reputation(
         }
     }
     publish_immutable_bytes(
+        #[cfg(windows)]
+        &archive.native,
         &archive.anchors,
         archive.anchors_identity,
         &prepared.anchor_path,
@@ -2742,6 +2754,9 @@ pub struct ReputationFinalizedArchive {
     checkpoints_identity: ArchiveFileIdentity,
     policies_identity: ArchiveFileIdentity,
     writer_lock_identity: ArchiveFileIdentity,
+    // Native pending originals and parents close before the exclusive archive lock.
+    #[cfg(windows)]
+    native: NativeArchive,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndex>,
 }
@@ -2833,6 +2848,21 @@ impl ReputationFinalizedArchive {
     ) -> Result<Self, ReputationFinalizedArchiveError> {
         let root = root.into();
         validate_archive_root_path(&root)?;
+        #[cfg(windows)]
+        let native = NativeArchive::open(
+            &root,
+            &[
+                (ANCHORS_DIRECTORY, ANCHOR_FILE_SUFFIX),
+                (CHECKPOINTS_DIRECTORY, CHECKPOINT_FILE_SUFFIX),
+                (POLICIES_DIRECTORY, POLICY_FILE_SUFFIX),
+            ],
+            bounds.max_record_bytes,
+            bounds.max_entries.get(),
+        )
+        .map_err(|source| ReputationFinalizedArchiveError::Write {
+            path: root.clone(),
+            source,
+        })?;
         create_direct_directory(&root)?;
         verify_absolute_directory_ancestry(&root)?;
         let root_identity = direct_archive_directory_identity(&root).map_err(|source| {
@@ -2901,6 +2931,8 @@ impl ReputationFinalizedArchive {
             policies_identity,
             writer_lock_identity,
             writer_lock,
+            #[cfg(windows)]
+            native,
             index: ArchiveIndexLock::new(ArchiveIndex::default()),
         };
         archive.verify_storage_boundaries()?;
@@ -4579,6 +4611,8 @@ impl ReputationFinalizedArchive {
             .checkpoints
             .join(checkpoint_file_name(persisted.checkpoint_digest));
         if let Err(error) = publish_immutable_bytes(
+            #[cfg(windows)]
+            &self.native,
             &self.checkpoints,
             self.checkpoints_identity,
             &checkpoint_path,
@@ -5239,7 +5273,16 @@ impl ReputationFinalizedArchive {
         {
             let path = self.policies.join(policy_file_name(digest));
             self.load_policy_at(&path, Some(digest))?;
-            unlink_immutable_archive_file(&self.policies, self.policies_identity, &path)?;
+            unlink_immutable_archive_file(
+                #[cfg(windows)]
+                &self.native,
+                &self.policies,
+                self.policies_identity,
+                &path,
+                #[cfg(windows)]
+                &norito::to_bytes(&self.load_policy_at(&path, Some(digest))?)
+                    .map_err(ReputationFinalizedArchiveError::Encode)?,
+            )?;
         }
         Ok(())
     }
@@ -5250,6 +5293,9 @@ impl ReputationFinalizedArchive {
         if index.checkpoints.is_empty() {
             return Ok(false);
         }
+        #[cfg(windows)]
+        let mut changed = self.finish_native_retention()?;
+        #[cfg(not(windows))]
         let mut changed = false;
         let mut covered_anchors = Vec::new();
         for entry in
@@ -5283,7 +5329,16 @@ impl ReputationFinalizedArchive {
         covered_anchors
             .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         for (_, _, path) in covered_anchors {
-            unlink_immutable_archive_file(&self.anchors, self.anchors_identity, &path)?;
+            unlink_immutable_archive_file(
+                #[cfg(windows)]
+                &self.native,
+                &self.anchors,
+                self.anchors_identity,
+                &path,
+                #[cfg(windows)]
+                &norito::to_bytes(&self.load_anchor_at(&path, None)?)
+                    .map_err(ReputationFinalizedArchiveError::Encode)?,
+            )?;
             changed = true;
         }
         let mut stale_checkpoints = Vec::new();
@@ -5310,7 +5365,16 @@ impl ReputationFinalizedArchive {
         }
         stale_checkpoints.sort_by_key(|(generation, _)| *generation);
         for (_, path) in stale_checkpoints {
-            unlink_immutable_archive_file(&self.checkpoints, self.checkpoints_identity, &path)?;
+            unlink_immutable_archive_file(
+                #[cfg(windows)]
+                &self.native,
+                &self.checkpoints,
+                self.checkpoints_identity,
+                &path,
+                #[cfg(windows)]
+                &norito::to_bytes(&self.load_checkpoint_at(&path, None)?)
+                    .map_err(ReputationFinalizedArchiveError::Encode)?,
+            )?;
             changed = true;
         }
         let refreshed = self.scan_inventory()?;
@@ -5458,6 +5522,16 @@ impl ReputationFinalizedArchive {
         Ok(state)
     }
     fn verify_storage_boundaries(&self) -> Result<(), ReputationFinalizedArchiveError> {
+        #[cfg(windows)]
+        {
+            self.native
+                .revalidate()
+                .and_then(|()| iroha_fs::FileSnapshot::of(&self.writer_lock, true).map(|_| ()))
+                .map_err(|source| ReputationFinalizedArchiveError::Read {
+                    path: self.root.clone(),
+                    source,
+                })?;
+        }
         verify_absolute_directory_ancestry(&self.root)?;
         verify_archive_directory_identity(&self.root, self.root_identity)
             .and_then(|()| verify_archive_directory_identity(&self.anchors, self.anchors_identity))
@@ -5501,18 +5575,24 @@ impl ReputationFinalizedArchive {
     }
     fn recover_staged_files(&self) -> Result<(), ReputationFinalizedArchiveError> {
         recover_staged_directory(
+            #[cfg(windows)]
+            &self.native,
             &self.anchors,
             self.anchors_identity,
             self.bounds.max_record_bytes,
             ANCHOR_FILE_SUFFIX,
         )?;
         recover_staged_directory(
+            #[cfg(windows)]
+            &self.native,
             &self.checkpoints,
             self.checkpoints_identity,
             self.bounds.max_record_bytes,
             CHECKPOINT_FILE_SUFFIX,
         )?;
         recover_staged_directory(
+            #[cfg(windows)]
+            &self.native,
             &self.policies,
             self.policies_identity,
             self.bounds.max_record_bytes,
@@ -5520,8 +5600,20 @@ impl ReputationFinalizedArchive {
         )?;
         self.verify_storage_boundaries()
     }
+    #[cfg(windows)]
+    fn finish_native_retention(&self) -> Result<bool, ReputationFinalizedArchiveError> {
+        self.native.finish_retention().map_err(|source| {
+            ReputationFinalizedArchiveError::NamespaceSync {
+                path: self.root.clone(),
+                source,
+            }
+        })
+    }
+
     fn scan_inventory(&self) -> Result<ArchiveIndex, ReputationFinalizedArchiveError> {
         self.verify_storage_boundaries()?;
+        #[cfg(windows)]
+        self.finish_native_retention()?;
         let mut index = ArchiveIndex::default();
         let mut policy_record_digests_by_policy_digest = BTreeMap::new();
         for entry in fs::read_dir(&self.policies).map_err(|source| {
@@ -7835,6 +7927,7 @@ fn validate_archive_root_path(path: &Path) -> Result<(), ReputationFinalizedArch
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn verify_existing_directory_ancestry(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -7984,6 +8077,7 @@ fn validate_root_namespace(root: &Path) -> Result<(), ReputationFinalizedArchive
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn recover_staged_directory(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8112,6 +8206,7 @@ fn recover_staged_directory(
         Ok(())
     }
 }
+#[cfg(not(windows))]
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8150,6 +8245,7 @@ fn publish_immutable_bytes(
         })
     }
 }
+#[cfg(not(windows))]
 fn unlink_immutable_archive_file(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8497,6 +8593,7 @@ fn read_bounded_archive_file_at_unix(
     }
     Ok(bytes)
 }
+#[cfg(not(windows))]
 fn create_direct_directory(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
     validate_archive_root_path(path)?;
     verify_existing_directory_ancestry(path)?;
@@ -8542,6 +8639,20 @@ fn create_direct_directory(path: &Path) -> Result<(), ReputationFinalizedArchive
         source,
     })
 }
+#[cfg(windows)]
+fn create_direct_directory(path: &Path) -> Result<(), ReputationFinalizedArchiveError> {
+    iroha_fs::OwnerDirectory::open_or_create(path)
+        .and_then(|owner| {
+            let result = owner.sync();
+            let final_check = owner.revalidate();
+            result.and(final_check)
+        })
+        .map_err(|source| ReputationFinalizedArchiveError::NamespaceSync {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+#[cfg(not(windows))]
 fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArchiveError> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true);
@@ -8590,6 +8701,23 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArc
     }
     Ok(file)
 }
+#[cfg(windows)]
+fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArchiveError> {
+    let result = (|| {
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "archive lock has no parent")
+        })?;
+        let name = path.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "archive lock has no name")
+        })?;
+        let owner = iroha_fs::OwnerDirectory::open(parent)?;
+        owner.open_exclusive_private_lock(name)
+    })();
+    result.map_err(|source| ReputationFinalizedArchiveError::WriterBusy {
+        path: path.to_path_buf(),
+        source,
+    })
+}
 fn acquire_writer_ownership(
     file: &fs::File,
     path: &Path,
@@ -8610,7 +8738,7 @@ fn acquire_writer_ownership(
 #[cfg(unix)]
 type ArchiveFileIdentity = (u64, u64);
 #[cfg(windows)]
-type ArchiveFileIdentity = (Option<u32>, Option<u64>);
+type ArchiveFileIdentity = iroha_fs::FileIdentity;
 #[cfg(not(any(unix, windows)))]
 type ArchiveFileIdentity = ();
 #[cfg(unix)]
@@ -8620,7 +8748,7 @@ fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
 }
 #[cfg(windows)]
 fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
-    (metadata.volume_serial_number(), metadata.file_index())
+    metadata.identity()
 }
 #[cfg(not(any(unix, windows)))]
 fn archive_file_identity(_metadata: &SecureMetadata) -> ArchiveFileIdentity {}
@@ -8629,8 +8757,8 @@ const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool
     true
 }
 #[cfg(windows)]
-const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool {
-    identity.0.is_some() && identity.1.is_some()
+const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
+    true
 }
 #[cfg(not(any(unix, windows)))]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
@@ -8673,11 +8801,12 @@ fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata
 }
 #[cfg(windows)]
 fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
     archive_file_identity_available(archive_file_identity(left))
         && archive_file_identity(left) == archive_file_identity(right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
-        && left.file_size() == right.file_size()
+        && left.links() == 1
+        && right.links() == 1
+        && left.len() == right.len()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
@@ -8699,6 +8828,7 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<Secur
     }
     Ok(metadata)
 }
+#[cfg(not(windows))]
 fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let path_before = direct_archive_file_metadata(path, max_bytes)?;
     let mut options = fs::OpenOptions::new();
@@ -8746,6 +8876,11 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     }
     Ok(bytes)
 }
+#[cfg(windows)]
+fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    native_archive::read(path, max_bytes)
+}
+#[cfg(not(windows))]
 fn sync_archive_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -8759,6 +8894,13 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
     {
         fs::File::open(path)?.sync_all()
     }
+}
+#[cfg(windows)]
+fn sync_archive_directory(path: &Path) -> io::Result<()> {
+    let owner = iroha_fs::OwnerDirectory::open(path)?;
+    let result = owner.sync();
+    let final_check = owner.revalidate();
+    result.and(final_check)
 }
 /// Fail-closed errors returned by the finalized reputation archive.
 #[derive(Debug, Error)]
@@ -9188,6 +9330,60 @@ pub enum ReputationFinalizedArchiveError {
         block_hash: [u8; 32],
     },
 }
+
+#[cfg(windows)]
+fn publish_immutable_bytes(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    target: &Path,
+    bytes: &[u8],
+) -> Result<(), ReputationFinalizedArchiveError> {
+    native
+        .publish(directory, expected_directory_identity, target, bytes)
+        .map_err(|source| ReputationFinalizedArchiveError::Write {
+            path: target.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(windows)]
+fn unlink_immutable_archive_file(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    target: &Path,
+    expected: &[u8],
+) -> Result<(), ReputationFinalizedArchiveError> {
+    native
+        .unlink(directory, expected_directory_identity, target, expected)
+        .map_err(|source| ReputationFinalizedArchiveError::Write {
+            path: target.to_path_buf(),
+            source,
+        })
+}
+
+#[cfg(windows)]
+fn recover_staged_directory(
+    native: &NativeArchive,
+    directory: &Path,
+    expected_directory_identity: ArchiveFileIdentity,
+    max_record_bytes: u64,
+    canonical_suffix: &str,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    native
+        .recover(
+            directory,
+            expected_directory_identity,
+            max_record_bytes,
+            canonical_suffix,
+        )
+        .map_err(|source| ReputationFinalizedArchiveError::Write {
+            path: directory.to_path_buf(),
+            source,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     mod frame_identity_tests;
@@ -9939,6 +10135,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
     ) -> PersistedReputationFinalizedVirtualBaseCheckpointV1 {
         let (persisted, bytes, path) = test_checkpoint_artifact(archive, target_key);
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &archive.native,
             &archive.checkpoints,
             archive.checkpoints_identity,
             &path,
@@ -9947,6 +10145,99 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         .expect("publish test checkpoint");
         persisted
     }
+    #[cfg(windows)]
+    #[test]
+    fn native_checkpoint_cleanup_retries_post_close_failure_before_rescan_and_new_insert() {
+        let directory = tempdir().expect("create native archive directory");
+        let archive = open_archive(&directory, bounds());
+        let first = sample_projection(7, [0x71; 32]);
+        let second = sample_projection(8, [0x81; 32]);
+        archive.insert(first.clone()).expect("insert prefix anchor");
+        archive
+            .insert(second.clone())
+            .expect("insert retained suffix");
+        publish_test_checkpoint(&archive, &first.key);
+        let path = archive.record_path(&first.key).expect("prefix path");
+        let bytes = norito::to_bytes(
+            &archive
+                .load_anchor_at(&path, Some(&first.key))
+                .expect("authenticate exact prefix bytes"),
+        )
+        .expect("canonical bytes");
+        let identity = iroha_fs::FileMetadata::symlink_metadata(&path)
+            .unwrap()
+            .identity();
+        let error = archive
+            .native
+            .unlink_after_close_observed(
+                &archive.anchors,
+                archive.anchors_identity,
+                &path,
+                &bytes,
+                || {
+                    Err(io::Error::other(
+                        "actual prefix closed before barrier failure",
+                    ))
+                },
+            )
+            .expect_err("retain failed post-close intent");
+        assert_eq!(
+            error.to_string(),
+            "actual prefix closed before barrier failure"
+        );
+        assert!(!path.exists());
+        assert!(
+            archive.load_anchor_at(&path, Some(&first.key)).is_err(),
+            "retry cannot recover authenticated bytes by reopening the deleted name"
+        );
+        {
+            let mut index = archive.write_index().expect("retain index mutation owner");
+            // This is the real compaction failure/retry path: rescan first, then cleanup.
+            archive
+                .reconcile_checkpoint_index(&mut index)
+                .expect("complete saved intent before rescan");
+            archive
+                .finish_checkpoint_cleanup(&index)
+                .expect("retry cleanup on same archive");
+            archive
+                .reconcile_checkpoint_index(&mut index)
+                .expect("final index reconciliation");
+        }
+        assert!(!path.exists());
+        assert!(
+            !archive
+                .native
+                .finish_retention()
+                .expect("no stranded retention")
+        );
+        assert_eq!(
+            archive.get_exact(&second.key).expect("retained suffix"),
+            Some(second)
+        );
+        let third = sample_projection(9, [0x91; 32]);
+        archive
+            .insert(third.clone())
+            .expect("same archive accepts later mutation");
+        assert_eq!(
+            archive.get_exact(&third.key).expect("new exact projection"),
+            Some(third)
+        );
+        assert!(matches!(
+            archive.get_exact(&first.key),
+            Err(ReputationFinalizedArchiveError::HistoryPruned { .. })
+        ));
+        assert_ne!(
+            iroha_fs::FileMetadata::symlink_metadata(
+                archive
+                    .record_path(&sample_projection(9, [0x91; 32]).key)
+                    .unwrap()
+            )
+            .unwrap()
+            .identity(),
+            identity
+        );
+    }
+
     #[test]
     fn production_open_rejects_a_checkpoint_without_retention_authority() {
         let directory = tempdir().expect("create archive directory");
@@ -10546,6 +10837,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 .checkpoints
                 .join(checkpoint_file_name(persisted.checkpoint_digest));
             publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
                 &archive.checkpoints,
                 archive.checkpoints_identity,
                 &path,
@@ -12353,8 +12646,15 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
             let path = archive
                 .policies
                 .join(policy_file_name(substituted.record_digest));
-            publish_immutable_bytes(&archive.policies, archive.policies_identity, &path, &bytes)
-                .expect("publish substituted predecessor");
+            publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
+                &archive.policies,
+                archive.policies_identity,
+                &path,
+                &bytes,
+            )
+            .expect("publish substituted predecessor");
         }
         assert!(matches!(
             ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()),
@@ -12580,6 +12880,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         file.write_all(&[original[0] ^ 0xFF])
             .expect("corrupt final record byte");
         file.sync_all().expect("sync record corruption");
+        #[cfg(windows)]
+        drop(file);
         assert!(archive.get_exact(&projection.key).is_err());
         drop(archive);
         assert!(ReputationFinalizedArchive::try_open(archive_root(&directory), bounds()).is_err());
@@ -12639,8 +12941,15 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
                 .join(policy_file_name(policy.record_digest));
             // Simulate process loss after the policy-first durable publication
             // and before the corresponding anchor publication.
-            publish_immutable_bytes(&archive.policies, archive.policies_identity, &path, &bytes)
-                .expect("publish policy crash artifact");
+            publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
+                &archive.policies,
+                archive.policies_identity,
+                &path,
+                &bytes,
+            )
+            .expect("publish policy crash artifact");
             (policy.record_digest, path, bounded_bytes_len(&bytes))
         };
         let archive = open_archive(&directory, one_per_namespace);
@@ -13055,6 +13364,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         let target = archive.anchors.join("no-clobber.anchor.to");
         let original = [0x41; 32];
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &archive.native,
             &archive.anchors,
             archive.anchors_identity,
             &target,
@@ -13062,6 +13373,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         )
         .expect("publish original artifact");
         publish_immutable_bytes(
+            #[cfg(windows)]
+            &archive.native,
             &archive.anchors,
             archive.anchors_identity,
             &target,
@@ -13070,6 +13383,8 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
         .expect("accept byte-identical publication");
         assert!(matches!(
             publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
                 &archive.anchors,
                 archive.anchors_identity,
                 &target,
@@ -13094,18 +13409,20 @@ iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
     }
     #[cfg(windows)]
     #[test]
-    fn unsupported_publication_fails_before_any_path_mutation() {
+    fn noncanonical_publication_fails_before_any_path_mutation() {
         let directory = tempdir().expect("create archive directory");
         let archive = open_archive(&directory, bounds());
         let target = archive.anchors.join("unsupported.anchor.to");
         assert!(matches!(
             publish_immutable_bytes(
+                #[cfg(windows)]
+                &archive.native,
                 &archive.anchors,
                 archive.anchors_identity,
                 &target,
                 b"must not be written",
             ),
-            Err(ReputationFinalizedArchiveError::UnsupportedPlatform { .. })
+            Err(ReputationFinalizedArchiveError::Write { .. })
         ));
         assert!(!target.exists());
         assert_eq!(

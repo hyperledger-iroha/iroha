@@ -19,10 +19,17 @@ impl Kura {
         kind: &str,
     ) -> Result<()> {
         for (index, directory) in namespace.directories.iter().enumerate() {
+            #[cfg(not(windows))]
             let result = if index == 0 {
                 sync_indexed_sidecar_dir_handle(&directory.file)
             } else {
                 sync_progress_sidecar_ancestor_dir_handle(&directory.file)
+            };
+            #[cfg(windows)]
+            let result = if index == 0 {
+                sync_indexed_sidecar_directory(|| directory.native_owner.sync())
+            } else {
+                sync_progress_sidecar_ancestor(|| directory.native_owner.sync())
             };
             if let Err(error) = result {
                 iroha_logger::warn!(

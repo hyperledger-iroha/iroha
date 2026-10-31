@@ -122,12 +122,12 @@ default = []
 }
 
 #[test]
-fn manifest_has_only_the_allocation_codec_and_c_library_dependencies() {
+fn manifest_has_only_the_allocation_codec_and_native_system_dependencies() {
     let manifest = manifest_of("iroha_measurement").expect("own manifest");
     let tables = dependency_tables(&manifest);
     assert_eq!(
         tables["dependencies"],
-        names(&["iroha_allocation", "libc", "norito"])
+        names(&["iroha_allocation", "libc", "norito", "windows-sys"])
     );
     // No dev-dependencies either: a proof crate may depend on this crate, so a
     // dev-dependency on one would both invert the layering and form a cycle.
@@ -252,7 +252,11 @@ fn sources_naming(root: &Path, directory: &Path, needle: &str, found: &mut BTree
         } else if path.extension().is_some_and(|extension| extension == "rs")
             && std::fs::read_to_string(root.join(&path)).is_ok_and(|text| text.contains(needle))
         {
-            found.insert(path.to_string_lossy().into_owned());
+            // The tracked inventory uses repository-relative slash paths on every host.
+            found.insert(
+                path.to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/"),
+            );
         }
     }
 }

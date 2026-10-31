@@ -11,7 +11,6 @@ use integration_tests::process::{output_with_timeout, process_timeout, status_wi
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
@@ -44,6 +43,8 @@ fn is_executable(p: &Path) -> bool {
 }
 #[test]
 fn compile_and_run_hello() {
+    iroha_test_network::require_development_process_mode()
+        .expect("optional external tools require a development invocation");
     let koto_bin = env::var("KOTO_BIN")
         .ok()
         .map(PathBuf::from)
@@ -70,16 +71,16 @@ fn compile_and_run_hello() {
     let out = root.join("target/examples/hello.to");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
     // Compile
-    let mut command = Command::new(&koto_bin);
+    let mut command =
+        iroha_test_network::development_process_command(&koto_bin).expect("select koto");
     command.arg("build").arg(&src).arg("--out").arg(&out);
-    let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
+    let status = status_with_timeout(command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
     // Run
-    let mut command = Command::new(&ivm_bin);
+    let mut command =
+        iroha_test_network::development_process_command(&ivm_bin).expect("select ivm_run");
     command.arg(&out).arg("--args").arg("{}");
-    let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
+    let output = output_with_timeout(command, process_timeout()).expect("failed to spawn ivm_run");
     assert!(
         output.status.success(),
         "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",
@@ -95,6 +96,8 @@ fn compile_and_run_hello() {
 }
 #[test]
 fn inspect_hello() {
+    iroha_test_network::require_development_process_mode()
+        .expect("optional external tools require a development invocation");
     let ivm_tool = env::var("IVM_TOOL_BIN")
         .ok()
         .map(PathBuf::from)
@@ -113,10 +116,11 @@ fn inspect_hello() {
         out.exists(),
         "hello.to not found; run compile_and_run_hello first or compile manually"
     );
-    let mut command = Command::new(&ivm_tool);
+    let mut command =
+        iroha_test_network::development_process_command(&ivm_tool).expect("select ivm tool");
     command.arg("inspect").arg(&out);
-    let output = output_with_timeout(&mut command, process_timeout())
-        .expect("failed to spawn ivm_tool inspect");
+    let output =
+        output_with_timeout(command, process_timeout()).expect("failed to spawn ivm_tool inspect");
     let out_stdout = String::from_utf8_lossy(&output.stdout);
     let out_stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -132,6 +136,8 @@ fn inspect_hello() {
 }
 #[test]
 fn compile_and_run_nft() {
+    iroha_test_network::require_development_process_mode()
+        .expect("optional external tools require a development invocation");
     let koto_bin = env::var("KOTO_BIN")
         .ok()
         .map(PathBuf::from)
@@ -157,15 +163,15 @@ fn compile_and_run_nft() {
     let src = root.join("examples/nft/nft.ko");
     let out = root.join("target/examples/nft.to");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-    let mut command = Command::new(&koto_bin);
+    let mut command =
+        iroha_test_network::development_process_command(&koto_bin).expect("select koto");
     command.arg("build").arg(&src).arg("--out").arg(&out);
-    let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
+    let status = status_with_timeout(command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
-    let mut command = Command::new(&ivm_bin);
+    let mut command =
+        iroha_test_network::development_process_command(&ivm_bin).expect("select ivm_run");
     command.arg(&out).arg("--args").arg("{}");
-    let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
+    let output = output_with_timeout(command, process_timeout()).expect("failed to spawn ivm_run");
     assert!(
         output.status.success(),
         "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",

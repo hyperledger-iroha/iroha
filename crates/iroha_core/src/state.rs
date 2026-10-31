@@ -408,7 +408,7 @@ pub use finality_proof_interval::FinalityProofIntervalReadError;
 
 pub use canonical_history::{
     CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
-    FinalizedEventReadError,
+    CommittedOutcomeReadError, FinalizedEventReadError,
 };
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
@@ -28715,14 +28715,29 @@ impl State {
         nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
     ) -> Self {
-        Self::new_pre_genesis_nexus_fixture(
+        Self::new_with_pre_genesis_nexus_and_identities_for_testing(
             world,
             nexus,
             query_handle,
             (*DEFAULT_TEST_CHAIN_ID).clone(),
             *DEFAULT_TEST_NETWORK_ID,
         )
-        .0
+    }
+    /// Create an isolated pre-genesis State with explicit display and network identities.
+    ///
+    /// The caller pins `network_id` to the original signed genesis before State and
+    /// its configured geometry are initialized. This preserves the supplied Nexus
+    /// policy and ordinary runtime defaults; it does not apply the fee and
+    /// scheduling overrides of [`Self::new_with_chain_and_network_id_for_testing`].
+    #[must_use]
+    pub fn new_with_pre_genesis_nexus_and_identities_for_testing(
+        world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_model_base::chain::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Self {
+        Self::new_pre_genesis_nexus_fixture(world, nexus, query_handle, chain_id, network_id).0
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Construct a fresh configured-catalog fixture with explicit display and security identities.
@@ -35579,6 +35594,18 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
 )> = LazyLock::new(|| {
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    // The checked-in testing identities are compiled fixture data. Native Windows
+    // must not require the build checkout's filesystem to expose local file IDs.
+    // Ordinary operator configuration still uses its retained file reader.
+    #[cfg(windows)]
+    let reader = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(iroha_config::base::toml::TomlSource::inline(
+            include_str!("../../iroha_config/iroha_test_config.toml")
+                .parse()
+                .expect("checked-in default testing config must be valid TOML"),
+        ));
+    #[cfg(not(windows))]
     let reader = iroha_config::base::read::ConfigReader::new()
         .without_env()
         .read_toml_with_extends(&config_path)
@@ -45000,6 +45027,12 @@ mod retail_contract_state_snapshot;
 pub(crate) mod retail_daily_limit_state;
 #[path = "state/asset_uid.rs"]
 pub(crate) mod asset_uid;
+#[path = "state/asset_fi.rs"]
+pub(crate) mod asset_fi;
+#[path = "state/asset_uid_enrollment.rs"]
+pub(crate) mod asset_uid_enrollment;
+#[path = "state/asset_uid_reader.rs"]
+pub(crate) mod asset_uid_reader;
 pub(crate) mod deserialize {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::PeerId;

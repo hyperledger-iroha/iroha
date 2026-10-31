@@ -22,12 +22,11 @@ use rayon::prelude::*;
 use std::collections::BTreeSet;
 #[cfg(windows)]
 use std::env;
-#[cfg(unix)]
-use std::fs;
 #[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::{fs, path::Path};
 use std::{
-    path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };

@@ -76,6 +76,19 @@ impl Drop for Workspace {
 }
 
 #[test]
+fn canonical_native_membership_has_host_independent_identity() {
+    // Independently framed from the five ordinary files in Workspace::new.
+    // GENERATED contributes no bytes, and native absolute paths never enter the digest.
+    assert_eq!(
+        Workspace::new().digest(),
+        [
+            70, 30, 74, 231, 196, 1, 142, 221, 123, 75, 18, 45, 206, 190, 6, 138, 34, 245, 192,
+            182, 197, 41, 98, 245, 228, 137, 232, 7, 116, 100, 101, 230,
+        ]
+    );
+}
+
+#[test]
 fn source_assets_dependency_lock_and_membership_change_identity() {
     let workspace = Workspace::new();
     let mut previous = workspace.digest();

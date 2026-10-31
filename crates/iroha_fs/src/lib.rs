@@ -18,6 +18,29 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod admitted_read;
+
+#[cfg(windows)]
+mod private_durability;
+#[cfg(windows)]
+pub use private_durability::PrivateDurabilityFile;
+mod build_output;
+
+#[cfg(windows)]
+mod output_file;
+#[cfg(windows)]
+pub use output_file::RetainedOutputFile;
+
+#[cfg(windows)]
+mod staged_output;
+#[cfg(windows)]
+pub use staged_output::{StagedOutputFile, StagedOutputReader};
+
+mod process;
+mod process_stdio;
+pub use process::{ProcessChild, ProcessCommand};
+pub use process_stdio::ProcessStdio;
+
 mod custody_io;
 pub use custody_io::CustodyEntryKind;
 
@@ -27,10 +50,39 @@ pub use custody_transaction::{custody_transaction, fence_custody_transaction};
 mod custody_work;
 pub use custody_work::CustodyWorkV1;
 
+mod metadata;
+pub use metadata::FileMetadata;
+
+#[cfg(any(windows, test))]
+mod volume_observation;
+
+#[cfg(test)]
+mod creator_slot_tests;
+
+#[cfg(windows)]
+mod archive_lock_windows;
+mod directory_move;
+#[cfg(windows)]
+pub use windows::directory_mutation::{DirectoryMutation, DirectoryMutationStep};
+mod file_move;
+#[cfg(windows)]
+mod journal_windows;
+#[cfg(windows)]
+pub use windows::{PublicInputSnapshot, StrictPublicInput};
 mod private_files;
+mod sealed_batch;
+pub use directory_move::{DirectoryMoveError, DirectoryMoveStep, MovedDirectory};
+pub use file_move::{FileMoveStep, MovableFile, MovedFile};
 pub use private_files::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 pub use private_files::{
-    PendingPrivateFile, PrivateFileMetadata, ScopedSealedPrivateFile, SealedPrivateFile,
+    PendingPrivateFile, PrivateFileMetadata, ScopedSealedPrivateFile, SealedExecutable,
+    SealedPrivateFile,
+};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use sealed_batch::SealedToolImage;
+pub use sealed_batch::{
+    FlatBatchEntry, FlatBatchKind, FlatBatchReader, FlatBatchSealStep, FlatBatchWriter,
+    PendingFlatBatch, SealedFlatBatch,
 };
 
 #[cfg(unix)]
@@ -76,9 +128,10 @@ pub enum PublishMode {
     Replace,
 }
 
-/// Native boundaries of one atomic file publication, observed before each operation.
+/// Native boundaries of one atomic file publication.
 ///
 /// An observer may refuse progress, but cannot replace the retained directory or the bytes.
+/// Except for [`Self::Published`], observations precede their named operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtomicWriteStep {
     /// Allocate one exclusive staging name.
@@ -91,6 +144,11 @@ pub enum AtomicWriteStep {
     SyncFile,
     /// Publish the complete original file without releasing its retained handle.
     Publish,
+    /// Native destination publication succeeded; subsequent errors require reconciliation.
+    ///
+    /// This runs before any fallible post-rename operation, including the Windows file flush.
+    /// Refusing this observation leaves the complete destination visible.
+    Published,
     /// Sync the original publication directory.
     SyncDirectory,
 }
@@ -247,7 +305,8 @@ enum NativeChildOutcome<T> {
 /// and zeroized buffer drop.
 /// [`Self::read_optional_owned`] moves the original zeroized native allocation;
 /// [`Self::read_admitted`] returns the caller's one original owned `Vec`, preserving
-/// its allocation and ownership semantics. The view cannot leave its owning scope callback,
+/// its allocation and ownership semantics. [`Self::read_admitted_zeroizing`] retains
+/// its zeroizing owner through the enclosing directory fence. The view cannot leave its owning scope callback,
 /// including [`PrivateDirectory::read_tree_scope_with_root`] and [`PrivateReadTreeScope::read_scope`].
 pub struct PrivateReadScope<'scope> {
     directory: &'scope platform::Directory,
@@ -380,76 +439,6 @@ impl PrivateReadScope<'_> {
             return Err(changed());
         }
         Ok(())
-    }
-
-    /// Read one admitted record into the caller's original owned allocation.
-    ///
-    /// The admission tuple converts the fresh length then allocates exactly that many bytes;
-    /// both retain caller error types and allocation charging. The maximum independently bounds
-    /// the admitted length before allocation. `mid` runs after exact read/EOF/snapshot checks and
-    /// before the final named snapshot. The error tuple maps only initial-open errors and constructs
-    /// original changed-read (`false`) or changed-namespace (`true`) errors. These factories cannot
-    /// accept a failed native check. Only the first raw native open can yield `None`.
-    ///
-    /// This method returns the same single `Vec`, with no copy or zeroization change. The caller
-    /// must close per-record ownership before decoding these bytes. Enclosing directory scope
-    /// closes every ordinary result. No file, pathname, descriptor or writer is returned; callers
-    /// keep batches read-only, without signing, publication, network effects or a validation cache.
-    ///
-    /// # Errors
-    /// Preserves admission, allocation, original native I/O and caller custody errors. Refuses an
-    /// inadmissible length/buffer, truncation, extension, changed snapshots or changed named objects.
-    pub fn read_admitted<E>(
-        &mut self,
-        name: impl AsRef<OsStr>,
-        maximum: usize,
-        admission: (
-            impl FnOnce(u64) -> Result<usize, E>,
-            impl FnOnce(usize) -> Result<Vec<u8>, E>,
-        ),
-        mid: impl FnOnce(&Self) -> Result<(), E>,
-        errors: (impl FnOnce(io::Error) -> E, impl FnOnce(bool) -> E),
-    ) -> Result<Option<Vec<u8>>, E>
-    where
-        E: From<io::Error>,
-    {
-        let (initial_error, changed_error) = errors;
-        let mut file = match checked_name(name.as_ref())
-            .and_then(|name| self.directory.open_readonly_native(name, true))
-            .map_err(initial_error)?
-        {
-            Some(file) => file,
-            None => return Ok(None),
-        };
-        let before = FileSnapshot::of(&file, true)?;
-        let extent = file.metadata()?.len();
-        let (admit, allocate) = admission;
-        let length = admit(extent)?;
-        if length > maximum || u64::try_from(length).ok() != Some(extent) {
-            return Err(
-                io::Error::other("record length admission differs from its native extent").into(),
-            );
-        }
-        let mut bytes = allocate(length)?;
-        if bytes.len() != length {
-            return Err(
-                io::Error::other("record allocation differs from its admitted length").into(),
-            );
-        }
-        file.read_exact(&mut bytes)?;
-        let mut tail = [0_u8; 1];
-        if !(file.read(&mut tail)? == 0 && FileSnapshot::of(&file, true)? == before) {
-            return Err(changed_error(false));
-        }
-        mid(self)?;
-        let current = self
-            .directory
-            .open_readonly_native(checked_name(name.as_ref())?, false)?
-            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        if FileSnapshot::of(&current, true)? != before {
-            return Err(changed_error(true));
-        }
-        Ok(Some(bytes))
     }
 }
 
@@ -1101,6 +1090,17 @@ pub struct ReaderDirectory {
     inner: platform::Directory,
 }
 impl ReaderDirectory {
+    /// Require this retained Windows directory to belong to the effective user.
+    ///
+    /// The ordinary reader also admits trusted system owners. Call this when an
+    /// application requires its original immediate directory to have exact user custody.
+    /// # Errors
+    /// Refuses foreign ownership, changed ancestors and native security-query errors.
+    #[cfg(windows)]
+    pub fn require_current_owner(&self) -> io::Result<()> {
+        self.inner.require_current_owner()
+    }
+
     /// Retain an existing regular directory under genuine native custody.
     /// # Errors
     /// Refuses links, unsafe native permissions, foreign mutation or unavailable storage.
@@ -1113,6 +1113,13 @@ impl ReaderDirectory {
     pub fn path(&self) -> &Path {
         self.inner.path()
     }
+    /// Read this reader's original directory identity after revalidating its ancestry.
+    ///
+    /// # Errors
+    /// Refuses changed directory custody or native observation errors.
+    pub fn identity(&self) -> io::Result<FileIdentity> {
+        self.inner.identity()
+    }
     /// Retain one existing directory child using this reader's original ancestor handles.
     ///
     /// This opens only one read-only directory handle. No writable directory capability,
@@ -1124,6 +1131,32 @@ impl ReaderDirectory {
         Ok(Self {
             inner: self.inner.child_reader(checked_name(name.as_ref())?)?,
         })
+    }
+
+    /// Open an optional read-only child through this original directory.
+    ///
+    /// Only its first native open may establish absence. Later disappearance and
+    /// unsafe custody remain errors; no writable directory authority is acquired.
+    /// # Errors
+    /// Refuses invalid names, unsafe custody, changed ancestors and late native failures.
+    pub fn open_child_optional(&self, name: impl AsRef<OsStr>) -> io::Result<Option<Self>> {
+        self.inner
+            .child_reader_optional(checked_name(name.as_ref())?)
+            .map(|child| child.map(|inner| Self { inner }))
+    }
+
+    /// Read an optional private file through this original read-only directory.
+    ///
+    /// Only initial native leaf absence produces `None`. The sole zeroized allocation
+    /// and all original file and ancestry checks are retained on every ordinary exit.
+    /// # Errors
+    /// Refuses invalid names, unsafe private custody, oversized files and late native errors.
+    pub fn read_private_optional(
+        &self,
+        name: impl AsRef<OsStr>,
+        maximum: usize,
+    ) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+        self.inner.read_optional(name.as_ref(), maximum, true)
     }
 
     /// Retain one private child while sharing this reader's existing ancestor handles.
@@ -1146,6 +1179,27 @@ impl ReaderDirectory {
                 .open_retained(checked_name(name.as_ref())?, false, false)?,
         })
     }
+    /// Retain an optional regular child through this original read-only directory.
+    ///
+    /// Only absence at the initial native leaf open returns `None`. A successful
+    /// reader keeps the original file and all reader-only ancestry; later missing
+    /// names, unsafe custody and post-admission changes remain errors.
+    /// # Errors
+    /// Refuses invalid names, unsafe custody and all post-admission native failures.
+    pub fn open_retained_regular_optional(
+        &self,
+        name: impl AsRef<OsStr>,
+    ) -> io::Result<Option<RetainedFile>> {
+        self.inner.revalidate()?;
+        let result = checked_name(name.as_ref()).and_then(|name| {
+            self.inner
+                .open_retained_optional(name, false)
+                .map(|file| file.map(|inner| RetainedFile { inner }))
+        });
+        self.inner.revalidate()?;
+        result
+    }
+
     /// Recheck the original directory and all retained ancestors.
     /// # Errors
     /// Refuses replaced namespace or changed native custody.
@@ -1159,6 +1213,35 @@ impl ReaderDirectory {
         Ok(FileSnapshot {
             inner: self.inner.snapshot_directory()?,
         })
+    }
+}
+
+#[cfg(all(test, windows))]
+mod reader_current_owner_tests {
+    use super::*;
+
+    #[test]
+    fn exact_current_owner_readers_retain_read_only_originals() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("owned")).unwrap();
+        directory
+            .write_atomic("source", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let reader = ReaderDirectory::open(directory.path()).unwrap();
+        reader.require_current_owner().unwrap();
+        let source = reader.open_retained_regular("source").unwrap();
+        source.require_current_owner().unwrap();
+        let before = source.snapshot().unwrap();
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(directory.path().join("source"))
+                .is_err()
+        );
+        assert!(std::fs::rename(directory.path(), temporary.path().join("moved")).is_err());
+        reader.require_current_owner().unwrap();
+        source.require_current_owner().unwrap();
+        assert_eq!(source.snapshot().unwrap(), before);
     }
 }
 
@@ -1234,6 +1317,28 @@ impl OwnerDirectory {
         result
     }
 
+    /// Retain an optional regular child under this original directory and its ancestors.
+    ///
+    /// Only the first native leaf open may establish absence. The retained original checks
+    /// its complete snapshot and single-link custody; Windows excludes concurrent writers
+    /// and deletion for its lifetime. Public readers are permitted, foreign mutation is not.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe custody, later missing names and native observation errors.
+    pub fn open_retained_regular_optional(
+        &self,
+        name: impl AsRef<OsStr>,
+    ) -> io::Result<Option<RetainedFile>> {
+        self.inner.revalidate()?;
+        let result = checked_name(name.as_ref()).and_then(|name| {
+            self.inner
+                .open_retained_optional(name, false)
+                .map(|file| file.map(|inner| RetainedFile { inner }))
+        });
+        self.inner.revalidate()?;
+        result
+    }
+
     /// Join one current regular name to its original descriptor and current native snapshot.
     ///
     /// This permits intentional repairs to the same original object between attempts; the
@@ -1282,6 +1387,31 @@ impl OwnerDirectory {
         let name = checked_name(name.as_ref())?;
         self.revalidate()?;
         let result = self.inner.remove_private_native(name);
+        self.revalidate()?;
+        result
+    }
+
+    /// Remove a private staging file only if its admitted original still matches `expected`.
+    ///
+    /// The complete snapshot includes identity, extent and custody metadata. A caller that
+    /// verified bounded bytes must capture this snapshot through that same original before
+    /// releasing its reader. Removal independently admits the current private original and
+    /// compares it before deletion; on Windows this admission holds native DELETE authority.
+    /// Only absence at the first native open returns `false`. Later absence or a mismatch
+    /// remains an error, and no substitute is deleted or repaired.
+    ///
+    /// # Errors
+    /// Refuses invalid names, mismatched snapshots, unsafe custody and native I/O errors.
+    pub fn remove_private_if_snapshot(
+        &self,
+        name: impl AsRef<OsStr>,
+        expected: &FileSnapshot,
+    ) -> io::Result<bool> {
+        let name = checked_name(name.as_ref())?;
+        self.revalidate()?;
+        let result = self
+            .inner
+            .remove_private_if_snapshot_native(name, &expected.inner);
         self.revalidate()?;
         result
     }
@@ -1560,10 +1690,32 @@ impl OwnerDirectory {
             .write_atomic(checked_name(name.as_ref())?, bytes, mode, false)
     }
 
+    /// Atomically publish private bytes, requiring any replaced file to be private too.
+    ///
+    /// The retained parent may permit readers; this never repairs its permissions or an
+    /// existing destination. Staging is private from creation. A refusal before publication
+    /// does not publish the new bytes; an error after publication may leave the complete new
+    /// destination visible with uncertain durability. Reconcile that destination before retry.
+    ///
+    /// # Errors
+    /// Refuses unsafe or nonprivate destinations, invalid names, collisions and native I/O.
+    pub fn write_private_atomic(
+        &self,
+        name: impl AsRef<OsStr>,
+        bytes: &[u8],
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        self.inner
+            .write_atomic(checked_name(name.as_ref())?, bytes, mode, true)
+    }
+
     /// Publish through the same native atomic writer with bounded attempts and observations.
     ///
-    /// Each observation runs immediately before its named operation and is followed by a
-    /// fresh directory-custody check. The caller may join a retained lock at every boundary.
+    /// Each operation observation runs immediately before its named operation and is followed
+    /// by a fresh directory-custody check. [`AtomicWriteStep::Published`] instead reports a
+    /// successful native destination publication before any fallible subsequent operation, allowing exact
+    /// classification of errors that require reconciliation. The caller may join a retained
+    /// lock at every boundary.
     /// Original bytes are borrowed; errors retain visible complete publications for retry.
     ///
     /// # Errors
@@ -1604,6 +1756,47 @@ impl OwnerDirectory {
     pub fn open_existing_lock(&self, name: impl AsRef<OsStr>) -> io::Result<File> {
         self.inner
             .open_exact_lock(checked_name(name.as_ref())?, false)
+    }
+
+    /// Exclusively create a private mutable file directly into its original owner's slot.
+    ///
+    /// The slot must be empty. Successful native creation installs the original descriptor
+    /// before validation or durability operations. If a later operation fails, the slot stays
+    /// populated: the caller must retain that original and reconcile its uncertain creation.
+    /// Existing names are never opened, truncated or replaced.
+    ///
+    /// # Errors
+    /// Refuses occupied slots, invalid names, collisions, unsafe custody and native errors.
+    /// An error after creation preserves the newly created file in `original`.
+    pub fn create_private_file_into(
+        &self,
+        name: impl AsRef<OsStr>,
+        original: &mut Option<File>,
+    ) -> io::Result<()> {
+        self.create_private_file_into_observed(name.as_ref(), original, |_| Ok(()))
+    }
+
+    fn create_private_file_into_observed(
+        &self,
+        name: &OsStr,
+        original: &mut Option<File>,
+        after_create: impl FnOnce(&File) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let name = checked_name(name)?;
+        if original.is_some() {
+            return Err(invalid("private creator requires an empty original slot"));
+        }
+        self.inner.create_private_file_into(name, original)?;
+        let file = original
+            .as_ref()
+            .ok_or_else(|| io::Error::other("missing created original"))?;
+        after_create(file)?;
+        FileSnapshot::private_journal(file)?;
+        self.require_same_lock(name, file)?;
+        file.sync_all()?;
+        self.sync()?;
+        self.require_same_lock(name, file)?;
+        FileSnapshot::private_journal(file).map(drop)
     }
 
     /// Complete this directory's native publication durability boundary.
@@ -1654,6 +1847,8 @@ pub struct RetainedFile {
 #[derive(Debug)]
 pub struct RetainedBuildInput {
     inner: platform::RetainedFile,
+    #[cfg(any(windows, target_os = "linux", target_os = "android"))]
+    path: PathBuf,
 }
 
 impl RetainedBuildInput {
@@ -1672,6 +1867,8 @@ impl RetainedBuildInput {
         )?;
         Ok(Self {
             inner: directory.open_build_input(name)?,
+            #[cfg(any(windows, target_os = "linux", target_os = "android"))]
+            path,
         })
     }
 
@@ -1823,6 +2020,16 @@ impl SelectedRegularFile {
 }
 
 impl RetainedFile {
+    /// Require this retained Windows file to belong to the effective user.
+    ///
+    /// This narrows the regular reader's accepted system-or-user owner policy.
+    /// # Errors
+    /// Refuses foreign ownership, changed source custody and native security-query errors.
+    #[cfg(windows)]
+    pub fn require_current_owner(&self) -> io::Result<()> {
+        self.inner.require_current_owner()
+    }
+
     /// Open an existing regular source for read-only streaming.
     ///
     /// # Errors
@@ -2184,7 +2391,13 @@ mod admitted_read_tests;
 mod optional_read_tests;
 
 #[cfg(test)]
+mod optional_retained_regular_tests;
+
+#[cfg(test)]
 mod optional_child_tests;
+
+#[cfg(test)]
+mod reader_optional_tests;
 
 #[cfg(test)]
 mod tree_read_producer_tests;
@@ -2200,3 +2413,8 @@ mod owner_atomic_tests;
 
 #[cfg(all(test, unix))]
 mod custody_transaction_tests;
+
+#[cfg(unix)]
+pub use platform::inherit_descriptors;
+
+mod build_input_command;

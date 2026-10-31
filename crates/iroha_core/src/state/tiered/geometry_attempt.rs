@@ -1,18 +1,21 @@
 //! Retained ownership of the exact filesystem operations for one lane transition.
 
 use super::*;
+#[cfg(not(windows))]
 use crate::secure_file_metadata::{self, SecureMetadata};
 use std::{
     io::ErrorKind,
     sync::{Arc, OnceLock},
 };
 
+#[cfg(not(windows))]
 #[derive(Debug)]
 struct Directory {
     file: fs::File,
     identity: SecureMetadata,
 }
 
+#[cfg(not(windows))]
 impl Directory {
     fn capture(path: &Path) -> Result<Self> {
         let before = secure_file_metadata::from_path(path)?;
@@ -55,14 +58,6 @@ fn same_identity(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
-#[cfg(windows)]
-fn same_identity(left: &SecureMetadata, right: &SecureMetadata) -> bool {
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-
 #[cfg(not(any(unix, windows)))]
 fn same_identity(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
     false
@@ -82,21 +77,52 @@ fn open_directory(path: &Path) -> std::io::Result<fs::File> {
     .map_err(std::io::Error::from)
 }
 
-#[cfg(windows)]
-fn open_directory(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(0x0200_0000 | 0x0020_0000)
-        .open(path)
-}
-
 #[cfg(not(any(unix, windows)))]
 fn open_directory(_path: &Path) -> std::io::Result<fs::File> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
         "tiered geometry requires stable directory identities",
     ))
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct Directory {
+    // An exclusive native create installs its original here before any fallible postcheck.
+    // Cloning the capability borrows the same Arc-owned original, never a reopened name.
+    native: std::sync::Mutex<Option<iroha_fs::DirectoryMutation>>,
+}
+
+#[cfg(windows)]
+impl Directory {
+    fn pending() -> Self {
+        Self {
+            native: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn capture(path: &Path) -> Result<Self> {
+        Ok(Self {
+            native: std::sync::Mutex::new(Some(iroha_fs::DirectoryMutation::open(path)?)),
+        })
+    }
+
+    fn original(&self) -> Result<iroha_fs::DirectoryMutation> {
+        self.native
+            .lock()
+            .map_err(|_| eyre::eyre!("tiered-state: directory owner poisoned"))?
+            .clone()
+            .ok_or_else(|| eyre::eyre!("tiered-state: directory creation has no original yet"))
+    }
+
+    fn authenticate(&self, path: &Path) -> Result<()> {
+        self.original()?.require_at(path).wrap_err_with(|| {
+            format!(
+                "tiered-state: original directory was replaced or custody changed at {}",
+                path.display()
+            )
+        })
+    }
 }
 
 // A planned directory has one assignment, performed immediately after its mkdir.
@@ -111,6 +137,29 @@ fn directory(reference: &DirectoryRef) -> Result<&Directory> {
     reference.get().ok_or_else(|| {
         eyre::eyre!("tiered-state: directory creation requires recovery before publication")
     })
+}
+
+// A failed native create can leave the assigned cell with an empty original slot. It has
+// no filesystem effect yet and must remain retryable, including during root authentication.
+#[cfg_attr(
+    not(windows),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Windows retained slots require fallible mutex admission"
+    )
+)]
+fn directory_captured(reference: &DirectoryRef) -> Result<bool> {
+    #[cfg(not(windows))]
+    return Ok(reference.get().is_some());
+    #[cfg(windows)]
+    match reference.get() {
+        Some(directory) => Ok(directory
+            .native
+            .lock()
+            .map_err(|_| eyre::eyre!("tiered-state: directory owner poisoned"))?
+            .is_some()),
+        None => Ok(false),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +178,11 @@ impl Parent {
     fn sync(&self, faults: &mut SyncFault) -> Result<()> {
         let owned = self.authenticate()?;
         faults.before_sync()?;
-        owned.file.sync_all().wrap_err_with(|| {
+        #[cfg(not(windows))]
+        let result = owned.file.sync_all();
+        #[cfg(windows)]
+        let result = owned.original()?.sync_at(&self.path);
+        result.wrap_err_with(|| {
             format!(
                 "failed to sync tiered geometry directory {}",
                 self.path.display()
@@ -182,13 +235,33 @@ impl Operation {
                 if self.phase == OperationPhase::Pending {
                     let parent_directory = parent.authenticate()?;
                     ensure_absent(path)?;
-                    create_directory_at(&parent_directory.file, leaf(path)?)?;
-                    // Remember that mkdir succeeded even if custody acquisition fails.
-                    // Such a failure cannot justify adopting a later same-name object.
-                    self.phase = OperationPhase::Changed;
-                    created.set(Directory::capture(path)?).map_err(|_| {
-                        eyre::eyre!("tiered-state: directory custody was already assigned")
-                    })?;
+                    #[cfg(not(windows))]
+                    {
+                        create_directory_at(&parent_directory.file, leaf(path)?)?;
+                        // Remember that mkdir succeeded even if custody acquisition fails.
+                        // Such a failure cannot justify adopting a later same-name object.
+                        self.phase = OperationPhase::Changed;
+                        created.set(Directory::capture(path)?).map_err(|_| {
+                            eyre::eyre!("tiered-state: directory custody was already assigned")
+                        })?;
+                    }
+                    #[cfg(windows)]
+                    {
+                        let pending = created.get_or_init(Directory::pending);
+                        let mut slot = pending
+                            .native
+                            .lock()
+                            .map_err(|_| eyre::eyre!("tiered-state: directory owner poisoned"))?;
+                        let result = parent_directory
+                            .original()?
+                            .create_child_into(path, &mut slot);
+                        if slot.is_some() {
+                            // Native creation installed the same original before its first
+                            // postcheck. Even an error must resume validation, never mkdir again.
+                            self.phase = OperationPhase::Changed;
+                        }
+                        result?;
+                    }
                 }
                 if self.phase == OperationPhase::Changed {
                     directory(created)?.authenticate(path)?;
@@ -208,8 +281,26 @@ impl Operation {
                     let to = target_parent.authenticate()?;
                     directory(original)?.authenticate(source)?;
                     ensure_absent(target)?;
-                    rename_directory_at(&from.file, leaf(source)?, &to.file, leaf(target)?)?;
-                    self.phase = OperationPhase::Changed;
+                    #[cfg(not(windows))]
+                    {
+                        rename_directory_at(&from.file, leaf(source)?, &to.file, leaf(target)?)?;
+                        self.phase = OperationPhase::Changed;
+                    }
+                    #[cfg(windows)]
+                    {
+                        let mut published = false;
+                        let result = directory(original)?.original()?.rename_no_replace(
+                            &from.original()?,
+                            source,
+                            &to.original()?,
+                            target,
+                            &mut published,
+                        );
+                        if published {
+                            self.phase = OperationPhase::Changed;
+                        }
+                        result?;
+                    }
                 }
                 if matches!(
                     self.phase,
@@ -259,10 +350,28 @@ impl Operation {
                     let parent_directory = parent.authenticate()?;
                     directory(created)?.authenticate(path)?;
                     // remove_dir refuses populated replacements; never recursively delete.
-                    remove_directory_at(&parent_directory.file, leaf(path)?)?;
-                    self.phase = OperationPhase::Reversed;
+                    #[cfg(not(windows))]
+                    {
+                        remove_directory_at(&parent_directory.file, leaf(path)?)?;
+                        self.phase = OperationPhase::Reversed;
+                    }
+                    #[cfg(windows)]
+                    {
+                        let mut removed = false;
+                        let result = directory(created)?.original()?.remove_empty(
+                            &parent_directory.original()?,
+                            path,
+                            &mut removed,
+                        );
+                        if removed {
+                            self.phase = OperationPhase::Reversed;
+                        }
+                        result?;
+                    }
                 }
                 if self.phase == OperationPhase::Reversed {
+                    #[cfg(windows)]
+                    directory(created)?.original()?.require_removed()?;
                     ensure_absent(path)?;
                     parent.sync(faults)?;
                     self.phase = OperationPhase::RolledBack;
@@ -285,8 +394,26 @@ impl Operation {
                     let to = source_parent.authenticate()?;
                     directory(original)?.authenticate(target)?;
                     ensure_absent(source)?;
-                    rename_directory_at(&from.file, leaf(target)?, &to.file, leaf(source)?)?;
-                    self.phase = OperationPhase::Reversed;
+                    #[cfg(not(windows))]
+                    {
+                        rename_directory_at(&from.file, leaf(target)?, &to.file, leaf(source)?)?;
+                        self.phase = OperationPhase::Reversed;
+                    }
+                    #[cfg(windows)]
+                    {
+                        let mut published = false;
+                        let result = directory(original)?.original()?.rename_no_replace(
+                            &from.original()?,
+                            target,
+                            &to.original()?,
+                            source,
+                            &mut published,
+                        );
+                        if published {
+                            self.phase = OperationPhase::Reversed;
+                        }
+                        result?;
+                    }
                 }
                 if matches!(
                     self.phase,
@@ -367,7 +494,7 @@ fn rename_directory_at(
     .map_err(std::io::Error::from)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn create_directory_at(_parent: &fs::File, _name: &std::ffi::OsStr) -> std::io::Result<()> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
@@ -375,7 +502,7 @@ fn create_directory_at(_parent: &fs::File, _name: &std::ffi::OsStr) -> std::io::
     ))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn remove_directory_at(_parent: &fs::File, _name: &std::ffi::OsStr) -> std::io::Result<()> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
@@ -384,6 +511,7 @@ fn remove_directory_at(_parent: &fs::File, _name: &std::ffi::OsStr) -> std::io::
 }
 
 #[cfg(not(any(
+    windows,
     target_vendor = "apple",
     target_os = "linux",
     target_os = "android",
@@ -471,7 +599,7 @@ impl TieredGeometryAttempt {
                 matches!(&operation.kind, OperationKind::Create { path, .. } if path == &root.resolved)
                     && matches!(operation.phase, OperationPhase::Reversed | OperationPhase::RolledBack)
             });
-            if removed || root.directory.get().is_none() {
+            if removed || !directory_captured(&root.directory)? {
                 ensure_absent(&root.resolved)?;
             } else {
                 directory(&root.directory)?.authenticate(&root.resolved)?;
@@ -591,7 +719,7 @@ impl Plan {
     fn existing_anchor(&mut self, path: &Path) -> Result<Parent> {
         for ancestor in path.ancestors().skip(1) {
             if let Some(directory) = self.lookup(ancestor)?
-                && directory.get().is_some()
+                && directory_captured(&directory)?
             {
                 return Ok(Parent {
                     path: ancestor.to_path_buf(),

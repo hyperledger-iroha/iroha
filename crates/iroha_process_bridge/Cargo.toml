@@ -1,0 +1,25 @@
+[package]
+name = "iroha_process_bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded native process interoperability with retained original ownership"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+iroha_fs.workspace = true
+norito = { workspace = true, default-features = false, features = ["json"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.177"

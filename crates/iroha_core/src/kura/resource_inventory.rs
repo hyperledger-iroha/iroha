@@ -16,7 +16,7 @@ pub(crate) enum Family {
     ResidentTransaction,
     /// Authenticated lane/config storage entries.
     ResidentFrontier,
-    /// Actual pipeline/FASTPQ queue records, including requeued retries.
+    /// Actual pipeline/FASTPQ queue records and persistent native transaction retries.
     /// Drained local work and payload internals are RSS, not queue associations.
     ResidentQueue,
     /// Canonical fixed-width block index slots.

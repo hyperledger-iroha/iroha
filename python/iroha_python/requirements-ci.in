@@ -10,6 +10,8 @@
 #     python/iroha_python/requirements-ci.in
 
 blake3==1.0.9
+# pytest's Windows console dependency must remain pinned in the hashed CI gate.
+colorama==0.4.6 ; sys_platform == "win32"
 cryptography==50.0.1
 maturin==1.14.1
 pytest==8.4.2

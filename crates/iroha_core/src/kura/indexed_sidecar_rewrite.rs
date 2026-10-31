@@ -1,5 +1,6 @@
 // Indexed-sidecar retention and crash-safe rewrite support.
 impl Kura {
+    #[cfg(not(windows))]
     fn prune_indexed_sidecars(
         data_path: &Path,
         index_path: &Path,
@@ -10,6 +11,7 @@ impl Kura {
             data_path, index_path, retention, None, kind,
         )
     }
+    #[cfg(not(windows))]
     fn prune_indexed_sidecars_with_pinned_height(
         data_path: &Path,
         index_path: &Path,
@@ -28,6 +30,7 @@ impl Kura {
         )
     }
     #[cfg(test)]
+    #[cfg(not(windows))]
     fn prune_indexed_sidecars_to_retention_window(
         data_path: &Path,
         index_path: &Path,
@@ -48,6 +51,7 @@ impl Kura {
         )
     }
     #[cfg(test)]
+    #[cfg(not(windows))]
     fn prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
         data_path: &Path,
         index_path: &Path,
@@ -79,6 +83,7 @@ impl Kura {
         )
     }
     #[cfg(test)]
+    #[cfg(not(windows))]
     fn prune_indexed_sidecars_through_terminal_frontier(
         data_path: &Path,
         index_path: &Path,
@@ -96,13 +101,32 @@ impl Kura {
         )
     }
     #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
+    #[cfg(not(windows))]
     fn rewrite_indexed_sidecars(
         data_path: &Path,
         index_path: &Path,
         rewrite: IndexedSidecarRewrite<'_>,
         kind: &str,
     ) -> bool {
-        let mut index = match std::fs::File::open(index_path) {
+        let mut storage = PathSidecarRewrite {
+            data_path,
+            index_path,
+            kind,
+        };
+        Self::rewrite_indexed_sidecars_with_io(data_path, index_path, rewrite, kind, &mut storage)
+    }
+
+    // The selection, validation, entry transformation and payload emission body is
+    // shared by real path storage and the native retained transaction backend.
+    #[allow(clippy::too_many_lines)]
+    fn rewrite_indexed_sidecars_with_io(
+        data_path: &Path,
+        index_path: &Path,
+        rewrite: IndexedSidecarRewrite<'_>,
+        kind: &str,
+        storage: &mut impl IndexedSidecarRewriteIo,
+    ) -> bool {
+        let mut index = match storage.open_index() {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
@@ -398,7 +422,7 @@ impl Kura {
             // unchanged window too, so crash controls reach the real temporary
             // write and promotion barriers rather than an earlier no-op.
         }
-        let mut data = match std::fs::File::open(data_path) {
+        let mut data = match storage.open_data() {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
@@ -455,7 +479,7 @@ impl Kura {
         // `*.norito` and `*.index` into the same `*.tmp` filename.
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
-        let mut new_data = match std::fs::File::create(&temp_data_path) {
+        let mut new_data = match storage.create_data() {
             Ok(file) => BufWriter::new(file),
             Err(err) => {
                 iroha_logger::warn!(
@@ -467,7 +491,7 @@ impl Kura {
                 return false;
             }
         };
-        let mut new_index = match std::fs::File::create(&temp_index_path) {
+        let mut new_index = match storage.create_index() {
             Ok(file) => BufWriter::new(file),
             Err(err) => {
                 iroha_logger::warn!(
@@ -710,143 +734,8 @@ impl Kura {
         drop(new_index);
         drop(data);
         drop(index);
-        // Make both temp directory entries durable before the first promotion. The temp index is
-        // the recovery marker if the process crashes after publishing the new data file but before
-        // publishing its matching index.
-        let Some(data_parent) = temp_data_path.parent() else {
-            iroha_logger::warn!(?temp_data_path, kind, "sidecar temp data has no parent");
+        if !storage.publish() {
             return false;
-        };
-        if let Err(err) = sync_sidecar_temp_marker_dir(data_parent) {
-            iroha_logger::warn!(
-                ?err,
-                ?data_parent,
-                kind,
-                "failed to sync sidecar temp recovery marker before prune promotion"
-            );
-            return false;
-        }
-        if let Some(index_parent) = temp_index_path.parent()
-            && index_parent != data_parent
-            && let Err(err) = sync_sidecar_temp_marker_dir(index_parent)
-        {
-            iroha_logger::warn!(
-                ?err,
-                ?index_parent,
-                kind,
-                "failed to sync sidecar temp index recovery marker before prune promotion"
-            );
-            return false;
-        }
-        if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                if let Err(remove_err) = std::fs::remove_file(data_path) {
-                    iroha_logger::warn!(
-                        ?remove_err,
-                        ?data_path,
-                        kind,
-                        "failed to remove sidecar store before pruned replace"
-                    );
-                    return false;
-                }
-                if let Err(rename_err) = std::fs::rename(&temp_data_path, data_path) {
-                    iroha_logger::warn!(
-                        ?rename_err,
-                        ?temp_data_path,
-                        ?data_path,
-                        kind,
-                        "failed to replace sidecar store after removal"
-                    );
-                    return false;
-                }
-            } else {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_data_path,
-                    ?data_path,
-                    kind,
-                    "failed to replace sidecar store with pruned data"
-                );
-                let _ = std::fs::remove_file(&temp_data_path);
-                let _ = std::fs::remove_file(&temp_index_path);
-                return false;
-            }
-        }
-        // The data rename must be stable before the index rename can become visible. This barrier
-        // rules out a recovered state with a new index pointing into the old data file.
-        if let Err(err) = sync_sidecar_promotion_dir(data_parent) {
-            iroha_logger::warn!(
-                ?err,
-                ?data_parent,
-                kind,
-                "failed to sync pruned sidecar data before index promotion"
-            );
-            return false;
-        }
-        if let Err(err) = std::fs::rename(&temp_index_path, index_path) {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                if let Err(remove_err) = std::fs::remove_file(index_path) {
-                    iroha_logger::warn!(
-                        ?remove_err,
-                        ?index_path,
-                        kind,
-                        "failed to remove sidecar index before pruned replace"
-                    );
-                    return false;
-                }
-                if let Err(rename_err) = std::fs::rename(&temp_index_path, index_path) {
-                    iroha_logger::warn!(
-                        ?rename_err,
-                        ?temp_index_path,
-                        ?index_path,
-                        kind,
-                        "failed to replace sidecar index after removal"
-                    );
-                    iroha_logger::warn!(
-                        ?temp_index_path,
-                        kind,
-                        "leaving temp index for sidecar recovery"
-                    );
-                    return false;
-                }
-            } else {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_index_path,
-                    ?index_path,
-                    kind,
-                    "failed to replace sidecar index with pruned entries"
-                );
-                let _ = std::fs::remove_file(&temp_data_path);
-                iroha_logger::warn!(
-                    ?temp_index_path,
-                    kind,
-                    "leaving temp index for sidecar recovery"
-                );
-                return false;
-            }
-        }
-        if let Some(parent) = data_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
-        }
-        if let Some(parent) = index_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
         }
         let retained = match rewrite {
             #[cfg(test)]

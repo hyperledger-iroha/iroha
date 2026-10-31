@@ -85,7 +85,7 @@ fn complete(
     }
     panic!("bounded fixture source did not complete");
 }
-fn source_file(chain: &CertifiedTestChain, height: u64) -> File {
+fn source_file(chain: &CertifiedTestChain, height: u64) -> ArchiveFile {
     let root = chain.kura().native_context_archive_root().unwrap();
     let directory =
         open_archive_directory_named(&root, Kura::fastpq_source_namespace(), false).unwrap();
@@ -113,6 +113,29 @@ fn rewrite_source(chain: &CertifiedTestChain, height: u64, bytes: &[u8]) {
     );
     file.write_all(bytes).unwrap();
     file.sync_all().unwrap();
+}
+
+#[cfg(windows)]
+fn source_directory_owner(original: &ArchiveDirectory) -> iroha_fs::OwnerDirectory {
+    let ArchiveDirectory::Owner(owner) = original else {
+        panic!("source fault fixture requires the retained original writer")
+    };
+    owner.retain().unwrap()
+}
+
+#[cfg(windows)]
+fn rewrite_source(chain: &CertifiedTestChain, height: u64, bytes: &[u8]) {
+    let root = chain.kura().native_context_archive_root().unwrap();
+    let directory =
+        open_archive_directory_named(&root, Kura::fastpq_source_namespace(), false).unwrap();
+    let owner = source_directory_owner(&directory);
+    let name = RecordName::fastpq(height, chain.committed(height).block_hash(), false);
+    // This is explicit local-disk corruption in a test. Keep the production reader's
+    // admission and authentication assertions; publish through the canonical owner.
+    owner
+        .write_atomic(name.as_str(), bytes, iroha_fs::PublishMode::Replace)
+        .unwrap();
+    owner.revalidate().unwrap();
 }
 
 #[test]
@@ -271,6 +294,7 @@ fn concrete_source_backing_refusal_keeps_original_bytes_and_cannot_be_relabelled
 
 #[test]
 fn absent_original_tape_stays_unresolved_until_the_same_record_is_available() {
+    #[cfg(unix)]
     use rustix::fs::{AtFlags, Mode, OFlags};
     let (mut chain, asset) = fixture();
     transfer(&mut chain, &asset, 2_000);
@@ -280,7 +304,12 @@ fn absent_original_tape_stays_unresolved_until_the_same_record_is_available() {
     let name = RecordName::fastpq(2, chain.committed(2).block_hash(), false);
     let mut original = Vec::new();
     source_file(&chain, 2).read_to_end(&mut original).unwrap();
+    #[cfg(unix)]
     rustix::fs::unlinkat(&directory, name.as_str(), AtFlags::empty()).unwrap();
+    #[cfg(windows)]
+    let owner = source_directory_owner(&directory);
+    #[cfg(windows)]
+    assert!(owner.remove_private(name.as_str()).unwrap());
     let pool = AllocationBudget::new(16 * 1024 * 1024);
     let mut read = reader(&chain, 2, &pool);
     for _ in 0..2 {
@@ -299,18 +328,25 @@ fn absent_original_tape_stays_unresolved_until_the_same_record_is_available() {
         );
         assert!(read.decoded.is_none());
     }
-    let mut file = File::from(
-        rustix::fs::openat(
-            &directory,
-            name.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        )
-        .unwrap(),
-    );
-    file.write_all(&original).unwrap();
-    file.sync_all().unwrap();
-    directory.sync_all().unwrap();
+    #[cfg(unix)]
+    {
+        let mut file = File::from(
+            rustix::fs::openat(
+                &directory,
+                name.as_str(),
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            )
+            .unwrap(),
+        );
+        file.write_all(&original).unwrap();
+        file.sync_all().unwrap();
+        directory.sync_all().unwrap();
+    }
+    #[cfg(windows)]
+    owner
+        .write_atomic(name.as_str(), &original, iroha_fs::PublishMode::CreateNew)
+        .unwrap();
     let source = complete(&mut read).unwrap();
     assert_eq!(source.native().committed().height(), 2);
     assert_eq!(
@@ -323,7 +359,6 @@ fn absent_original_tape_stays_unresolved_until_the_same_record_is_available() {
 }
 
 #[test]
-#[cfg(unix)]
 fn optional_artifact_store_refusal_cannot_strand_actual_paid_native_publication() {
     let (mut chain, asset) = fixture();
     // Occupy one canonical source file beyond its local artifact object cap. The
@@ -353,6 +388,16 @@ fn optional_artifact_store_refusal_cannot_strand_actual_paid_native_publication(
         writable.sync_all().unwrap();
     }
     drop(file);
+    #[cfg(windows)]
+    {
+        let owner = source_directory_owner(&directory);
+        let writable = owner.open_existing_lock(name.as_str()).unwrap();
+        writable
+            .set_len(chain.kura().fastpq_object_max_bytes().get() as u64 + 1)
+            .unwrap();
+        writable.sync_all().unwrap();
+        owner.require_same_lock(name.as_str(), &writable).unwrap();
+    }
     assert!(chain.kura().fastpq_source_archive_root().is_err());
     transfer(&mut chain, &asset, 2_000);
     assert_eq!(
@@ -373,7 +418,7 @@ fn optional_artifact_store_refusal_cannot_strand_actual_paid_native_publication(
     );
 }
 
-fn source_file_if_present(chain: &CertifiedTestChain, height: u64) -> io::Result<File> {
+fn source_file_if_present(chain: &CertifiedTestChain, height: u64) -> io::Result<ArchiveFile> {
     let root = chain
         .kura()
         .native_context_archive_root()
@@ -386,8 +431,8 @@ fn source_file_if_present(chain: &CertifiedTestChain, height: u64) -> io::Result
 }
 
 #[test]
-#[cfg(unix)]
 fn actual_empty_genesis_manifest_advances_without_optional_tape() {
+    #[cfg(unix)]
     use rustix::fs::AtFlags;
     let (mut chain, asset) = fixture();
     transfer(&mut chain, &asset, 2_000);
@@ -395,7 +440,14 @@ fn actual_empty_genesis_manifest_advances_without_optional_tape() {
     let directory =
         open_archive_directory_named(&root, Kura::fastpq_source_namespace(), false).unwrap();
     let name = RecordName::fastpq(1, chain.committed(1).block_hash(), false);
+    #[cfg(unix)]
     rustix::fs::unlinkat(&directory, name.as_str(), AtFlags::empty()).unwrap();
+    #[cfg(windows)]
+    assert!(
+        source_directory_owner(&directory)
+            .remove_private(name.as_str())
+            .unwrap()
+    );
     let pool = AllocationBudget::new(16 * 1024 * 1024);
     let mut read = reader(&chain, 1, &pool);
     let source = complete(&mut read).unwrap();

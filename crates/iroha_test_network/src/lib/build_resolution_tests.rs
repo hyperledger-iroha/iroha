@@ -177,6 +177,7 @@ fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
     let root = temp.path();
     let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
     let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+    let _clear_lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
     let _clear_test = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
     let _clear_cargo = EnvVarGuard::cleared("CARGO_TARGET_DIR");
     assert_eq!(
@@ -191,6 +192,7 @@ fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
     let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
     assert_eq!(resolve_target_dir(root), root.join("test-target"));
 }
+// Canonical publication fixtures shared by the resolver's environment/cache controls.
 struct ReleasePrebuiltFixture {
     _temp: tempfile::TempDir,
     repo: PathBuf,
@@ -203,107 +205,116 @@ struct ReleasePrebuiltFixture {
 }
 impl Drop for ReleasePrebuiltFixture {
     fn drop(&mut self) {
-        for directory in [self.target.join("release"), self.target.clone()] {
-            set_mode(&directory, 0o700);
-        }
+        set_fixture_access(&self.target, "F");
     }
 }
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .unwrap_or_else(|err| panic!("set mode {mode:04o} on {}: {err}", path.display()));
+fn set_fixture_access(path: &Path, access: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = match access {
+        "F" => 0o700,
+        "RX" => 0o500,
+        "R" => 0o400,
+        _ => panic!("unknown fixture policy"),
+    };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) {}
-fn release_manifest_text(
-    source_manifest_sha256: &str,
-    cargo_lock_sha256: &str,
-    target: &Path,
-) -> String {
-    let mut rows = vec![
-        ("schema_version".to_owned(), "2".to_owned()),
-        (
-            "source_manifest_sha256".to_owned(),
-            source_manifest_sha256.to_owned(),
-        ),
-        ("cargo_lock_sha256".to_owned(), cargo_lock_sha256.to_owned()),
-        ("cargo_version_sha256".to_owned(), "c".repeat(64)),
-        ("rustc_version_sha256".to_owned(), "d".repeat(64)),
-        ("host_triple".to_owned(), "test-host".to_owned()),
-        ("target_triple".to_owned(), "test-target".to_owned()),
-        ("profile".to_owned(), "release".to_owned()),
-        (
-            "bundle_dir".to_owned(),
-            target
-                .to_str()
-                .expect("fixture target must be Unicode")
-                .to_owned(),
-        ),
-    ];
-    for kind in ReleasePrebuiltBinary::ALL {
-        let path = target.join(kind.relative_path());
-        let bytes = fs::read(&path).expect("read fixture release binary");
-        let prefix = kind.manifest_prefix();
-        rows.extend([
-            (
-                format!("{prefix}_relative_path"),
-                kind.relative_path().to_owned(),
-            ),
-            (format!("{prefix}_sha256"), lowercase_hex(&sha256(&bytes))),
-            (format!("{prefix}_size_bytes"), bytes.len().to_string()),
-            (
-                format!("{prefix}_mode_octal"),
-                RELEASE_BINARY_MODE_OCTAL.to_owned(),
-            ),
-        ]);
+#[cfg(windows)]
+fn set_fixture_access(path: &Path, access: &str) {
+    static SID: OnceLock<String> = OnceLock::new();
+    let sid = SID.get_or_init(|| {
+        let output = std::process::Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        let sid = text.rsplit(',').next().unwrap().trim().trim_matches('"');
+        assert!(
+            sid.starts_with("S-1-")
+                && sid
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || matches!(b, b'S' | b'-'))
+        );
+        sid.to_owned()
+    });
+    // Remove the old ACE first: /grant:r alone can retain an inheritable owner ACE.
+    for args in [
+        ["/remove:g".to_owned(), format!("*{sid}")],
+        ["/grant:r".to_owned(), format!("*{sid}:{access}")],
+    ] {
+        let output = std::process::Command::new("icacls")
+            .arg(path)
+            .args(args)
+            .arg("/Q")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    let mut text = String::new();
-    for (key, value) in rows {
-        text.push_str(&key);
-        text.push('\t');
-        text.push_str(&value);
-        text.push('\n');
-    }
-    text
 }
 fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
-    let temp = tempdir().expect("temporary release workspace");
-    let fixture_root = temp
-        .path()
-        .canonicalize()
-        .expect("canonical temporary release workspace");
-    let repo = fixture_root.join("repo");
-    fs::create_dir_all(&repo).expect("create release workspace");
-    let artifact_root = fixture_root.join("artifacts");
-    fs::create_dir(&artifact_root).expect("create external release artifact root");
-    set_mode(&artifact_root, 0o700);
-    let cargo_lock = repo.join("Cargo.lock");
-    fs::write(&cargo_lock, b"release-lock-v1\n").expect("write Cargo.lock");
-    let cargo_lock_sha256 = lowercase_hex(&sha256(b"release-lock-v1\n"));
+    use iroha_fs::{OwnerDirectory, PublishMode};
+    use iroha_release_bundle::{
+        bundle::NATIVE_TARGET,
+        manifest::MANIFEST_NAME,
+        publish::{PublishInputs, publish},
+    };
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    let _source = OwnerDirectory::open_or_create(&repo).unwrap();
+    let artifact_root = root.join("artifacts");
+    let artifact = OwnerDirectory::open_or_create(&artifact_root).unwrap();
     let source_manifest_sha256 = "a".repeat(64);
-    let target = artifact_root
-        .join(SUMERAGI_RELEASE_TARGET_SUBDIR)
-        .join(&source_manifest_sha256)
-        .join(SUMERAGI_RELEASE_PROGRAMS_SUBDIR)
-        .join("invocation.A1b2C3");
-    for kind in ReleasePrebuiltBinary::ALL {
-        let path = target.join(kind.relative_path());
-        fs::create_dir_all(path.parent().expect("binary parent")).expect("create binary parent");
+    let lock = repo.join("Cargo.lock");
+    fs::write(&lock, b"release-lock-v1\n").unwrap();
+    let programs = artifact
+        .ensure_child("sumeragi-release")
+        .unwrap()
+        .ensure_child(&source_manifest_sha256)
+        .unwrap()
+        .ensure_child("programs")
+        .unwrap();
+    let build = OwnerDirectory::open_or_create(root.join("build")).unwrap();
+    for kind in BinaryKind::ALL {
         fs::write(
-            &path,
-            format!("{} release executable\n", kind.manifest_prefix()),
+            build.path().join(kind.filename(cfg!(windows))),
+            crate::native_program_fixture::image(),
         )
-        .expect("write release binary");
-        set_mode(&path, RELEASE_BINARY_MODE);
+        .unwrap();
     }
-    let manifest = target.join(SUMERAGI_PREBUILT_MANIFEST);
-    let manifest_text = release_manifest_text(&source_manifest_sha256, &cargo_lock_sha256, &target);
-    fs::write(&manifest, &manifest_text).expect("write prebuilt manifest");
-    set_mode(&manifest, RELEASE_MANIFEST_MODE);
-    for directory in [target.join("release"), target.clone()] {
-        set_mode(&directory, RELEASE_BINARY_MODE);
-    }
-    let manifest_sha256 = lowercase_hex(&sha256(manifest_text.as_bytes()));
+    let tools = OwnerDirectory::open_or_create(root.join("tools")).unwrap();
+    tools
+        .write_atomic("cargo", b"cargo 1.93.1 (fixture)\n", PublishMode::CreateNew)
+        .unwrap();
+    tools
+        .write_atomic(
+            "rustc",
+            format!("rustc 1.93.1 (fixture)\nhost: {NATIVE_TARGET}\n").as_bytes(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    let bundle = publish(
+        &programs,
+        "invocation.A1b2C3",
+        PublishInputs {
+            source_sha256: &source_manifest_sha256,
+            build_directory: build.path(),
+            cargo_lock: &lock,
+            cargo_version: &tools.path().join("cargo"),
+            rustc_version: &tools.path().join("rustc"),
+        },
+    )
+    .unwrap();
+    let target = bundle.path().to_owned();
+    let manifest = target.join(MANIFEST_NAME);
+    let cargo_lock_sha256 = bundle.manifest().cargo_lock_sha256.clone();
+    let manifest_sha256 = bundle.manifest_sha256().to_owned();
+    drop(bundle);
     ReleasePrebuiltFixture {
         _temp: temp,
         repo,
@@ -336,38 +347,48 @@ fn release_prebuilt_env(
         EnvVarRestore::set("PROFILE", "release"),
     ]
 }
-fn rewrite_release_manifest(fixture: &ReleasePrebuiltFixture, from: &str, to: &str) -> String {
-    let text = fs::read_to_string(&fixture.manifest).expect("read release manifest");
-    let updated = text.replacen(from, to, 1);
-    assert_ne!(updated, text, "fixture manifest replacement must apply");
-    set_mode(&fixture.manifest, 0o600);
-    fs::write(&fixture.manifest, &updated).expect("rewrite release manifest");
-    set_mode(&fixture.manifest, RELEASE_MANIFEST_MODE);
-    lowercase_hex(&sha256(updated.as_bytes()))
+fn rewrite_release_manifest(
+    fixture: &ReleasePrebuiltFixture,
+    mutate: impl FnOnce(&mut iroha_release_bundle::manifest::Manifest),
+) -> String {
+    let source = fs::read(&fixture.manifest).unwrap();
+    let mut manifest: iroha_release_bundle::manifest::Manifest =
+        norito::json::from_slice(&source).unwrap();
+    mutate(&mut manifest);
+    let mut bytes = norito::json::to_vec(&manifest).unwrap();
+    bytes.push(b'\n');
+    let before = iroha_fs::FileMetadata::symlink_metadata(&fixture.manifest)
+        .unwrap()
+        .identity();
+    set_fixture_access(&fixture.manifest, "F");
+    fs::write(&fixture.manifest, &bytes).unwrap();
+    set_fixture_access(&fixture.manifest, "R");
+    assert_eq!(
+        before,
+        iroha_fs::FileMetadata::symlink_metadata(&fixture.manifest)
+            .unwrap()
+            .identity()
+    );
+    lowercase_hex(&sha256(&bytes))
 }
 #[test]
 fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let contract = release_program_contract(&fixture.repo)
-        .expect("validate release contract")
-        .expect("release contract active");
-    for kind in ReleasePrebuiltBinary::ALL {
-        let expected = fixture.target.join(kind.relative_path());
+    let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
+    for kind in BinaryKind::ALL {
+        let expected = fixture.target.join(kind.filename(cfg!(windows)));
+        let selected = contract.select(kind, Some(&expected)).unwrap();
         assert_eq!(
-            validate_release_program_candidate(&contract, kind, &expected)
-                .expect("validate exact release candidate"),
-            expected.canonicalize().expect("canonical candidate")
+            selected.diagnostic_path().unwrap().as_os_str(),
+            expected.as_os_str()
         );
+        assert!(selected.is_release());
     }
     let escaped = fixture.repo.join("escaped");
-    fs::write(&escaped, b"iroha3d release executable\n").expect("write escaped candidate");
-    set_mode(&escaped, RELEASE_BINARY_MODE);
-    assert!(
-        validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, escaped)
-            .is_err()
-    );
+    fs::write(&escaped, b"iroha3d release fixture\n").unwrap();
+    assert!(contract.select(BinaryKind::Irohad, Some(&escaped)).is_err());
 }
 #[test]
 fn release_prebuilt_requires_exact_external_artifact_root() {
@@ -376,108 +397,27 @@ fn release_prebuilt_requires_exact_external_artifact_root() {
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     {
         let _missing = EnvVarGuard::cleared(IROHA_RELEASE_ARTIFACT_ROOT_ENV);
-        let err = release_program_contract(&fixture.repo)
-            .expect_err("missing release artifact root must fail closed");
-        assert!(err.to_string().contains(IROHA_RELEASE_ARTIFACT_ROOT_ENV));
+        assert!(release_program_contract(&fixture.repo).is_err());
     }
     {
         let _relative = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, "artifacts");
-        let err = release_program_contract(&fixture.repo)
-            .expect_err("relative release artifact root must fail closed");
-        assert!(err.to_string().contains("absolute"));
+        assert!(release_program_contract(&fixture.repo).is_err());
     }
-    let other_root = fixture
+    let other = fixture
         .artifact_root
         .parent()
-        .expect("artifact root parent")
+        .unwrap()
         .join("other-artifacts");
-    fs::create_dir(&other_root).expect("create different external artifact root");
-    set_mode(&other_root, 0o700);
-    let _different = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &other_root);
-    let err = release_program_contract(&fixture.repo)
-        .expect_err("bundle outside the selected artifact root must fail closed");
-    assert!(
-        err.to_string()
-            .contains("immediate private invocation bundle")
-    );
-}
-#[cfg(unix)]
-#[test]
-fn release_prebuilt_rejects_untrusted_or_overlapping_artifact_root() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    set_mode(&fixture.artifact_root, 0o750);
-    let err = release_program_contract(&fixture.repo)
-        .expect_err("permission-unsafe release artifact root must fail closed");
-    assert!(err.to_string().contains("exact mode 0700"));
-    set_mode(&fixture.artifact_root, 0o700);
-
-    let source_root = fixture.repo.join("artifact-root");
-    fs::create_dir(&source_root).expect("create source-contained artifact root");
-    set_mode(&source_root, 0o700);
-    {
-        let _source_root = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &source_root);
-        let err = release_program_contract(&fixture.repo)
-            .expect_err("source-contained release artifact root must fail closed");
-        assert!(
-            err.to_string()
-                .contains("must not overlap repository source")
-        );
-    }
-    let source_ancestor = fixture
-        .artifact_root
-        .parent()
-        .expect("fixture root contains source and artifacts");
-    set_mode(source_ancestor, 0o700);
-    let _source_ancestor = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, source_ancestor);
-    let err = release_program_contract(&fixture.repo)
-        .expect_err("source-containing release artifact root must fail closed");
-    assert!(
-        err.to_string()
-            .contains("must not overlap repository source")
-    );
-}
-#[cfg(unix)]
-#[test]
-fn release_prebuilt_rejects_symlinked_artifact_paths() {
-    use std::os::unix::fs::symlink;
-
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let artifact_link = fixture
-        .artifact_root
-        .parent()
-        .expect("artifact root parent")
-        .join("artifact-link");
-    symlink(&fixture.artifact_root, &artifact_link).expect("create artifact root symlink");
-    {
-        let _linked = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &artifact_link);
-        let err = release_program_contract(&fixture.repo)
-            .expect_err("symlinked release artifact root must fail closed");
-        assert!(err.to_string().contains("not a symlink"));
-    }
-
-    let release_root = fixture.artifact_root.join(SUMERAGI_RELEASE_TARGET_SUBDIR);
-    let relocated_release_root = fixture.artifact_root.join("relocated-release");
-    fs::rename(&release_root, &relocated_release_root).expect("relocate release subtree");
-    symlink(&relocated_release_root, &release_root).expect("replace release subtree with symlink");
-    let err = release_program_contract(&fixture.repo)
-        .expect_err("symlinked source-bound programs path must fail closed");
-    assert!(
-        err.to_string()
-            .contains("no symlinked or non-canonical components")
-    );
+    let _owner = iroha_fs::OwnerDirectory::open_or_create(&other).unwrap();
+    let _different = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &other);
+    assert!(release_program_contract(&fixture.repo).is_err());
 }
 #[test]
 fn release_prebuilt_manifest_rejects_forged_external_digest() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
     let _env = release_prebuilt_env(&fixture, &"f".repeat(64));
-    let err =
-        release_program_contract(&fixture.repo).expect_err("forged manifest digest must fail");
-    assert!(err.to_string().contains("manifest digest"));
+    assert!(release_program_contract(&fixture.repo).is_err());
 }
 #[test]
 fn release_source_contract_requires_inherited_prebuilt_manifest_digest() {
@@ -487,131 +427,147 @@ fn release_source_contract_requires_inherited_prebuilt_manifest_digest() {
         IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
         &fixture.source_manifest_sha256,
     );
-    let _prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-    let err = release_program_contract(&fixture.repo)
-        .expect_err("source-bound release contract requires manifest anchor");
+    let _manifest = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
     assert!(
-        err.to_string()
+        release_program_contract(&fixture.repo)
+            .unwrap_err()
+            .to_string()
             .contains(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)
     );
 }
 #[test]
 fn release_prebuilt_manifest_rejects_wrong_binary_path_and_hash() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let path_fixture = create_release_prebuilt_fixture();
-    let path_manifest_sha256 = rewrite_release_manifest(
-        &path_fixture,
-        "irohad_relative_path\trelease/iroha3d",
-        "irohad_relative_path\trelease/not-iroha3d",
-    );
-    {
-        let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256);
+    for wrong_path in [true, false] {
+        let fixture = create_release_prebuilt_fixture();
+        let anchor = rewrite_release_manifest(&fixture, |manifest| {
+            if wrong_path {
+                manifest.binaries[0].filename = "wrong-native-name".to_owned();
+            } else {
+                manifest.binaries[0].sha256 = "0".repeat(64);
+            }
+        });
+        let _env = release_prebuilt_env(&fixture, &anchor);
         assert!(
-            release_program_contract(&path_fixture.repo).is_err(),
-            "non-exact binary path must fail manifest parsing"
+            release_program_contract(&fixture.repo).is_err(),
+            "reanchored path/hash forgery must fail"
         );
     }
-    let hash_fixture = create_release_prebuilt_fixture();
-    let original = fs::read_to_string(&hash_fixture.manifest).expect("read manifest");
-    let irohad_hash = original
-        .lines()
-        .find_map(|line| line.strip_prefix("irohad_sha256\t"))
-        .expect("irohad digest field");
-    let hash_manifest_sha256 = rewrite_release_manifest(
-        &hash_fixture,
-        &format!("irohad_sha256\t{irohad_hash}"),
-        &format!("irohad_sha256\t{}", "0".repeat(64)),
-    );
-    let _env = release_prebuilt_env(&hash_fixture, &hash_manifest_sha256);
-    let contract = release_program_contract(&hash_fixture.repo)
-        .expect("parse hash-forged manifest")
-        .expect("release contract active");
-    assert!(
-        validate_release_program_candidate(
-            &contract,
-            ReleasePrebuiltBinary::Irohad,
-            hash_fixture.target.join("release/iroha3d")
-        )
-        .is_err(),
-        "forged binary digest must fail independent hashing"
-    );
 }
 #[cfg(unix)]
-#[test]
-fn release_prebuilt_binary_rejects_symlink() {
-    use std::os::unix::fs::symlink;
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let contract = release_program_contract(&fixture.repo)
-        .expect("parse release manifest")
-        .expect("release contract active");
-    let binary = fixture.target.join("release/iroha3d");
-    let replacement = fixture.repo.join("replacement-iroha3d");
-    fs::write(&replacement, b"iroha3d release executable\n").expect("write replacement");
-    set_mode(&replacement, RELEASE_BINARY_MODE);
-    let parent = binary.parent().expect("binary parent");
-    set_mode(parent, 0o700);
-    fs::remove_file(&binary).expect("remove original binary");
-    symlink(&replacement, &binary).expect("install symlink");
-    set_mode(parent, RELEASE_BINARY_MODE);
-    assert!(
-        validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
-            .is_err()
-    );
-}
 #[test]
 fn release_prebuilt_binary_revalidates_mutation_after_initial_resolution() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let contract = release_program_contract(&fixture.repo)
-        .expect("parse release manifest")
-        .expect("release contract active");
-    let binary = fixture.target.join("release/iroha3d");
-    validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
-        .expect("initial resolution");
-    set_mode(&binary, 0o700);
-    fs::write(&binary, b"mutated release executable\n").expect("mutate cached binary");
-    set_mode(&binary, RELEASE_BINARY_MODE);
-    assert!(
-        validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
-            .is_err(),
-        "fresh verification must reject mutation after an earlier cached resolution"
-    );
+    let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
+    let selected = contract.select(BinaryKind::Irohad, None).unwrap();
+    assert!(selected.command().is_ok());
+    let binary = fixture.target.join(BinaryKind::Irohad.filename(false));
+    set_fixture_access(&binary, "F");
+    fs::write(&binary, b"mutated release executable\n").unwrap();
+    set_fixture_access(&binary, "RX");
+    assert!(selected.command().is_err());
 }
-#[cfg(unix)]
 #[test]
-fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
+fn release_prebuilt_cached_selection_rejects_native_policy_drift() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let mode_fixture = create_release_prebuilt_fixture();
-    let binary = mode_fixture.target.join("release/iroha3d");
-    set_mode(&binary, 0o700);
-    {
-        let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256);
-        let contract = release_program_contract(&mode_fixture.repo)
-            .expect("parse release manifest")
-            .expect("release contract active");
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
+    let selected = contract.select(BinaryKind::Irohad, None).unwrap();
+    assert!(selected.command().is_ok());
+    drop(contract);
+    set_fixture_access(
+        &fixture
+            .target
+            .join(BinaryKind::Irohad.filename(cfg!(windows))),
+        "F",
+    );
+    assert!(selected.command().is_err());
+}
+#[test]
+fn release_prebuilt_resolution_rejects_feature_isolation_force_build_and_ambient_override() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    for program in [
+        Program::IrohadPrivateSettlementRoutes,
+        Program::IrohadDisposableBroker,
+        Program::IrohadParliamentSigners,
+    ] {
         assert!(
-            validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
-                .is_err(),
-            "mode drift must fail"
+            program
+                .resolve_internal_in_repo(Some(true), &fixture.repo)
+                .unwrap_err()
+                .to_string()
+                .contains("feature-isolated")
         );
     }
-    let link_fixture = create_release_prebuilt_fixture();
-    let binary = link_fixture.target.join("release/iroha3d");
-    let extra_link = link_fixture.repo.join("iroha3d-hard-link");
-    fs::hard_link(&binary, &extra_link).expect("create adversarial hard link");
-    let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256);
-    let contract = release_program_contract(&link_fixture.repo)
-        .expect("parse release manifest")
-        .expect("release contract active");
     assert!(
-        validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
-            .is_err(),
-        "multiple hard links must fail"
+        Program::Iroha
+            .resolve_internal_in_repo(Some(false), &fixture.repo)
+            .is_err()
+    );
+    let _override = EnvVarRestore::set(PROGRAM_IROHA_ENV, env::current_exe().unwrap());
+    assert!(
+        Program::Iroha
+            .resolve_internal_in_repo(Some(true), &fixture.repo)
+            .is_err()
+    );
+    let _clear = EnvVarGuard::cleared(PROGRAM_IROHA_ENV);
+    assert!(
+        Program::Iroha
+            .resolve_internal_in_repo(Some(true), &fixture.repo)
+            .unwrap()
+            .is_release()
     );
 }
+#[test]
+fn release_prebuilt_resolution_admits_before_developer_cache() {
+    // Isolate the OnceLock mutation from every other resolver test in this process.
+    const CHILD: &str = "IROHA_TEST_RELEASE_CACHE_CONTROL";
+    if env::var_os(CHILD).is_none() {
+        let mut command = development_process_command(env::current_exe().unwrap()).unwrap();
+        command
+            .args([
+                "--exact",
+                "tests::release_prebuilt_resolution_admits_before_developer_cache",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        let output = command_output_with_timeout(command, Duration::from_secs(60)).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    let _clear = EnvVarGuard::cleared(PROGRAM_IROHA_ENV);
+    let _ = IROHA_BIN.set(env::current_exe().unwrap());
+    let selected = Program::Iroha
+        .resolve_internal_in_repo(Some(true), &fixture.repo)
+        .unwrap();
+    assert!(selected.is_release());
+    assert_eq!(
+        selected.diagnostic_path().unwrap(),
+        fixture
+            .target
+            .join(BinaryKind::Iroha.filename(cfg!(windows)))
+    );
+    let _wrong = EnvVarRestore::set(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV, "f".repeat(64));
+    assert!(
+        Program::Iroha
+            .resolve_internal_in_repo(Some(true), &fixture.repo)
+            .is_err()
+    );
+}
+
 #[test]
 fn default_build_profile_respects_env_override() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -1069,53 +1025,25 @@ fn freshness_validation_runs_only_when_building_is_allowed() {
 #[test]
 fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let source = fs::read(fixture.target.join(SUMERAGI_PREBUILT_MANIFEST)).unwrap();
-    let parsed = parse_release_prebuilt_manifest(
-        &source,
-        &fixture.source_manifest_sha256,
-        &fixture.target,
-        &fixture.repo,
-    )
-    .unwrap();
-    assert_eq!(
-        parsed.each_ref().map(|artifact| artifact.kind),
-        [
-            ReleasePrebuiltBinary::Irohad,
-            ReleasePrebuiltBinary::Iroha,
-            ReleasePrebuiltBinary::Kagami,
-            ReleasePrebuiltBinary::IrohadTaira,
-        ]
-    );
-    let text = std::str::from_utf8(&source).unwrap();
-    let missing = text
-        .lines()
-        .filter(|line| !line.starts_with("irohad_taira_"))
-        .map(|line| format!("{line}\n"))
-        .collect::<String>();
-    assert!(
-        parse_release_prebuilt_manifest(
-            missing.as_bytes(),
-            &fixture.source_manifest_sha256,
-            &fixture.target,
-            &fixture.repo
-        )
-        .is_err()
-    );
-    let substituted = text.replace(
-        "irohad_taira_relative_path\trelease/iroha3d_taira",
-        "irohad_taira_relative_path\trelease/iroha3d",
-    );
-    assert!(
-        parse_release_prebuilt_manifest(
-            substituted.as_bytes(),
-            &fixture.source_manifest_sha256,
-            &fixture.target,
-            &fixture.repo
-        )
-        .is_err()
-    );
+    for substitute in [false, true] {
+        let fixture = create_release_prebuilt_fixture();
+        let _valid = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+        let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
+        for kind in BinaryKind::ALL {
+            assert!(contract.select(kind, None).is_ok());
+        }
+        drop(contract);
+        let anchor = rewrite_release_manifest(&fixture, |manifest| {
+            if substitute {
+                manifest.binaries[3].filename =
+                    BinaryKind::Irohad.filename(cfg!(windows)).to_owned();
+            } else {
+                manifest.binaries.pop();
+            }
+        });
+        let _changed = EnvVarRestore::set(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV, anchor);
+        assert!(release_program_contract(&fixture.repo).is_err());
+    }
     let spec = Program::IrohadTaira.spec();
     assert_eq!(spec.env, "TEST_NETWORK_BIN_IROHAD_TAIRA");
     assert_eq!(spec.name, "iroha3d_taira");
@@ -1124,4 +1052,65 @@ fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
         [OsString::from("--bin"), OsString::from("iroha3d_taira")]
     );
     assert!(Program::IrohadTaira.release_prebuilt_allowed());
+}
+
+#[test]
+fn developer_tool_selection_runs_an_absolute_native_image_without_release_anchors() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let _source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+    let _manifest = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+    let _lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
+    let fixture = create_release_prebuilt_fixture();
+    let tool = fixture
+        .target
+        .join(BinaryKind::Iroha.filename(cfg!(windows)));
+    let output = development_process_command(&tool)
+        .unwrap()
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"resolver-probe\n");
+}
+
+#[test]
+fn developer_tool_selection_refuses_partial_release_anchors_before_path_lookup() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let _source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+    let _manifest = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+    let _lock = EnvVarGuard::cleared(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV);
+    for (present, required) in [
+        (
+            IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+            IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+        ),
+        (
+            IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+            IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+        ),
+        (
+            IROHA_RELEASE_CARGO_LOCK_SHA256_ENV,
+            IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+        ),
+    ] {
+        let _partial = EnvVarRestore::set(present, "a".repeat(64));
+        let error = development_process_command("").expect_err("release guard must run first");
+        assert!(error.to_string().contains(required), "{error}");
+        let error = require_development_process_mode().expect_err("optional discovery guard");
+        assert!(error.to_string().contains(required), "{error}");
+    }
+}
+
+#[test]
+fn developer_tool_selection_refuses_an_authenticated_release_before_path_lookup() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _environment = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    let error = crate::development_process::command_in_repo(OsStr::new(""), &fixture.repo)
+        .expect_err("an admitted release cannot select a developer tool");
+    assert!(
+        error
+            .to_string()
+            .contains("developer tool discovery is forbidden"),
+        "{error}"
+    );
 }

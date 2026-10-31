@@ -869,9 +869,13 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     const INCLUDABLE: u32 = 32 * 1024;
     let signatures = NonZeroU64::MIN;
     let context = maximal_action_transaction_bytes(0, signatures).unwrap();
-    let action = u32::try_from(u64::from(INCLUDABLE) - context).unwrap();
-    // The signed genesis must admit one maximal privacy action together with its
-    // required signer and framing context, not just the action's payload bytes.
+    let action = u32::try_from(
+        u64::from(INCLUDABLE)
+            .checked_sub(context)
+            .expect("fixture transaction cap includes one signer's required context"),
+    )
+    .unwrap();
+    // One maximal privacy action and its required signed context fit the transaction cap.
     let mut limits = PrivacyConsensusLimitsV1::taira_default();
     limits.max_proof_bytes_per_action = action;
     limits.max_action_bytes = action;
@@ -921,14 +925,15 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     );
     assert_eq!(chain.commit_at(2_000, vec![update]), [true]);
     chain.commit_at(3_000, Vec::new());
-    // Six transactions fit only the raised block cap that activates at height 4.
+    // Six 18,000-byte logs exceed the original 96 KiB block cap, including its reserve.
+    // Their signed transactions fit the raised cap that activates at height 4.
     let large = (0..6_u64)
         .map(|index| {
             chain.sign(
                 &author,
                 [InstructionBox::from(Log::new(
                     Level::DEBUG,
-                    "x".repeat(20_000),
+                    "x".repeat(18_000),
                 ))],
                 3_500 + index,
             )

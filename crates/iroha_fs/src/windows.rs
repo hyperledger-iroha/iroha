@@ -40,8 +40,8 @@ use windows_sys::Win32::{
         CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_APPEND_DATA,
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_BASIC_INFO, FILE_DELETE_CHILD,
         FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_FLAG_WRITE_THROUGH, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
+        FILE_FLAG_WRITE_THROUGH, FILE_ID_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+        FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
         FILE_WRITE_ATTRIBUTES, FileBasicInfo, FileDispositionInfo, FileIdInfo, FileRenameInfo,
         FileStandardInfo, GetFileInformationByHandleEx, GetVolumeInformationByHandleW, OPEN_ALWAYS,
         OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
@@ -51,6 +51,11 @@ use windows_sys::Win32::{
         PROCESS_QUERY_LIMITED_INFORMATION,
     },
 };
+
+mod archive_lock;
+mod public_input;
+pub use public_input::{PublicInputSnapshot, StrictPublicInput};
+mod output_file;
 
 #[derive(Debug)]
 struct LocalAllocation(*mut c_void);
@@ -84,29 +89,36 @@ fn wide(value: &OsStr) -> io::Result<Vec<u16>> {
     Ok(result)
 }
 
+mod user_directory;
+pub use crate::volume_observation::{observe_volume_identity, observe_volume_space};
+pub use user_directory::current_user_local_data_directory;
+
+fn current_user_token(access: u32) -> io::Result<OwnedHandle> {
+    let mut token = null_mut();
+    // SAFETY: output is valid; pseudo handles remain owned by the operating system.
+    unsafe {
+        if OpenThreadToken(GetCurrentThread(), access, 1, &raw mut token) == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_NO_TOKEN.cast_signed()) {
+                return Err(error);
+            }
+            win_ok(OpenProcessToken(
+                GetCurrentProcess(),
+                access,
+                &raw mut token,
+            ))?;
+        }
+    }
+    // SAFETY: token was returned as one owned valid handle.
+    Ok(unsafe { OwnedHandle::from_raw_handle(token) })
+}
+
 struct UserSid {
     storage: Vec<usize>,
 }
 impl UserSid {
     fn current() -> io::Result<Self> {
-        let mut token = null_mut();
-        // SAFETY: output is valid; pseudo handles remain owned by the operating system.
-        unsafe {
-            if OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) == 0 {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(ERROR_NO_TOKEN.cast_signed()) {
-                    return Err(error);
-                }
-                win_ok(OpenProcessToken(
-                    GetCurrentProcess(),
-                    TOKEN_QUERY,
-                    &raw mut token,
-                ))?;
-            }
-        }
-        // SAFETY: token was returned as one owned valid handle.
-        let token = unsafe { OwnedHandle::from_raw_handle(token) };
-        Self::from_token(&token)
+        Self::from_token(&current_user_token(TOKEN_QUERY)?)
     }
     fn from_token(token: &OwnedHandle) -> io::Result<Self> {
         let mut bytes = 0u32;
@@ -177,8 +189,35 @@ pub fn is_current_user_process(pid: u32) -> io::Result<bool> {
 }
 
 fn is_system_sid(sid: PSID) -> bool {
+    // The Windows Modules Installer owns ordinary system-volume roots. Admit only its
+    // fixed service SID, never the NT SERVICE namespace or a name resolved by the host.
+    // https://learn.microsoft.com/en-us/archive/msdn-magazine/2008/november/access-control-understanding-windows-file-and-registry-permissions
+    #[repr(C)]
+    struct ServiceSid {
+        revision: u8,
+        count: u8,
+        authority: [u8; 6],
+        subauthorities: [u32; 6],
+    }
+    const TRUSTED_INSTALLER: ServiceSid = ServiceSid {
+        revision: 1,
+        count: 6,
+        authority: [0, 0, 0, 0, 0, 5],
+        subauthorities: [
+            80,
+            956_008_885,
+            3_418_522_649,
+            1_831_038_044,
+            1_853_292_631,
+            2_271_478_464,
+        ],
+    };
     if sid.is_null() {
         return false;
+    }
+    // SAFETY: both SIDs are retained, and the constant has the complete native SID layout.
+    if unsafe { EqualSid(sid, from_ref(&TRUSTED_INSTALLER).cast_mut().cast()) } != 0 {
+        return true;
     }
     [WinLocalSystemSid, WinBuiltinAdministratorsSid]
         .into_iter()
@@ -397,6 +436,10 @@ pub(super) fn sync_file_ordered(file: &File) -> io::Result<()> {
 }
 
 /// Ordered syncs are already durable on Windows: nothing to flush.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "shares the fallible Unix durability fence interface"
+)]
 pub(super) fn durability_fence() -> io::Result<u64> {
     Ok(0)
 }
@@ -472,6 +515,14 @@ fn open_file(
     private_creation: bool,
 ) -> io::Result<File> {
     let path = wide(path.as_os_str())?;
+    // Metadata-only opens do not participate in Windows sharing checks. A retained
+    // no-delete-sharing ancestor therefore needs directory read access to pin its name.
+    let access = access
+        | if directory && share & FILE_SHARE_DELETE == 0 {
+            FILE_LIST_DIRECTORY
+        } else {
+            0
+        };
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
         | if directory {
             FILE_FLAG_BACKUP_SEMANTICS
@@ -512,6 +563,7 @@ fn open_file(
 
 #[derive(Debug)]
 struct Link {
+    sealed: Option<Arc<sealed_batch::DirectorySeal>>,
     path: PathBuf,
     file: File,
     private: bool,
@@ -524,6 +576,15 @@ pub(super) struct Directory {
 
 #[path = "windows/custody_io.rs"]
 mod custody_io;
+#[path = "windows/directory_move.rs"]
+mod directory_move;
+pub(crate) mod directory_mutation;
+#[path = "windows/file_move.rs"]
+mod file_move;
+#[path = "windows/journal.rs"]
+mod journal;
+mod staged_output;
+pub(crate) use directory_move::MovedDirectory;
 #[path = "windows/private_files.rs"]
 mod private_files;
 
@@ -582,6 +643,7 @@ impl Directory {
             return Err(changed());
         }
         directory.links.push(Arc::new(Link {
+            sealed: None,
             path: previous.path.clone(),
             file,
             private: false,
@@ -592,6 +654,12 @@ impl Directory {
 
     pub(super) fn open_reader(path: &Path) -> io::Result<Self> {
         Self::open_with_policy(path, false, false)
+    }
+
+    pub(super) fn require_current_owner(&self) -> io::Result<()> {
+        self.revalidate()?;
+        validate_current_owner(&self.current().file)?;
+        self.revalidate()
     }
 
     pub(super) fn identity(&self) -> io::Result<FileIdentity> {
@@ -651,8 +719,9 @@ impl Directory {
                 "private stores require an absolute local drive path",
             ));
         }
-        let mut current = PathBuf::from(prefix.as_os_str());
-        current.push("\\");
+        let mut root_name = prefix.as_os_str().to_owned();
+        root_name.push("\\");
+        let mut current = PathBuf::from(root_name);
         let root = open_file(
             &current,
             FILE_READ_ATTRIBUTES,
@@ -687,6 +756,7 @@ impl Directory {
             ));
         }
         let mut links = vec![Arc::new(Link {
+            sealed: None,
             path: current.clone(),
             file: root,
             private: false,
@@ -735,6 +805,7 @@ impl Directory {
                 sync_directory_metadata(&file)?;
             }
             links.push(Arc::new(Link {
+                sealed: None,
                 path: current.clone(),
                 file,
                 private: final_private || created,
@@ -752,6 +823,11 @@ impl Directory {
         &self.current().path
     }
     pub(super) fn revalidate(&self) -> io::Result<()> {
+        for link in &self.links {
+            if let Some(sealed) = &link.sealed {
+                sealed.revalidate(&link.file)?;
+            }
+        }
         self.revalidate_from(0)
     }
 
@@ -775,6 +851,9 @@ impl Directory {
     fn revalidate_from(&self, first: usize) -> io::Result<()> {
         crate::custody_work::record_ancestry_walk(self.links.len().saturating_sub(first));
         for link in self.links.iter().skip(first) {
+            if let Some(sealed) = &link.sealed {
+                sealed.revalidate(&link.file)?;
+            }
             let held = snapshot(&link.file, link.private, true)?;
             let named = open_file(
                 &link.path,
@@ -792,29 +871,53 @@ impl Directory {
     }
 
     pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        match self.child_reader_admission(name)? {
+            NativeChildOutcome::Present(child) => Ok(child),
+            NativeChildOutcome::InitialAbsence(error) => Err(error),
+        }
+    }
+
+    pub(super) fn child_reader_optional(&self, name: &OsStr) -> io::Result<Option<Self>> {
+        let result = match self.child_reader_admission(name) {
+            Ok(NativeChildOutcome::Present(child)) => return Ok(Some(child)),
+            Ok(NativeChildOutcome::InitialAbsence(_)) => Ok(None),
+            Err(error) => Err(error),
+        };
+        self.revalidate()?;
+        result
+    }
+
+    fn child_reader_admission(&self, name: &OsStr) -> io::Result<NativeChildOutcome<Self>> {
         self.revalidate()?;
         let path = self.path().join(name);
-        let file = open_file(
+        let file = match open_file(
             &path,
             FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             OPEN_EXISTING,
             true,
             false,
-        )?;
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(NativeChildOutcome::InitialAbsence(error));
+            }
+            Err(error) => return Err(error),
+        };
         snapshot(&file, false, true)?;
         let mut links = self.links.clone();
         if links.len() >= 128 {
             return Err(invalid("private directory depth bound exceeded"));
         }
         links.push(Arc::new(Link {
+            sealed: None,
             path,
             file,
             private: false,
         }));
         let result = Self { links };
         result.revalidate()?;
-        Ok(result)
+        Ok(NativeChildOutcome::Present(result))
     }
 
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {
@@ -904,6 +1007,7 @@ impl Directory {
             return Err(invalid("private directory depth bound exceeded"));
         }
         links.push(Arc::new(Link {
+            sealed: None,
             path,
             file,
             private,
@@ -1102,20 +1206,7 @@ impl Directory {
     pub(super) fn sync_parent(&self) -> io::Result<()> {
         self.revalidate()?;
         if let Some(parent) = self.links.iter().rev().nth(1) {
-            // Retained non-delete-sharing ancestors make this named open stable; join its
-            // identity before the metadata write-through operation needs write access.
-            let writable = open_file(
-                &parent.path,
-                FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                OPEN_EXISTING,
-                true,
-                false,
-            )?;
-            if identity(&writable)? != identity(&parent.file)? {
-                return Err(changed());
-            }
-            sync_directory_metadata(&writable)?;
+            sync_retained_directory_link(parent)?;
         }
         self.revalidate()
     }
@@ -1203,6 +1294,7 @@ impl Directory {
             before(AtomicWriteStep::Publish, &destination)?;
             self.revalidate()?;
             rename_handle(&file, &destination, mode)?;
+            before(AtomicWriteStep::Published, &destination)?;
             file.sync_all()?;
             if staged.id != snapshot(&file, true, false)?.id {
                 return Err(changed());
@@ -1261,6 +1353,25 @@ impl Directory {
         Ok(file)
     }
 
+    pub(super) fn create_private_file_into(
+        &self,
+        name: &OsStr,
+        original: &mut Option<File>,
+    ) -> io::Result<()> {
+        self.revalidate()?;
+        let file = open_file(
+            &self.path().join(name),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            CREATE_NEW,
+            false,
+            true,
+        )?;
+        // Keep the exact CREATE_NEW handle even if subsequent custody or sync checks fail.
+        *original = Some(file);
+        Ok(())
+    }
+
     pub(super) fn open_exact_lock(&self, name: &OsStr, create_new: bool) -> io::Result<File> {
         self.revalidate()?;
         let file = open_file(
@@ -1312,6 +1423,7 @@ impl Directory {
             path,
             file,
             private,
+            sealed: _,
         } = current;
         drop(file);
         let removing = open_file(
@@ -1373,7 +1485,10 @@ impl Directory {
 
     pub(super) fn sync(&self) -> io::Result<()> {
         self.revalidate()?;
-        sync_directory_metadata(&self.current().file)
+        // A completed move or removal can leave an original ancestor as the
+        // current directory. Its namespace pin intentionally has read access.
+        sync_retained_directory_link(self.current())?;
+        self.revalidate()
     }
 
     /// Windows publication syncs are write-through: ordering is the durable sync.
@@ -1416,6 +1531,7 @@ impl Directory {
             path,
             file,
             private,
+            sealed,
         } = current;
         drop(file);
         let publishing = open_file(
@@ -1451,6 +1567,7 @@ impl Directory {
         }
         snapshot(&published, private, true)?;
         self.links.push(Arc::new(Link {
+            sealed,
             path: destination,
             file: published,
             private,
@@ -1461,19 +1578,37 @@ impl Directory {
 
     // The public removal bracket owns full entry and every-result exit custody.
     pub(super) fn remove_private_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, true)
+        self.remove_file_native(name, true, None, LinkPolicy::Single)
+    }
+
+    pub(super) fn remove_private_if_snapshot_native(
+        &self,
+        name: &OsStr,
+        expected: &FileSnapshot,
+    ) -> io::Result<bool> {
+        self.remove_file_native(name, true, Some(expected), LinkPolicy::Single)
     }
 
     pub(super) fn remove_regular_native(&self, name: &OsStr) -> io::Result<bool> {
-        self.remove_file_native(name, false)
+        self.remove_file_native(name, false, None, LinkPolicy::Single)
     }
 
-    fn remove_file_native(&self, name: &OsStr, private: bool) -> io::Result<bool> {
+    pub(super) fn remove_build_output_native(&self, name: &OsStr) -> io::Result<bool> {
+        self.remove_file_native(name, false, None, LinkPolicy::BuildInput)
+    }
+
+    fn remove_file_native(
+        &self,
+        name: &OsStr,
+        private: bool,
+        expected: Option<&FileSnapshot>,
+        links: LinkPolicy,
+    ) -> io::Result<bool> {
         let snapshot = |file: &File| {
             if private {
                 journal_snapshot(file)
             } else {
-                snapshot_file(file, false)
+                snapshot_with_links(file, false, false, links).map(FileSnapshot)
             }
         };
         let path = self.path().join(name);
@@ -1490,6 +1625,18 @@ impl Directory {
             Err(error) => return Err(error),
         };
         let before = snapshot(&file)?;
+        let build_security = if links == LinkPolicy::BuildInput {
+            Some(directory_move::SecuritySnapshot::of(&file)?)
+        } else {
+            None
+        };
+        if expected.is_some_and(|expected| *expected != before) {
+            return Err(changed());
+        }
+        #[cfg(test)]
+        if links == LinkPolicy::BuildInput {
+            crate::build_output::before_named_removal(name);
+        }
         self.revalidate()?;
         // This observer permits the original handle's DELETE access, without acquiring
         // write or delete authority itself. The original excludes replacement sharing.
@@ -1504,10 +1651,16 @@ impl Directory {
         if snapshot(&file)? != before || snapshot(&named)? != before {
             return Err(changed());
         }
+        if let Some(security) = &build_security
+            && *security != directory_move::SecuritySnapshot::of(&file)?
+        {
+            return Err(changed());
+        }
         drop(named);
         let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-        // SAFETY: this exact no-reparse private regular single-link file owns DELETE
-        // access and excludes write/delete sharing; no pathname deletion is performed.
+        // SAFETY: this exact no-reparse regular file owns DELETE access and excludes
+        // write/delete sharing. Its full snapshot includes the admitted link count;
+        // only the explicit Cargo-output policy permits multiple initial links.
         unsafe {
             win_ok(SetFileInformationByHandle(
                 file.as_raw_handle(),
@@ -1515,6 +1668,23 @@ impl Directory {
                 from_ref(&disposition).cast(),
                 native_size::<FILE_DISPOSITION_INFO>()?,
             ))?;
+        }
+        if let Some(security) = &build_security {
+            // NTFS decrements the admitted link count when disposition is set,
+            // while the exact original handle remains retained and delete-pending.
+            let basic: FILE_BASIC_INFO = info(&file, FileBasicInfo)?;
+            let standard: FILE_STANDARD_INFO = info(&file, FileStandardInfo)?;
+            if !standard.DeletePending
+                || standard.Directory
+                || standard.NumberOfLinks != before.0.links.checked_sub(1).ok_or_else(changed)?
+                || identity(&file)? != before.0.id
+                || u64::try_from(standard.EndOfFile).ok() != Some(before.0.length)
+                || basic.LastWriteTime != before.0.modified
+                || basic.FileAttributes != before.0.attributes
+                || *security != directory_move::SecuritySnapshot::of(&file)?
+            {
+                return Err(changed());
+            }
         }
         drop(file);
         sync_directory_metadata(&self.current().file)?;
@@ -1675,6 +1845,10 @@ impl Directory {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent native custody capabilities are checked separately"
+)]
 pub(super) struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     directory: D,
     name: N,
@@ -1684,6 +1858,7 @@ pub(super) struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     private: bool,
     writable: bool,
     read_only: bool,
+    executable: bool,
     publishable: bool,
     ancestry: AncestryCheck,
 }
@@ -1749,6 +1924,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: private || create_new,
             writable: create_new,
             read_only: false,
+            executable: false,
             publishable: create_new,
             ancestry: AncestryCheck::EachCall,
         };
@@ -1766,6 +1942,11 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         )?);
         self.revalidate()?;
         Ok(value)
+    }
+    pub(super) fn require_current_owner(&self) -> io::Result<()> {
+        self.revalidate()?;
+        validate_current_owner(&self.file)?;
+        self.revalidate()
     }
     pub(super) fn seal(mut self) -> io::Result<Self> {
         self.file.sync_all()?;
@@ -1792,6 +1973,9 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         let after = snapshot_with_links(&self.file, self.private, false, self.links)?;
         if self.read_only {
             private_files::validate_read_only(&self.file)?;
+        }
+        if self.executable {
+            private_files::validate_executable(&self.file)?;
         }
         if after.id != self.before.id || (!self.writable && after != self.before) {
             return Err(changed());
@@ -1874,31 +2058,88 @@ fn sync_directory_metadata(file: &File) -> io::Result<()> {
     }
 }
 
+fn sync_retained_directory_link(original: &Link) -> io::Result<()> {
+    // The original non-delete-sharing pin remains held throughout this scoped
+    // acquisition of metadata write authority. Never replace its identity with
+    // the newly opened path, and preserve its original private-custody policy.
+    let writable = open_file(
+        &original.path,
+        FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+        true,
+        false,
+    )?;
+    if identity(&writable)? != identity(&original.file)? {
+        return Err(changed());
+    }
+    snapshot(&writable, original.private, true)?;
+    sync_directory_metadata(&writable)
+}
+
+#[cfg(test)]
+mod retained_sync_tests;
+
+#[derive(Clone, Copy)]
+enum NativeRename {
+    Ordinary(PublishMode),
+    ReplaceRetainingDestination,
+}
+
 fn rename_handle(file: &File, destination: &Path, mode: PublishMode) -> io::Result<()> {
+    rename_handle_with_policy(file, destination, NativeRename::Ordinary(mode))
+}
+
+/// Replace only after the caller has admitted and retained the exact destination original.
+/// This opt-in mode leaves the old handle valid; ordinary rename callers stay unchanged.
+fn replace_retaining_destination(file: &File, destination: &Path) -> io::Result<()> {
+    rename_handle_with_policy(file, destination, NativeRename::ReplaceRetainingDestination)
+}
+
+fn rename_handle_with_policy(
+    file: &File,
+    destination: &Path,
+    mode: NativeRename,
+) -> io::Result<()> {
     let name = wide(destination.as_os_str())?;
     let name_bytes = (name.len() - 1)
         .checked_mul(2)
         .ok_or_else(|| invalid("native rename length overflow"))?;
     let bytes = offset_of!(FILE_RENAME_INFO, FileName)
         .checked_add(name_bytes)
+        .and_then(|length| length.checked_add(size_of::<u16>()))
         .ok_or_else(|| invalid("native rename length overflow"))?;
     let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+    // Keep the Win32 path NUL-terminated even when its length exactly fills the aligned
+    // allocation. FileNameLength excludes the terminator; the API also inspects the path.
     // SAFETY: aligned allocation contains the header and complete UTF-16 tail; the source
     // handle retains DELETE access, so source identity never relies on reopening a pathname.
     unsafe {
         let value = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        (*value).Anonymous.ReplaceIfExists = mode == PublishMode::Replace;
+        let information_class = match mode {
+            NativeRename::Ordinary(mode) => {
+                (*value).Anonymous.ReplaceIfExists = mode == PublishMode::Replace;
+                FileRenameInfo
+            }
+            NativeRename::ReplaceRetainingDestination => {
+                use windows_sys::Win32::{
+                    Storage::FileSystem::FileRenameInfoEx,
+                    System::WindowsProgramming::{
+                        FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
+                    },
+                };
+                (*value).Anonymous.Flags =
+                    FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+                FileRenameInfoEx
+            }
+        };
         (*value).RootDirectory = null_mut();
         (*value).FileNameLength =
             u32::try_from(name_bytes).map_err(|_| invalid("native rename path too long"))?;
-        std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
-            (*value).FileName.as_mut_ptr(),
-            name.len() - 1,
-        );
+        std::ptr::copy_nonoverlapping(name.as_ptr(), (*value).FileName.as_mut_ptr(), name.len());
         win_ok(SetFileInformationByHandle(
             file.as_raw_handle(),
-            FileRenameInfo,
+            information_class,
             value.cast(),
             u32::try_from(bytes).map_err(|_| invalid("native rename path too long"))?,
         ))
@@ -1915,12 +2156,129 @@ pub(super) fn read_external(
 }
 
 #[cfg(test)]
+pub(super) fn grant_test_original_everyone(file: &File, rights: u32) -> io::Result<()> {
+    use windows_sys::Win32::Security::{
+        Authorization::{
+            ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE,
+            SetEntriesInAclW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP,
+            TRUSTEE_W,
+        },
+        PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    let sid_text = wide(OsStr::new("S-1-1-0"))?;
+    let mut sid = null_mut();
+    // SAFETY: the terminated constant SID and output address remain live for conversion.
+    unsafe { win_ok(ConvertStringSidToSidW(sid_text.as_ptr(), &raw mut sid))? };
+    let _sid = LocalAllocation(sid);
+    let mut dacl = null_mut();
+    let mut descriptor = null_mut();
+    // SAFETY: test-owned original has READ_CONTROL; all output pointers have native layouts.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &raw mut dacl,
+            null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status.cast_signed()));
+    }
+    let _descriptor = LocalAllocation(descriptor);
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: rights,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: 0,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            ptstrName: sid.cast(),
+        },
+    };
+    let mut amended = null_mut();
+    // SAFETY: original ACL, SID and explicit entry remain live; amended is an output pointer.
+    let status = unsafe { SetEntriesInAclW(1, &raw const entry, dacl, &raw mut amended) };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status.cast_signed()));
+    }
+    let _amended = LocalAllocation(amended.cast());
+    // SAFETY: this exact test-owned metadata handle has WRITE_DAC; the amended ACL is retained.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            amended,
+            null_mut(),
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(status.cast_signed()))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use windows_sys::Win32::Security::{
-        Authorization::SetSecurityInfo, GetSecurityDescriptorDacl,
-        PROTECTED_DACL_SECURITY_INFORMATION,
+        Authorization::{ConvertStringSidToSidW, SetSecurityInfo},
+        GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
     };
+
+    #[test]
+    fn system_sid_admission_rejects_other_services_and_unprivileged_principals() {
+        assert!(!is_system_sid(null_mut()));
+        for (text, expected) in [
+            ("S-1-5-18", true),
+            ("S-1-5-32-544", true),
+            (
+                "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+                true,
+            ),
+            (
+                "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478465",
+                false,
+            ),
+            ("S-1-5-80-0", false),
+            ("S-1-5-32-545", false),
+            ("S-1-1-0", false),
+        ] {
+            let encoded = wide(OsStr::new(text)).unwrap();
+            let mut sid = null_mut();
+            // SAFETY: terminated SDDL input and initialized output slot; the API owns allocation.
+            unsafe { win_ok(ConvertStringSidToSidW(encoded.as_ptr(), &raw mut sid)).unwrap() };
+            let _allocation = LocalAllocation(sid);
+            assert_eq!(is_system_sid(sid), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn by_handle_publication_preserves_exact_names_at_every_utf16_alignment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+        for count in 1..=12 {
+            let name = format!("{}\u{1f30d}", "a".repeat(count));
+            store
+                .write_atomic(&name, b"first", PublishMode::CreateNew)
+                .unwrap();
+            assert_eq!(store.read(&name, 5).unwrap().as_slice(), b"first");
+            store
+                .write_atomic(&name, b"second", PublishMode::Replace)
+                .unwrap();
+            assert_eq!(store.read(&name, 6).unwrap().as_slice(), b"second");
+        }
+        assert_eq!(store.entries(12).unwrap().len(), 12);
+    }
 
     fn set_dacl(file: &File, sddl: &str) {
         let encoded = wide(OsStr::new(sddl)).unwrap();
@@ -2157,3 +2515,30 @@ mod private_child_parent_sharing_tests {
         }
     }
 }
+
+/// Policy-neutral metadata components for the public descriptor snapshot owner.
+pub(super) fn metadata_snapshot(
+    file: &File,
+) -> io::Result<(FileIdentity, u64, u64, u32, i64, i64, i64)> {
+    let identity = identity(file)?;
+    let basic: FILE_BASIC_INFO = info(file, FileBasicInfo)?;
+    let standard: FILE_STANDARD_INFO = info(file, FileStandardInfo)?;
+    let length = u64::try_from(standard.EndOfFile)
+        .map_err(|_| invalid("native descriptor has a negative length"))?;
+    Ok((
+        identity,
+        length,
+        u64::from(standard.NumberOfLinks),
+        basic.FileAttributes,
+        basic.CreationTime,
+        basic.LastWriteTime,
+        basic.ChangeTime,
+    ))
+}
+
+#[path = "windows/sealed_batch.rs"]
+mod sealed_batch;
+pub(super) use sealed_batch::{FlatBatchCreation, FlatBatchFile, seal_flat_batch};
+
+#[path = "windows/process_owner.rs"]
+pub(crate) mod process_owner;

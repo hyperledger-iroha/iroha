@@ -42,13 +42,13 @@ from urllib import request as urllib_request
 _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
-    "release_artifact_contract": "66945051159d644f9507c5e6c4c264e2ece83cbcd4a4c8c1d21ef4115d380a0e",
-    "release_manifest_signing": "4966d0b408f7d67d154b578875a1b0cb77584de77b4b1561e8704043b99b60fd",
+    "release_artifact_contract": "a0143a2face0572687547600736ed98a6b7d9d8c87b98b7da2f318390b1cecfe",
+    "release_manifest_signing": "528d7e145be55ac512d2a9bb9269347b7ab5326963e3abc255bed80b2ebc9fb4",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "a0a5e6d559f60026bbd62a15564b93a7b43c58145cd8d95fe04e01362d2876ec",
+    "check_release_feature_graph": "a5711e567f54d8538577a87aaac8944d4422e4246efb61908e9bc71320a1cb59",
 }
 
 
@@ -210,6 +210,230 @@ def _load_release_modules() -> None:
         module.__package__ = ""
         sys.modules[name] = module
         exec(compile(payload, str(path), "exec"), module.__dict__)
+
+
+# Draft native preparation, independent of the existing packaging lanes.
+"""Draft reviewed-module registry, kept alive through a structured pipeline operation.
+
+Initial reads authenticate content against independently reviewed source literals;
+only the later canonical keeper admission establishes local filesystem originals,
+which remain held before any process launch. Initial hash-authenticated code bytes
+do not claim continuous identity custody back through their first content read.
+This contains no private ACL creation, repair, release manifest or source census.
+"""
+from contextlib import ExitStack
+import ctypes
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import types
+
+_MAXIMUM = 2 * 1024 * 1024
+
+
+def _capture(path):
+    """Bounded no-follow code read; no code executes before its review digest matches."""
+    if os.name != 'nt':
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_mode & 0o022
+                    or not 0 < before.st_size <= _MAXIMUM):
+                raise RuntimeError('reviewed bootstrap input is not an admissible regular file')
+            raw = stream.read(_MAXIMUM + 1)
+            after = os.fstat(stream.fileno())
+            fields = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                                   info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            if len(raw) != before.st_size or fields(before) != fields(after):
+                raise RuntimeError('reviewed bootstrap input changed while reading')
+            return raw
+    # Minimal content bootstrap only: use the already-trusted operating-system
+    # reader to obtain reviewed keeper code without following a reparse or FIFO.
+    # Full128 identities/security/ancestor custody belong to that canonical keeper.
+    from ctypes import wintypes as w
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    def function(name, args, result):
+        value = getattr(kernel, name); value.argtypes = args; value.restype = result
+        return value
+    opened = function('CreateFileW', [w.LPCWSTR,w.DWORD,w.DWORD,ctypes.c_void_p,w.DWORD,w.DWORD,w.HANDLE], w.HANDLE)
+    close = function('CloseHandle', [w.HANDLE], w.BOOL)
+    kind = function('GetFileType', [w.HANDLE], w.DWORD)
+    info = function('GetFileInformationByHandleEx', [w.HANDLE,ctypes.c_int,ctypes.c_void_p,w.DWORD], w.BOOL)
+    length = function('GetFileSizeEx', [w.HANDLE,ctypes.POINTER(ctypes.c_longlong)], w.BOOL)
+    read = function('ReadFile', [w.HANDLE,ctypes.c_void_p,w.DWORD,ctypes.POINTER(w.DWORD),ctypes.c_void_p], w.BOOL)
+    handle = opened(str(path), 0x80000000, 1, None, 3, 0x00200000 | 0x02000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        attributes = (w.DWORD * 2)()
+        size = ctypes.c_longlong()
+        if kind(handle) != 1 or not info(handle, 9, attributes, ctypes.sizeof(attributes)):
+            raise RuntimeError('reviewed bootstrap input is not native disk data')
+        if attributes[0] & (0x10 | 0x400) or not length(handle, ctypes.byref(size)) or not 0 < size.value <= _MAXIMUM:
+            raise RuntimeError('reviewed bootstrap input is indirect or excessive')
+        raw = bytearray()
+        buffer = ctypes.create_string_buffer(65536)
+        while True:
+            count = w.DWORD()
+            if not read(handle, buffer, len(buffer), ctypes.byref(count), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if count.value == 0: break
+            raw.extend(buffer.raw[:count.value])
+            if len(raw) > _MAXIMUM:
+                raise RuntimeError('reviewed bootstrap input exceeds its bound')
+        if len(raw) != size.value:
+            raise RuntimeError('reviewed bootstrap input changed extent')
+        return bytes(raw)
+    finally:
+        close(handle)
+
+
+class ReviewedRegistry:
+    """Authenticate all bytes, retain originals, then execute only the captured set."""
+    def __init__(self, directory, expected):
+        self.directory = Path(directory)
+        self.expected = dict(expected)
+        self.modules = {}
+        self.payloads = {}
+        self.stack = ExitStack()
+        self.keeper = None
+
+    def _execute(self, name):
+        if name in sys.modules:
+            raise RuntimeError('a bootstrap module was already installed outside this reviewed registry')
+        module = types.ModuleType(name)
+        module.__file__ = str(self.directory / (name + '.py'))
+        module.__package__ = ''
+        sys.modules[name] = module
+        self.stack.callback(lambda: sys.modules.pop(name, None) if sys.modules.get(name) is module else None)
+        exec(compile(self.payloads[name + '.py'], module.__file__, 'exec'), module.__dict__)
+        self.modules[name] = module
+        return module
+
+    def __enter__(self):
+        try:
+            for filename, digest in self.expected.items():
+                if (re.fullmatch(r'[a-z_-]+\.(py|json)', filename) is None
+                        or re.fullmatch(r'[0-9a-f]{64}', digest) is None):
+                    raise RuntimeError('reviewed registry has an invalid static entry')
+                raw = _capture(self.directory / filename)
+                if hashlib.sha256(raw).hexdigest() != digest:
+                    raise RuntimeError('bootstrap bytes differ from the reviewed pipeline source')
+                self.payloads[filename] = raw
+            native = self._execute('workspace_source_keeper_windows') if os.name == 'nt' else None
+            custody = self._execute('workspace_source_keeper')
+            self.keeper = self.stack.enter_context(custody.SourceKeeper(self.directory, maximum_members=len(self.expected), native_module=native))
+            self.keeper.capture(self.expected)
+            if os.name != 'nt':
+                # Preserve the existing pipeline's non-shared-write root/file policy.
+                for original in self.keeper.originals.values():
+                    if (original.path == self.directory or original.path == self.directory.parent
+                            or original.path in self.keeper.members) and original.before[2] & 0o022:
+                        raise RuntimeError('reviewed bootstrap ancestry or member is shared-writable')
+            for filename, expected in self.payloads.items():
+                with self.keeper.reader(self.directory / filename) as reader:
+                    if reader.read(_MAXIMUM + 1) != expected:
+                        raise RuntimeError('retained registry original differs from authenticated bytes')
+            for name in ('compute_workspace_source_manifest', 'sumeragi_prebuilt_bundle', 'release_entry_owner',
+                         'release_process_bridge', 'release_bridge_admission'):
+                self._execute(name)
+            self.keeper.revalidate()
+            return self
+        except BaseException:
+            self.stack.close()
+            raise
+
+    def prepare(self, invocation, pins, *, bridge_root=None, bridge_pins=None):
+        """Keep registry, source, entry and native module in one transferable owner."""
+        if (bridge_root is None) != (bridge_pins is None):
+            raise RuntimeError('native bridge trust inputs are incomplete')
+        if bridge_root is None:
+            raise RuntimeError('first entry requires independently pinned native bridge inputs')
+        entry = self.modules['release_entry_owner']
+        custody = self.modules['workspace_source_keeper']
+        native = self.modules.get('workspace_source_keeper_windows')
+        bridge_factory=None
+        if bridge_root is not None:
+            bridge_root=entry._path(str(bridge_root))
+            bridge_owner=self.stack.enter_context(entry.RootSecurity(bridge_root,custody,native_module=native))
+            for path in (invocation.repo_root,invocation.entry_root,invocation.cargo_root,invocation.artifact_root):
+                other=self.stack.enter_context(entry.RootSecurity(path,custody,native_module=native))
+                if bridge_owner.identity in other.ancestry or other.identity in bridge_owner.ancestry:
+                    raise RuntimeError('native bridge physically overlaps source, entry or output roots')
+            def bridge_factory(source,owners):
+                bridge_owner.revalidate()
+                return self.modules['release_bridge_admission'].load_original(bridge_root,bridge_pins,source,owners,
+                    entry_module=entry,custody_module=custody,native_module=native,
+                    environment_policy=self.payloads['environment-policy.json'])
+        self.keeper.revalidate()
+        result = entry.prepare_sumeragi_programs(invocation, pins,
+            source_module=self.modules['compute_workspace_source_manifest'],
+            custody_module=custody,native_module=native,owners=self.stack,bridge_factory=bridge_factory,
+            environment_policy=self.payloads['environment-policy.json'])
+        self.keeper.revalidate()
+        return result
+
+    def __exit__(self, kind, error, traceback):
+        return self.stack.__exit__(kind, error, traceback)
+
+_NATIVE_PREPARATION_MODULE_SHA256 = {'workspace_source_keeper.py': '6eaea08b23cad1cebae891456d99cfc3a3f61c163c91bd9048b8c53841652d01', 'workspace_source_keeper_windows.py': '8dea082905fca974c65cb44731c2c4a3411dbb4f2a46c0d63bd08627c525d3a2', 'compute_workspace_source_manifest.py': 'e49fefa6d19de36773c01661717956e70fa21e8508fe24ab16230d984f2c79d3', 'sumeragi_prebuilt_bundle.py': '427b2eeaafe69e050b57971bc15a3a40cdeaa60520e15583577e7e2326215478', 'release_entry_owner.py': '4e3e0142434c28ce489fffc829469666311582c8c05933516552e499c056c050', 'release_process_bridge.py': '13796955c7cd0215df4cc62a33e9de0c4df45446a78096f18151ef5781da1710', 'release_bridge_admission.py': 'fe47ddde0cb35c5a35620ff8c312334f6c878d2cbe80a4a29399d538b430e6c9', 'environment-policy.json': 'dd7ea93cde4e2a6fa3c1564b0fca87e4357e1273bb6384d318d6c2d49eed13b8'}
+
+
+def _prepare_sumeragi_programs(arguments):
+    """Structured source-bound operation; arbitrary environment paths supply no trust."""
+    parser=argparse.ArgumentParser(prog="run_release_pipeline.py prepare-sumeragi-programs")
+    for option in ('repo-root','entry-root','cargo-target-dir','artifact-root','cargo-home','cargo-bin',
+                   'rustc-bin','cancel-request','trusted-entry-sha256','trusted-entry-provenance-sha256',
+                   'trusted-workspace-source-sha256','native-target'):
+        parser.add_argument('--'+option, required=True)
+    for option in ('bridge-root','trusted-bridge-sha256','trusted-bridge-provenance-sha256'):
+        parser.add_argument('--'+option)
+    parser.add_argument('--name')
+    parser.add_argument('--inherited-bundle')
+    parser.add_argument('--inherited-manifest-sha256')
+    options=[argument for argument in arguments if argument.startswith('--')]
+    if len(options)!=len(set(options)):
+        parser.error('repeated invocation option')
+    values=parser.parse_args(arguments)
+    if (values.inherited_bundle is None)!=(values.inherited_manifest_sha256 is None):
+        parser.error('inherited path and manifest must be supplied together')
+    if values.name is None:
+        if values.inherited_bundle is not None:
+            values.name=Path(values.inherited_bundle).name
+        else:
+            import secrets
+            import string
+            values.name='invocation.'+''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(6))
+    with ReviewedRegistry(_SCRIPT_DIRECTORY, _NATIVE_PREPARATION_MODULE_SHA256) as registry:
+        entry=registry.modules['release_entry_owner']
+        invocation=entry.Invocation(entry._path(values.repo_root),entry._path(values.entry_root),entry._path(values.cargo_target_dir),
+            entry._path(values.artifact_root),entry._path(values.cargo_home),entry._path(values.cargo_bin),entry._path(values.rustc_bin),
+            entry._path(values.cancel_request),values.name,
+            None if values.inherited_bundle is None else entry._path(values.inherited_bundle),values.inherited_manifest_sha256)
+        pins=entry.EntryPins(values.trusted_entry_sha256,values.trusted_entry_provenance_sha256,
+            values.trusted_workspace_source_sha256,values.native_target)
+        bridge_values=(values.bridge_root,values.trusted_bridge_sha256,values.trusted_bridge_provenance_sha256)
+        if any(value is not None for value in bridge_values) and not all(value is not None for value in bridge_values):
+            raise RuntimeError('native bridge trust inputs are incomplete')
+        bridge_pins=None if values.bridge_root is None else registry.modules['release_bridge_admission'].BridgePins(
+            values.trusted_bridge_sha256,values.trusted_bridge_provenance_sha256,
+            values.trusted_workspace_source_sha256,values.native_target)
+        directory,manifest=registry.prepare(invocation,pins,bridge_root=values.bridge_root,bridge_pins=bridge_pins)
+    sys.stdout.buffer.write(('bundle_dir\t'+str(directory)+'\nmanifest_sha256\t'+manifest+'\n').encode('utf-8'))
+    sys.stdout.buffer.flush()
+    return 0
+
+
+if __name__ == '__main__' and sys.argv[1:2] == ['prepare-sumeragi-programs']:
+    try:
+        raise SystemExit(_prepare_sumeragi_programs(sys.argv[2:]))
+    except (RuntimeError, OSError) as error:
+        print('release preparation: '+str(error),file=sys.stderr)
+        status=getattr(error,'status',2)
+        raise SystemExit(status if isinstance(status,int) and 0<status<256 else 2)
 
 
 _load_release_modules()

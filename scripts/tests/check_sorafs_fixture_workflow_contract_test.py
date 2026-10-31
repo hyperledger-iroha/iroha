@@ -927,8 +927,12 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
             f"python/iroha_python/src/iroha_python/{native_pattern}" in ignore_rules
         )
     assert "Python native SDK artifacts must be rebuilt in the ABI-31 lane, not tracked" in runner
-    assert 'export VIRTUAL_ENV="${SDK_SESSION}/venv"' in runner
-    assert 'export PATH="${VIRTUAL_ENV}/bin:${PATH}"' in runner
+    assert 'VIRTUAL_ENV="$(capture_python "${VENV_PYTHON}" -I -c' in runner
+    assert 'export PATH="${VENV_SCRIPTS}:${PATH}"' in runner
+    assert 'VENV_SCRIPTS="${SDK_SESSION}/venv/Scripts"' in runner
+    assert 'VENV_SCRIPTS="${SDK_SESSION}/venv/bin"' in runner
+    assert 'os.pathsep.join' in runner
+    assert '--native-helper "${NATIVE_HELPER}"' in runner
     assert 'cd "${ROOT_DIR}/python/iroha_native"' in runner
     assert (
         '"${VENV_PYTHON}" -m maturin build --release --locked --out "${NATIVE_WHEELS}"'

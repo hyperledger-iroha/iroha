@@ -36,7 +36,6 @@ use reqwest::header::CONTENT_TYPE;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
-    path::Path,
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
@@ -446,14 +445,14 @@ fn wait_for_multisig_proposals(
     ))
 }
 fn run_multisig_list_all_cli(
-    cli_program: &Path,
+    cli_program: &iroha_test_network::ResolvedProgram,
     client: &Client,
     key_pair: &KeyPair,
     multisig_selector: &str,
     extra_args: &[&str],
 ) -> Result<std::process::Output> {
     let cli_dir = tempfile::tempdir().wrap_err("create CLI working directory")?;
-    let mut command = std::process::Command::new(cli_program);
+    let mut command = cli_program.command()?;
     command
         .current_dir(cli_dir.path())
         .envs(cli_envs_for_signatory(client, key_pair));
@@ -485,8 +484,7 @@ fn run_multisig_list_all_cli(
         .arg("--multisig-selector")
         .arg(multisig_selector)
         .args(list_args);
-    output_with_timeout(&mut command, process_timeout())
-        .wrap_err("run `iroha ledger multisig list all`")
+    output_with_timeout(command, process_timeout()).wrap_err("run `iroha ledger multisig list all`")
 }
 #[test]
 fn multisig_normal() -> Result<()> {

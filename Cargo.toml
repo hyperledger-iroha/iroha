@@ -39,6 +39,7 @@ iroha_private_settlement = { path = "crates/iroha_private_settlement" }
 iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
 iroha_deploy = { path = "crates/iroha_deploy" }
 iroha_fs = { path = "crates/iroha_fs" }
+iroha_release_bundle = { path = "crates/iroha_release_bundle" }
 iroha_operation_journal = { path = "crates/iroha_operation_journal" }
 iroha_wallet = { path = "crates/iroha_wallet" }
 iroha_storage_client = { path = "crates/iroha_storage_client" }
@@ -155,7 +156,7 @@ clap = "4.5.51"
 owo-colors = "4.2.3"
 supports-color = "3.0.2"
 humantime = "2.3.0"
-criterion = "0.8.0"
+criterion = { version = "0.8.0", features = ["csv_output"] }
 expect-test = "1.5.1"
 assertables = "9.8.2"
 
@@ -373,6 +374,7 @@ members = [
     "tools/sora-vpn-backend",
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
+    "tools/iroha_native_source_delivery",
     "tools/soradns-resolver",
     "tools/telemetry-schema-diff",
     "tools/kotlin-fixture-gen"

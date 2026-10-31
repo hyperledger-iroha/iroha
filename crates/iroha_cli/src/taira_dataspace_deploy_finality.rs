@@ -360,7 +360,7 @@ fn preflight_staging_name(name: &str) -> bool {
 }
 
 /// The child never admits signatures, dispatch claims, plans or completion evidence.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_preflight_contents(child: &Journal, expected: &PreflightBinding) -> Result<bool> {
     child.revalidate()?;
     let binding = child.optional_json::<PreflightBinding>("binding.json")?;
@@ -371,13 +371,11 @@ fn validate_preflight_contents(child: &Journal, expected: &PreflightBinding) -> 
         )?;
     }
     let mut heights = BTreeSet::new();
-    for entry in fs::read_dir(&child.path)? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for name in child.entry_names()? {
         let name = name
             .to_str()
             .ok_or_else(|| eyre!("invalid preflight proof filename"))?;
-        private_metadata(&fs::symlink_metadata(entry.path())?, false)?;
+        child.require_private_regular(std::ffi::OsStr::new(name))?;
         if let Some(height) = proof_file_height(name) {
             require(
                 binding.is_some(),
@@ -404,7 +402,7 @@ fn validate_preflight_contents(child: &Journal, expected: &PreflightBinding) -> 
     Ok(binding.is_some())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn validate_preflight_contents(_: &Journal, _: &PreflightBinding) -> Result<bool> {
     eyre::bail!("durable preflight proofs require Unix filesystem custody")
 }
@@ -434,7 +432,27 @@ fn open_preflight_child(parent: &Journal, create: bool) -> Result<Journal> {
     Ok(child)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn open_preflight_child(parent: &Journal, create: bool) -> Result<Journal> {
+    parent.revalidate()?;
+    let child = match parent.directory.open_child_optional(PREFLIGHT_DIRECTORY)? {
+        Some(directory) => {
+            let empty = directory.entries(100_002)?.is_empty();
+            Journal::lock_native(directory, false, create && empty)?
+        }
+        None if create => Journal::open_native_child(
+            &parent.directory,
+            std::ffi::OsStr::new(PREFLIGHT_DIRECTORY),
+            true,
+            false,
+        )?,
+        None => return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into()),
+    };
+    parent.revalidate()?;
+    Ok(child)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_preflight_child(_: &Journal, _: bool) -> Result<Journal> {
     eyre::bail!("durable preflight proofs require Unix filesystem custody")
 }
@@ -443,6 +461,36 @@ fn open_preflight_child(_: &Journal, _: bool) -> Result<Journal> {
 pub(super) fn validate_preflight_cache(parent: &Journal) -> Result<()> {
     parent.revalidate()?;
     let expected = PreflightBinding::expected(parent)?;
+    validate_preflight_expected(parent, expected)
+}
+
+#[cfg(windows)]
+pub(super) fn validate_preflight_identity(
+    parent: &Journal,
+    identity: (String, NetworkId, String),
+) -> Result<()> {
+    validate_preflight_expected(
+        parent,
+        PreflightBinding {
+            purpose: "iroha.dataspace-preflight-finality.v1".into(),
+            definition_sha256: identity.0,
+            network_id: identity.1,
+            trust_sha256: identity.2,
+        },
+    )
+}
+
+fn validate_preflight_expected(parent: &Journal, expected: PreflightBinding) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let directory = parent.directory.open_child(PREFLIGHT_DIRECTORY)?;
+        if directory.entries(100_002)?.is_empty() {
+            // Read-only inventory can admit an empty interrupted mkdir without creating
+            // a lock. Explicit Preflight creation performs the exclusive lock recovery.
+            directory.revalidate()?;
+            return parent.revalidate();
+        }
+    }
     let child = open_preflight_child(parent, false)?;
     validate_preflight_contents(&child, &expected)?;
     parent.revalidate()
@@ -1497,7 +1545,7 @@ fn complete<C: RunContext>(
 
 #[cfg(test)]
 pub(super) fn test_trust() -> TrustV1 {
-    let (block, key) = crate::taira_public_reset::deployment_genesis_fixture();
+    let (block, key) = crate::deployment_genesis_fixture::deployment_genesis_fixture();
     let validators = iroha_genesis::signed_genesis_validator_pops(&block).unwrap();
     TrustV1 {
         chain: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
@@ -1524,7 +1572,7 @@ pub(super) fn test_trust() -> TrustV1 {
 #[cfg(test)]
 pub(super) fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(
-        crate::taira_public_reset::deployment_genesis_fixture()
+        crate::deployment_genesis_fixture::deployment_genesis_fixture()
             .0
             .hash(),
     )

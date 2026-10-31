@@ -1592,7 +1592,13 @@ fn public_service_discovery_cross_binds_canonical_document_and_artifact_envelope
     )
     .expect_err("strict index document must reject the detached artifact envelope");
 
+    #[cfg(not(windows))]
     let staged = taira_test_tempdir("public-discovery-binding-");
+    #[cfg(windows)]
+    let staged = tempfile::Builder::new()
+        .prefix("public-discovery-binding-")
+        .tempdir()
+        .expect("native local discovery fixture");
     fs::write(
         staged.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
         &document_bytes,

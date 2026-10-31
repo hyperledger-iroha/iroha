@@ -13,6 +13,147 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
     (temporary, store)
 }
 
+fn grant_fixture_public_read(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = if path.is_dir() { 0o755 } else { 0o644 };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let result = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "owned fixture ACL grant failed");
+    }
+}
+
+#[test]
+fn project_private_destination_keeps_readable_parent_and_private_replacement() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    grant_fixture_public_read(&path);
+    let parent = OwnerDirectory::open(&path).unwrap();
+    let parent_identity = parent.identity().unwrap();
+    parent
+        .write_private_atomic("cache", b"first", PublishMode::CreateNew)
+        .unwrap();
+    let first = RetainedFile::open_private(path.join("cache")).unwrap();
+    let first_identity = first.identity().unwrap();
+    drop(first);
+    parent
+        .write_private_atomic("cache", b"replacement", PublishMode::Replace)
+        .unwrap();
+    let replacement = RetainedFile::open_private(path.join("cache")).unwrap();
+    assert_ne!(replacement.identity().unwrap(), first_identity);
+    assert_eq!(parent.identity().unwrap(), parent_identity);
+    assert_eq!(
+        read_private(path.join("cache"), 11).unwrap().as_slice(),
+        b"replacement"
+    );
+    assert!(
+        PrivateDirectory::open(&path).is_err(),
+        "parent was not repaired"
+    );
+    assert!(
+        parent
+            .write_private_atomic("cache", b"clobber", PublishMode::CreateNew)
+            .is_err()
+    );
+    assert_eq!(fs::read(path.join("cache")).unwrap(), b"replacement");
+}
+
+#[test]
+fn project_private_destination_refuses_public_and_multilink_originals_without_repair() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    let parent = OwnerDirectory::open(&path).unwrap();
+    parent
+        .write_private_atomic("public", b"public original", PublishMode::CreateNew)
+        .unwrap();
+    grant_fixture_public_read(&path.join("public"));
+    let before = RetainedFile::open_regular(path.join("public"))
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert!(
+        parent
+            .write_private_atomic("public", b"replacement", PublishMode::Replace)
+            .is_err()
+    );
+    assert_eq!(
+        RetainedFile::open_regular(path.join("public"))
+            .unwrap()
+            .snapshot()
+            .unwrap(),
+        before
+    );
+    assert!(RetainedFile::open_private(path.join("public")).is_err());
+    assert_eq!(fs::read(path.join("public")).unwrap(), b"public original");
+    parent
+        .write_private_atomic("linked", b"linked original", PublishMode::CreateNew)
+        .unwrap();
+    fs::hard_link(path.join("linked"), path.join("alias")).unwrap();
+    assert!(
+        parent
+            .write_private_atomic("linked", b"replacement", PublishMode::Replace)
+            .is_err()
+    );
+    assert_eq!(fs::read(path.join("linked")).unwrap(), b"linked original");
+    assert_eq!(fs::read(path.join("alias")).unwrap(), b"linked original");
+    assert!(
+        parent
+            .write_private_atomic("../outside", b"escape", PublishMode::CreateNew)
+            .is_err()
+    );
+}
+
+#[test]
+fn project_private_destination_preserves_publication_uncertainty() {
+    for fail_at in [AtomicWriteStep::Publish, AtomicWriteStep::Published] {
+        let (_temporary, private) = store();
+        let path = private.path().to_path_buf();
+        drop(private);
+        let parent = OwnerDirectory::open(&path).unwrap();
+        parent
+            .write_private_atomic("cache", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let mut observed = false;
+        let result = parent.inner.write_atomic_observed(
+            OsStr::new("cache"),
+            b"complete replacement",
+            PublishMode::Replace,
+            true,
+            1,
+            &mut |step, _| {
+                if step == fail_at {
+                    observed = true;
+                    Err(io::Error::other("exact publication boundary refusal"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(observed);
+        assert!(result.is_err());
+        let expected: &[u8] = if fail_at == AtomicWriteStep::Publish {
+            b"original"
+        } else {
+            b"complete replacement"
+        };
+        assert_eq!(
+            read_private(path.join("cache"), 64).unwrap().as_slice(),
+            expected
+        );
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+    }
+}
+
 #[test]
 fn atomic_staging_names_accept_only_the_native_writer_grammar() {
     assert!(is_atomic_staging_name(OsStr::new(&temporary_name())));
@@ -312,6 +453,14 @@ fn exact_lock_creation_and_open_never_change_missing_or_existing_custody() {
     first.try_lock().unwrap();
     let second = store.open_existing_lock("journal.lock").unwrap();
     assert!(second.try_lock().is_err());
+    // Windows byte-range locks exclude reads through other handles. Verify the original
+    // locked handle retained its complete bytes before independently reopening the file.
+    first.rewind().unwrap();
+    let mut bytes = Vec::new();
+    first.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"retained");
+    drop(first);
+    drop(second);
     assert_eq!(
         store.read("journal.lock", 8).unwrap().as_slice(),
         b"retained"
@@ -778,9 +927,8 @@ fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
     first.sync_all().unwrap();
     let mut second = store.open_lock("owner.lock").unwrap();
     assert!(second.try_lock().is_err());
-    let mut bytes = Vec::new();
-    second.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"owner");
+    #[cfg(windows)]
+    assert!(second.read(&mut [0; 5]).is_err());
     drop(first);
     // Another parallel test may be between fork/posix_spawn and exec. CLOEXEC keeps this
     // descriptor out of the executed child, but the inherited open-file description can
@@ -795,6 +943,9 @@ fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
             Err(error) => panic!("released lock remained unavailable: {error}"),
         }
     }
+    let mut bytes = Vec::new();
+    second.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"owner");
 }
 
 #[test]

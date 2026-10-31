@@ -159,3 +159,37 @@ fn native_rewrite_image_requires_the_complete_original_frame() {
         "an empty evicted frame cannot recreate retired snapshot authority"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn native_commit_marker_sync_preserves_create_and_replace_readback() {
+    let temporary = tempfile::tempdir().expect("create commit-marker fixture");
+    let root = std::fs::canonicalize(temporary.path()).expect("canonicalize marker fixture");
+    let mut store = BlockStore::new(&root);
+    store
+        .create_files_if_they_do_not_exist()
+        .expect("initialize and sync the published empty marker");
+    let marker = BlockStoreCommitMarker::new(0, None);
+    let expected = norito::encode_canonical(&marker).unwrap();
+    let marker_path = store.commit_marker_path();
+    let temporary_path = marker_path.with_extension("norito.tmp");
+    assert_eq!(std::fs::read(&marker_path).unwrap(), expected);
+    assert_eq!(store.read_commit_marker().unwrap(), Some(marker.clone()));
+    assert!(!temporary_path.exists());
+
+    // The same ordinary read-only access used by the old reopen cannot flush on Windows.
+    let read_only = std::fs::File::open(&marker_path).unwrap();
+    let error = read_only
+        .sync_all()
+        .expect_err("a read-only marker handle cannot call FlushFileBuffers");
+    assert_eq!(error.raw_os_error(), Some(5));
+    drop(read_only);
+
+    store
+        .write_commit_marker_value(&marker)
+        .expect("replace and sync an existing published marker");
+    assert_eq!(std::fs::read(&marker_path).unwrap(), expected);
+    assert_eq!(store.read_commit_marker().unwrap(), Some(marker));
+    assert!(!temporary_path.exists());
+    assert_eq!(store.read_exact_durable_index_count().unwrap(), 0);
+}

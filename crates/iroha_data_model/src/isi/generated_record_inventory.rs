@@ -47,6 +47,28 @@ macro_rules! record_inventory {
         }
 
         #[test]
+        fn compiled_record_inventory_covers_every_fixture_row() {
+            let rows: norito::json::Value = norito::json::from_str(include_str!(
+                "../../tests/fixtures/instruction_record_generated_identity_frames.json"
+            ))
+            .expect("instruction record fixture JSON");
+            let rows = rows.as_array().expect("instruction record rows");
+            let expected: std::collections::BTreeSet<_> = rows
+                .iter()
+                .map(|row| {
+                    row.get("nominal")
+                        .and_then(norito::json::Value::as_str)
+                        .expect("record nominal name")
+                })
+                .collect();
+            assert_eq!(expected.len(), rows.len(), "unique fixture record names");
+            let declared = [$($nominal),*];
+            let actual: std::collections::BTreeSet<_> = declared.into_iter().collect();
+            assert_eq!(actual.len(), declared.len(), "unique compiled record names");
+            assert_eq!(actual, expected, "complete compiled/fixture record inventories");
+        }
+
+        #[test]
         #[ignore = "explicit maintenance capture of every current populated instruction record"]
         fn print_native_record_capture_v1() {
             const RECORDS: &[super::native_capture::Record] = &[
@@ -1749,5 +1771,47 @@ record!(
     sccp_endorse_sccp_fast_pause_v1,
     crate::isi::sccp::EndorseSccpFastPauseV1,
     "iroha_data_model::isi::sccp::EndorseSccpFastPauseV1"
+);
+
+record!(
+    asset_uid_set_asset_uid_policy_reader_v1,
+    crate::isi::asset_uid::SetAssetUidPolicyReaderV1,
+    "iroha_data_model::isi::asset_uid::SetAssetUidPolicyReaderV1"
+);
+
+record!(
+    asset_uid_enrollment_activate_asset_uid_enrollment_v1,
+    crate::isi::asset_uid_enrollment::ActivateAssetUidEnrollmentV1,
+    "iroha_data_model::isi::asset_uid_enrollment::ActivateAssetUidEnrollmentV1"
+);
+
+record!(
+    asset_uid_enrollment_set_asset_uid_system_account_v1,
+    crate::isi::asset_uid_enrollment::SetAssetUidSystemAccountV1,
+    "iroha_data_model::isi::asset_uid_enrollment::SetAssetUidSystemAccountV1"
+);
+
+record!(
+    asset_fi_set_asset_fi_v1,
+    crate::isi::asset_fi::SetAssetFiV1,
+    "iroha_data_model::isi::asset_fi::SetAssetFiV1"
+);
+
+record!(
+    asset_fi_set_asset_fi_link_attestation_v1,
+    crate::isi::asset_fi::SetAssetFiLinkAttestationV1,
+    "iroha_data_model::isi::asset_fi::SetAssetFiLinkAttestationV1"
+);
+
+record!(
+    asset_fi_set_asset_fi_link_v1,
+    crate::isi::asset_fi::SetAssetFiLinkV1,
+    "iroha_data_model::isi::asset_fi::SetAssetFiLinkV1"
+);
+
+record!(
+    asset_fi_transfer_to_linked_fi_v1,
+    crate::isi::asset_fi::TransferToLinkedFiV1,
+    "iroha_data_model::isi::asset_fi::TransferToLinkedFiV1"
 );
 }

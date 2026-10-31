@@ -128,7 +128,10 @@ fn provider_bounds() -> ProviderIngestFinalizedArchiveBoundsV1 {
 }
 
 fn archives() -> (tempfile::TempDir, FinalizedArchives) {
+    #[cfg(not(windows))]
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    #[cfg(windows)]
+    let directory = tempfile::tempdir().unwrap();
     let provider = ProviderIngestFinalizedArchiveV1::try_open(
         directory.path().join("provider"),
         provider_bounds(),
@@ -159,10 +162,16 @@ fn archive_files(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>
             if path.is_dir() {
                 walk(root, &path, files);
             } else {
-                files.insert(
-                    path.strip_prefix(root).unwrap().to_owned(),
-                    std::fs::read(&path).unwrap(),
-                );
+                files.insert(path.strip_prefix(root).unwrap().to_owned(), {
+                    #[cfg(not(windows))]
+                    {
+                        std::fs::read(&path).unwrap()
+                    }
+                    #[cfg(windows)]
+                    {
+                        native_archive_snapshot_bytes(&path)
+                    }
+                });
             }
         }
     }
@@ -280,10 +289,17 @@ fn hold_archive_completion(worker: &mut Worker<'_>, block: &AvailableBody, qc: &
         .unwrap()
         .root()
         .to_owned();
+    #[cfg(not(windows))]
     let hidden = root.with_extension("temporarily-unavailable");
+    #[cfg(not(windows))]
     std::fs::rename(&root, &hidden).unwrap();
+    #[cfg(windows)]
+    let unavailable = NativeArchiveUnavailable::new(&root);
     let error = worker.commit(block, qc).unwrap_err();
+    #[cfg(not(windows))]
     std::fs::rename(&hidden, &root).unwrap();
+    #[cfg(windows)]
+    unavailable.restore();
     assert!(
         error
             .to_string()
@@ -620,8 +636,12 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     assert_eq!(provider.health_generation().unwrap(), provider_before);
     assert_eq!(reputation.health_generation().unwrap(), reputation_before);
     let root = reputation.root().to_owned();
+    #[cfg(not(windows))]
     let hidden = root.with_extension("temporarily-unavailable");
+    #[cfg(not(windows))]
     std::fs::rename(&root, &hidden).unwrap();
+    #[cfg(windows)]
+    let unavailable = NativeArchiveUnavailable::new(&root);
     let error = worker.commit(&block, &qc).unwrap_err();
     assert!(
         error
@@ -669,7 +689,10 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
         worker.live.as_ref().unwrap().overlay.is_none(),
         "retry must not acquire another State overlay"
     );
+    #[cfg(not(windows))]
     std::fs::rename(&hidden, &root).unwrap();
+    #[cfg(windows)]
+    unavailable.restore();
     assert_eq!(reputation.health_generation().unwrap(), reputation_before);
     let completed = worker.commit(&block, &qc).unwrap();
     assert_eq!(worker.applied, (2, qc.block_hash));
@@ -789,8 +812,12 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
     let executor = StateExecutor::spawn(context).unwrap();
     let reputation_root = reputation.root().to_owned();
     let reputation_bounds = reputation.bounds();
+    #[cfg(not(windows))]
     let hidden_root = reputation_root.with_extension("temporarily-unavailable");
+    #[cfg(not(windows))]
     std::fs::rename(&reputation_root, &hidden_root).unwrap();
+    #[cfg(windows)]
+    let unavailable = NativeArchiveUnavailable::new(&reputation_root);
     assert!(
         executor
             .attach_finalized_archives(archives.clone())
@@ -799,7 +826,10 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
     let provider_generation = provider.health_generation().unwrap();
     assert_eq!(provider_generation, 1);
     assert_eq!(chain.state().view().height(), 1);
+    #[cfg(not(windows))]
     std::fs::rename(&hidden_root, &reputation_root).unwrap();
+    #[cfg(windows)]
+    unavailable.restore();
     executor
         .attach_finalized_archives(archives.clone())
         .unwrap();
@@ -1124,4 +1154,162 @@ fn binding_refuses_unpublished_execution_and_captures_the_published_tip_case() {
         "the published tip is captured once"
     );
     assert!(worker.bind_finalized_archives(archives).is_err());
+}
+
+#[cfg(windows)]
+struct NativeArchiveUnavailable {
+    path: std::path::PathBuf,
+    identity: iroha_fs::FileIdentity,
+    original_acl: Vec<u8>,
+    restored: bool,
+}
+
+#[cfg(windows)]
+impl NativeArchiveUnavailable {
+    fn new(path: &std::path::Path) -> Self {
+        let identity = iroha_fs::FileMetadata::symlink_metadata(path)
+            .unwrap()
+            .identity();
+        let original_acl = native_archive_acl_snapshot(path);
+        let result = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(W)"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let guard = Self {
+            path: path.to_owned(),
+            identity,
+            original_acl,
+            restored: false,
+        };
+        assert_eq!(
+            iroha_fs::FileMetadata::symlink_metadata(path)
+                .unwrap()
+                .identity(),
+            identity
+        );
+        assert!(
+            iroha_fs::OwnerDirectory::open(path).is_err(),
+            "native fixture must actually revoke safe custody"
+        );
+        guard
+    }
+    fn restore(mut self) {
+        self.restore_inner();
+    }
+    fn restore_inner(&mut self) {
+        if self.restored {
+            return;
+        }
+        let result = std::process::Command::new("icacls.exe")
+            .arg(&self.path)
+            .args(["/remove:g", "*S-1-1-0"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            iroha_fs::FileMetadata::symlink_metadata(&self.path)
+                .unwrap()
+                .identity(),
+            self.identity
+        );
+        iroha_fs::OwnerDirectory::open(&self.path)
+            .unwrap()
+            .revalidate()
+            .unwrap();
+        assert_eq!(native_archive_acl_snapshot(&self.path), self.original_acl);
+        self.restored = true;
+    }
+}
+
+#[cfg(windows)]
+impl Drop for NativeArchiveUnavailable {
+    fn drop(&mut self) {
+        if !self.restored {
+            // Best-effort fixture restoration also runs when an assertion unwinds. Explicit
+            // restore above remains the asserted success path and checks original identity.
+            let _ = std::process::Command::new("icacls.exe")
+                .arg(&self.path)
+                .args(["/remove:g", "*S-1-1-0"])
+                .output();
+        }
+    }
+}
+
+#[cfg(windows)]
+fn native_archive_snapshot_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::{
+        io::Read as _,
+        os::windows::fs::{MetadataExt as _, OpenOptionsExt as _},
+    };
+    let before = iroha_fs::FileMetadata::symlink_metadata(path).unwrap();
+    assert!(before.is_file());
+    assert_eq!(before.links(), 1);
+    assert_eq!(before.file_attributes() & 0x400, 0);
+    // The SHARE_NONE writer lock has zero extent. Retain a metadata original and issue
+    // no forbidden data read for it; every entry remains in the byte-exact snapshot.
+    let parent = iroha_fs::OwnerDirectory::open(path.parent().unwrap()).unwrap();
+    let access = if before.len() == 0 { 0x80 } else { 0x8000_0000 };
+    let original = std::fs::OpenOptions::new()
+        .access_mode(access | 0x0002_0000)
+        .share_mode(7)
+        .custom_flags(0x0020_0000)
+        .open(path)
+        .unwrap();
+    let held = iroha_fs::FileMetadata::of(&original).unwrap();
+    let custody = iroha_fs::FileSnapshot::of(&original, true).unwrap();
+    assert_eq!(held.identity(), before.identity());
+    assert_eq!(held.len(), before.len());
+    let mut bytes = Vec::new();
+    (&original)
+        .take(held.len())
+        .read_to_end(&mut bytes)
+        .unwrap();
+    for after in [
+        iroha_fs::FileMetadata::of(&original).unwrap(),
+        iroha_fs::FileMetadata::symlink_metadata(path).unwrap(),
+    ] {
+        assert_eq!(after.identity(), held.identity());
+        assert_eq!(after.links(), held.links());
+        assert_eq!(after.len(), held.len());
+        assert_eq!(after.creation_time(), held.creation_time());
+        assert_eq!(after.last_write_time(), held.last_write_time());
+        assert_eq!(after.file_attributes(), held.file_attributes());
+    }
+    assert_eq!(bytes.len() as u64, held.len());
+    assert_eq!(
+        iroha_fs::FileSnapshot::of(&original, true).unwrap(),
+        custody
+    );
+    parent.revalidate().unwrap();
+    bytes
+}
+
+#[cfg(windows)]
+fn native_archive_acl_snapshot(path: &std::path::Path) -> Vec<u8> {
+    let temporary = tempfile::tempdir().unwrap();
+    let output = temporary.path().join("directory-acl.txt");
+    let result = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .arg("/save")
+        .arg(&output)
+        .arg("/q")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(std::fs::metadata(&output).unwrap().len() <= 65536);
+    std::fs::read(output).unwrap()
 }

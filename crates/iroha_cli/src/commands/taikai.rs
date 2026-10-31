@@ -26,6 +26,7 @@ use iroha::{
         },
     },
 };
+use iroha_fs::FileMetadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::LaneId;
 use norito::{
@@ -886,7 +887,7 @@ struct StagedPolicyArtifact {
 #[derive(Debug)]
 struct PolicyOutputSnapshot {
     backup: StagedPolicyArtifact,
-    target_metadata: fs::Metadata,
+    target_metadata: FileMetadata,
 }
 
 impl StagedPolicyArtifact {
@@ -907,7 +908,7 @@ impl StagedPolicyArtifact {
         options.write(true);
         set_policy_no_follow(&mut options);
         let file = options.open(path)?;
-        let metadata = file.metadata()?;
+        let metadata = FileMetadata::of(&file)?;
         if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
             return Err(std::io::Error::other(
                 "staged policy artifact is not a direct regular file",
@@ -917,9 +918,9 @@ impl StagedPolicyArtifact {
         file.sync_all()
     }
 
-    fn metadata(&self) -> std::io::Result<fs::Metadata> {
+    fn metadata(&self) -> std::io::Result<FileMetadata> {
         let path = self.path.as_ref().expect("staged artifact is unpublished");
-        let metadata = fs::symlink_metadata(path)?;
+        let metadata = FileMetadata::symlink_metadata(path)?;
         if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
             return Err(std::io::Error::other(
                 "staged policy artifact is not a direct regular file",
@@ -1102,7 +1103,7 @@ where
 fn rollback_policy_artifacts(
     artifacts: &[PolicyArtifactBytes<'_>],
     backups: &mut [Option<PolicyOutputSnapshot>],
-    published_metadata: &[Option<fs::Metadata>],
+    published_metadata: &[Option<FileMetadata>],
     published: usize,
 ) -> Result<()> {
     let mut failures = Vec::new();
@@ -1138,9 +1139,9 @@ fn rollback_policy_artifacts(
 fn verify_policy_artifact_publication(
     path: &Path,
     label: &str,
-    staged_metadata: &fs::Metadata,
-) -> Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path)
+    staged_metadata: &FileMetadata,
+) -> Result<FileMetadata> {
+    let metadata = FileMetadata::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect published {label} `{}`", path.display()))?;
     if policy_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() {
         return Err(eyre!(
@@ -1160,9 +1161,9 @@ fn verify_policy_artifact_publication(
 fn revalidate_policy_artifact_before_rollback(
     path: &Path,
     label: &str,
-    published_metadata: &fs::Metadata,
+    published_metadata: &FileMetadata,
 ) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let metadata = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to revalidate published {label} `{}` before rollback",
             path.display()
@@ -1201,6 +1202,18 @@ where
     snapshot_policy_output_with_hooks(path, label, replacement, || Ok(()), before_read)
 }
 
+fn open_policy_snapshot(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_policy_no_follow(&mut options);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.share_mode(0x1); // FILE_SHARE_READ keeps the original bytes stable.
+    }
+    options.open(path)
+}
+
 #[allow(clippy::too_many_lines)]
 fn snapshot_policy_output_with_hooks<F, G>(
     path: &Path,
@@ -1213,7 +1226,7 @@ where
     F: FnOnce() -> Result<()>,
     G: FnOnce() -> Result<()>,
 {
-    let path_metadata = match fs::symlink_metadata(path) {
+    let path_metadata = match FileMetadata::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -1231,14 +1244,9 @@ where
     }
     before_open()?;
 
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_policy_no_follow(&mut options);
-    let mut file = options
-        .open(path)
+    let mut file = open_policy_snapshot(path)
         .wrap_err_with(|| format!("failed to open existing {label} `{}`", path.display()))?;
-    let opened_metadata = file
-        .metadata()
+    let opened_metadata = FileMetadata::of(&file)
         .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
     if policy_metadata_is_symlink_or_reparse(&opened_metadata) || !opened_metadata.is_file() {
         return Err(eyre!(
@@ -1278,13 +1286,13 @@ where
             MAX_TAIKAI_POLICY_OUTPUT_SNAPSHOT_BYTES
         ));
     }
-    let final_opened_metadata = file.metadata().wrap_err_with(|| {
+    let final_opened_metadata = FileMetadata::of(&file).wrap_err_with(|| {
         format!(
             "failed to re-inspect opened {label} `{}` after snapshotting",
             path.display()
         )
     })?;
-    let final_path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+    let final_path_metadata = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to re-inspect existing {label} `{}` after snapshotting",
             path.display()
@@ -1347,7 +1355,7 @@ fn revalidate_policy_output_snapshot(
     label: &str,
     snapshot: Option<&PolicyOutputSnapshot>,
 ) -> Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
+    let metadata = match FileMetadata::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && snapshot.is_none() => {
             return Ok(());
@@ -1548,8 +1556,8 @@ fn resolve_rpt_validity_window(
 }
 
 fn ensure_same_policy_input_state(
-    expected: &fs::Metadata,
-    opened: &fs::Metadata,
+    expected: &FileMetadata,
+    opened: &FileMetadata,
     path: &Path,
     label: &str,
     operation: &str,
@@ -1561,7 +1569,7 @@ fn ensure_same_policy_input_state(
 }
 
 #[cfg(unix)]
-fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn policy_input_metadata_state_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     policy_metadata_denotes_same_file(left, right)
         && left.len() == right.len()
@@ -1573,7 +1581,7 @@ fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metada
 }
 
 #[cfg(windows)]
-fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn policy_input_metadata_state_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     policy_metadata_denotes_same_file(left, right)
         && left.file_size() == right.file_size()
@@ -1583,28 +1591,12 @@ fn policy_input_metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metada
 }
 
 #[cfg(not(any(unix, windows)))]
-fn policy_input_metadata_state_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn policy_input_metadata_state_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
 
-#[cfg(unix)]
-fn policy_metadata_denotes_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-fn policy_metadata_denotes_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn policy_metadata_denotes_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
+fn policy_metadata_denotes_same_file(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
 }
 
 fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
@@ -3010,6 +3002,28 @@ mod tests {
             .tempdir_in(root)
             .expect("direct policy output fixture")
     }
+
+    #[test]
+    fn policy_metadata_binds_original_objects_across_names() {
+        let temporary = policy_output_tempdir();
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        let alias = temporary.path().join("alias");
+        fs::write(&first, b"equal policy bytes").unwrap();
+        fs::write(&second, b"equal policy bytes").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        let original = FileMetadata::of(&File::open(&first).unwrap()).unwrap();
+        let linked = FileMetadata::symlink_metadata(&alias).unwrap();
+        let distinct = FileMetadata::symlink_metadata(&second).unwrap();
+        assert!(policy_metadata_denotes_same_file(&original, &linked));
+        assert!(policy_input_metadata_state_unchanged(&original, &linked));
+        assert!(!policy_metadata_denotes_same_file(&original, &distinct));
+        assert!(!policy_input_metadata_state_unchanged(&original, &distinct));
+        assert!(
+            ensure_same_policy_input_state(&original, &distinct, &first, "policy", "during read")
+                .is_err()
+        );
+    }
     #[derive(Debug)]
     struct FailingTryRngError;
     impl std::fmt::Display for FailingTryRngError {
@@ -3156,20 +3170,37 @@ mod tests {
 
         let error =
             snapshot_policy_output_with_hook(&primary, "CEK receipt", &mut replacement, || {
-                std::thread::sleep(Duration::from_millis(20));
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(&primary)
-                    .wrap_err("open existing output for mutation")?;
-                file.write_all(MUTATED).wrap_err("mutate existing output")?;
-                file.sync_all().wrap_err("sync mutated existing output")?;
-                Ok(())
+                #[cfg(windows)]
+                {
+                    assert!(OpenOptions::new().write(true).open(&primary).is_err());
+                    assert!(fs::rename(&primary, tmp.path().join("moved.to")).is_err());
+                    return Err(eyre!(
+                        "native mutation refused while it was being snapshotted"
+                    ));
+                }
+                #[cfg(unix)]
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(&primary)
+                        .wrap_err("open existing output for mutation")?;
+                    file.write_all(MUTATED).wrap_err("mutate existing output")?;
+                    file.sync_all().wrap_err("sync mutated existing output")?;
+                    Ok(())
+                }
             })
             .expect_err("same-length mutation during snapshotting must fail closed");
 
         assert!(error.to_string().contains("while it was being snapshotted"));
+        #[cfg(unix)]
         assert_eq!(fs::read(&primary).expect("read mutated output"), MUTATED);
+        #[cfg(windows)]
+        assert_eq!(
+            fs::read(&primary).expect("read pinned original output"),
+            ORIGINAL
+        );
     }
     #[test]
     fn policy_artifact_writer_revalidates_snapshot_before_publish() {

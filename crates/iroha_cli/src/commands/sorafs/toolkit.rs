@@ -1078,6 +1078,82 @@ mod tests {
         );
     }
     #[test]
+    fn toolkit_pack_directory_matches_explicit_file_archive() {
+        let temp = TempDir::new().expect("temp dir");
+        let site = temp.path().join("site");
+        fs::create_dir_all(site.join("assets")).expect("site directory");
+        let entries = vec![
+            sorafs_car::FileEntry {
+                path: vec!["index.html".into()],
+                data: b"<html>directory toolkit</html>".to_vec(),
+            },
+            sorafs_car::FileEntry {
+                path: vec!["assets".into(), "app.js".into()],
+                data: b"console.log('directory');".to_vec(),
+            },
+            sorafs_car::FileEntry {
+                path: vec!["empty.txt".into()],
+                data: Vec::new(),
+            },
+        ];
+        for entry in &entries {
+            let path = entry
+                .path
+                .iter()
+                .fold(site.clone(), |path, part| path.join(part));
+            fs::write(path, &entry.data).expect("fixture file");
+        }
+        let (plan, payload) = CarBuildPlan::from_files(entries).expect("explicit reference plan");
+        let mut expected_archive = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("reference writer")
+            .write_to(&mut expected_archive)
+            .expect("reference archive");
+        let manifest_path = temp.path().join("manifest.to");
+        let car_path = temp.path().join("payload.car");
+        let report_path = temp.path().join("report.json");
+        let args = PackArgs {
+            input: site,
+            manifest_out: Some(manifest_path.clone()),
+            car_out: Some(car_path.clone()),
+            json_out: Some(report_path.clone()),
+            hybrid_envelope_out: None,
+            hybrid_envelope_json_out: None,
+            hybrid_recipient_x25519: None,
+            hybrid_recipient_kyber: None,
+        };
+        let mut stdout = Vec::new();
+        args.run_without_client_config(&mut stdout)
+            .expect("credential-free directory pack");
+        let manifest: ManifestV1 =
+            decode_from_bytes(&fs::read(manifest_path).expect("manifest bytes"))
+                .expect("canonical manifest");
+        assert_eq!(fs::read(car_path).expect("archive bytes"), expected_archive);
+        assert_eq!(manifest.root_cid, stats.root_cids[0]);
+        assert_eq!(manifest.car_size, expected_archive.len() as u64);
+        assert_eq!(
+            manifest.car_digest,
+            *blake3::hash(&expected_archive).as_bytes()
+        );
+        assert_eq!(manifest.content_length, payload.len() as u64);
+        assert_eq!(
+            manifest.chunk_digest_sha3_256,
+            compute_chunk_digest_sha3(&plan.chunks)
+        );
+        assert_eq!(
+            manifest.por_root,
+            sorafs_car::compute_por_root(&payload, &plan).expect("reference PoR")
+        );
+        let report_bytes = fs::read(report_path).expect("report bytes");
+        assert_eq!(stdout, report_bytes);
+        let report: Value = norito::json::from_slice(&report_bytes).expect("report");
+        let expected = hex::encode(manifest.car_digest);
+        assert_eq!(
+            report.get("car_archive_digest_hex").and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+    #[test]
     fn hybrid_manifest_aad_appends_filename() {
         let digest = blake3::hash(b"manifest");
         let chunk_digest = [0x11; 32];

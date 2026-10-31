@@ -2354,12 +2354,17 @@ impl TieredStateBackend {
         }
         match fs::hard_link(source, dest) {
             Ok(()) => {
-                let file = fs::File::open(dest).wrap_err_with(|| {
-                    format!(
-                        "failed to open hard-linked cold shard {path} for syncing",
-                        path = dest.display()
-                    )
-                })?;
+                // Windows FlushFileBuffers requires a writable file handle.
+                let file = fs::OpenOptions::new()
+                    .read(true)
+                    .write(cfg!(windows))
+                    .open(dest)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to open hard-linked cold shard {path} for syncing",
+                            path = dest.display()
+                        )
+                    })?;
                 file.sync_all().wrap_err_with(|| {
                     format!(
                         "failed to sync hard-linked cold shard {path}",
@@ -2382,12 +2387,16 @@ impl TieredStateBackend {
                         dest = dest.display()
                     )
                 })?;
-                let file = fs::File::open(dest).wrap_err_with(|| {
-                    format!(
-                        "failed to open copied cold shard {path} for syncing",
-                        path = dest.display()
-                    )
-                })?;
+                let file = fs::OpenOptions::new()
+                    .read(true)
+                    .write(cfg!(windows))
+                    .open(dest)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to open copied cold shard {path} for syncing",
+                            path = dest.display()
+                        )
+                    })?;
                 file.sync_all().wrap_err_with(|| {
                     format!(
                         "failed to sync copied cold shard {path}",
@@ -2406,14 +2415,29 @@ impl TieredStateBackend {
         name.parse::<u64>().ok()
     }
     fn sync_dir(path: &Path) -> Result<()> {
-        let file = fs::File::open(path).wrap_err_with(|| {
-            format!(
-                "failed to open directory {path} for syncing",
-                path = path.display()
-            )
-        })?;
-        file.sync_all()
-            .wrap_err_with(|| format!("failed to sync directory {path}", path = path.display()))
+        #[cfg(windows)]
+        {
+            let directory = iroha_fs::OwnerDirectory::open(path).wrap_err_with(|| {
+                format!("failed to open directory {} for syncing", path.display())
+            })?;
+            directory
+                .sync()
+                .wrap_err_with(|| format!("failed to sync directory {}", path.display()))?;
+            directory
+                .revalidate()
+                .wrap_err_with(|| format!("directory changed while syncing {}", path.display()))
+        }
+        #[cfg(not(windows))]
+        {
+            let file = fs::File::open(path).wrap_err_with(|| {
+                format!(
+                    "failed to open directory {path} for syncing",
+                    path = path.display()
+                )
+            })?;
+            file.sync_all()
+                .wrap_err_with(|| format!("failed to sync directory {path}", path = path.display()))
+        }
     }
 }
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -6770,6 +6794,30 @@ mod tests {
         let manifest2 = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest2.cold_reused_entries, 1);
         assert!(manifest2.cold_reused_bytes > 0);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_cold_payload_reuse_and_directory_sync_preserve_bytes() {
+        let directory = tempdir().expect("native cold payload fixture");
+        let source = directory.path().join("source.norito");
+        let destination = directory.path().join("reused.norito");
+        let payload = b"unchanged cold payload";
+        fs::write(&source, payload).expect("write cold payload");
+        assert_eq!(
+            TieredStateBackend::try_reuse_cold_payload(&source, &destination)
+                .expect("flush reused native payload"),
+            Some(payload.len() as u64)
+        );
+        TieredStateBackend::sync_dir(directory.path())
+            .expect("synchronize native cold-store directory");
+        assert_eq!(fs::read(&source).expect("source bytes"), payload);
+        assert_eq!(fs::read(&destination).expect("reused bytes"), payload);
+        let _ = TieredStateBackend::sync_dir(&destination)
+            .expect_err("a regular payload must not be accepted as a directory");
+        assert_eq!(
+            fs::read(&destination).expect("bytes after refusal"),
+            payload
+        );
     }
     #[cfg(unix)]
     #[test]

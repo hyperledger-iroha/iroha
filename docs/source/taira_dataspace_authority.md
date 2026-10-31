@@ -12,7 +12,9 @@ iroha --config /private/original-client.toml dataspace status /private/definitio
 Export requires that invocation's completed three-phase allocation verification.
 Pending status cannot export. The destination must be a fresh direct directory in
 private current-owner custody. It contains `authority.json`, its exact inventoried
-public originals, and a zero-byte `lock` owned by the current user with mode 0600.
+public originals, and a zero-byte `lock` created with mode 0600 on Unix or a
+protected current-user-only DACL on Windows. The same original operation lock
+remains held through replay and export.
 No account private key, validator configuration, binary, or credentials are exported.
 
 After a preserved-state runtime update, status additionally uses

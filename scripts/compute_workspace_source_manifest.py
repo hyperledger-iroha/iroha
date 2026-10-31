@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 import hashlib
+import importlib.util
 import json
 import ntpath
 import os
@@ -42,6 +44,7 @@ _MAX_SOURCE_SEAL_BYTES = 16 * 1024 * 1024 * 1024
 _MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_SYMLINK_TARGET_BYTES = 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
+_RETAINED_SOURCE: ContextVar[object | None] = ContextVar("retained_workspace_source", default=None)
 _STABLE_FILE_FIELDS = (
     "st_dev",
     "st_ino",
@@ -182,7 +185,7 @@ def _root_excluded_policy_directories(root: Path) -> tuple[list[str], str | None
 
     if ".gitignore" not in _git_paths(root, "ls-files", "--cached", "--", ".gitignore"):
         return [], None
-    policy_before = _manifest_for_paths(root, [".gitignore"])
+    policy_before = _root_ignore_policy_snapshot(root)
     with os.scandir(root) as entries:
         directories = sorted(
             (os.fsencode(entry.name + "/") for entry in entries
@@ -229,7 +232,7 @@ def _git_source_paths(root: Path) -> list[str]:
         *excluded_policy_directories,
     )
     if (root_policy_before is not None
-            and _manifest_for_paths(root, [".gitignore"]) != root_policy_before):
+            and _root_ignore_policy_snapshot(root) != root_policy_before):
         raise DirtyReleaseSourceError("root ignore policy changed during policy discovery")
     untracked_ignore_policy = _effective_untracked_ignore_policy(
         root, untracked_ignore_policy
@@ -418,6 +421,7 @@ def _raw_tracked_worktree_changes(root: Path) -> list[str]:
                             metadata,
                             maximum_size=_MAX_SOURCE_FILE_BYTES,
                             label=f"workspace source {relative}",
+                            source_path=root / relative,
                         ) as (source, _):
                             while chunk := source.read(_COPY_CHUNK_BYTES):
                                 digest.update(chunk)
@@ -426,15 +430,13 @@ def _raw_tracked_worktree_changes(root: Path) -> list[str]:
                     mode_matches = stat.S_ISLNK(metadata.st_mode)
                     if mode_matches:
                         try:
-                            target = os.readlink(leaf, dir_fd=parent_descriptor)
+                            target = _retained_source_readlink(root / relative, leaf, parent_descriptor)
                             after = os.stat(
                                 leaf,
                                 dir_fd=parent_descriptor,
                                 follow_symlinks=False,
                             )
-                            repeated_target = os.readlink(
-                                leaf, dir_fd=parent_descriptor
-                            )
+                            repeated_target = _retained_source_readlink(root / relative, leaf, parent_descriptor)
                         except OSError as error:
                             raise SourceSealError(
                                 f"workspace symlink changed while inspected: {relative}"
@@ -568,15 +570,21 @@ def _stable_regular_reader(
         raise SourceSealError(
             f"{label} must be {requirement}"
         )
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise SourceSealError(f"{label} changed before it was opened") from error
-    stream = os.fdopen(descriptor, "rb")
-    try:
+    with ExitStack() as stack:
+        keeper = _RETAINED_SOURCE.get()
+        if keeper is not None and path.is_relative_to(keeper.root) and not keeper.contains(path):
+            raise SourceSealError("source read is outside the original retained census")
+        if keeper is not None and keeper.contains(path):
+            stream = stack.enter_context(keeper.reader(path))
+        else:
+            try:
+                descriptor = os.open(path, flags)
+            except OSError as error:
+                raise SourceSealError(f"{label} changed before it was opened") from error
+            stream = stack.enter_context(os.fdopen(descriptor, "rb"))
         opened = os.fstat(stream.fileno())
         if (
             (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
@@ -602,8 +610,32 @@ def _stable_regular_reader(
             raise SourceSealError(f"{label} changed after it was read") from error
         if _stable_metadata_changed(before, path_after):
             raise SourceSealError(f"{label} was replaced while it was read")
-    finally:
-        stream.close()
+
+
+def _root_ignore_policy_snapshot(root: Path) -> str:
+    """Bind ignore-policy bytes on native Windows without a Unix dir_fd walk."""
+    if _descriptor_source_manifest_supported():
+        return _manifest_for_paths(root, [".gitignore"])
+    digest = hashlib.sha256()
+    with _stable_regular_reader(root / ".gitignore", maximum_size=_MAX_SOURCE_FILE_BYTES,
+                                label="root ignore policy") as (reader, metadata):
+        for chunk in iter(lambda: reader.read(_COPY_CHUNK_BYTES), b""):
+            digest.update(chunk)
+        # This is only an internal before/after policy observation, never the
+        # workspace aggregate. Preserve the old predicate's mode sensitivity.
+        return f"{stat.S_IMODE(metadata.st_mode):o}:{digest.hexdigest()}"
+
+
+def _retained_source_readlink(path: Path, leaf: bytes | None = None,
+                              parent_descriptor: int | None = None):
+    keeper = _RETAINED_SOURCE.get()
+    if keeper is not None and path.is_relative_to(keeper.root) and not keeper.contains(path):
+        raise SourceSealError("source link is outside the original retained census")
+    if keeper is not None and keeper.contains(path):
+        return keeper.readlink(path)
+    if parent_descriptor is not None:
+        return os.readlink(leaf, dir_fd=parent_descriptor)
+    return os.readlink(path)
 
 
 def _stable_file_sha256(
@@ -954,20 +986,28 @@ def _stable_regular_reader_at(
     *,
     maximum_size: int,
     label: str,
+    source_path: Path | None = None,
 ) -> Iterator[tuple[BinaryIO, os.stat_result]]:
     """Open one regular member relative to an already authenticated parent."""
 
     if not stat.S_ISREG(expected.st_mode) or expected.st_size > maximum_size:
         raise SourceSealError(f"{label} must be one bounded regular file")
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
-    except OSError as error:
-        raise SourceSealError(f"{label} changed before it was opened") from error
-    stream = os.fdopen(descriptor, "rb")
-    try:
+    with ExitStack() as stack:
+        keeper = _RETAINED_SOURCE.get()
+        if (keeper is not None and source_path is not None
+                and source_path.is_relative_to(keeper.root) and not keeper.contains(source_path)):
+            raise SourceSealError("source read is outside the original retained census")
+        if keeper is not None and source_path is not None and keeper.contains(source_path):
+            stream = stack.enter_context(keeper.reader(source_path))
+        else:
+            try:
+                descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
+            except OSError as error:
+                raise SourceSealError(f"{label} changed before it was opened") from error
+            stream = stack.enter_context(os.fdopen(descriptor, "rb"))
         opened = os.fstat(stream.fileno())
         if _stable_metadata_changed(
             expected,
@@ -988,8 +1028,6 @@ def _stable_regular_reader_at(
             raise SourceSealError(f"{label} changed after it was read") from error
         if _stable_metadata_changed(expected, path_after):
             raise SourceSealError(f"{label} was replaced while it was read")
-    finally:
-        stream.close()
 
 
 def _inspect_source_members(
@@ -1799,13 +1837,11 @@ def _manifest_snapshot_for_paths(
 
                 if stat.S_ISLNK(metadata.st_mode):
                     try:
-                        target = os.readlink(leaf, dir_fd=parent_descriptor)
+                        target = _retained_source_readlink(root / relative, leaf, parent_descriptor)
                         after = os.stat(
                             leaf, dir_fd=parent_descriptor, follow_symlinks=False
                         )
-                        repeated_target = os.readlink(
-                            leaf, dir_fd=parent_descriptor
-                        )
+                        repeated_target = _retained_source_readlink(root / relative, leaf, parent_descriptor)
                     except OSError as error:
                         raise SourceSealError(
                             f"workspace symlink changed while inspected: {relative}"
@@ -1830,6 +1866,7 @@ def _manifest_snapshot_for_paths(
                         metadata,
                         maximum_size=_MAX_SOURCE_FILE_BYTES,
                         label=f"workspace source {relative}",
+                        source_path=root / relative,
                     ) as (source, stable_metadata):
                         hasher.update(
                             struct.pack(
@@ -2083,9 +2120,9 @@ def _portable_clean_index_manifest_snapshot(
                 ) from error
             if stat.S_ISLNK(metadata.st_mode):
                 try:
-                    target = os.readlink(path)
+                    target = _retained_source_readlink(path)
                     after = path.lstat()
-                    repeated_target = os.readlink(path)
+                    repeated_target = _retained_source_readlink(path)
                 except OSError as error:
                     raise SourceSealError(
                         f"workspace symlink changed while inspected: {relative}"
@@ -2246,6 +2283,100 @@ def native_artifact_workspace_source_manifest(root: Path) -> str:
     if _descriptor_source_manifest_supported():
         return workspace_source_manifest(root)
     return _portable_clean_index_manifest(root)
+
+
+class RetainedWorkspaceSource:
+    """Canonical aggregate and original source custody held by the publishing parent.
+
+    The native publisher receives this aggregate as a source-owner assertion;
+    it cannot reconstruct source authority from the digest alone. Keep this
+    context alive until the child has durably sealed its bundle, then call
+    ``revalidate`` before accepting its manifest anchor. This does not establish
+    which dependency, toolchain or generated inputs Cargo consumed.
+    """
+
+    def __init__(self, root: Path, manifest: str, keeper):
+        self.root = root
+        self.manifest = manifest
+        self._keeper = keeper
+
+    @contextmanager
+    def reader(self, path: Path):
+        """Read an already captured regular original inside this exact source session."""
+        self.revalidate()
+        try:
+            with self._keeper.reader(path) as stream:
+                yield stream
+            self.revalidate()
+        except BaseException:
+            self._keeper.failed = True
+            raise
+
+    def revalidate_originals(self) -> None:
+        """Recheck captured originals without processes; this is not full source admission.
+
+        This checks retained identities, names, absence and the original context.
+        It does not enumerate new source membership or recompute the canonical
+        aggregate. Callers must still call ``revalidate`` before admission and
+        after any bounded interval using only this original-owner check.
+        """
+        try:
+            self._keeper.revalidate()
+            if _RETAINED_SOURCE.get() is not self._keeper:
+                raise SourceSealError("source owner is outside its original retained context")
+        except BaseException:
+            self._keeper.failed = True
+            raise
+
+    def revalidate(self) -> None:
+        """Recheck originals and the unchanged canonical aggregate before acceptance."""
+        try:
+            self.revalidate_originals()
+            if native_artifact_workspace_source_manifest(self.root) != self.manifest:
+                raise SourceSealError("retained canonical workspace aggregate changed")
+            self.revalidate_originals()
+        except BaseException:
+            self._keeper.failed = True
+            raise
+
+
+@contextmanager
+def retained_workspace_source(root: Path, expected_manifest: str, *, custody_module=None, native_module=None):
+    """Keep every canonical source original through a synchronous publication.
+
+    Windows requires native Python and local fixed NTFS; raw WSL/network link
+    payloads and unavailable change notifications remain refused. The existing
+    canonical census and aggregate are unchanged. In particular, this never
+    substitutes a snapshot-file hash or the narrower PLONK native-input census.
+    """
+    expected_manifest = _validate_sha256(expected_manifest, "expected workspace manifest")
+    if _RETAINED_SOURCE.get() is not None:
+        raise SourceSealError("nested workspace source owners are not supported")
+    if custody_module is None:
+        path = Path(__file__).with_name("workspace_source_keeper.py")
+        spec = importlib.util.spec_from_file_location("_iroha_workspace_source_keeper", path)
+        if spec is None or spec.loader is None:
+            raise SourceSealError("original workspace source keeper is unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        module = custody_module
+    with module.SourceKeeper(root, maximum_members=_MAX_PATH_COUNT, native_module=native_module) as keeper:
+        paths = _git_source_paths(root)
+        for relative in paths:
+            _validate_source_path_bytes(os.fsencode(relative))
+        keeper.capture(paths)
+        token = _RETAINED_SOURCE.set(keeper)
+        try:
+            manifest = native_artifact_workspace_source_manifest(root)
+            if manifest != expected_manifest:
+                raise SourceSealError("retained source differs from its canonical anchor")
+            keeper.revalidate()
+            owner = RetainedWorkspaceSource(root, manifest, keeper)
+            yield owner
+            owner.revalidate()
+        finally:
+            _RETAINED_SOURCE.reset(token)
 
 
 def _release_workspace_snapshot(root: Path) -> tuple[str, str]:

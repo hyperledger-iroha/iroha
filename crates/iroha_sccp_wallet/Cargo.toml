@@ -21,6 +21,7 @@ iroha_config_base = { workspace = true }
 # Native integration retains the mandatory Wallet-to-SDK proving path.
 iroha_wallet = { workspace = true }
 iroha_operation_journal = { workspace = true }
+iroha_fs = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 hex = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }

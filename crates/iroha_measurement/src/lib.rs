@@ -3,7 +3,7 @@
 //! This crate is the shared owner of phase timing and resource instrumentation
 //! for proof, verification, native and SDK flows. It sits below the proof,
 //! Core and data-model crates: it depends only on `iroha_allocation`, the
-//! Norito codec and the C library.
+//! Norito codec and native operating-system APIs.
 //!
 //! # What a record contains
 //!

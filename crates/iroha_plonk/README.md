@@ -298,6 +298,12 @@ inputs disable built-in admission while
 allowing strict compilation/generation. This source identity is not an external
 dependency or toolchain attestation.
 
+Filesystem paths are serialized component by component into Git's slash-separated
+census names on every native host. Windows separators do not disable source walks
+or omit restored references. Git inventory bytes remain strictly validated, and
+case and literal filename bytes are preserved; a shared fixture digest tests the
+same source identity on Unix and Windows.
+
 Cargo recomputes membership and file contents on each invocation through an absent
 `OUT_DIR` rerun input. This detects newly added untracked sources or build config
 without recursively watching ignored native outputs. The identity module is only
@@ -317,6 +323,17 @@ still compared. Independent parameter admission starts a fresh memo; it is
 neither global nor persisted and retains no column tables. Cancellation fails
 closed, and a poisoned memo causes recomputation. This optimization changes no
 source-admission authority or proof bytes.
+
+`prover::rebuild_key_and_witness_v2_cancellable` prepares a source-bound V2
+key and witness from one actual synthesis. It checks the opaque seal and exact
+parameters before allocating witness tables, validates typed instances, moves
+advice into wiping ownership, and checks the actual descriptor and complete
+fixed/selector/copy/permutation source against the seal before constructing
+proving buffers. The existing witnessless rebuild entry point remains separate.
+Actual-source changes return `RebuildWitnessError::Rebuild`; instance, synthesis
+and witness-shape failures return `RebuildWitnessError::Witness`. Both retain
+cooperative cancellation. The result still requires normal proving and full
+self-verification; it adds no cache, authority or monetary acceptance path.
 
 On ARM64 targets other than Windows, SHA-256 source and column hashing uses the
 existing `sha2` hardware backend with runtime CPU detection and portable fallback.

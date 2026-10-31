@@ -39,6 +39,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_fs::FileMetadata;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -2825,6 +2826,7 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
 }
+#[cfg(unix)]
 fn write_secret_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = open_secret_output_file(path)?;
     file.write_all(bytes)
@@ -2841,12 +2843,30 @@ fn secret_output_effective_uid() -> u32 {
     // SAFETY: `geteuid` has no preconditions and does not retain pointers.
     unsafe { geteuid() }
 }
-#[cfg(not(unix))]
-fn open_secret_output_file(path: &Path) -> Result<File, String> {
-    Err(format!(
-        "failed to write `{}`: secret outputs require Unix owner/mode/link custody enforcement",
-        path.display()
-    ))
+#[cfg(windows)]
+fn write_secret_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let directory = iroha_fs::OwnerDirectory::open_or_create(parent).map_err(|err| {
+        format!(
+            "failed to retain secret-output parent `{}`: {err}",
+            parent.display()
+        )
+    })?;
+    // Keep the original private creator and all ancestors through the last check.
+    // Existing names are never opened for writing or truncated.
+    let mut file = iroha_fs::RetainedFile::create_new_private(path)
+        .map_err(|err| format!("failed to create secret output `{}`: {err}", path.display()))?;
+    let written = file
+        .file_mut()
+        .write_all(bytes)
+        .and_then(|()| file.file().sync_all());
+    let custody = file.revalidate().and_then(|()| directory.revalidate());
+    written
+        .and(custody)
+        .map_err(|err| format!("failed to finish secret output `{}`: {err}", path.display()))
 }
 #[cfg(unix)]
 fn open_secret_output_file(path: &Path) -> Result<File, String> {
@@ -10101,41 +10121,23 @@ fn validate_moderation_request_text(
     Ok(())
 }
 fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
-    let before = fs::symlink_metadata(path)
+    let mut file = iroha_fs::RetainedFile::open_regular(path)
+        .map_err(|error| format!("failed to retain {label} `{}`: {error}", path.display()))?;
+    let before = file
+        .snapshot()
         .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
-    if before.file_type().is_symlink() || !before.is_file() {
+    let length = file
+        .file()
+        .metadata()
+        .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?
+        .len();
+    if length > maximum {
         return Err(format!(
-            "{label} `{}` must be a regular non-symlink file",
-            path.display()
-        ));
-    }
-    if before.len() > maximum {
-        return Err(format!(
-            "{label} `{}` has {} bytes; maximum is {maximum}",
+            "{label} `{}` has {length} bytes; maximum is {maximum}",
             path.display(),
-            before.len()
         ));
     }
-    let identity = moderation_file_identity(&before);
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let file = options
-        .open(path)
-        .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
-    let opened = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect opened {label} `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if !opened.is_file() || moderation_file_identity(&opened) != identity {
-        return Err(format!(
-            "{label} `{}` changed identity while opening",
-            path.display()
-        ));
-    }
-    let capacity = usize::try_from(before.len())
+    let capacity = usize::try_from(length)
         .map_err(|_| format!("{label} size does not fit into this platform's usize"))?;
     let mut bytes = Vec::new();
     bytes
@@ -10144,7 +10146,8 @@ fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, 
     let read_limit = maximum
         .checked_add(1)
         .ok_or_else(|| format!("{label} read limit overflows u64"))?;
-    file.take(read_limit)
+    Read::by_ref(file.file_mut())
+        .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {label} `{}`: {error}", path.display()))?;
     let observed_len =
@@ -10152,16 +10155,13 @@ fn read_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, 
     if observed_len > maximum {
         return Err(format!(
             "{label} `{}` grew beyond the {maximum}-byte limit while reading",
-            path.display()
+            path.display(),
         ));
     }
-    let after = fs::symlink_metadata(path)
+    let after = file
+        .snapshot()
         .map_err(|error| format!("failed to re-inspect {label} `{}`: {error}", path.display()))?;
-    if after.file_type().is_symlink()
-        || !after.is_file()
-        || moderation_file_identity(&after) != identity
-        || observed_len != before.len()
-    {
+    if before != after || observed_len != length {
         return Err(format!(
             "{label} `{}` changed while it was being read",
             path.display()
@@ -10178,47 +10178,23 @@ fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
             executable.display()
         )
     })?;
-    let before = fs::symlink_metadata(&canonical).map_err(|error| {
-        format!(
-            "failed to inspect moderation runner binary `{}`: {error}",
-            canonical.display()
-        )
-    })?;
-    if before.file_type().is_symlink() || !before.is_file() {
-        return Err(format!(
-            "moderation runner binary `{}` must be a regular non-symlink file",
-            canonical.display()
-        ));
-    }
-    let identity = moderation_file_identity(&before);
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options.open(&canonical).map_err(|error| {
-        format!(
-            "failed to open moderation runner binary `{}`: {error}",
-            canonical.display()
-        )
-    })?;
-    let opened = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect opened moderation runner binary `{}`: {error}",
-            canonical.display()
-        )
-    })?;
-    if !opened.is_file() || moderation_file_identity(&opened) != identity {
-        return Err("moderation runner binary changed identity while opening".to_string());
-    }
+    // Cargo can hardlink this exact executing image to its dependency artifact. The build-input
+    // owner captures that initial link count and retains the original image and every ancestor.
+    let mut file = iroha_fs::RetainedBuildInput::open(&canonical)
+        .map_err(|error| format!("failed to retain moderation runner binary: {error}"))?;
+    let before = file
+        .snapshot()
+        .map_err(|error| format!("failed to inspect moderation runner binary: {error}"))?;
+    let expected_len = file
+        .len()
+        .map_err(|error| format!("failed to inspect moderation runner binary length: {error}"))?;
     let mut hasher = blake3::Hasher::new();
     let mut chunk = [0_u8; 64 * 1024];
     let mut total_bytes = 0_u64;
     loop {
-        let read = file.read(&mut chunk).map_err(|error| {
-            format!(
-                "failed to hash moderation runner binary `{}`: {error}",
-                canonical.display()
-            )
-        })?;
+        let read = file
+            .read(&mut chunk)
+            .map_err(|error| format!("failed to hash moderation runner binary: {error}"))?;
         if read == 0 {
             break;
         }
@@ -10230,34 +10206,13 @@ fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
             .ok_or_else(|| "moderation runner binary length overflow".to_string())?;
         hasher.update(&chunk[..read]);
     }
-    let after = fs::symlink_metadata(&canonical).map_err(|error| {
-        format!(
-            "failed to re-inspect moderation runner binary `{}`: {error}",
-            canonical.display()
-        )
-    })?;
-    if after.file_type().is_symlink()
-        || !after.is_file()
-        || moderation_file_identity(&after) != identity
-        || total_bytes != before.len()
-    {
+    let after = file
+        .snapshot()
+        .map_err(|error| format!("failed to re-inspect moderation runner binary: {error}"))?;
+    if before != after || total_bytes != expected_len {
         return Err("moderation runner binary changed while hashing".to_string());
     }
     Ok(*hasher.finalize().as_bytes())
-}
-#[cfg(unix)]
-fn moderation_file_identity(metadata: &FsMetadata) -> (u64, u64, u64, i64, i64) {
-    (
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mtime(),
-        metadata.mtime_nsec(),
-    )
-}
-#[cfg(not(unix))]
-fn moderation_file_identity(metadata: &FsMetadata) -> (u64, Option<SystemTime>) {
-    (metadata.len(), metadata.modified().ok())
 }
 fn load_moderation_runner_for_current_executable(
     manifest: ModerationReproManifestV1,
@@ -10359,6 +10314,16 @@ fn parse_moderation_trust_anchor(value: &str, context: &str) -> Result<PublicKey
     PublicKey::from_str(trimmed)
         .map_err(|error| format!("invalid `--trust-anchor` for `{context}`: {error}"))
 }
+#[cfg(windows)]
+#[path = "sorafs_cli/moderation_signing_key_windows.rs"]
+mod moderation_signing_key_windows;
+
+#[cfg(windows)]
+fn load_moderation_signing_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
+    moderation_signing_key_windows::load(path, context)
+}
+
+#[cfg(not(windows))]
 fn load_moderation_signing_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
     #[cfg(not(unix))]
     {
@@ -11508,6 +11473,54 @@ mod manifest_tests {
     fn canonical_temp_path(temp: &TempDir) -> std::path::PathBuf {
         temp.path().canonicalize().expect("canonical tempdir")
     }
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn moderation_signing_key_private_file_preserves_shared_parser() {
+        let temp = TempDir::new().unwrap();
+        let path = canonical_temp_path(&temp).join("moderation.key");
+        let key = iroha_crypto::KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
+            .expect("fixture key");
+        let text = format!(
+            " \t{}\r\n",
+            iroha_crypto::ExposedPrivateKey(key.private_key().clone())
+        );
+        let mut file = iroha_fs::RetainedFile::create_new_private(&path).unwrap();
+        file.file_mut().write_all(text.as_bytes()).unwrap();
+        file.file().sync_all().unwrap();
+        file.revalidate().unwrap();
+        drop(file);
+        let observed = load_moderation_signing_key(&path, "private-file regression").unwrap();
+        assert_eq!(observed, parse_private_key_inline(&text).unwrap());
+        assert_eq!(&observed, key.private_key());
+        assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+    }
+
+    #[test]
+    fn moderation_native_reader_preserves_bounds_and_refuses_hardlinks() {
+        let temp = TempDir::new().unwrap();
+        let root = canonical_temp_path(&temp);
+        let path = root.join("manifest.json");
+        fs::write(&path, b"public-fixture").unwrap();
+        assert_eq!(
+            read_file_bounded(&path, 14, "manifest").unwrap(),
+            b"public-fixture"
+        );
+        assert!(read_file_bounded(&path, 13, "manifest").is_err());
+        assert!(read_file_bounded(&root, 14, "manifest").is_err());
+        fs::hard_link(&path, root.join("alias.json")).unwrap();
+        assert!(read_file_bounded(&path, 14, "manifest").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"public-fixture");
+    }
+    #[test]
+    fn moderation_native_executable_hash_matches_original_file_bytes() {
+        let original = fs::File::open(env::current_exe().unwrap()).unwrap();
+        let mut expected = blake3::Hasher::new();
+        expected.update_reader(original).unwrap();
+        assert_eq!(
+            moderation_runner_current_executable_hash().unwrap(),
+            *expected.finalize().as_bytes(),
+        );
+    }
     macro_rules! assert_json_str {
         ($object:ident, $field:literal, $expected:expr) => {
             assert_eq!($object.get($field).and_then(Value::as_str), Some($expected));
@@ -11545,6 +11558,50 @@ mod manifest_tests {
             fs::read(&output_path).expect("read output"),
             br#"{"ok":true}"#
         );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_secret_output_creates_private_original_under_missing_parent() {
+        let temp = TempDir::new().expect("tempdir");
+        let output = canonical_temp_path(&temp)
+            .join("nested")
+            .join("proxy-bootstrap.json");
+        let capability = b"test bootstrap capability\0with exact bytes";
+        write_secret_text(&output, capability).expect("write private capability");
+        assert_eq!(
+            iroha_fs::read_private(&output, capability.len())
+                .expect("native private custody")
+                .as_slice(),
+            capability
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_secret_output_refuses_existing_original_and_preserves_preopened_reader() {
+        use std::io::Read as _;
+        let temp = TempDir::new().expect("tempdir");
+        let output = canonical_temp_path(&temp).join("proxy-bootstrap.json");
+        write_secret_text(&output, b"original capability").expect("first private output");
+        let mut reader = File::open(&output).expect("pre-open original");
+        assert!(write_secret_text(&output, b"replacement capability").is_err());
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .expect("read original handle");
+        assert_eq!(bytes, b"original capability");
+        assert_eq!(fs::read(&output).unwrap(), b"original capability");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_secret_output_refuses_existing_hardlink_without_changing_either_name() {
+        let temp = TempDir::new().expect("tempdir");
+        let original = canonical_temp_path(&temp).join("original");
+        let alias = canonical_temp_path(&temp).join("proxy-bootstrap.json");
+        fs::write(&original, b"untouched").expect("create original");
+        fs::hard_link(&original, &alias).expect("create actual hard link");
+        assert!(write_secret_text(&alias, b"new capability").is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"untouched");
+        assert_eq!(fs::read(&alias).unwrap(), b"untouched");
     }
     #[cfg(unix)]
     #[test]
@@ -14849,50 +14906,8 @@ fn parse_reputation_auth_account(raw: &str, context: &str) -> Result<AccountId, 
     }
     Ok(account)
 }
-#[cfg(unix)]
-type ReputationAuthFileIdentity = (u64, u64);
-#[cfg(windows)]
-type ReputationAuthFileIdentity = (Option<u32>, Option<u64>);
-#[cfg(not(any(unix, windows)))]
-type ReputationAuthFileIdentity = ();
-#[cfg(unix)]
-fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
-    (metadata.dev(), metadata.ino())
-}
-#[cfg(windows)]
-fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
-    use std::os::windows::fs::MetadataExt as _;
-    (metadata.volume_serial_number(), metadata.file_index())
-}
-#[cfg(not(any(unix, windows)))]
-fn reputation_auth_file_identity(_metadata: &FsMetadata) -> ReputationAuthFileIdentity {}
-#[cfg(unix)]
-const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
-    true
-}
-#[cfg(windows)]
-const fn reputation_auth_file_identity_available(identity: ReputationAuthFileIdentity) -> bool {
-    identity.0.is_some() && identity.1.is_some()
-}
-#[cfg(not(any(unix, windows)))]
-const fn reputation_auth_file_identity_available(_identity: ReputationAuthFileIdentity) -> bool {
-    false
-}
-fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
+fn reputation_auth_file_is_single_link(metadata: &FileMetadata) -> bool {
+    metadata.links() == 1
 }
 #[cfg(windows)]
 fn reputation_auth_file_is_reparse_point(metadata: &FsMetadata) -> bool {
@@ -14907,11 +14922,8 @@ fn reputation_auth_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
 fn reputation_auth_file_is_indirect(metadata: &FsMetadata) -> bool {
     metadata.file_type().is_symlink() || reputation_auth_file_is_reparse_point(metadata)
 }
-fn validate_reputation_auth_file_metadata(metadata: &FsMetadata) -> Result<(), String> {
-    if reputation_auth_file_is_indirect(metadata)
-        || !metadata.file_type().is_file()
-        || !reputation_auth_file_identity_available(reputation_auth_file_identity(metadata))
-    {
+fn validate_reputation_auth_file_metadata(metadata: &FileMetadata) -> Result<(), String> {
+    if reputation_auth_file_is_indirect(metadata) || !metadata.file_type().is_file() {
         return Err(
             "reputation authentication private key must be a regular non-symlink file with a stable identity"
                 .to_owned(),
@@ -14932,8 +14944,8 @@ fn validate_reputation_auth_file_metadata(metadata: &FsMetadata) -> Result<(), S
     Ok(())
 }
 #[cfg(unix)]
-fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
-    reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
+fn reputation_auth_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
         && left.nlink() == 1
         && right.nlink() == 1
         && left.len() == right.len()
@@ -14946,52 +14958,30 @@ fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
         && left.gid() == right.gid()
 }
 #[cfg(windows)]
-fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+fn reputation_auth_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    reputation_auth_file_identity_available(reputation_auth_file_identity(left))
-        && reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
+    left.identity() == right.identity()
+        && left.links() == 1
+        && right.links() == 1
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
 #[cfg(not(any(unix, windows)))]
-fn reputation_auth_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
+fn reputation_auth_metadata_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
-#[cfg(unix)]
-fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    options
-        .open(path)
-        .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
+fn open_reputation_auth_private_key(path: &Path) -> Result<iroha_fs::RetainedFile, String> {
+    // Keep the original object and every ancestor through the complete bounded read. The
+    // canonical owner checks Unix private modes and Windows exact current-owner SID/DACLs.
+    iroha_fs::RetainedFile::open_private(path).map_err(|_| {
+        "failed to securely open reputation authentication private key with private current-owner custody"
+            .to_owned()
+    })
 }
-#[cfg(windows)]
-fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .share_mode(0x0000_0001)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    options
-        .open(path)
-        .map_err(|_| "failed to securely open reputation authentication private key".to_owned())
-}
-#[cfg(not(any(unix, windows)))]
-fn open_reputation_auth_private_key(_path: &Path) -> Result<File, String> {
-    Err(
-        "this platform does not expose the stable file identity required for reputation authentication private keys"
-            .to_owned(),
-    )
-}
-fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
-    let before = fs::symlink_metadata(path)
+fn read_reputation_auth_private_key(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+    let before = FileMetadata::symlink_metadata(path)
         .map_err(|_| "failed to inspect reputation authentication private key".to_owned())?;
     validate_reputation_auth_file_metadata(&before)?;
     if before.len() == 0 || before.len() > REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES {
@@ -15003,8 +14993,7 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
         "reputation authentication private key length is not representable on this host".to_owned()
     })?;
     let mut file = open_reputation_auth_private_key(path)?;
-    let opened = file
-        .metadata()
+    let opened = FileMetadata::of(file.file())
         .map_err(|_| "failed to inspect opened reputation authentication private key".to_owned())?;
     validate_reputation_auth_file_metadata(&opened)?;
     if !reputation_auth_metadata_unchanged(&before, &opened) {
@@ -15012,17 +15001,18 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
             "reputation authentication private key changed between inspection and open".to_owned(),
         );
     }
-    let mut bytes = vec![0_u8; expected_len];
-    file.read_exact(&mut bytes).map_err(|error| {
+    let mut bytes = zeroize::Zeroizing::new(vec![0_u8; expected_len]);
+    file.file_mut().read_exact(&mut bytes).map_err(|error| {
         if error.kind() == io::ErrorKind::UnexpectedEof {
             "reputation authentication private key changed length while being read".to_owned()
         } else {
             "failed to read reputation authentication private key".to_owned()
         }
     })?;
-    let mut trailing = [0_u8; 1];
+    let mut trailing = zeroize::Zeroizing::new([0_u8; 1]);
     if file
-        .read(&mut trailing)
+        .file_mut()
+        .read(&mut *trailing)
         .map_err(|_| "failed to finish reading reputation authentication private key".to_owned())?
         != 0
     {
@@ -15030,10 +15020,10 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
             "reputation authentication private key changed length while being read".to_owned(),
         );
     }
-    let after_file = file.metadata().map_err(|_| {
+    let after_file = FileMetadata::of(file.file()).map_err(|_| {
         "failed to re-inspect opened reputation authentication private key".to_owned()
     })?;
-    let after_path = fs::symlink_metadata(path)
+    let after_path = FileMetadata::symlink_metadata(path)
         .map_err(|_| "failed to re-inspect reputation authentication private key".to_owned())?;
     validate_reputation_auth_file_metadata(&after_file)?;
     validate_reputation_auth_file_metadata(&after_path)?;
@@ -15043,6 +15033,9 @@ fn read_reputation_auth_private_key(path: &Path) -> Result<Vec<u8>, String> {
     {
         return Err("reputation authentication private key changed while being read".to_owned());
     }
+    file.revalidate().map_err(|_| {
+        "reputation authentication private key custody changed while being read".to_owned()
+    })?;
     Ok(bytes)
 }
 fn load_reputation_auth_private_key(path: &Path, context: &str) -> Result<PrivateKey, String> {
@@ -19897,13 +19890,14 @@ mod tests {
     }
     fn write_reputation_private_key(path: &Path, key_pair: &KeyPair) {
         let exposed = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
-        fs::write(path, format!("{exposed}\n")).expect("write private key fixture");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-                .expect("secure private key permissions");
-        }
+        write_reputation_private_fixture(path, format!("{exposed}\n").as_bytes());
+    }
+    fn write_reputation_private_fixture(path: &Path, bytes: &[u8]) {
+        let mut file = iroha_fs::RetainedFile::create_new_private(path)
+            .expect("create private current-owner fixture");
+        file.file_mut().write_all(bytes).unwrap();
+        file.file().sync_all().unwrap();
+        file.revalidate().unwrap();
     }
     fn reputation_response_fixture(
         status: &str,
@@ -20487,47 +20481,108 @@ mod tests {
         assert!(error.contains("does not control"));
     }
     #[test]
+    fn reputation_auth_native_identity_rejects_equal_byte_substitution_and_hardlinks() {
+        let directory = tempdir().unwrap();
+        let first = directory.path().join("first.key");
+        let second = directory.path().join("second.key");
+        let alias = directory.path().join("alias.key");
+        for path in [&first, &second] {
+            write_reputation_private_fixture(path, b"public-fixture");
+        }
+        let before = FileMetadata::symlink_metadata(&first).unwrap();
+        let opened =
+            FileMetadata::of(open_reputation_auth_private_key(&first).unwrap().file()).unwrap();
+        assert!(reputation_auth_metadata_unchanged(&before, &opened));
+        assert!(!reputation_auth_metadata_unchanged(
+            &before,
+            &FileMetadata::symlink_metadata(&second).unwrap(),
+        ));
+        assert_eq!(
+            read_reputation_auth_private_key(&first).unwrap().as_slice(),
+            b"public-fixture"
+        );
+        fs::hard_link(&first, &alias).unwrap();
+        let aliased = FileMetadata::symlink_metadata(&alias).unwrap();
+        assert_eq!(before.identity(), aliased.identity());
+        assert!(!reputation_auth_file_is_single_link(&aliased));
+        assert!(
+            read_reputation_auth_private_key(&first)
+                .unwrap_err()
+                .contains("exactly one hard link")
+        );
+        fs::remove_file(&alias).unwrap();
+        fs::write(&first, b"changed-public-fixture").unwrap();
+        assert!(!reputation_auth_metadata_unchanged(
+            &opened,
+            &FileMetadata::symlink_metadata(&first).unwrap(),
+        ));
+    }
+
+    #[test]
     fn reputation_auth_private_key_rejects_malformed_oversize_and_leaking_errors() {
         let directory = tempdir().expect("tempdir");
         let malformed_path = directory.path().join("malformed.key");
         let secret = "secret-material-that-must-not-appear";
-        fs::write(&malformed_path, secret).expect("write malformed key");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&malformed_path, fs::Permissions::from_mode(0o600))
-                .expect("secure malformed fixture");
-        }
+        write_reputation_private_fixture(&malformed_path, secret.as_bytes());
         let error =
             load_reputation_auth_private_key(&malformed_path, "test").expect_err("malformed key");
         assert!(error.contains("malformed"));
         assert!(!error.contains(secret));
         let utf8_path = directory.path().join("invalid-utf8.key");
-        fs::write(&utf8_path, [0xff_u8]).expect("write invalid UTF-8 key");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&utf8_path, fs::Permissions::from_mode(0o600))
-                .expect("secure UTF-8 fixture");
-        }
+        write_reputation_private_fixture(&utf8_path, &[0xff_u8]);
         let error =
             load_reputation_auth_private_key(&utf8_path, "test").expect_err("invalid UTF-8 key");
         assert!(error.contains("not valid UTF-8"));
         let oversize_path = directory.path().join("oversize.key");
-        fs::write(
+        write_reputation_private_fixture(
             &oversize_path,
-            vec![b'a'; REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES as usize + 1],
-        )
-        .expect("write oversize key");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&oversize_path, fs::Permissions::from_mode(0o600))
-                .expect("secure oversize fixture");
-        }
+            &vec![b'a'; REPUTATION_AUTH_PRIVATE_KEY_MAX_BYTES as usize + 1],
+        );
         let error =
             load_reputation_auth_private_key(&oversize_path, "test").expect_err("oversize key");
         assert!(error.contains("between 1 and"));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn reputation_auth_private_key_rejects_inherited_and_foreign_acl_grants() {
+        let directory = tempdir().unwrap();
+        let inherited = directory.path().join("inherited.key");
+        fs::write(&inherited, b"public-fixture").unwrap();
+        let error = read_reputation_auth_private_key(&inherited).unwrap_err();
+        assert!(error.contains("private current-owner custody"));
+        assert_eq!(fs::read(&inherited).unwrap(), b"public-fixture");
+
+        let foreign = directory.path().join("foreign.key");
+        write_reputation_private_fixture(&foreign, b"public-fixture");
+        assert_eq!(
+            read_reputation_auth_private_key(&foreign)
+                .unwrap()
+                .as_slice(),
+            b"public-fixture",
+        );
+        let grant = std::process::Command::new("icacls.exe")
+            .arg(&foreign)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(grant.status.success(), "create foreign read-grant fixture");
+        let acl_before = std::process::Command::new("icacls.exe")
+            .arg(&foreign)
+            .output()
+            .unwrap();
+        assert!(acl_before.status.success());
+        let error = read_reputation_auth_private_key(&foreign).unwrap_err();
+        assert!(error.contains("private current-owner custody"));
+        let acl_after = std::process::Command::new("icacls.exe")
+            .arg(&foreign)
+            .output()
+            .unwrap();
+        assert!(acl_after.status.success());
+        assert_eq!(
+            acl_before.stdout, acl_after.stdout,
+            "admission must not repair ACLs"
+        );
+        assert_eq!(fs::read(&foreign).unwrap(), b"public-fixture");
     }
     #[cfg(unix)]
     #[test]

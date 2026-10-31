@@ -16,6 +16,7 @@ use std::{
 };
 
 use iroha_fs::{PrivateDirectory, PublishMode};
+use zeroize::Zeroizing;
 
 use super::{
     contract::MAX_WORKFLOW_JOURNAL_BYTES_V1,
@@ -232,10 +233,15 @@ impl WorkflowStorage for MemoryWorkflowStorage {
 /// interprocess lock before the next record is read or published. A record
 /// contains signed transaction bytes, public transcripts and custody references,
 /// never a secret.
-// TODO: Run the file store on Linux and on Windows; it has run on macOS only. The
-// permission assertion below is `#[cfg(unix)]`, and the Windows paths of `iroha_fs`
-// (access-control lists, lock files, replace-by-rename, staging reconciliation) were never
-// exercised through this type. Commands, on each platform:
+///
+/// Runner leases retain the original file and directory ancestry after the store is
+/// dropped. Windows denies deletion or renaming of those native originals until the
+/// lease is dropped. Unix locks coordinate cooperating stores; retained descriptors
+/// and boundary checks do not prevent a same-user namespace change between calls.
+// TODO: Run the complete SDK file-store and engine suites on native Windows. Linux
+// storage and engine execution are recorded in the Windows/Intel completion goals;
+// protected ACL assertions cover every record and lock, but lower-owner native tests
+// do not qualify this SDK integration. Commands on Windows:
 // `cargo test -p iroha --lib workflow::storage` and
 // `cargo test -p iroha --lib workflow::engine_tests` (file-backed resume and custody tests).
 #[derive(Debug)]
@@ -255,7 +261,18 @@ const WORKFLOW_FILES: [&str; 3] = [JOURNAL_FILE, LOCK_FILE, RUNNER_FILE];
 const MAX_STAGED_RECORDS: usize = 16;
 
 struct FileLease {
+    // Drop the locked original before releasing its original directory ancestry.
     _lock: File,
+    _directory: PrivateDirectory,
+}
+
+// Preserve the SDK error classes while using the canonical scoped native reader.
+struct JournalReadError(WorkflowStorageError);
+
+impl From<io::Error> for JournalReadError {
+    fn from(error: io::Error) -> Self {
+        Self(unavailable("read workflow journal", &error))
+    }
 }
 
 impl WorkflowRunnerLease for FileLease {}
@@ -288,15 +305,11 @@ impl FileWorkflowStorage {
     ) -> Result<Option<PrivateDirectory>, WorkflowStorageError> {
         let root = self.directory.lock().map_err(|_| poisoned("directory"))?;
         let opened = if create {
-            root.ensure_child(id.to_hex())
+            root.ensure_child(id.to_hex()).map(Some)
         } else {
-            root.open_child(id.to_hex())
+            root.open_child_optional(id.to_hex())
         };
-        match opened {
-            Ok(directory) => Ok(Some(directory)),
-            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(unavailable("open workflow directory", &error)),
-        }
+        opened.map_err(|error| unavailable("open workflow directory", &error))
     }
 
     /// Take the interprocess lock of one workflow and remove interrupted staging files.
@@ -335,29 +348,68 @@ impl FileWorkflowStorage {
     }
 
     fn read(workflow: &PrivateDirectory) -> Result<Option<Vec<u8>>, WorkflowStorageError> {
-        // The length is taken from the opened file before anything is allocated: a record
-        // above the bound is corruption, never an unreadable store.
-        let length = match workflow.open_read(JOURNAL_FILE) {
-            Ok(file) => file
-                .metadata()
-                .map_err(|error| unavailable("inspect workflow journal", &error))?
-                .len(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(unavailable("open workflow journal", &error)),
-        };
-        if length > MAX_WORKFLOW_JOURNAL_BYTES_V1 as u64 {
-            return Err(WorkflowStorageError::new(
-                WorkflowStorageErrorKind::Oversized,
-                format!(
-                    "journal record is {length} bytes, maximum {MAX_WORKFLOW_JOURNAL_BYTES_V1}"
-                ),
-            ));
-        }
-        match workflow.read(JOURNAL_FILE, MAX_WORKFLOW_JOURNAL_BYTES_V1) {
-            Ok(bytes) => Ok(Some(bytes.to_vec())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(unavailable("read workflow journal", &error)),
-        }
+        Self::read_journal(
+            workflow,
+            #[cfg(test)]
+            || Ok(()),
+            #[cfg(test)]
+            || Ok(()),
+        )
+    }
+
+    fn read_journal(
+        workflow: &PrivateDirectory,
+        #[cfg(test)] after_selection: impl FnOnce() -> io::Result<()>,
+        #[cfg(test)] after_read: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Option<Vec<u8>>, WorkflowStorageError> {
+        workflow
+            .read_scope(|reader| {
+                reader.read_admitted_zeroizing(
+                    JOURNAL_FILE,
+                    MAX_WORKFLOW_JOURNAL_BYTES_V1,
+                    (
+                        |extent| {
+                            // Admit the original native extent before allocating or reading.
+                            if extent > MAX_WORKFLOW_JOURNAL_BYTES_V1 as u64 {
+                                return Err(JournalReadError(WorkflowStorageError::new(
+                                    WorkflowStorageErrorKind::Oversized,
+                                    format!(
+                                        "journal record is {extent} bytes, maximum {MAX_WORKFLOW_JOURNAL_BYTES_V1}"
+                                    ),
+                                )));
+                            }
+                            usize::try_from(extent)
+                                .map_err(|error| io::Error::other(error).into())
+                        },
+                        |length| {
+                            #[cfg(test)]
+                            after_selection()?;
+                            let mut bytes = Zeroizing::new(Vec::new());
+                            bytes.try_reserve_exact(length).map_err(io::Error::other)?;
+                            bytes.resize(length, 0);
+                            Ok(bytes)
+                        },
+                    ),
+                    |_| {
+                        #[cfg(test)]
+                        after_read()?;
+                        Ok(())
+                    },
+                    (
+                        JournalReadError::from,
+                        |_| {
+                            JournalReadError(WorkflowStorageError::new(
+                                WorkflowStorageErrorKind::Unavailable,
+                                "workflow journal changed while reading its original file",
+                            ))
+                        },
+                    ),
+                )
+            })
+            .map_err(|error: JournalReadError| error.0)
+            // The zeroizing owner survives the outer ancestry fence. Transfer the same
+            // allocation only after that fence succeeds; no extra plaintext copy exists.
+            .map(|bytes| bytes.map(|mut bytes| std::mem::take(&mut *bytes)))
     }
 }
 
@@ -427,7 +479,19 @@ impl WorkflowStorage for FileWorkflowStorage {
                 .map_err(|error| unavailable("open workflow runner lease", &error))?
         };
         match lease.try_lock() {
-            Ok(()) => Ok(Box::new(FileLease { _lock: lease })),
+            Ok(()) => {
+                workflow
+                    .read_scope(|reader| {
+                        reader.require_same_file(RUNNER_FILE, &lease, || {
+                            io::Error::other("workflow runner lease name changed")
+                        })
+                    })
+                    .map_err(|error| unavailable("validate workflow runner lease", &error))?;
+                Ok(Box::new(FileLease {
+                    _lock: lease,
+                    _directory: workflow,
+                }))
+            }
             Err(std::fs::TryLockError::WouldBlock) => Err(WorkflowStorageError::new(
                 WorkflowStorageErrorKind::Busy,
                 "another runner owns this workflow",
@@ -532,14 +596,22 @@ mod tests {
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, WORKFLOW_FILES);
-        // TODO: Assert owner-only access on Windows (access-control list of the record,
-        // lock and lease files); run `cargo test -p iroha --lib workflow::storage` there.
+        // Inspect the actual retained native ACL/mode for every journal and lock,
+        // including Windows' protected current-user DACL rather than readonly metadata.
+        let directory =
+            PrivateDirectory::open(workflow_path(&path, 7)).expect("private workflow directory");
+        for name in WORKFLOW_FILES {
+            let file = directory.open_read(name).expect("private journal or lock");
+            iroha_fs::FileSnapshot::private_journal(&file).expect("exact private native custody");
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
             for target in [
                 workflow_path(&path, 7),
                 workflow_path(&path, 7).join(JOURNAL_FILE),
+                workflow_path(&path, 7).join(LOCK_FILE),
+                workflow_path(&path, 7).join(RUNNER_FILE),
             ] {
                 let mode = std::fs::metadata(target)
                     .expect("metadata")
@@ -554,18 +626,42 @@ mod tests {
         root.join(id(byte).to_hex())
     }
 
-    /// Create a file with owner-only access inside the directory of a workflow.
+    /// Create a native owner-private fixture without changing an existing file.
     fn private_file(path: &Path, bytes: &[u8]) -> File {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        let mut file = options.open(path).expect("create private file");
+        let directory = PrivateDirectory::open(path.parent().expect("fixture parent"))
+            .expect("private fixture parent");
+        let mut file = directory
+            .create_lock(path.file_name().expect("fixture name"))
+            .expect("create private file exclusively");
         io::Write::write_all(&mut file, bytes).expect("write private file");
+        file.sync_all().expect("sync private fixture bytes");
+        iroha_fs::FileSnapshot::private_journal(&file)
+            .expect("exact private native fixture custody");
+        directory
+            .revalidate()
+            .expect("original private fixture parent");
         file
+    }
+
+    #[test]
+    fn private_fixture_preserves_native_policy_and_refuses_existing_original() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("fixtures"))
+            .expect("create private fixture parent");
+        let path = directory.path().join("staged");
+        let mut original = private_file(&path, b"retained staging bytes");
+        let snapshot = iroha_fs::FileSnapshot::private_journal(&original)
+            .expect("private original fixture snapshot");
+        assert!(std::panic::catch_unwind(|| private_file(&path, b"replacement")).is_err());
+        assert_eq!(
+            iroha_fs::FileSnapshot::private_journal(&original).expect("unchanged private original"),
+            snapshot
+        );
+        io::Seek::rewind(&mut original).expect("rewind original");
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut original, &mut bytes).expect("read original fixture");
+        assert_eq!(bytes, b"retained staging bytes");
+        directory.revalidate().expect("unchanged original parent");
     }
 
     #[test]
@@ -723,6 +819,260 @@ mod tests {
         );
         drop(lease);
         let _lease = second.acquire_runner(&id(3)).expect("released");
+    }
+
+    fn journal_reader_fixture() -> (tempfile::TempDir, PrivateDirectory) {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("journal-reader"))
+            .expect("create private journal reader directory");
+        (temporary, directory)
+    }
+
+    #[test]
+    fn original_journal_read_distinguishes_initial_absence_from_late_io_failure() {
+        let (_temporary, directory) = journal_reader_fixture();
+        assert_eq!(
+            FileWorkflowStorage::read_journal(
+                &directory,
+                || panic!("absent journal cannot reach original selection"),
+                || panic!("absent journal cannot reach completed read"),
+            )
+            .expect("initial absence"),
+            None
+        );
+        directory
+            .write_atomic(JOURNAL_FILE, b"record", PublishMode::CreateNew)
+            .expect("publish original");
+        for after_read in [false, true] {
+            let error = if after_read {
+                FileWorkflowStorage::read_journal(
+                    &directory,
+                    || Ok(()),
+                    || Err(io::Error::from(io::ErrorKind::NotFound)),
+                )
+            } else {
+                FileWorkflowStorage::read_journal(
+                    &directory,
+                    || Err(io::Error::from(io::ErrorKind::NotFound)),
+                    || Ok(()),
+                )
+            }
+            .expect_err("late native error cannot become absence");
+            assert_eq!(error.kind, WorkflowStorageErrorKind::Unavailable);
+            assert_eq!(
+                FileWorkflowStorage::read(&directory).expect("unchanged original retry"),
+                Some(b"record".to_vec())
+            );
+        }
+        directory
+            .open_existing_lock(JOURNAL_FILE)
+            .expect("original journal")
+            .set_len(MAX_WORKFLOW_JOURNAL_BYTES_V1 as u64 + 1)
+            .expect("oversized original");
+        let error = FileWorkflowStorage::read_journal(
+            &directory,
+            || panic!("oversized original cannot reach allocation"),
+            || panic!("oversized original cannot reach read"),
+        )
+        .expect_err("oversized before allocation");
+        assert_eq!(error.kind, WorkflowStorageErrorKind::Oversized);
+    }
+
+    #[test]
+    fn original_journal_read_refuses_extent_changes_before_and_after_read() {
+        for after_read in [false, true] {
+            let (_temporary, directory) = journal_reader_fixture();
+            directory
+                .write_atomic(JOURNAL_FILE, b"record", PublishMode::CreateNew)
+                .expect("publish original");
+            let change = || {
+                directory
+                    .open_existing_lock(JOURNAL_FILE)?
+                    .set_len(u64::try_from(b"record".len()).expect("small fixture") + 1)
+            };
+            let error = if after_read {
+                FileWorkflowStorage::read_journal(&directory, || Ok(()), change)
+            } else {
+                FileWorkflowStorage::read_journal(&directory, change, || Ok(()))
+            }
+            .expect_err("one original extent must survive the entire read");
+            assert_eq!(error.kind, WorkflowStorageErrorKind::Unavailable);
+            assert_eq!(
+                directory
+                    .open_read(JOURNAL_FILE)
+                    .expect("original")
+                    .metadata()
+                    .expect("metadata")
+                    .len(),
+                7
+            );
+            directory
+                .write_atomic(JOURNAL_FILE, b"record", PublishMode::Replace)
+                .expect("restore fixture");
+            assert_eq!(
+                FileWorkflowStorage::read(&directory).expect("restored retry"),
+                Some(b"record".to_vec())
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn original_journal_read_refuses_late_absence_and_equal_byte_substitution() {
+        for after_read in [false, true] {
+            for substitute in [false, true] {
+                let (_temporary, directory) = journal_reader_fixture();
+                directory
+                    .write_atomic(JOURNAL_FILE, b"record", PublishMode::CreateNew)
+                    .expect("publish original");
+                let named = directory.path().join(JOURNAL_FILE);
+                let saved = directory.path().join("saved-original");
+                let identity = iroha_fs::FileIdentity::of(
+                    &directory.open_read(JOURNAL_FILE).expect("original"),
+                )
+                .expect("original identity");
+                let change = || {
+                    std::fs::rename(&named, &saved)?;
+                    if substitute {
+                        drop(private_file(&named, b"record"));
+                    }
+                    Ok(())
+                };
+                let error = if after_read {
+                    FileWorkflowStorage::read_journal(&directory, || Ok(()), change)
+                } else {
+                    FileWorkflowStorage::read_journal(&directory, change, || Ok(()))
+                }
+                .expect_err("late loss or another equal-byte original cannot be accepted");
+                assert_eq!(error.kind, WorkflowStorageErrorKind::Unavailable);
+                assert_eq!(
+                    iroha_fs::FileIdentity::of(&File::open(&saved).expect("saved original"))
+                        .expect("saved identity"),
+                    identity
+                );
+                if substitute {
+                    assert_ne!(
+                        iroha_fs::FileIdentity::of(&File::open(&named).expect("substitute"))
+                            .expect("substitute identity"),
+                        identity
+                    );
+                    std::fs::remove_file(&named).expect("remove test substitute");
+                } else {
+                    assert!(!named.exists());
+                }
+                std::fs::rename(&saved, &named).expect("restore same original");
+                assert_eq!(
+                    FileWorkflowStorage::read(&directory).expect("same original retry"),
+                    Some(b"record".to_vec())
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_workflow_under_displaced_root_is_unavailable_not_absent() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("journals");
+        let saved = temporary.path().join("original-journals");
+        let storage = FileWorkflowStorage::open_or_create(&path).expect("open");
+        assert_eq!(storage.load(&id(9)).expect("initial absence"), None);
+        std::fs::rename(&path, &saved).expect("displace original root");
+        let error = storage.load(&id(9)).expect_err("late original-root loss");
+        assert_eq!(error.kind, WorkflowStorageErrorKind::Unavailable);
+        std::fs::rename(&saved, &path).expect("restore original root");
+        assert_eq!(storage.load(&id(9)).expect("original root retry"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn original_journal_read_pins_native_name_through_both_read_boundaries() {
+        for after_read in [false, true] {
+            let (_temporary, directory) = journal_reader_fixture();
+            directory
+                .write_atomic(JOURNAL_FILE, b"record", PublishMode::CreateNew)
+                .expect("publish original");
+            let named = directory.path().join(JOURNAL_FILE);
+            let saved = directory.path().join("saved-original");
+            let identity =
+                iroha_fs::FileIdentity::of(&directory.open_read(JOURNAL_FILE).expect("original"))
+                    .expect("original identity");
+            let change = || {
+                assert!(std::fs::rename(&named, &saved).is_err());
+                assert!(std::fs::remove_file(&named).is_err());
+                assert!(!saved.exists());
+                Ok(())
+            };
+            let bytes = if after_read {
+                FileWorkflowStorage::read_journal(&directory, || Ok(()), change)
+            } else {
+                FileWorkflowStorage::read_journal(&directory, change, || Ok(()))
+            }
+            .expect("original remains selected");
+            assert_eq!(bytes, Some(b"record".to_vec()));
+            assert_eq!(
+                iroha_fs::FileIdentity::of(
+                    &directory
+                        .open_read(JOURNAL_FILE)
+                        .expect("same named original"),
+                )
+                .expect("same identity"),
+                identity
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_runner_lease_retains_native_ancestry_after_all_stores_drop() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("journals");
+        let saved_root = temporary.path().join("saved-root");
+        let workflow = workflow_path(&path, 3);
+        let original_root;
+        let lease = {
+            let store = FileWorkflowStorage::open_or_create(&path).expect("open");
+            let lease = store.acquire_runner(&id(3)).expect("runner lease");
+            original_root = store
+                .directory
+                .lock()
+                .expect("root")
+                .identity()
+                .expect("root identity");
+            lease
+        };
+        assert!(std::fs::rename(&path, &saved_root).is_err());
+        assert!(std::fs::rename(&workflow, path.join("saved-workflow")).is_err());
+        assert!(
+            std::fs::rename(workflow.join(RUNNER_FILE), workflow.join("saved-runner")).is_err()
+        );
+        {
+            let reopened = FileWorkflowStorage::open_or_create(&path).expect("reopen store");
+            assert_eq!(
+                reopened
+                    .acquire_runner(&id(3))
+                    .err()
+                    .expect("held original")
+                    .kind,
+                WorkflowStorageErrorKind::Busy
+            );
+        }
+        drop(lease);
+        std::fs::rename(&path, &saved_root).expect("namespace released after original lease");
+        std::fs::rename(&saved_root, &path).expect("restore original root");
+        let reopened = FileWorkflowStorage::open_or_create(&path).expect("reopen original");
+        assert_eq!(
+            reopened
+                .directory
+                .lock()
+                .expect("root")
+                .identity()
+                .expect("root identity"),
+            original_root
+        );
+        let _again = reopened
+            .acquire_runner(&id(3))
+            .expect("original lease released");
     }
 
     #[test]

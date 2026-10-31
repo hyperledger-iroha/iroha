@@ -683,6 +683,21 @@ impl Kura {
             .map_err(|error| Error::IO(error, parent.expected_path.clone()))?;
         Ok(child)
     }
+    #[cfg(windows)]
+    fn bound_storage_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
+        let Ok(opened) = iroha_fs::FileMetadata::of(&directory.file) else {
+            return false;
+        };
+        opened.is_dir()
+            && directory.native_owner.revalidate().is_ok()
+            && directory
+                .native_owner
+                .identity()
+                .is_ok_and(|identity| identity == opened.identity())
+            && directory
+                .canonical_path
+                .starts_with(&self.store_root_directory.canonical_path)
+    }
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn bound_storage_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
         use std::os::unix::fs::MetadataExt as _;
