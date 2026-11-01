@@ -134,6 +134,8 @@ fn journal_inventory_scope_preserves_actual_leaf_lock_decode_work_and_budgets() 
 fn journal_inventory_scope_keeps_native_precedence_fresh_bytes_and_original_retry() {
     use std::{fs, os::unix::fs::PermissionsExt as _};
     let root = tempfile::tempdir().unwrap();
+    // This test deliberately admits the parent with private-directory policy; a
+    // generic temporary directory can inherit 0755 from the process umask.
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let created = Journal::create_preparation(
         &root.path().join("journal"),
@@ -318,7 +320,7 @@ thread_local! {
         std::cell::RefCell::new(None)
     };
 }
-pub(super) fn before_child_exit() {
+pub fn before_child_exit() {
     let hook = BEFORE_CHILD_EXIT.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
@@ -353,9 +355,21 @@ fn original_child_records(
     child_records(journal.as_ref().map(Journal::native_inspection))
 }
 
+fn private_parent_fixture() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    // A generic tempdir follows the caller's umask. These tests explicitly
+    // admit the parent itself, so establish the required private fixture mode.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    root
+}
+
 #[test]
 fn optional_child_scope_reduces_ancestry_and_keeps_actual_records_locks_and_decoder_work() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_parent_fixture();
     let parent = PrivateDirectory::open(root.path()).unwrap();
     let value = norito::json!({"request": 71});
     let journal = Journal::create_preparation(&root.path().join("journal"), &value).unwrap();
@@ -433,7 +447,7 @@ fn optional_child_scope_reduces_ancestry_and_keeps_actual_records_locks_and_deco
 
 #[test]
 fn optional_child_scope_preserves_absence_admission_and_exclusive_lock_lifetime() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_parent_fixture();
     let parent = PrivateDirectory::open(root.path()).unwrap();
     assert!(
         Journal::read_optional_child(&parent, "absent", child_records)
@@ -487,7 +501,7 @@ fn optional_child_scope_preserves_absence_admission_and_exclusive_lock_lifetime(
 #[test]
 fn optional_child_scope_closes_some_none_and_lock_errors_before_returning() {
     use std::{fs, os::unix::fs::PermissionsExt as _};
-    let root = tempfile::tempdir().unwrap();
+    let root = private_parent_fixture();
     let parent = PrivateDirectory::open(root.path()).unwrap();
     for name in ["journal", "unsafe-lock"] {
         drop(
@@ -565,7 +579,7 @@ fn optional_child_scope_closes_some_none_and_lock_errors_before_returning() {
 #[test]
 fn optional_child_scope_closes_nested_and_unrelated_roots_at_both_fences() {
     use std::{fs, os::unix::fs::PermissionsExt as _};
-    let root = tempfile::tempdir().unwrap();
+    let root = private_parent_fixture();
     let parent = PrivateDirectory::open(root.path()).unwrap();
     drop(
         Journal::create_preparation(
@@ -574,7 +588,7 @@ fn optional_child_scope_closes_nested_and_unrelated_roots_at_both_fences() {
         )
         .unwrap(),
     );
-    let other_root = tempfile::tempdir().unwrap();
+    let other_root = private_parent_fixture();
     let other = PrivateDirectory::open(other_root.path()).unwrap();
     for same_parent in [false, true] {
         let joined = if same_parent { &parent } else { &other };

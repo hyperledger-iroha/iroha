@@ -88,7 +88,7 @@ mod tests {
         use super::super::DeferredArchiveWakeHintV1 as Hint;
         let first = 123;
         for (elapsed, expected) in [
-            (0, Hint::RecheckAfter(Duration::from_secs(900))),
+            (0, Hint::RecheckAfter(Duration::from_mins(15))),
             (
                 IDLE_AGE_MILLIS - 120_000,
                 Hint::RecheckAfter(Duration::from_secs(120)),
@@ -131,7 +131,7 @@ mod tests {
         ] {
             assert_eq!(
                 wake_hint(Some(first), now),
-                Hint::RecheckAfter(Duration::from_secs(900))
+                Hint::RecheckAfter(Duration::from_mins(15))
             );
             assert_ne!(age(Some(first), now), Age::Due);
         }
@@ -148,7 +148,7 @@ mod tests {
         }
         assert_eq!(
             wake_hint(Some(u64::MAX), Ok(WallObservation { unix_ms: 0 })),
-            Hint::RecheckAfter(Duration::from_secs(900))
+            Hint::RecheckAfter(Duration::from_mins(15))
         );
         assert_eq!(
             wake_hint(

@@ -134,16 +134,14 @@ fn native_base_cache_invalid_projection_clears_owned_destinations() {
 #[test]
 fn native_base_cache_clears_packed_words_bits_and_reserved_words_on_all_exits() {
     for exit in 0..3 {
-        let (_, observations) = inspection::observe_v1(|| {
+        let ((), observations) = inspection::observe_v1(|| {
             let result = std::panic::catch_unwind(|| {
                 let result = ShaNativeBaseCacheV1::build_v1(3, |visitor| {
                     visitor(0, &original_row(0))?;
                     if exit == 1 {
                         return Err(Error::Terminal);
                     }
-                    if exit == 2 {
-                        panic!("test unwind after private packed row");
-                    }
+                    assert!(exit != 2, "test unwind after private packed row");
                     visitor(1, &original_row(1))?;
                     visitor(2, &[F::ZERO; ZK_X509_SHA_BATCH_BASE_WIDTH_V1])?;
                     Ok(())

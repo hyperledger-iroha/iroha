@@ -563,7 +563,7 @@ fn vk_record_new_defaults() {
     assert_eq!(rec.version, 2);
     assert_eq!(rec.status, ConfidentialStatus::Proposed);
     assert_eq!(rec.vk_len, 0);
-    assert!(rec.max_proof_bytes == 0);
+    assert_eq!(rec.max_proof_bytes, 0);
     assert!(rec.key.is_none());
 }
 #[test]

@@ -187,7 +187,7 @@ fn registration_original_roundtrip_admits_large_checkpoint_without_proof_claim()
             .as_slice(),
         bytes.as_slice()
     );
-    let request = restored.request(&terms, Instant::now() + Duration::from_secs(900));
+    let request = restored.request(&terms, Instant::now() + Duration::from_mins(15));
     assert_eq!(request.deadline_unix_ms, terms.signing_deadline_unix_ms);
     assert_eq!(request.policy, original.policy);
     assert_eq!(request.underwriting, original.underwriting);
@@ -271,7 +271,7 @@ fn expired_registration_retains_original_utc_and_fees_across_fresh_io_deadline()
     journal::publish_intent(&directory, &original).unwrap();
     let retained = directory.read("original.nrt", 256 * 1024).unwrap();
     let original = journal::read_intent(&directory).unwrap().unwrap();
-    let options = terms.options(Instant::now() + Duration::from_secs(900));
+    let options = terms.options(Instant::now() + Duration::from_mins(15));
     original
         .matches_intent(&original.policy, &original.underwriting)
         .and_then(|()| terms.matches(terms.requested_deadline_unix_ms, &options))

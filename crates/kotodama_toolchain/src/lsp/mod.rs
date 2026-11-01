@@ -1002,7 +1002,7 @@ fn collect_lsp_project_diagnostics(
         .iter()
         .filter(|(uri, source)| !editor_lsp::is_test_module(uri, source))
         .collect::<Vec<_>>();
-    ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+    ordered.sort_by_key(|(left, _)| *left);
     let mut logical_to_uri = HashMap::new();
     let sources = ordered
         .iter()
@@ -1324,7 +1324,7 @@ fn lsp_local_source_projects_with_root(
         .collect::<BTreeMap<_, _>>();
     let requested = requested_uri.and_then(lsp_file_uri_path);
     let mut ordered = overlays.iter().collect::<Vec<_>>();
-    ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+    ordered.sort_by_key(|(left, _)| *left);
     let mut projects = Vec::new();
     for (path, source) in ordered {
         if projects.len() >= limit {

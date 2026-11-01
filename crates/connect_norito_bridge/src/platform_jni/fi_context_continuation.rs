@@ -55,30 +55,26 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFiCont
     checkpoint: JByteArray<'_>,
     trust: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        let Some(wire) = read_java_byte_array_bounded(&mut env, &wire, "signedOriginal", 64 * 1024)
+    crate::platform_jni::with_java_env(env, |env| {
+        let Some(wire) = read_java_byte_array_bounded(env, &wire, "signedOriginal", 64 * 1024)
         else {
             return std::ptr::null_mut();
         };
         let Some(request) =
-            read_java_byte_array_bounded(&mut env, &request, "originalRequest", 64 * 1024)
+            read_java_byte_array_bounded(env, &request, "originalRequest", 64 * 1024)
         else {
             return std::ptr::null_mut();
         };
-        let Some(checkpoint) = read_java_byte_array_bounded(
-            &mut env,
-            &checkpoint,
-            "originalCheckpoint",
-            68 * 1024 * 1024,
-        ) else {
-            return std::ptr::null_mut();
-        };
-        let Some(trust) =
-            read_java_byte_array_bounded(&mut env, &trust, "originalTrust", 32 * 1024)
+        let Some(checkpoint) =
+            read_java_byte_array_bounded(env, &checkpoint, "originalCheckpoint", 68 * 1024 * 1024)
         else {
             return std::ptr::null_mut();
         };
-        emit(&mut env, 2048, || {
+        let Some(trust) = read_java_byte_array_bounded(env, &trust, "originalTrust", 32 * 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        emit(env, 2048, || {
             crate::fi_context_continuation::admit_fi_assertion_original_json(
                 &wire,
                 &request,
@@ -103,39 +99,35 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFiCont
     cursor: JByteArray<'_>,
     trust: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        let Some(capsule) = read_java_byte_array_bounded(&mut env, &capsule, "capsule", 512 * 1024)
+    crate::platform_jni::with_java_env(env, |env| {
+        let Some(capsule) = read_java_byte_array_bounded(env, &capsule, "capsule", 512 * 1024)
         else {
             return std::ptr::null_mut();
         };
         let Some(request) =
-            read_java_byte_array_bounded(&mut env, &request, "originalRequest", 64 * 1024)
+            read_java_byte_array_bounded(env, &request, "originalRequest", 64 * 1024)
         else {
             return std::ptr::null_mut();
         };
-        let Some(wire) = read_java_byte_array_bounded(&mut env, &wire, "signedOriginal", 64 * 1024)
+        let Some(wire) = read_java_byte_array_bounded(env, &wire, "signedOriginal", 64 * 1024)
         else {
             return std::ptr::null_mut();
         };
         let Some(floor) =
-            read_java_byte_array_bounded(&mut env, &floor, "originalCheckpoint", 68 * 1024 * 1024)
+            read_java_byte_array_bounded(env, &floor, "originalCheckpoint", 68 * 1024 * 1024)
         else {
             return std::ptr::null_mut();
         };
-        let Some(cursor) = read_java_byte_array_bounded(
-            &mut env,
-            &cursor,
-            "branchCursorCheckpoint",
-            68 * 1024 * 1024,
-        ) else {
-            return std::ptr::null_mut();
-        };
-        let Some(trust) =
-            read_java_byte_array_bounded(&mut env, &trust, "continuationTrust", 36 * 1024)
+        let Some(cursor) =
+            read_java_byte_array_bounded(env, &cursor, "branchCursorCheckpoint", 68 * 1024 * 1024)
         else {
             return std::ptr::null_mut();
         };
-        emit(&mut env, 512 * 1024, || {
+        let Some(trust) = read_java_byte_array_bounded(env, &trust, "continuationTrust", 36 * 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        emit(env, 512 * 1024, || {
             crate::fi_context_continuation::verify_fi_context_continuation_json(
                 &capsule, &request, &wire, &floor, &cursor, &trust,
             )

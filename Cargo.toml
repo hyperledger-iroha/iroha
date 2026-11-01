@@ -39,6 +39,8 @@ iroha_private_settlement = { path = "crates/iroha_private_settlement" }
 iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
 iroha_deploy = { path = "crates/iroha_deploy" }
 iroha_fs = { path = "crates/iroha_fs" }
+iroha_managed_ipc = { path = "crates/iroha_managed_ipc" }
+iroha_release_bundle = { path = "crates/iroha_release_bundle" }
 iroha_operation_journal = { path = "crates/iroha_operation_journal" }
 iroha_wallet = { path = "crates/iroha_wallet" }
 iroha_storage_client = { path = "crates/iroha_storage_client" }
@@ -150,7 +152,7 @@ prometheus = { version = "0.14.0", default-features = false }
 clap = "4.5.51"
 owo-colors = "4.2.3"
 humantime = "2.3.0"
-criterion = "0.8.0"
+criterion = { version = "0.8.0", features = ["csv_output"] }
 expect-test = "1.5.1"
 
 eyre = "0.6.12"
@@ -289,6 +291,19 @@ clippy.enum_glob_use = "allow"
 clippy.module_name_repetitions = "allow"
 clippy.must_use_candidate = "allow"
 clippy.missing_panics_doc = "allow"
+# Its suggestion for collections without an inferable element type is
+# `assert_eq!(value, [] as [T; 0])`, which `rust.trivial_casts` denies.
+clippy.assert_is_empty = "allow"
+
+# style
+# `rustfmt.toml` enforces field-init shorthand. derive_more's `Constructor`
+# expansion reuses the input field idents, which clippy reports on every field.
+clippy.redundant_field_names = "allow"
+
+# perf
+# Custody and admission failures hand their owned input back inside the error so
+# rejection never allocates; boxing those errors would allocate on failure paths.
+clippy.result_large_err = "allow"
 
 # restriction
 clippy.dbg_macro = "deny"
@@ -324,7 +339,6 @@ clippy.wildcard_dependencies = "deny"
 
 # Lints new in the Rust 1.99.1 clippy are allowed instead of rewriting existing
 # code. TODO: migrate the flagged code and remove each allow.
-clippy.assert_is_empty = "allow"
 clippy.chunks_exact_to_as_chunks = "allow"
 clippy.decimal_bitwise_operands = "allow"
 clippy.duration_suboptimal_units = "allow"
@@ -417,9 +431,7 @@ clippy.question_mark = "allow"
 clippy.redundant_closure = "allow"
 clippy.redundant_closure_for_method_calls = "allow"
 clippy.redundant_else = "allow"
-clippy.redundant_field_names = "allow"
 clippy.ref_option = "allow"
-clippy.result_large_err = "allow"
 clippy.similar_names = "allow"
 clippy.single_element_loop = "allow"
 clippy.single_match_else = "allow"
@@ -510,6 +522,7 @@ members = [
     "tools/sora-vpn-backend",
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
+    "tools/iroha_native_source_delivery",
     "tools/soradns-resolver",
     "tools/telemetry-schema-diff",
     "tools/kotlin-fixture-gen"

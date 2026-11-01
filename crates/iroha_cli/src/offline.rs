@@ -553,14 +553,16 @@ impl Run for InspectArgs {
                 lanes.to_owned()
             }
         };
-        let text = match &report.error {
-            Some(error) => format!("no lane decoded: {error}"),
-            None => format!(
-                "lanes decoded: {lanes}; turn lanes: {}; kana lanes: {}",
-                or_none(&turns),
-                or_none(&kana)
-            ),
-        };
+        let text = report.error.as_ref().map_or_else(
+            || {
+                format!(
+                    "lanes decoded: {lanes}; turn lanes: {}; kana lanes: {}",
+                    or_none(&turns),
+                    or_none(&kana)
+                )
+            },
+            |error| format!("no lane decoded: {error}"),
+        );
         let readable = !lanes.is_empty();
         print_with_optional_text(context, Some(text), &report)?;
         if readable {
@@ -881,7 +883,9 @@ fn write_gif(path: &Path, frames: &[Vec<u8>], width: u32, height: u32, fps: u16)
         .wrap_err_with(|| format!("failed to set GIF repeat {}", path.display()))?;
     for rgb in frames {
         let rgba: Vec<u8> = rgb
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|px| [px[0], px[1], px[2], 255])
             .collect();
         let image = RgbaImage::from_raw(width, height, rgba)

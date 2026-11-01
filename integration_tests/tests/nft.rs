@@ -36,7 +36,7 @@ fn wait_for_nft(
                         return nft;
                     }
                 } else {
-                    last_observed = "nft missing".to_owned();
+                    "nft missing".clone_into(&mut last_observed);
                 }
             }
             Err(err) => {
@@ -66,7 +66,7 @@ fn wait_for_nft_absent(client: &Client, nft_id: &NftId, context: &str) {
                 if nfts.iter().all(|nft| nft.id() != nft_id) {
                     return;
                 }
-                last_observed = "nft still present".to_owned();
+                "nft still present".clone_into(&mut last_observed);
             }
             Err(err) => {
                 last_observed = format!("query failed: {err}");

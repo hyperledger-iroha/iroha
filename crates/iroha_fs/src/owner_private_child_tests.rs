@@ -18,7 +18,7 @@ fn project_parent_private_child_preserves_absence_names_identity_and_no_creation
     );
     assert!(parent.open_private_child_optional("../journal").is_err());
     assert!(parent.open_private_child("../journal").is_err());
-    assert!(parent.entries(0).unwrap().is_empty());
+    assert_eq!(parent.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
     let original = parent.create_private_child("journal").unwrap();
     original
         .write_atomic("original", b"original bytes", PublishMode::CreateNew)

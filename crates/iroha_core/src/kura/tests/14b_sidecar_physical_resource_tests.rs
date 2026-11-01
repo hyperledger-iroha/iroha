@@ -405,3 +405,186 @@ fn sidecar_physical_absent_rewrite_markers_do_not_read_stable_index_or_repair_fa
     assert_eq!(fs::read(index).unwrap(), b"not a V1 index");
     sidecar_physical_assert_unavailable(&kura);
 }
+
+#[cfg(windows)]
+mod native_pipeline_public_callers {
+    //! Public pipeline and FASTPQ recovery retain originals and exact accounting.
+
+    use super::*;
+
+    struct ResetFaults;
+
+    impl Drop for ResetFaults {
+        fn drop(&mut self) {
+            FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.set(false));
+            FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.set(false));
+            FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(false));
+        }
+    }
+
+    fn fixture(count: usize) -> (TempDir, Arc<Kura>, Vec<HashOf<BlockHeader>>) {
+        let temporary = TempDir::new().unwrap();
+        let root = {
+            let private =
+                iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("store")).unwrap();
+            private.path().to_path_buf()
+        };
+        let mut config = kura_config_for_path(&root, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Always;
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+        let hashes = store_dummy_blocks(&kura, count);
+        kura.reconcile_resident_resource_inventory().unwrap();
+        kura.reconcile_physical_resource_inventory().unwrap();
+        (temporary, kura, hashes)
+    }
+
+    fn sidecar(height: u64, hash: HashOf<BlockHeader>) -> PipelineRecoverySidecar {
+        PipelineRecoverySidecar::new(
+            height,
+            hash,
+            PipelineDagSnapshot {
+                fingerprint: [7; 32],
+                key_count: 3,
+            },
+            Vec::new(),
+        )
+    }
+
+    fn queue_records(kura: &Kura) -> u64 {
+        kura.resource_inventory
+            .component_usage_for_tests(ResourceFamily::ResidentQueue)
+            .unwrap()
+            .resident_associations
+    }
+
+    fn identity(path: &Path) -> iroha_fs::FileIdentity {
+        iroha_fs::FileIdentity::of(&fs::File::open(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn native_pipeline_public_read_recovers_failed_payload_on_original_pair() {
+        let _reset = ResetFaults;
+        let (_temporary, kura, hashes) = fixture(1);
+        let expected = sidecar(1, hashes[0]);
+        let before = queue_records(&kura);
+        fail_next_indexed_sidecar_initial_data_sync_for_tests();
+        kura.write_pipeline_metadata(&expected);
+        assert!(kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before + 1);
+        sidecar_physical_assert_unavailable(&kura);
+        let (data, index) = sidecar_physical_test_paths(&kura);
+        let originals = (identity(&data), identity(&index));
+        for path in [&data, &index] {
+            assert!(fs::OpenOptions::new().write(true).open(path).is_err());
+        }
+        assert_eq!(fs::metadata(&data).unwrap().len(), 0);
+        assert_eq!(
+            kura.read_pipeline_metadata(1)
+                .unwrap()
+                .encode_framed()
+                .unwrap(),
+            expected.encode_framed().unwrap()
+        );
+        assert!(!kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before);
+        assert_eq!((identity(&data), identity(&index)), originals);
+        let published = (fs::read(&data).unwrap(), fs::read(&index).unwrap());
+        kura.write_pipeline_metadata(&expected);
+        assert_eq!(
+            (fs::read(&data).unwrap(), fs::read(&index).unwrap()),
+            published
+        );
+        sidecar_physical_assert_unavailable(&kura);
+        kura.reconcile_physical_resource_inventory().unwrap();
+        sidecar_physical_assert_actual(&kura);
+    }
+
+    #[test]
+    fn native_pipeline_public_prepend_retry_keeps_published_index_and_resident_record() {
+        let _reset = ResetFaults;
+        let (_temporary, kura, hashes) = fixture(2);
+        let later = sidecar(2, hashes[1]);
+        let earlier = sidecar(1, hashes[0]);
+        kura.write_pipeline_metadata(&later);
+        let (data, index) = sidecar_physical_test_paths(&kura);
+        let data_original = identity(&data);
+        let replaced_index = identity(&index);
+        let before = queue_records(&kura);
+        fail_next_indexed_sidecar_dir_sync_for_tests();
+        kura.write_pipeline_metadata(&earlier);
+        assert!(kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before + 1);
+        let published_index = identity(&index);
+        assert_ne!(published_index, replaced_index);
+        let published_bytes = (fs::read(&data).unwrap(), fs::read(&index).unwrap());
+        kura.write_pipeline_metadata(&earlier);
+        assert!(!kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before);
+        assert_eq!(identity(&data), data_original);
+        assert_eq!(identity(&index), published_index);
+        assert_eq!(
+            (fs::read(&data).unwrap(), fs::read(&index).unwrap()),
+            published_bytes
+        );
+        for expected in [&earlier, &later] {
+            assert_eq!(
+                kura.read_pipeline_metadata(expected.height)
+                    .unwrap()
+                    .encode_framed()
+                    .unwrap(),
+                expected.encode_framed().unwrap()
+            );
+        }
+        assert!(!index.with_extension("index.prepend.tmp").exists());
+        sidecar_physical_assert_unavailable(&kura);
+        kura.reconcile_physical_resource_inventory().unwrap();
+        sidecar_physical_assert_actual(&kura);
+    }
+
+    #[test]
+    fn native_fastpq_public_retry_recovers_one_proof_without_duplicate_payload() {
+        let _reset = ResetFaults;
+        let (_temporary, kura, hashes) = fixture(1);
+        kura.write_pipeline_metadata(&sidecar(1, hashes[0]));
+        let (data, index) = sidecar_physical_test_paths(&kura);
+        let originals = (identity(&data), identity(&index));
+        let snapshot = sample_fastpq_snapshot(1, hashes[0], 8);
+        let before = queue_records(&kura);
+        fail_next_indexed_sidecar_data_sync_for_tests();
+        assert!(matches!(
+            kura.write_fastpq_proof_snapshots(
+                &[&snapshot],
+                &mut kura.sidecar_lock.defer_notifications()
+            ),
+            FastpqProofWriteResult::Retry
+        ));
+        assert!(kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before + 1);
+        let published = (fs::read(&data).unwrap(), fs::read(&index).unwrap());
+        assert!(matches!(
+            kura.write_fastpq_proof_snapshots(
+                &[&snapshot],
+                &mut kura.sidecar_lock.defer_notifications()
+            ),
+            FastpqProofWriteResult::Written
+        ));
+        assert!(!kura.native_pipeline_pending());
+        assert_eq!(queue_records(&kura), before);
+        assert_eq!((identity(&data), identity(&index)), originals);
+        assert_eq!(
+            (fs::read(&data).unwrap(), fs::read(&index).unwrap()),
+            published
+        );
+        assert_eq!(
+            kura.read_pipeline_metadata(1).unwrap().fastpq_proofs.len(),
+            1
+        );
+        sidecar_physical_assert_unavailable(&kura);
+        kura.reconcile_physical_resource_inventory().unwrap();
+        sidecar_physical_assert_actual(&kura);
+    }
+}

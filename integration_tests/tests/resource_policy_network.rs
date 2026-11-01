@@ -78,7 +78,7 @@ const FIXTURE_QUERY_AGGREGATE_BYTES: u64 = (FIXTURE_QUERY_WORKING_SET_BYTES
 const TIGHT_BLOCK_PAYLOAD: u32 = 10_551_296;
 /// An intermediate coherent block payload for the first tightening.
 const MIDDLE_BLOCK_PAYLOAD: u32 = 12_582_912;
-const CASE_TIMEOUT: Duration = Duration::from_secs(1_800);
+const CASE_TIMEOUT: Duration = Duration::from_mins(30);
 const POLL: Duration = Duration::from_millis(250);
 const SIZING_SLACK: usize = 8_192;
 

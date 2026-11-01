@@ -102,20 +102,23 @@ fn assert_only_signer_may_differ(original: &Config, selected: &Config) {
     // Never use assertion formatting on secret values.
     match (basic_auth.as_ref(), original.basic_auth.as_ref()) {
         (Some(selected), Some(original)) => {
-            assert!(selected.web_login.as_str() == original.web_login.as_str());
-            assert!(selected.password.expose_secret() == original.password.expose_secret());
+            assert_eq!(selected.web_login.as_str(), original.web_login.as_str());
+            assert_eq!(
+                selected.password.expose_secret(),
+                original.password.expose_secret()
+            );
         }
         (None, None) => {}
         _ => panic!("HTTP authentication selection changed"),
     }
-    assert!(
+    assert_eq!(
         api_token
             .as_ref()
+            .map(iroha::secrecy::SecretString::expose_secret),
+        original
+            .api_token
+            .as_ref()
             .map(iroha::secrecy::SecretString::expose_secret)
-            == original
-                .api_token
-                .as_ref()
-                .map(iroha::secrecy::SecretString::expose_secret)
     );
     let cache = &original.sorafs_alias_cache;
     assert_eq!(sorafs_alias_cache.positive_ttl(), cache.positive_ttl());
@@ -192,20 +195,20 @@ fn issuer_operator_config_changes_only_signer_and_preserves_manager_peers() {
         Some(config.key_pair.public_key())
     );
     assert_ne!(config.account, original.account);
-    assert!(config.key_pair != original.key_pair);
+    assert_ne!(config.key_pair, original.key_pair);
     assert_only_signer_may_differ(&original, &authority.config);
     assert_eq!(authority.config.account, original.account);
-    assert!(authority.config.key_pair == original.key_pair);
+    assert_eq!(authority.config.key_pair, original.key_pair);
     assert_eq!(peer_identities(&authority), peers);
-    assert!(
-        retained.as_slice()
-            == files
-                .read(
-                    StreamTokenAuthorityRole::IssuerOperator.credential_filename(),
-                    256
-                )
-                .unwrap()
-                .as_slice()
+    assert_eq!(
+        retained.as_slice(),
+        files
+            .read(
+                StreamTokenAuthorityRole::IssuerOperator.credential_filename(),
+                256
+            )
+            .unwrap()
+            .as_slice()
     );
     assert_eq!(
         authority.directory.entries(2).unwrap(),
@@ -283,7 +286,7 @@ fn issuer_operator_revalidates_every_role_before_returning_any_config() {
     authority.issuer_operator_config().unwrap();
     assert_only_signer_may_differ(&manager, &authority.config);
     assert_eq!(authority.config.account, manager.account);
-    assert!(authority.config.key_pair == manager.key_pair);
+    assert_eq!(authority.config.key_pair, manager.key_pair);
     assert_eq!(peer_identities(&authority), peers);
 }
 
@@ -300,7 +303,7 @@ fn issuer_operator_refuses_replaced_operation_lock_before_credential_use() {
         .unwrap();
     assert_profile_refusal(&authority);
     assert_eq!(authority.config.account, manager.account);
-    assert!(authority.config.key_pair == manager.key_pair);
+    assert_eq!(authority.config.key_pair, manager.key_pair);
     assert_eq!(peer_identities(&authority), peers);
 }
 

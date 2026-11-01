@@ -11,30 +11,22 @@ fn projection_message_product_for_test_v1(
     let mut words = [0_u8; 2048];
     words[..message.len()].copy_from_slice(message);
     let mut result = [F::ONE; 4];
-    for lane in 0..4 {
+    for (product, lane) in result.iter_mut().zip(lanes.lanes) {
         let mut absorb = |kind, index, value| {
-            result[lane] = result[lane].mul(hash_bus::factor_v1(
+            *product = product.mul(hash_bus::factor_v1(
                 F(invocation as u64),
                 F(kind),
                 F(index),
                 F(value),
-                lanes.lanes[lane],
+                lane,
             ));
         };
-        for (index, bytes) in words.chunks_exact(4).enumerate() {
-            absorb(
-                3,
-                index as u64,
-                u64::from(u32::from_be_bytes(bytes.try_into().unwrap())),
-            );
+        for (index, bytes) in words.as_chunks::<4>().0.iter().enumerate() {
+            absorb(3, index as u64, u64::from(u32::from_be_bytes(*bytes)));
         }
         absorb(4, 0, message.len() as u64);
-        for (index, bytes) in digest.chunks_exact(4).enumerate() {
-            absorb(
-                1,
-                index as u64,
-                u64::from(u32::from_be_bytes(bytes.try_into().unwrap())),
-            );
+        for (index, bytes) in digest.as_chunks::<4>().0.iter().enumerate() {
+            absorb(1, index as u64, u64::from(u32::from_be_bytes(*bytes)));
         }
     }
     result
@@ -45,7 +37,9 @@ fn projection_sha_typed_products_bind_length_call_order_and_zero_collisions() {
     use super::super::projection_air::hash_bus;
     let lanes = challenges();
     for len in [0, 1, 2, 3, 4, 31, 32, 55, 56, 63, 64, 65, 2047, 2048] {
-        let message: Vec<_> = (0..len).map(|i| (i * 17 + 3) as u8).collect();
+        let message: Vec<_> = (0..len)
+            .map(|i| u8::try_from((i * 17 + 3) % 256).unwrap())
+            .collect();
         let digest: [u8; 32] = Sha256::digest(&message).into();
         let honest = projection_message_product_for_test_v1(0, &message, &digest, lanes);
         assert_ne!(
@@ -77,7 +71,7 @@ fn projection_sha_typed_products_bind_length_call_order_and_zero_collisions() {
             );
         }
     }
-    let factor = |lane| hash_bus::factor_v1(F::ZERO, F(3), F::ZERO, F(0x01020304), lane);
+    let factor = |lane| hash_bus::factor_v1(F::ZERO, F(3), F::ZERO, F(0x0102_0304), lane);
     let mut collision = lanes;
     collision.lanes[0].terms[0] = collision.lanes[0].terms[0].sub(factor(collision.lanes[0]));
     collision.validate().unwrap();
@@ -128,19 +122,22 @@ fn projection_sha_products_match_actual_credentials_and_rehashed_substitution_fa
         let projection_challenges = binding.main_post_base().projection();
         assert_eq!(projection_challenges.hash_bus, binding.sha());
         let trace = &assembly.projection_trace;
-        let aux =
-            build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, projection_challenges)
-                .unwrap();
+        let aux = build_zk_x509_projection_aux_trace_v1(
+            &trace.base,
+            &trace.fixed,
+            &projection_challenges,
+        )
+        .unwrap();
         let fixed = compile_zk_x509_projection_stark_fixed_rows_v1(&fixture.statement).unwrap();
-        for index in 0..trace.base.rows.len() {
+        for (index, fixed_row) in fixed.iter().enumerate().take(trace.base.rows.len()) {
             let next = (index + 1) % trace.base.rows.len();
             let residues = evaluate_zk_x509_projection_stark_residues_v1(
                 &trace.base.rows[index],
                 &trace.base.rows[next],
                 &aux.rows[index],
                 &aux.rows[next],
-                &fixed[index],
-                projection_challenges,
+                fixed_row,
+                &projection_challenges,
             )
             .unwrap();
             assert!(
@@ -218,7 +215,9 @@ fn projection_sha_products_match_actual_credentials_and_rehashed_substitution_fa
                     "slot {invocation} row {index}"
                 );
                 if current.fixed[projection_bus::FIX_WORD_V1] == F::ONE {
-                    let word = current.fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 as usize;
+                    let word =
+                        usize::try_from(current.fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0)
+                            .unwrap();
                     if word == 0 || word == witness.message.len() / 4 || word == 511 {
                         let full = evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                             &current,
@@ -226,7 +225,8 @@ fn projection_sha_products_match_actual_credentials_and_rehashed_substitution_fa
                             binding.sha_word(),
                             binding.sha(),
                             binding.rfc5280(),
-                            (manifest.first_logical_row / ZK_X509_SHA_SEGMENT_ROWS_V1) as u8,
+                            u8::try_from(manifest.first_logical_row / ZK_X509_SHA_SEGMENT_ROWS_V1)
+                                .unwrap(),
                         )
                         .unwrap();
                         assert!(full.iter().all(|v| *v == F::ZERO));
@@ -295,7 +295,7 @@ fn projection_sha_products_match_actual_credentials_and_rehashed_substitution_fa
                 &aux.rows[current],
                 &bad,
                 &fixed[current],
-                projection_challenges,
+                &projection_challenges,
             )
             .unwrap();
             assert!(residues.iter().any(|v| *v != F::ZERO));

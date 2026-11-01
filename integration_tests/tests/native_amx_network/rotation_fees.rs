@@ -79,7 +79,7 @@ fn move_funding(balances: &mut Balances, value: &Transfer<Asset, Quantity, Accou
     let destination = AssetId::with_scope(
         value.source.definition().clone(),
         value.destination.clone(),
-        value.source.scope().clone(),
+        *value.source.scope(),
     );
     // Calculate both results before publishing either side, including self-transfer.
     let mut next = balances.clone();
@@ -117,18 +117,17 @@ fn genesis_funding(root: &amx::Root) -> Result<(Quantity, Balances)> {
                 add(&mut balances, value.destination.clone(), &value.object)?;
             }
             ensure!(
-                !burn(instruction)
-                    .is_some_and(|value| value.destination.definition() == &amx::fee_asset()),
+                burn(instruction)
+                    .is_none_or(|value| value.destination.definition() != &amx::fee_asset()),
                 "unexpected fee-asset burn in rotation genesis"
             );
             // Bank genesis is a direct monetary fixture. Global staking may move
             // balances internally, but cannot change the sum of the signed mints.
-            if root.index != 0 {
-                if let Some(value) = transfer(instruction)
+            if root.index != 0
+                && let Some(value) = transfer(instruction)
                     .filter(|value| value.source.definition() == &amx::fee_asset())
-                {
-                    move_funding(&mut balances, value)?;
-                }
+            {
+                move_funding(&mut balances, value)?;
             }
         }
     }
@@ -257,8 +256,7 @@ fn bank_fee_history_accounts_exact_funding_and_refuses_missing_or_excess_debits(
         AssetBalanceScope::Dataspace(amx::DATASPACES[1]),
     );
     let recipient = amx::account(&amx::relay(2));
-    let destination =
-        AssetId::with_scope(amx::fee_asset(), recipient.clone(), source.scope().clone());
+    let destination = AssetId::with_scope(amx::fee_asset(), recipient.clone(), *source.scope());
     let mut balances = Balances::from([(source.clone(), Quantity::from(100_u32))]);
     move_funding(
         &mut balances,

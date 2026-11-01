@@ -6,6 +6,18 @@
 
 use super::*;
 
+/// Original public batch coordinates, carried only by diagnostic callbacks.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct JoinedTraceBatchCoordinatesV1 {
+    /// Original native group index.
+    pub(crate) group: usize,
+    /// First original column within that group.
+    pub(crate) start: usize,
+    /// Exclusive original column bound within that group.
+    pub(crate) end: usize,
+}
+
 /// Which independently committed transcript phase the joined row belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinedTraceColumnKindV1 {
@@ -137,6 +149,7 @@ impl JoinedTraceCommitmentPlanV1 {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 commitment.absorb_columns_v1(&evaluations)?;
+                drop_completed_field_columns_v1(evaluations);
             }
         }
         commitment.finish()
@@ -189,6 +202,7 @@ impl JoinedTraceCommitmentPlanV1 {
                     return Err(AggregateStarkErrorV1::InvalidLayout);
                 }
                 commitment.absorb_columns_v1(&evaluations)?;
+                drop_completed_field_columns_v1(evaluations);
             }
         }
         commitment.finish()
@@ -198,18 +212,28 @@ impl JoinedTraceCommitmentPlanV1 {
     /// The initial commitment evaluates the full domain. A replay requests only
     /// canonical global rows of the original queried cuts, while the transform
     /// owner validates every original coefficient and preserves mask custody.
-    pub(crate) fn commit_retained_replayed_v1(
+    pub(crate) fn commit_retained_replayed_v1<
+        C: super::initial_evaluated_column::InitialEvaluationV1,
+    >(
         &self,
         domains: &AggregateStarkDomainsV1,
         opening_indices: &[usize],
         cut: Option<&retained_commitment::RetainedMerkleCutV1>,
         mut coefficients: impl FnMut(usize, usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-        mut evaluate: impl FnMut(
+        #[cfg(not(test))] mut evaluate: impl FnMut(
             &[ZeroizingFieldColumnV1],
             u8,
             u8,
             Option<&[usize]>,
-        ) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1>,
+        ) -> Result<Vec<C>, AggregateStarkErrorV1>,
+        #[cfg(test)] mut evaluate: impl FnMut(
+            &[ZeroizingFieldColumnV1],
+            u8,
+            u8,
+            Option<&[usize]>,
+            JoinedTraceBatchCoordinatesV1,
+        ) -> Result<Vec<C>, AggregateStarkErrorV1>,
+        #[cfg(test)] observation: commitment_observation::ContextV1,
     ) -> Result<
         (
             StreamingRowCommitmentResultV1,
@@ -235,7 +259,9 @@ impl JoinedTraceCommitmentPlanV1 {
             if !opening_indices.is_empty() {
                 return Err(AggregateStarkErrorV1::InvalidLayout);
             }
-            RetainedReplayBuilderV1::Initial(StreamingRowCommitmentV1::new(
+            #[cfg(test)]
+            let setup = observation.enter(commitment_observation::OperationV1::StreamSetup);
+            let builder = StreamingRowCommitmentV1::new(
                 domains.digest_context,
                 leaf,
                 node,
@@ -243,7 +269,17 @@ impl JoinedTraceCommitmentPlanV1 {
                 rows,
                 self.width,
                 &[],
-            )?)
+            )?;
+            #[cfg(test)]
+            let builder = builder.with_observation_v1(observation.clone());
+            #[cfg(test)]
+            setup.complete();
+            RetainedReplayBuilderV1::Initial(builder)
+        };
+        let mut initial = if matches!(&builder, RetainedReplayBuilderV1::Initial(_)) {
+            Some(initial_coalescing::InitialCoalescerV1::new_v1(rows)?)
+        } else {
+            None
         };
         for (group, (native, range)) in self.groups.iter().enumerate() {
             for start in (0..range.len()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
@@ -260,22 +296,47 @@ impl JoinedTraceCommitmentPlanV1 {
                     RetainedReplayBuilderV1::Selected(builder) => Some(builder.selected_rows_v1()),
                 };
                 let evaluated_rows = selected.map_or(rows, <[usize]>::len);
-                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2, selected)?;
+                let evaluations = evaluate(
+                    &batch,
+                    *native,
+                    self.commitment_lde_log2,
+                    selected,
+                    #[cfg(test)]
+                    JoinedTraceBatchCoordinatesV1 { group, start, end },
+                )?;
                 if evaluations.len() != batch.len()
                     || evaluations
                         .iter()
-                        .any(|column| column.len() != evaluated_rows)
+                        .any(|column| column.as_ref().len() != evaluated_rows)
                 {
                     return Err(AggregateStarkErrorV1::InvalidLayout);
                 }
                 match &mut builder {
                     RetainedReplayBuilderV1::Initial(builder) => {
-                        builder.absorb_columns_v1(&evaluations)?
+                        // Source/native/evaluation dispatch remains eight columns.
+                        // End coefficients before retaining completed outputs.
+                        drop_completed_field_columns_v1(batch);
+                        initial
+                            .as_mut()
+                            .ok_or(AggregateStarkErrorV1::InternalInvariant)?
+                            .push_v1(evaluations, |columns| {
+                                absorb_initial_evaluations_v1(builder, columns)
+                            })?;
                     }
                     RetainedReplayBuilderV1::Selected(builder) => {
-                        builder.absorb_selected_columns_v1(&evaluations)?
+                        builder.absorb_selected_columns_v1(&evaluations)?;
+                        super::initial_evaluated_column::drop_completed_v1(evaluations);
+                        drop_completed_field_columns_v1(batch);
                     }
                 }
+            }
+            // Group boundaries are public; flush an odd/short final batch in
+            // its original order before beginning the next native domain.
+            if let RetainedReplayBuilderV1::Initial(builder) = &mut builder {
+                initial
+                    .as_mut()
+                    .ok_or(AggregateStarkErrorV1::InternalInvariant)?
+                    .flush_v1(|columns| absorb_initial_evaluations_v1(builder, columns))?;
             }
         }
         match builder {
@@ -355,3 +416,26 @@ enum RetainedReplayBuilderV1<'a> {
 #[cfg(test)]
 #[path = "joined_trace_tests.rs"]
 mod tests;
+
+#[path = "joined_initial_coalescing.rs"]
+mod initial_coalescing;
+pub(crate) use initial_coalescing::PreflightedInitialColumnsV1;
+#[cfg(test)]
+pub(crate) use initial_coalescing::preflight_test_batch_v1;
+
+/// Extra live output, exact owner metadata and conservative row packing scratch
+/// for initial sixteen-column absorption only. Native/source batches stay eight.
+pub(crate) fn initial_coalescing_extra_payload_v1(
+    rows: usize,
+) -> Result<usize, AggregateStarkErrorV1> {
+    initial_coalescing::extra_payload_v1(rows)
+}
+
+/// Resolve immutable owner variants once per bounded batch, before the row loop.
+/// This keeps per-row hashing on plain borrowed slices with no Arc/enum lookup.
+fn absorb_initial_evaluations_v1<C: AsRef<[F]> + Sync>(
+    builder: &mut StreamingRowCommitmentV1,
+    columns: PreflightedInitialColumnsV1<'_, C>,
+) -> Result<(), AggregateStarkErrorV1> {
+    columns.absorb_into_v1(builder)
+}

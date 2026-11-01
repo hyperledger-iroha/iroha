@@ -46,10 +46,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPrepa
             if statement.is_null() {
                 return Err(holder::NULL);
             }
-            let length = env
-                .get_array_length(&statement)
-                .map_err(|_| holder::INTERNAL)?;
-            let length = usize::try_from(length).map_err(|_| holder::TOO_LARGE)?;
+            let length = statement.len(env).map_err(|_| holder::INTERNAL)?;
             if length == 0 {
                 return Err(holder::EMPTY);
             }
@@ -70,9 +67,11 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_ZkX509SigningPrepa
             let digest = env
                 .byte_array_from_slice(&prepared.digest)
                 .map_err(|_| holder::INTERNAL)?;
-            env.set_object_array_element(&outputs, 0, message)
+            outputs
+                .set_element(env, 0, message)
                 .map_err(|_| holder::INTERNAL)?;
-            env.set_object_array_element(&outputs, 1, digest)
+            outputs
+                .set_element(env, 1, digest)
                 .map_err(|_| holder::INTERNAL)?;
             Ok(outputs.into_raw())
         }))

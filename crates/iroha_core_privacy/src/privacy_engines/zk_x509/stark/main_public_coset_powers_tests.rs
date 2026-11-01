@@ -100,6 +100,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 2,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: Some(table),
         };
         let address = evaluator.coset_powers.as_ref().unwrap().values.as_ptr();
@@ -139,6 +140,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 1,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: table,
         };
         assert!(
@@ -215,7 +217,9 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
     let common = 22;
     let rows = 1usize << common;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let cap =
+        usize::try_from(super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+            .unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
     assert!(metal_goldilocks_transform_extra_payload_v1(rows, 8).unwrap() <= available);
@@ -225,7 +229,7 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
                 let values = (0..1usize << native)
                     .map(|row| F((17 * row + 13 * column + 1) as u64))
                     .collect::<Vec<_>>();
-                let mask = (0..MASK_DEGREE + 1)
+                let mask = (0..=MASK_DEGREE)
                     .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                     .collect::<Vec<_>>();
                 Column::from_vec_v1(
@@ -275,6 +279,185 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
                     rayon::current_num_threads(),
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn semantic_scope_receives_actual_full_selected_and_split_backend_work() {
+    use crate::privacy_engines::zk_x509::prover_observation::transform::{FamilyV1, KindV1};
+    use crate::privacy_engines::zk_x509::prover_observation::{
+        ObservationV1, PhaseTimerV1, PhaseV1,
+    };
+    let columns = (0..5)
+        .map(|column| {
+            Column::from_vec_v1(
+                (0..21)
+                    .map(|degree| F((column * 19 + degree * 7 + 1) as u64))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for selected in [false, true] {
+        let observation = ObservationV1::begin_v1();
+        let timer = PhaseTimerV1::start_v1(PhaseV1::InitialJoinedTransform);
+        let child = timer
+            .transform_context_v1()
+            .enter(KindV1::Base, Ok(FamilyV1::Projection));
+        let mut evaluator = MainTraceCosetEvaluatorV1 {
+            evaluation_rows: 64,
+            device_columns: if selected { 0 } else { 2 },
+            receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
+            coset_powers: if selected {
+                None
+            } else {
+                Some(PublicCosetPowersV1::new_v1(64).unwrap())
+            },
+        };
+        let mut backend_calls = 0;
+        let indices = [0, 17, 63];
+        let output = if selected {
+            evaluator
+                .evaluate_selected_v1(&columns, 4, 6, &indices)
+                .unwrap()
+        } else {
+            evaluator
+                .evaluate_with_v1(&columns, 4, 6, |words, root| {
+                    transform_goldilocks_columns_v1(
+                        words,
+                        root,
+                        Direction::Forward,
+                        fastpq_prover::ExecutionMode::Cpu,
+                    )
+                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                    backend_calls += 1;
+                    // Inject only the receipt identity after real CPU arithmetic.
+                    // This tests mixed submission accounting, not Metal hardware.
+                    Ok(if backend_calls == 2 {
+                        Backend::Metal
+                    } else {
+                        Backend::Cpu
+                    })
+                })
+                .unwrap()
+        };
+        child.complete();
+        timer.complete_v1();
+        let receipt = observation.finish_v1();
+        for (actual, column) in output.iter().zip(&columns) {
+            let full = masked_trace_coefficients_on_coset_v1(column, 4, 6).unwrap();
+            let expected = if selected {
+                indices.iter().map(|&index| full[index]).collect::<Vec<_>>()
+            } else {
+                full
+            };
+            assert_eq!(&**actual, expected.as_slice());
+        }
+        let record = receipt.measurement_v1().unwrap();
+        let (node_index, node) = record
+            .phase_tree
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| node.label == FamilyV1::Projection.label(KindV1::Base))
+            .unwrap();
+        assert_eq!((node.calls, node.completed, node.interrupted), (1, 1, 0));
+        let work = record
+            .work_counters
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.label.as_str(),
+                    "transform_cpu_columns" | "transform_metal_columns"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            work.iter()
+                .all(|entry| usize::try_from(entry.phase).ok() == Some(node_index))
+        );
+        assert_eq!(work.iter().map(|entry| entry.total_units).sum::<u64>(), 5);
+        assert_eq!(
+            work.iter().map(|entry| entry.count).sum::<u64>(),
+            if selected { 1 } else { 3 }
+        );
+        assert_eq!(backend_calls, if selected { 0 } else { 3 });
+        assert_eq!(evaluator.receipt.cpu_columns, if selected { 5 } else { 3 });
+        assert_eq!(
+            evaluator.receipt.metal_columns,
+            if selected { 0 } else { 2 }
+        );
+    }
+}
+
+#[test]
+fn semantic_scope_keeps_actual_evaluator_refusal_unwind_and_populated_cleanup() {
+    use crate::privacy_engines::zk_x509::private_table::inspection;
+    use crate::privacy_engines::zk_x509::prover_observation::transform::{FamilyV1, KindV1};
+    use crate::privacy_engines::zk_x509::prover_observation::{
+        ObservationV1, PhaseTimerV1, PhaseV1,
+    };
+    for unwind in [false, true] {
+        let observation = ObservationV1::begin_v1();
+        let (result, cleared) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let timer = PhaseTimerV1::start_v1(PhaseV1::InitialJoinedTransform);
+                let child = timer
+                    .transform_context_v1()
+                    .enter(KindV1::Aux, Ok(FamilyV1::MixedRelations));
+                let columns = vec![Column::from_vec_v1(vec![F(3); 21])];
+                let mut evaluator = MainTraceCosetEvaluatorV1 {
+                    evaluation_rows: 64,
+                    device_columns: 1,
+                    receipt: MainTransformReceiptV1::default(),
+                    selected_scratch: selected_coset::SelectedScratchV1::default(),
+                    coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
+                };
+                let output = evaluator.evaluate_with_v1(&columns, 4, 6, |words, _| {
+                    assert!(words.iter().flatten().any(|&word| word != 0));
+                    if unwind {
+                        panic!("injected original backend unwind");
+                    }
+                    Err(AggregateStarkErrorV1::InternalInvariant)
+                })?;
+                child.complete();
+                timer.complete_v1();
+                Ok::<_, AggregateStarkErrorV1>(output)
+            }))
+        });
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(
+                result,
+                Ok(Err(AggregateStarkErrorV1::InternalInvariant))
+            ));
+        }
+        assert!(
+            cleared
+                .iter()
+                .any(|entry| entry.cells >= 64 && entry.nonzero_before > 0)
+        );
+        assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+        let receipt = observation.finish_v1();
+        for label in [
+            "InitialJoinedTransform",
+            FamilyV1::MixedRelations.label(KindV1::Aux),
+        ] {
+            let node = receipt
+                .measurement_v1()
+                .unwrap()
+                .phase_tree
+                .nodes
+                .iter()
+                .find(|node| node.label == label)
+                .unwrap();
+            assert_eq!(
+                (node.calls, node.completed, node.interrupted, node.unwound),
+                (1, 0, 1, u64::from(unwind))
+            );
         }
     }
 }

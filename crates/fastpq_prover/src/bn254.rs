@@ -56,10 +56,8 @@ pub fn validate_canonical_limbs(limbs: &[u64]) -> Result<(), &'static str> {
     if !limbs.len().is_multiple_of(BN254_LIMBS) {
         return Err("BN254 canonical input length must be a multiple of four limbs");
     }
-    for chunk in limbs.chunks_exact(BN254_LIMBS) {
-        let scalar_limbs: [u64; BN254_LIMBS] = chunk
-            .try_into()
-            .expect("chunks_exact yields four BN254 limbs");
+    for chunk in limbs.as_chunks::<BN254_LIMBS>().0 {
+        let scalar_limbs: [u64; BN254_LIMBS] = *chunk;
         scalar_from_canonical_limbs(&scalar_limbs)?;
     }
     Ok(())
@@ -202,7 +200,9 @@ pub fn column_extent(columns: &[Vec<u64>]) -> Result<usize, &'static str> {
 #[cfg(test)]
 pub fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
     column
-        .chunks_exact(BN254_LIMBS)
+        .as_chunks::<BN254_LIMBS>()
+        .0
+        .iter()
         .map(|chunk| limbs_slice_to_scalar(chunk).expect("valid scalar"))
         .collect()
 }

@@ -1910,14 +1910,13 @@ fn validate_zk_x509_crl_freshness_v1(
     }
     // Keep useful diagnostics after the canonical rejection. These branches
     // cannot admit a record or extend the RFC 5280 calendar.
-    if block_unix_seconds < record.next_update_unix_seconds {
-        if let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds) {
-            if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
-                return Err(invalid_privacy_parameter(format!(
-                    "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
-                )));
-            }
-        }
+    if block_unix_seconds < record.next_update_unix_seconds
+        && let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds)
+        && age > ZK_X509_MAX_CRL_AGE_SECONDS_V1
+    {
+        return Err(invalid_privacy_parameter(format!(
+            "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
+        )));
     }
     Err(invalid_privacy_parameter(
         "X.509 signed CRL is not current at the executing block timestamp",
@@ -5941,7 +5940,7 @@ mod tests {
         };
         let execute = |instruction: iroha_data_model::isi::InstructionBox,
                        tx: &mut StateTransaction<'_, '_>| {
-            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, instruction)
+            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, &instruction)
         };
         assert!(execute(schedule(last).into(), &mut transaction).is_err());
         assert_eq!(
@@ -6058,7 +6057,7 @@ mod tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next)
+                &SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next)
                     .into(),
             )
             .expect("authorized ordinary update from implicit defaults");
@@ -6096,7 +6095,7 @@ mod tests {
             let instruction =
                 SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next);
             let error = crate::executor::Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction.clone().into())
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction.clone().into())
                 .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
             assert!(
@@ -6111,7 +6110,7 @@ mod tests {
                 .execute_instruction(
                     &mut transaction,
                     &iroha_test_samples::BOB_ID,
-                    instruction.clone().into(),
+                    &instruction.clone().into(),
                 )
                 .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
@@ -6119,7 +6118,7 @@ mod tests {
                 .execute_instruction(
                     &mut transaction,
                     &ALICE_ID,
-                    SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT, next)
+                    &SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT, next)
                         .into(),
                 )
                 .expect_err("updates must be strictly future");
@@ -6131,7 +6130,7 @@ mod tests {
                     .is_none()
             );
             crate::executor::Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction.into())
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction.into())
                 .unwrap();
         }
         assert!(
@@ -9124,7 +9123,7 @@ mod tests {
             norito::encode_canonical(original).unwrap(),
             norito::encode_canonical(&clone).unwrap()
         );
-        assert!(!core::ptr::eq(original, &clone));
+        assert!(!core::ptr::eq(original, &raw const clone));
         let mut custody = AttachmentCustody::new(&source).unwrap();
         let error = Executor::Initial
             .execute_original_direct_instruction(

@@ -91,7 +91,8 @@ class NoritoCodecContractsTest(unittest.TestCase):
             (GATE.validate_codegen, GATE.DERIVE, "derive_fast_json", "return Err(norito::json::Error::unknown_field(w.last_key()).into());", "w.skip_value()?;", "codegen.strict_json_rejection"),
             (GATE.validate_codegen, GATE.DERIVE, "derive_fast_json_write", "dyn norito::json::JsonWriteSink", "dyn std::fmt::Write", "codegen.bounded_json_sink"),
             (GATE.validate_codegen, GATE.JSON_WRITER, None, "norito::json::BoundedJsonError::Unsupported", "norito::json::BoundedJsonError::DepthLimit", "codegen.bounded_json_helper_rejection"),
-            (GATE.validate_identity, GATE.IDENTITY, "frame_hash", "T::frame_name()", "T::nominal_name()", "identity.frame_hash_uses_declared_name"),
+            (GATE.validate_identity, GATE.IDENTITY, "uncached_frame_hash", "T::frame_name()", "T::nominal_name()", "identity.frame_hash_uses_declared_name"),
+            (GATE.validate_identity, GATE.IDENTITY, "frame_hash", "frame_hash_memo::cached(uncached_frame_hash::<T>)", "crate::core::schema_hash_for_name(&T::nominal_name())", "identity.frame_hash_uses_declared_name"),
             (GATE.validate_identity, GATE.IDENTITY_DERIVE, None, "::norito::NoritoSchema>::nominal_name()", "::norito::NoritoSchema>::frame_name()", "identity.generic_nominal_arguments"),
             (GATE.validate_identity, GATE.IDENTITY_DERIVE, None, "let mut arguments = Vec::new();", "let mut arguments = Vec::new(); IntoSchema::update_schema_map(map);", "identity.no_structural_marker_expansion"),
         )
@@ -121,6 +122,7 @@ class NoritoCodecContractsTest(unittest.TestCase):
         factory = re.fullmatch(r"Self::(\w+)\(EncoderSink::Counting\(counter\)\)", roles["count_constructor"].code).group(1)
         guard_type = re.search(r"let\w+=(\w+)\{encoder:self,previous_limit,\};", roles["exact_scope"].code).group(1)
         names = [item.name for item in roles.values()] + [owner.name, factory, guard_type]
+        names += ["charge", "ValueGuard", "frame_hash_memo", "cached", "uncached_frame_hash"]
         combined = dict(self.sources)
         for index, name in enumerate(names):
             with self.subTest(helper=name):
@@ -135,8 +137,9 @@ class NoritoCodecContractsTest(unittest.TestCase):
         roles = GATE.encoding_roles(self.sources)
         cases = (
             (GATE.ENCODER, roles["count_destination"].name, f"if !self.{roles['count_kind'].name}()", "if false", "encoding.count_destination_isolation"),
+            (GATE.ENCODER, roles["count_destination"].name, "super::encode_work::charge(0)?;", "self.written = length;", "encoding.count_destination_isolation"),
             (GATE.ENCODER, roles["count_constructor"].name, "EncoderSink::Counting(counter)", "EncoderSink::Writer(counter)", "encoding.count_constructor_destination"),
-            (GATE.CORE, "write_counted_payload", f"writer.{roles['exact_scope'].name}(measured_len, |writer| value.serialize(writer))", "value.serialize(writer)", "encoding.measured_emission_uses_scope"),
+            (GATE.CORE, "write_counted_payload", f"writer.{roles['exact_scope'].name}(measured_len, |writer| {{\n            let _work = encode_work::ValueGuard::enter()?;\n            value.serialize(writer)\n        }})", "value.serialize(writer)", "encoding.measured_emission_uses_scope"),
             (GATE.CORE, "serialize_to_writer_exact", "serialize_to_writer(value, &mut exact)", "Ok(())", "encoding.public_exact_checks_output"),
         )
         for path, owner, old, new, diagnostic in cases:

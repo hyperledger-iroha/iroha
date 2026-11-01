@@ -1,6 +1,9 @@
 //! Independent resource reductions, generation races, and real index-file tests.
 
 use super::*;
+#[cfg(windows)]
+use crate::kura::tests::sidecar_test_write;
+use crate::kura::tests::{IndexedSidecarSession, sidecar_test_directory};
 use crate::kura::{
     self, FsyncMode, IndexResourceFormat, Kura, ResourceUsage, SidecarIndexLayout,
     index_resource_file_usage, index_resource_kind, index_resource_paths_usage,
@@ -370,10 +373,11 @@ fn fixture_pair(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
 
 #[test]
 fn real_append_sparse_growth_and_compaction_match_independent_file_lengths() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = sidecar_test_directory();
     let root = directory.path().canonicalize().unwrap();
     let (data, index) = fixture_pair(&root);
-    assert!(Kura::append_indexed_sidecar(
+    let mut session = IndexedSidecarSession::default();
+    assert!(session.append_indexed_sidecar(
         &data,
         &index,
         10,
@@ -382,7 +386,7 @@ fn real_append_sparse_growth_and_compaction_match_independent_file_lengths() {
         FsyncMode::Always,
         None
     ));
-    assert!(Kura::append_indexed_sidecar(
+    assert!(session.append_indexed_sidecar(
         &data,
         &index,
         14,
@@ -402,7 +406,7 @@ fn real_append_sparse_growth_and_compaction_match_independent_file_lengths() {
         before[Family::PipelineIndex as usize].index_bytes,
         32 + 5 * 16
     );
-    assert!(Kura::prune_indexed_sidecars_to_retention_window(
+    assert!(session.prune_indexed_sidecars_to_retention_window(
         &data,
         &index,
         NonZeroUsize::new(2).unwrap(),
@@ -486,14 +490,18 @@ fn real_file_failure_drops_publication_and_duplicate_path_sets_are_rejected() {
 fn actual_total_disk_guard_publishes_exact_index_delta_and_invalidates_unclassified_writes() {
     let kura = Kura::blank_kura_for_testing();
     let root = kura.store_root.join("blocks/resource_fixture");
+    #[cfg(not(windows))]
     fs::create_dir(&root).unwrap();
+    #[cfg(windows)]
+    drop(iroha_fs::PrivateDirectory::open_or_create(&root).unwrap());
     initialize_physical_fixture(&kura);
     let (data, index) = fixture_pair(&root);
     let _sidecar = kura.sidecar_lock.lock();
+    let mut session = IndexedSidecarSession::default();
     let accounting = kura
         .begin_total_disk_usage_mutation()
         .with_resource_paths(Kura::sidecar_physical_resource_paths(&data, &index));
-    assert!(Kura::append_indexed_sidecar(
+    assert!(session.append_indexed_sidecar(
         &data,
         &index,
         12,
@@ -761,10 +769,14 @@ fn symlinked_parent_never_proves_an_absent_index_or_empty_tree() {
 fn read_recovery_counts_staged_slots_once_before_the_followup_writer() {
     let kura = Kura::blank_kura_for_testing();
     let root = kura.store_dir().unwrap().join(kura::PIPELINE_DIR_NAME);
+    #[cfg(not(windows))]
     fs::create_dir_all(&root).unwrap();
+    #[cfg(windows)]
+    drop(iroha_fs::PrivateDirectory::open_or_create(&root).unwrap());
     let (data, index) = fixture_pair(&root);
     let _sidecar = kura.sidecar_lock.lock();
-    assert!(Kura::append_indexed_sidecar(
+    let mut session = IndexedSidecarSession::default();
+    assert!(session.append_indexed_sidecar(
         &data,
         &index,
         10,
@@ -773,8 +785,16 @@ fn read_recovery_counts_staged_slots_once_before_the_followup_writer() {
         FsyncMode::Always,
         None
     ));
-    fs::copy(&data, data.with_extension("norito.tmp")).unwrap();
-    fs::copy(&index, index.with_extension("index.tmp")).unwrap();
+    #[cfg(not(windows))]
+    {
+        fs::copy(&data, data.with_extension("norito.tmp")).unwrap();
+        fs::copy(&index, index.with_extension("index.tmp")).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        sidecar_test_write(data.with_extension("norito.tmp"), fs::read(&data).unwrap()).unwrap();
+        sidecar_test_write(index.with_extension("index.tmp"), fs::read(&index).unwrap()).unwrap();
+    }
     initialize_physical_fixture(&kura);
     let before = kura
         .resource_inventory_component_for_tests(Family::PipelineIndex)
@@ -801,7 +821,7 @@ fn read_recovery_counts_staged_slots_once_before_the_followup_writer() {
     let append = kura
         .begin_total_disk_usage_mutation()
         .with_resource_paths(Kura::sidecar_physical_resource_paths(&data, &index));
-    assert!(Kura::append_indexed_sidecar(
+    assert!(session.append_indexed_sidecar(
         &data,
         &index,
         11,
@@ -835,7 +855,10 @@ fn read_recovery_counts_staged_slots_once_before_the_followup_writer() {
             .load(std::sync::atomic::Ordering::Relaxed)
     );
     // An orphan payload temporary is an actual failed recovery, even when no index slot changed.
+    #[cfg(not(windows))]
     fs::write(data.with_extension("norito.tmp"), b"orphan").unwrap();
+    #[cfg(windows)]
+    sidecar_test_write(data.with_extension("norito.tmp"), b"orphan").unwrap();
     assert!(!kura.recover_indexed_sidecar_with_physical_resources(
         &data,
         &index,

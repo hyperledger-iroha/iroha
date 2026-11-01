@@ -80,19 +80,40 @@ fn table<'a>(manifest: &'a str, header: &str) -> &'a str {
 
 fn bgv_sources() -> Vec<(String, String)> {
     let directory = crate_root().join("src/bgv");
-    let mut sources: Vec<(String, String)> = fs::read_dir(&directory)
-        .expect("src/bgv")
-        .flatten()
-        .map(|entry| {
-            (
-                entry.file_name().to_string_lossy().into_owned(),
-                read(&entry.path()),
-            )
-        })
-        .collect();
+    let mut pending = vec![directory.clone()];
+    let mut sources = Vec::new();
+    while let Some(parent) = pending.pop() {
+        for entry in fs::read_dir(&parent).expect("BGV source directory") {
+            let entry = entry.expect("BGV source entry");
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                sources.push((
+                    path.strip_prefix(&directory)
+                        .expect("BGV source descendant")
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    read(&path),
+                ));
+            }
+        }
+    }
     sources.sort();
     assert!(sources.len() >= 12, "src/bgv lost files: {}", sources.len());
     sources
+}
+
+#[test]
+fn source_inventory_checks_nested_production_modules() {
+    let sources = bgv_sources();
+    let opening = &sources
+        .iter()
+        .find(|(name, _)| name == "threshold/opening.rs")
+        .expect("local opening must receive every production-surface check")
+        .1;
+    assert!(production_part(opening).contains("pub fn open_local("));
+    assert!(!production_part(opening).contains("FixtureEntropy"));
 }
 
 /// The part of a source file before its inline test module.
@@ -268,7 +289,7 @@ fn the_production_path_uses_no_floating_point_and_no_u128_reconstruction() {
 }
 
 #[test]
-fn offline_threshold_exposes_custody_metadata_without_a_production_opening_path() {
+fn offline_threshold_custody_exposes_only_the_declared_public_owners() {
     let source = read(&crate_root().join("src/bgv/threshold.rs"));
     let production = production_part(&source);
     // Review additions to the deliberately small public surface explicitly.
@@ -340,4 +361,32 @@ fn offline_threshold_exposes_custody_metadata_without_a_production_opening_path(
     assert!(fixtures.contains("pub fn threshold_subset_share_words"));
     assert!(fixtures.contains("pub fn threshold_share_buffer_address"));
     assert!(fixtures.contains("pub fn threshold_subset_share_buffer_address"));
+}
+
+#[test]
+fn local_threshold_opening_exposes_no_partial_decryption_or_share_export() {
+    let source = read(&crate_root().join("src/bgv/threshold/opening.rs"));
+    let production = production_part(&source);
+    let mut functions: Vec<_> = production
+        .lines()
+        .filter_map(|line| {
+            line.trim_start()
+                .strip_prefix("pub fn ")
+                .or_else(|| line.trim_start().strip_prefix("pub const fn "))
+                .map(|rest| rest.split(['(', '<']).next().expect("function name"))
+        })
+        .collect();
+    functions.sort_unstable();
+    assert_eq!(
+        functions,
+        [
+            "into_parts",
+            "open_local",
+            "reason",
+            "required_opening_secret_bytes"
+        ]
+    );
+    assert!(production.contains("shares: Vec<SubsetSecretKeyShare>"));
+    assert!(!production.contains("impl Clone for ThresholdOpeningError"));
+    assert!(!production.contains("#[derive(Clone)]"));
 }

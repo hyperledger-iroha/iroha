@@ -148,10 +148,8 @@ pub fn reduce_wide(val: [u64; 8]) -> [u64; 4] {
     // representation on both 32-bit and 64-bit targets through its byte encoding.
     let bytes = reduced.to_le_bytes();
     let mut limbs = [0u64; 4];
-    for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
-        let mut encoded = [0u8; 8];
-        encoded.copy_from_slice(chunk);
-        *limb = u64::from_le_bytes(encoded);
+    for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
+        *limb = u64::from_le_bytes(*chunk);
     }
     limbs
 }

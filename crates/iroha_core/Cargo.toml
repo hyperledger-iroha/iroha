@@ -292,7 +292,7 @@ required-features = ["zk-ipa-native"]
 name = "isi_gas_calibration"
 path = "benches/isi_gas_calibration.rs"
 harness = false
-required-features = ["bench"]
+required-features = ["bench", "iroha-core-tests"]
 
 [[bench]]
 name = "kaigi"

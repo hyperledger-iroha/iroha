@@ -2,13 +2,15 @@
 //!
 //! Reservations live outside the source tree and remain exclusive before the
 //! peer binds its socket. Dropping an allocation or exiting its process releases
-//! the lease automatically; the small lock files retain stable inodes.
+//! the lease automatically; the small lock files retain stable native identities.
+#[path = "fslock_ports/port_lease.rs"]
 mod port_lease;
-use port_lease::{PortLease, PortLeasePool, runtime_lease_directory};
+use port_lease::{PortLease, PortLeasePool};
+#[cfg(unix)]
+use std::sync::Once;
 use std::{
     fmt,
     ops::Deref,
-    sync::Once,
     time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(unix)]
@@ -31,11 +33,7 @@ fn randomized_port_start() -> u16 {
 fn allocate(count: u16) -> Vec<PortLease> {
     ensure_fd_limit();
     assert!(count > 0, "port block must reserve at least one port");
-    let owner = nix::unistd::Uid::effective().as_raw();
-    let directory =
-        runtime_lease_directory(owner).expect("host runtime temporary directory is available");
-    let pool =
-        PortLeasePool::open(&directory, owner).expect("owner-private test port lease directory");
+    let pool = PortLeasePool::runtime().expect("OS-owned private test port lease directory");
     pool.allocate(
         count,
         PORT_RANGE_START..=PORT_RANGE_PREFERRED_END,
@@ -73,12 +71,15 @@ impl AllocatedPort {
 impl Deref for AllocatedPort {
     type Target = u16;
     fn deref(&self) -> &u16 {
+        self._lease
+            .revalidate()
+            .expect("original test port lease custody");
         &self.port
     }
 }
 impl fmt::Display for AllocatedPort {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.port, formatter)
+        fmt::Display::fmt(&**self, formatter)
     }
 }
 
@@ -100,7 +101,12 @@ impl AllocatedPortBlock {
         }
     }
     /// First port in the reserved block.
-    pub const fn base(&self) -> u16 {
+    pub fn base(&self) -> u16 {
+        for lease in &self._leases {
+            lease
+                .revalidate()
+                .expect("original test port block custody");
+        }
         self.base
     }
     /// Number of ports reserved in the block.
@@ -177,8 +183,7 @@ mod tests {
         assert_eq!(block.count(), 4);
         assert!(block.base() >= PORT_RANGE_START);
         assert!(block.base().checked_add(block.count() - 1).is_some());
-        let owner = nix::unistd::Uid::effective().as_raw();
-        let pool = PortLeasePool::open(&runtime_lease_directory(owner).unwrap(), owner).unwrap();
+        let pool = PortLeasePool::runtime().unwrap();
         assert!(pool.try_port(*port).unwrap().is_none());
         for port in block.base()..=block.base() + block.count() - 1 {
             assert!(pool.try_port(port).unwrap().is_none());

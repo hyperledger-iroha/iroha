@@ -24,6 +24,7 @@ on:
       - "crates/iroha/src/client.rs"
       - "crates/iroha_torii/assets/openapi/torii.json"
       - "crates/iroha_torii/src/openapi.rs"
+      - "crates/iroha_torii/src/openapi/tests.rs"
       - "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs"
       - "crates/iroha_torii/src/routing.rs"
       - "crates/iroha_torii/tests/sorafs_discovery.rs"

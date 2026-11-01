@@ -104,7 +104,7 @@ fn prepare_withheld_while_block_time_ahead() {
 
 #[test]
 fn authenticated_proposer_time_above_floor_executes_and_replays_without_restamping() {
-    let chosen = Duration::from_millis(20_000);
+    let chosen = Duration::from_secs(20);
     let (clock, source) = TimeSource::new_mock(chosen);
     publication_tests::with_worker_clock(source, move |chain, worker, blocks, _events| {
         let original = publication_tests::proposal(chain, worker);

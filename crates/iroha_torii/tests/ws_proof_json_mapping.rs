@@ -1,7 +1,6 @@
 //! Verify Proof events map to the expected JSON object (WS/SSE share mapper).
 #![cfg(feature = "app_api")]
-#[path = "common/proof_events.rs"]
-mod proof_events;
+use crate::proof_events;
 use iroha_torii::event_to_json_value;
 use proof_events::ProofEventFixture;
 #[test]

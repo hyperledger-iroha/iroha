@@ -36,11 +36,14 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         if candidate.exists() {
             candidate
         } else {
+            // `taikai_viewer` is a dev tool of the orchestrator package.
             let status = Command::new("cargo")
                 .args([
                     "build",
                     "-p",
                     "sorafs_orchestrator",
+                    "--features",
+                    "dev-tools",
                     "--bin",
                     "taikai_viewer",
                 ])

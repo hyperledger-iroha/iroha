@@ -260,8 +260,8 @@ fn required_native(test_name: &str) {
         }
         padded.extend_from_slice(&((length as u64) * 8).to_be_bytes());
         let mut actual = INITIAL;
-        for chunk in padded.chunks_exact(64) {
-            super::super::sha256_compress(&mut actual, chunk.try_into().unwrap());
+        for chunk in padded.as_chunks::<64>().0 {
+            super::super::sha256_compress(&mut actual, chunk);
             blocks += 1;
         }
         let digest: Vec<u8> = actual.into_iter().flat_map(u32::to_be_bytes).collect();

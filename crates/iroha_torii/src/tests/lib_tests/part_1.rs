@@ -1736,7 +1736,7 @@ fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
 }
 #[tokio::test]
 async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
-    let app = mk_native_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
+    let app = mk_native_app_state_for_tests_with_iso_bridge(Some(&sample_iso_bridge_config(
         "DE89370400440532013000",
         &ALICE_ID,
     )));

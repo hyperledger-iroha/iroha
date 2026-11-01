@@ -235,7 +235,7 @@ fn statement_bytes(
 fn prepares_complete_ordered_diagnostics_and_exact_canonical_statement_digests() {
     let (source, mut entries, transcripts) = fixture();
     // Execution order intentionally differs from transcript-map key order.
-    entries[1..].sort_by(|left, right| right.entry_hash.cmp(&left.entry_hash));
+    entries[1..].sort_by_key(|entry| std::cmp::Reverse(entry.entry_hash));
     let before = norito::encode_canonical(&transcripts).unwrap();
     let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source,

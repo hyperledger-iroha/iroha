@@ -17,7 +17,11 @@ zeroize = { workspace = true }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Memory"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Com", "Win32_System_WindowsProgramming", "Win32_UI_Shell", "Win32_Globalization", "Win32_Security_Cryptography", "Win32_System_Console", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Environment"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { workspace = true, features = ["rt", "process", "io-util", "time", "macros"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_LibraryLoader"] }

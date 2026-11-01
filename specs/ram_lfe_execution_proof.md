@@ -4,10 +4,13 @@ Status: the [canonical V1 contract](#canonical-v1-contract) below is implemented
 as types, commitments and a cleartext reference interpreter. It requires a
 proved [normalizing lowering](#normalizing-lowering) under one
 [fixed public schedule](#fixed-public-schedule) for each class profile. That
-lowering is specified, and its plaintext definition is a cleartext oracle that
-tests compare with the reference; no encrypted normalizer, no schedule and no
-proof of the lowering exist. The encrypted
-evaluator, the execution relation and the opening proofs are not implemented.
+lowering has a cleartext definition and an affine RNS-BGV evaluator under a
+fixed padded 64-output arithmetic schedule with public noise planning. The
+affine algorithm remains unqualified: circuit privacy, input/key proofs, the
+execution relation and opening proofs are not implemented. One generic nonlinear
+evaluator implements the fixed bounded and Refresh-class arithmetic schedules;
+their committed normalization/execution proofs and production qualification
+remain unfinished.
 Encrypted policy registration, activation, restored-state validation and
 receipts still reject in both signed and proof modes, and no Core, Torii or SDK
 path consumes the canonical V1 types yet. This is an implementation contract
@@ -368,11 +371,13 @@ commit to. It never changes what an admitted instruction computes.
 | `bounded.v1` | All eleven, including `Mul` and the complete `SelectEqZero`. | 16 | 0 |
 | `refresh.v1` | All eleven, with refresh between rank-bounded segments. | 16 between refreshes | at most 64 |
 
-Rank is the dependency depth of ciphertext multiplications, by the rule of each
-opcode in the descriptor. `SelectEqZero` counts its actual expansion: eight
-squarings of the condition, one multiplication by the embedded one and one
-selection multiplication, so a condition adds ten and a branch adds one. Rank
-passes through registers and through state lanes. **Rank is not a noise
+Rank is the canonical dependency weight of ciphertext multiplications, by the
+rule of each opcode in the descriptor. `SelectEqZero` retains weight ten for a
+condition and one for each branch: eight condition squares, the canonical unit
+product and selection product. In the Refresh runtime, closed zero-future and
+embedded-one invariants make the unit product redundant, leaving nine physical
+steps. This optimization changes no rank, class membership or descriptor hash.
+Rank passes through registers and through state lanes. **Rank is not a noise
 budget.** Additions and plaintext multiplications consume noise at constant
 rank; the leveled noise and work plan belongs to the encryption profile.
 [Logical rank and physical noise](#logical-rank-and-physical-noise) states what
@@ -633,10 +638,12 @@ passes through one coefficient on its way from a column to the next gate or to
 an output, however long the plaintext run of the tape was. A form has at most
 416 terms of centered magnitude at most 128. The worst-case noise of a
 normalized evaluation is therefore a function of the class shape and the
-profile, not of the plaintext instructions of a tape. That function is not
-derived. The cost summary
-projects the folded affine map of the affine candidate at 3 main primes; that
-is a projection, not a measurement, and nothing evaluates it. Folding does not
+profile, not of the plaintext instructions of a tape. The affine arithmetic
+plan now derives that function from the existing exact BGV transfers, including
+all padded rows, key switches and output masks. It excludes the still-missing
+circuit-privacy sanitizer. The cost summary retains its historical projection
+of the affine candidate at 3 main primes; it is not a fresh measured
+maximum-shape resource result. Folding does not
 make the existing candidates adequate: task C.3 derives and measures the
 worst-case noise and work of the complete padded construction, including key
 switches, masking and sanitization.
@@ -648,7 +655,7 @@ the normal form does not.
 
 `ram_lfe_reference_normalize_v1` is the plaintext definition of this section
 (see [cleartext reference](#cleartext-reference)). It is a cleartext oracle.
-No encrypted normalizer exists.
+An affine encrypted normal-form algorithm exists; complete qualified normalization remains open.
 
 ### Fixed public schedule
 
@@ -701,10 +708,294 @@ or an evaluator chooses none of it.
   evaluation and sanitization of task R.11, established for the normalized
   evaluation under this schedule.
 
-No class profile has a schedule yet. No profile is selected
-([open question 2](#open-construction-questions)); tasks R.3, R.7 and R.9
-build the schedules of `affine.v1`, `bounded.v1` and `refresh.v1` with the
-bounds of C.3 ([open question 5](#open-construction-questions)).
+No class profile is qualified or selected
+([open question 2](#open-construction-questions)). The `bgv_affine` module of
+`iroha_crypto::ram_lfe` supplies the affine arithmetic candidate: owner-side
+preparation maps the canonical forms into one clearing 128-slot matrix owned by
+`iroha_fhe::bgv::SlotLinearMap`. Rows 0..63 are the padded outputs; columns 0..63
+carry inputs, 64..95 initial lanes and 96 the constant one. All other rows and
+columns are zero. Each request first masks the original input to 64 slots and
+adds that request's initialized lanes/one, so preparation is independent of
+associated data and no unused encrypted slot can alter a lane. The shared
+BSGS/Horner routing algorithm evaluates the entire dense matrix, including
+zero diagonals; the existing fixed 64-output mask remains.
+
+The tested profiles choose 8 baby images and 16 giant partials under the public
+plan: 22 Galois applications, 130 plaintext products, 128 ciphertext additions
+and one plaintext addition including preprocessing and final masking. Other
+public noise shapes may select a smaller baby split under the same derived
+scratch ceiling; no private value selects it. With fresh bound V, key-switch
+bound K, vector l1 bound L and exact public prefix-mask norm M = 4494,
+the tested split's exact output bound is
+`(128 + L * (128 * (V * M + 128) + 192 * K) + 15 * K) * M`.
+The fixed 64-slot masks use the explicit public-count encoding API. The
+possibly hidden-count prefix-mask API retains its count-independent bound.
+The persistent matrix/bias payload is 66,048 bytes of u32 scalars. Routing has a
+conservative bound of 15 temporary/cached ciphertext residue buffers beyond its
+one output; keys, profile, preprocessing, plaintext buffers and backend scratch
+are separate, so this is not a complete working-set or resource qualification.
+The plan admits every intermediate transfer before private coefficients are
+read. It never chooses a level from the tape. Existing shared SIMD arithmetic
+and its scalar fallback implement the same operations. The wrapper accepts
+only fresh-shape two-component ciphertexts and the fixed seven matching keys;
+these checks do not authenticate the claimed noise or scalar-subalgebra input.
+No circuit-privacy sanitizer, complete execution/input proof, security approval
+or complete resource qualification is supplied. The explicit
+`bgv_affine_maximum_tests` check exercises two 256-instruction tapes at the
+current N16384/q6 profile: dense input routing and all 64 ordered outputs.
+It compares actual decrypted slots with independent scalar expectations and
+checks the measured centered inner-product norm through an independent CRT
+oracle. Its unoptimized elapsed times are functional diagnostics, not a resource
+ceiling or proof for every tape. Owner-side preparation is outside a request;
+the fixed shape does not establish time/access privacy.
+The `bgv_nonlinear_compiler` module owns one compiler bound to the original
+admitted `bounded.v1` or `refresh.v1` normal form. It copies canonical gate
+operands and ordered output snapshots into class-sized clearing storage; it
+does not reinterpret the tape or rewrite stored aliases. Public class, stage,
+effective F257/128-slot geometry and every exact row-support segment are checked
+before private coefficient reads. The `bgv_nonlinear` module consumes its bounded
+maps through the existing generic arithmetic schedule. Each of 255 canonical boundaries retains ten
+physical positions, with result `10*g+9`; sixteen layers route 21 input banks
+to 60 operand banks and evaluate all 2560 `A*B+C` positions. The extra input
+bank holds the same request-specific 64-input/32-lane/one embedding as affine.
+Output snapshots project to 64 ordered slots followed by 64 zeros. Every state
+and base-bank level transfer is public. Dummy/carry rows obey the same fixed
+support schedule as every private program, with exact per-bank transfers. A supplied profile/schedule must
+admit every intermediate; the selected bounded candidate still refuses the
+known complete schedule. The unqualified N128/q26 fixture is arithmetic evidence,
+not a production parameter selection or a security/resource qualification.
+The sole nonlinear entry point consumes `RamLfeBgvPackedInputV1`, whose
+constructor accepts admitted byte input, performs effective-F257 slot encoding,
+checks and encrypts the scalar plaintext under its borrowed local key, then
+canonically switches to the explicit public source level. Complete fresh-to-source
+admission precedes private slot reads. The evaluator checks its exact prepared-plan identity, source shape,
+key origin and complete key union before reading request memory or private maps.
+The identity token is process-local preparation provenance, not authentication
+of an external statement. Bounded and Refresh classes use one generic execution
+kernel; the bounded-only public runtime and raw-ciphertext entry point are retired.
+
+The closed input constructor guarantees slots 64..127 are zero. Initialization
+therefore adds only the memory/one embedding, without an input-mask product.
+Canonical `add_plain_scalar` returns its unchanged source and actual result by
+moving both owners, allowing the private input wrapper to retain only its original
+packed token. The result retains scalar membership but never byte-input admission.
+The compiler's final projection guarantees upper 64 output slots are zero, so evaluation returns its
+actual publicly switched result without a final mask. These omissions remove
+real products and their noise/work; no bound is reset and no arbitrary local
+ciphertext can regain packed-input provenance.
+
+The same closed scalar owner passes through every initialization, switch,
+route, product, sum and refresh. Its message lies in the scalar subalgebra at
+effective F257 precision; ciphertext residues and master-precision noise may
+remain dense. Every physical plan explicitly selects
+`BootstrapMessageSpace::ScalarSlots`. The one canonical bootstrap executor
+retains full-degree homomorphic decryption and strict dense-secret carry
+admission, then extracts and recomposes coefficient bank zero through its fixed
+even-only trace. No raw/general-local source gains this capability, and exact
+source readmission still applies to every descriptor. Only the final public
+output consumes the capability into an ordinary local ciphertext. These local
+construction facts provide no imported input/key proof or circuit privacy.
+
+The bounded physical-refresh schedule still lowers and bootstraps all 21 banks
+initially and after each of 16 layers:357 calls,320 ciphertext products and 17
+routes. The unselected N128/F257/E3 q20x60 witness retains its top-level input,
+routing level 4, product level 1 and refresh source level 0. Without the redundant
+masks its derived final level 0 bound is `1094861248`, with `16638609472`
+canonical arithmetic units and `2059780864` scalar-word operations. This N128
+witness has `d=1`: scalar selection retains its actual identity operations and
+therefore changes neither those derived counts nor supplied preparation payload.
+Current typed metadata includes the selected-mode owners and tags. All three
+complete bounded encrypted fixtures passed in the captured wave29 campaign
+described below; the counters retain their declared scopes and do not establish
+whole-application qualification.
+
+Canonical `BootstrapPlan::new` owns one immutable preparation. `admit_source`
+retains each exact new descriptor only after rechecking source context, strict
+carry and every selected-stage/per-call ceiling. The nonlinear runtime shares
+one actual core, counts every descriptor separately and never widens a source
+bound to force reuse. A class-specific physical-call ceiling bounds the number
+of descriptors. Split typed metadata and supplied retained preparation payload
+are charged once per actual shared allocation. The bounded witness has 21 exact
+descriptors and derives 36,238,176 retained preparation payload bytes and
+36,838,178 bytes including compiler/row preparation; complementary typed
+metadata and the other declared resource scopes remain separate.
+
+Refresh-class coefficient lowering retains all 319 mixed canonical gate
+ordinals (255 nonlinear boundaries plus at most 64 logical Refresh boundaries)
+and 416 canonical columns. Three state banks store one result per mixed
+ordinal, with a fourth base bank. Every public ordinal has nine physical steps:
+one Select-condition square (zero dummy target for other kinds), seven further
+squares, and a final `A*B+C` result. Initial, Square and Final are the three
+unique maps; Square repeats seven times. The final row implements `Mul=L*R`,
+`Select=(1-c^256)*(zero-nonzero)+nonzero`, logical `Refresh=0*0+operand`, or zero
+padding. Four input banks route to three operand banks; one product updates
+only the public target bank. Earlier slots within that bank pass through C;
+the other two state banks and the base move as unchanged ciphertext owners.
+Every future slot stays structural zero and the base's embedded one stays one.
+These closed invariants make the Unit product redundant. Arbitrary encrypted
+state has no constructor into this domain; no runtime plaintext inspection
+establishes these invariants. Canonical rank ten, class admission and descriptor
+hash remain unchanged. Saved lanes, aliases, dead boundaries, multiple logical
+refreshes and early output snapshots retain their original canonical forms.
+
+The Refresh compiler retains 850,110 private bytes and uses a 2,052-byte clearing
+row. Its 957 unique stage maps plus projection retain 1,962,112 coefficient bytes;
+their public layout graphs occupy 5,098,896 bytes on a 64-bit target. The plan
+owns 319 public Square maps; the private program owns 638 Initial/Final maps and
+projection. Public-map preparation never constructs or reads a private compiler.
+All 2,871 physical steps execute, with Square reuse admitted only after complete
+exact mixed input-shape equality. Three honest zero banks start at the routing
+level. One initial base bootstrap and one target bootstrap per step give 2,872
+bootstraps, 2,871 products and 2,872 routes. The diagnostic routing-level-4,
+product-level-1 schedule performs 28,714 individual modulus switches.
+Private stage/target tags and bank ordinals reject mismatches before arithmetic;
+the exact-plan identity remains a process-local binding, not an external proof.
+
+The unselected N128/F257/E3 q20x60 Refresh witness accepts an actual level 0
+packed input and retains 640 exact source descriptors under one shared core.
+It derives final level 0 bound `1094861248`, `73234637760` canonical arithmetic
+units and `5767183744` scalar-word operations. Supplied retained preparation
+payload is 24,003,088 bytes and preparation peak is 24,855,250 bytes; typed
+metadata, runtime residues and the other declared scopes remain separate.
+These are public schedule calculations, not production cost qualification.
+Scalar tests compare emitted rows and all carried banks with the normalizer and
+reference VM. Encrypted diagnostics use the canonical kernel, including maximum
+counts, independent full-ring phases at cross-bank boundaries and 64 ordered
+snapshots. The first gate checks all four banks after each of nine steps and
+compares unchanged ciphertext residues for each carried owner.
+
+TODO(R.9): complete committed lowering/execution proofs, authenticated
+input/key/opening and operation-v1 delivery, circuit privacy, selected secure
+parameters and original full-size application resource limits. A separate
+unselected N256/q23 diagnostic has a complete public noise recurrence with two exact source descriptors and final
+level-zero bound `2181235200`. The N128 and N256 first-gate fixtures each run
+conditions 256 and zero with unequal branches 17 and 99. Each case executes
+10 bootstraps and 36 independent all-bank phase checks; N256 checks all 256
+coefficients, including off-stride zeros. A separate ignored N256 full cross-bank
+tape exercises canonical evaluation through target banks one and two and final
+projection, with independent all-bank phases at gates 127/128/255/256/318.
+Both first-gate drivers passed for both conditions in the captured wave29
+campaign. The complete N128 maximum-319, nonzero-cross-bank and 64 distinct ordered
+snapshot tapes passed ([record](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/target-bank-full-r9-01.json),
+[log](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/target-bank-full-r9-01.log)). The separate complete N256
+cross-bank tape also passed ([record](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/target-bank-full-r9-d2-01.json),
+[log](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/target-bank-full-r9-d2-01.log)). Each tape evaluation executes all
+2,871 steps and 2,872 bootstraps through canonical evaluation, including
+independent all-bank phase checks at gates 127/128/255/256/318 and final
+ordered projection. These are unselected small-ring arithmetic diagnostics.
+
+The [wave29 component summary](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json)
+(SHA-256 `f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc`) records all three complete bounded
+encrypted fixtures, 375 ordinary FHE tests (14 ignored), 275 RAM-LFE tests
+(10 ignored), both expanded first-gate drivers and the current 640-source
+N65536 public planner as passing. The [independent audit](../dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json)
+binds every result to its captured source and Git controls. These are the
+test bytes before the subsequent test-only lint cleanup; their source pins
+remain unchanged. The separate [post-cleanup summary](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-post-cleanup-summary.json)
+and [audit](../dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json)
+record passing focused all-target strict Clippy, 376 ordinary FHE tests
+(15 ignored) and 275 RAM-LFE tests (10 ignored), with source/Git captures held.
+Its exact records and logs are `target-bank-clippy-05`, `target-bank-fhe-02`
+and `target-bank-ram-lfe-02` under the same report directory. Earlier strict
+failures remain preserved. These newer checks do not rerun or replace the
+maximum-tape receipts.
+
+The separate genuine N65536/F257/E3 q23 `ScalarSlots` diagnostic now passes
+honest key generation, encryption, bootstrap and one square/repeated-refresh
+cycle ([record](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.json),
+[log](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.log),
+[summary](../dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-fullsize-bootstrap-summary.json),
+[independent audit](../dist/zk-delivery-handoff/candidates/fullsize-scalar-native-independent-audit-2026-11-01/review.json)).
+Both bootstraps use the same closed scalar owner and shared preparation, with
+full dense homomorphic decryption and strict carry. At seven checkpoints,
+production inner-product words plus independent `BigInt` CRT check all 65,536
+message coefficients and phase bounds against independent inverse-Vandermonde
+messages, including all off-stride zeros. Direct secret convolution independently
+checks 135 fixed coordinates per actual limb: all 128 scalar-stride positions
+and seven off-stride/boundary probes. It is sampled independent convolution,
+not a full independent convolution of every coefficient. The finite setup caps
+are 5,395,972,096 retained-residue bytes, 13,631,488 returned-secret bytes and
+524,288 plaintext bytes; all three one-under refusals execute before key setup.
+The captured aarch64 macOS run completes in 139.225 seconds including Cargo.
+The test intentionally opens phases under separate secret custody; its `BigInt`
+buffers are not guaranteed cleared, and this supplies no production-custody
+qualification. It does not execute the full N65536 RAM-LFE application or
+qualify the original application resource limits.
+These component results establish no selected security, complete application,
+other-platform or release qualification.
+Historical N65536 full-`Ring` work figures and previous all-bank schedules do not
+describe this target-bank scalar execution.
+
+The bounded matrices use the same shared routing owner with immutable public row
+support. Let `F_g` contain all 97 base coordinates and the final physical slots
+of the `g` earlier canonical boundaries. The conservative support, identical at
+every layer, is:
+
+| Physical step | A support | B support | C support |
+| --- | --- | --- | --- |
+| 0 | `F_g` and self | `F_g` | empty |
+| 1..7 | predecessor and self | predecessor and one | empty |
+| 8 | predecessor and self | one | empty |
+| 9 | `F_g`, predecessor and self | `F_g` | `F_g` |
+
+The ten permanent padding positions and all bias columns have empty support.
+The projection's first 64 rows each retain all 352 canonical coordinates; its
+remaining rows are structural zero. This retains `519+5*g` coefficients per
+boundary, or 294,270 u32 values per layer and 22,528 in the projection: exactly
+18,923,392 private bytes for all prepared maps. Every supported private zero is
+retained. Preparation rejects any nonzero outside the public support; no actual
+gate kind, depth, coefficient, deadness or output count selects the layout.
+
+One shared layer layout contains 8,920 ordered arithmetic-progression segments
+and 7,681 row offsets; the projection contains 128 segments and 129 offsets.
+On a 64-bit target, both layouts together occupy 372,704 resident public payload
+bytes, including the immutable layout data, Arc control words and 20,496 bytes
+of public activity bits. These bits classify each supported matrix coordinate
+under the actual odd-unit slot action modulo256; they are shared layout data,
+never derived from private coefficient values. All sixteen
+layer plans and maps share one layout allocation. Per-object handles, other public plan/shape metadata and allocator headers are
+excluded. One clearing 10,756-byte row scratch is budgeted
+separately during preparation; the compiler's 589,246-byte private source and
+borrowed normal form are separate from those individual payload figures.
+The aggregate nonlinear plan additionally admits compiler-plus-row preparation
+alongside all retained class maps/layouts and the one shared bootstrap
+payload plus every exact source descriptor. A complementary typed metadata ceiling covers enclosing owners,
+public vectors, shape-bound capacities, routing-search and preparation overlap.
+Actual retained capacities and private-map container reservations are checked
+before private compiler construction. The sole `from_normal_form` factory
+then prepares the maps and drops its temporary compiler. Whole-process RSS,
+allocator overhead and caller-owned normal form/profile/keys remain outside
+these scopes. Complete declared arithmetic and scalar-word ceilings count all
+physical refresh calls in addition to every outer layer; encoding, preparation,
+copying/clearing and proof work retain separate scopes. The immutable layout
+must match between map and plan before any private coefficient read. Dense affine rows use the same
+owner, lookup representation and evaluator. The evaluator skips only diagonals
+absent from that immutable support, and empty Horner subtrees. Every supported
+private zero performs the same operations as a nonzero coefficient. Empty
+subtrees are algebraic absence, not ciphertexts with fictitious zero bounds;
+all output banks retain the genuine trivial bias embedding with bound128.
+Every output has its own exact public transfer bound, and the bounded wrapper
+propagates twenty distinct state bounds through the A/B/C triples. It does not
+widen them to a common bound or reduce a bound after evaluation.
+
+For the existing N128/q26 arithmetic fixture, each layer uses 68,643 plaintext
+products instead of 161,280; projection uses 2,632 instead of 2,688. The full
+schedule without the redundant input/output masks uses 1,100,920 plaintext products,
+1,101,240 ciphertext additions, 11,844 Galois applications, 320 ciphertext
+products and 1,425 single-prime switches. The full baby cache remains and is
+charged; only nonempty giant leaves receive inverse transforms. All counts and
+per-output shapes are derived before private preparation from public layout,
+profile, levels and selected split. The seven keys are still preflighted even
+when a public layout uses fewer of them. Other public layouts/splits have their
+own exact counts. No private-value pruning or alternate evaluator is present.
+Tests compare same-split exact ciphertext residues with a full dense oracle,
+independent scalar results, every supported private read and the new exact
+operation/transform counts, including empty and one-sided subtrees. The bounded
+rows retain the independent canonical/reference scalar equivalence tests. Complete encrypted bounded
+fixtures remain explicitly scheduled ignored tests; all three passed in the
+captured wave29 campaign above. Tasks R.7/R.9 still require
+production bounded/refresh admission and the full C.3 obligations
+([open question 5](#open-construction-questions)).
 
 ### Obligations of the normalizing lowering
 
@@ -937,9 +1228,9 @@ scalars when a form and its evaluations end, when a refused reservation
 returns an error after the refresh schedule and the initial symbolic machine
 of a normalization or the plaintext column values of an evaluation were
 written, and during unwinding. After its last reservation a normalization
-returns no error, so no error is returned while a folded form holds data. No
-encrypted normalizer exists; task R.3 builds it and compares it with this
-oracle.
+returns no error, so no error is returned while a folded form holds data. The
+affine BGV evaluator consumes this oracle with a padded arithmetic schedule;
+its complete proof, privacy and qualification remain open.
 
 `RamLfeOrderedOutputV1::padded_for_opening` gives the 64 slots an
 [opening commits](#commitments) for a reference output.
@@ -971,12 +1262,13 @@ These are not decided by this contract. Each names its owner in the
    not a proof or admission route and does not establish honest key/randomness
    provenance. TODO(R.11): the committed client/key relation, its authenticated
    binding to input/policy/context and a hiding proof backend remain unimplemented.
-5. **Fixed public schedules (C.3, R.3, R.7, R.9, R.11).** No class profile has
-   a [schedule](#fixed-public-schedule). The largest normal form of each class
-   is fixed above. The physical schedule of each class profile is not derived:
-   its levels, its ciphertext, key and proof sizes, its key switches and
-   refresh slots, how a gate slot hides the kind of its gate, how values are
-   routed, and its worst-case noise and work bound.
+5. **Fixed public schedules (C.3, R.3, R.7, R.9, R.11).** Unselected affine
+   and complete bounded/Refresh arithmetic schedules are implemented
+   under explicit public levels and resource ceilings. No class profile has a
+   qualified [schedule](#fixed-public-schedule). The largest normal forms and
+   their class limits remain fixed above; complete profile admission still
+   requires worst-case noise/work, authenticated ciphertext/key/proof sizes,
+   full-size encrypted execution, execution proofs and circuit privacy.
 6. **Opening and PRF (R.8).** The public opening material, the PRF, the carrier
    of the derived identifier and any expiry of the opening itself are not chosen.
    What an opening commits is decided: the 64 padded output slots
@@ -987,10 +1279,19 @@ These are not decided by this contract. Each names its owner in the
    per-identity and per-beneficiary counts and the set of opened receipts, and
    how a threshold committee checks an accepted request before it contributes,
    are decided where they are enforced.
-8. **Refresh (R.9, C.8).** The refresh algorithm does not exist. The rank limit
-   16 and the count 64 are candidates to be derived again from a noise model.
-   How the private logical refreshes of a tape are routed into refresh slots
-   the profile fixes is part of that work.
+8. **Refresh (R.9, C.8).** The shared local bootstrap implements genuine
+   full-degree homomorphic decryption, explicit `Ring` or closed `ScalarSlots`
+   coefficient selection and complete upper-digit extraction for each selected
+   bank. Earlier unselected `Ring` N256/F257 arithmetic tests exercise repeated
+   honest square/refresh with independent full-ring phase checks. The scalar
+   target-bank successor passes the captured N128/N256 component workloads
+   described above. The separate N65536 bootstrap/repeat diagnostic also passes
+   under its stated test scope.
+   These results do not qualify a RAM-LFE application profile. The logical
+   rank limit 16 and maximum 64 refreshes remain unchanged. The sole nonlinear runtime maps private logical
+   `Refresh` gates into a fixed public schedule with explicit physical noise/work
+   admission. Full-size encrypted application execution, original application
+   resources and the bound execution proof remain open; see the [current implementation](ram_lfe_encryption_replacement.md).
 9. **Threshold opening (R.10).** What the opening-key commitment covers for a
    committee and its epochs is not specified.
 10. **Receipt consumers (R.12, R.4).** The time source for expiry, the replay
@@ -1003,8 +1304,9 @@ These are not decided by this contract. Each names its owner in the
 12. **Whether folding suffices (C.3).** Folding removes the growth of
     plaintext runs. Whether a candidate of this kind holds the padded maximum
     shape of each class after folding, with key switches, masking and
-    sanitization, is not known; the only figure is a projection for the
-    affine map. A candidate that does not hold it is replaced by construction
+    sanitization, is not known. The affine arithmetic has a complete public
+    noise plan; nonlinear schedules and sanitization remain unfinished.
+    A candidate that does not hold it is replaced by construction
     work. No class becomes optional and no limit is added to a class.
 
 ## Provider-backed phone control

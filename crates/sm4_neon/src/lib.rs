@@ -172,8 +172,8 @@ mod neon {
     fn expand_round_keys(key: &[u8; 16]) -> [u32; 32] {
         const FK: [u32; 4] = [0xA3B1_BAC6, 0x56AA_3350, 0x677D_9197, 0xB270_22DC];
         let mut k = [0u32; 4];
-        for (slot, chunk) in k.iter_mut().zip(key.chunks_exact(4)) {
-            *slot = u32::from_be_bytes(chunk.try_into().expect("SM4 key chunk"));
+        for (slot, chunk) in k.iter_mut().zip(key.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*chunk);
         }
         for (slot, fk) in k.iter_mut().zip(FK) {
             *slot ^= fk;
@@ -290,8 +290,8 @@ mod tests {
     fn scalar_round_keys(key: &[u8; 16]) -> [u32; 32] {
         const FK: [u32; 4] = [0xA3B1_BAC6, 0x56AA_3350, 0x677D_9197, 0xB270_22DC];
         let mut k = [0u32; 4];
-        for (slot, chunk) in k.iter_mut().zip(key.chunks_exact(4)) {
-            *slot = u32::from_be_bytes(chunk.try_into().expect("SM4 key chunk"));
+        for (slot, chunk) in k.iter_mut().zip(key.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*chunk);
         }
         for (slot, fk) in k.iter_mut().zip(FK) {
             *slot ^= fk;

@@ -1927,7 +1927,9 @@ where
             .checked_mul(size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (encoded, residue) in buffer.as_mut_slice()[..bytes]
-            .chunks_exact_mut(size_of::<u64>())
+            .as_chunks_mut::<{ size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(chunk)
         {
             encoded.copy_from_slice(&residue.to_be_bytes());
@@ -3183,12 +3185,13 @@ impl StreamingRnsObjectReaderV1 {
             {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }
-            for (index, encoded) in buffer.as_mut_slice()[..bytes].chunks_exact(8).enumerate() {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                );
+            for (index, encoded) in buffer.as_mut_slice()[..bytes]
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .enumerate()
+            {
+                let residue = u64::from_be_bytes(*encoded);
                 if residue >= modulus {
                     return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                 }

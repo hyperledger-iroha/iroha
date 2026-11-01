@@ -1184,7 +1184,9 @@ fn equation_bundle_digest_v1(
     let mut registry = DigestRegistryV1::with_capacity_v1(EQUATION_COUNT_V1)?;
     let mut records = [0_u8; EQUATION_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)];
     for (ordinal, (entry, digest)) in records
-        .chunks_exact_mut(1 + PROOF_DIGEST_BYTES_V1)
+        .as_chunks_mut::<{ 1 + PROOF_DIGEST_BYTES_V1 }>()
+        .0
+        .iter_mut()
         .zip(equation_commitment_digests)
         .enumerate()
     {
@@ -1208,7 +1210,9 @@ fn limb_bundle_digest_v1(
     let mut registry = DigestRegistryV1::with_capacity_v1(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1)?;
     let mut records = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (9 + PROOF_DIGEST_BYTES_V1)];
     for (limb, (entry, digest)) in records
-        .chunks_exact_mut(9 + PROOF_DIGEST_BYTES_V1)
+        .as_chunks_mut::<{ 9 + PROOF_DIGEST_BYTES_V1 }>()
+        .0
+        .iter_mut()
         .zip(limb_commitment_digests)
         .enumerate()
     {
@@ -1848,7 +1852,12 @@ fn aggregation_schedule_digest_v1(
     }
     const RECORD_BYTES: usize = 2 + 8 + 2 * 8 + 2;
     let mut records = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITION_COUNT_V1 * RECORD_BYTES];
-    for (ordinal, entry) in records.chunks_exact_mut(RECORD_BYTES).enumerate() {
+    for (ordinal, entry) in records
+        .as_chunks_mut::<RECORD_BYTES>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let limb = ordinal / REPETITION_COUNT_V1;
         let repetition = ordinal % REPETITION_COUNT_V1;
         let challenge = challenges[limb][repetition];
@@ -2238,13 +2247,13 @@ fn validate_canonical_plaintext_chunk_v1(
     if bytes.len() != ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
-    let mut coefficients = bytes.chunks_exact(CANONICAL_COEFFICIENT_BYTES_V1);
-    for coefficient in &mut coefficients {
-        if coefficient >= VEGA_T256_SCALAR_MODULUS_BE_V1.as_slice() {
+    let (coefficients, remainder) = bytes.as_chunks::<CANONICAL_COEFFICIENT_BYTES_V1>();
+    for coefficient in coefficients {
+        if coefficient.as_slice() >= VEGA_T256_SCALAR_MODULUS_BE_V1.as_slice() {
             return Err(RnsNativeRlweSourceStatementErrorV1::NonCanonicalPlaintext);
         }
     }
-    if !coefficients.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
     Ok(())
@@ -2261,13 +2270,9 @@ fn validate_signed_chunk_v1(
     {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
-    let mut coefficients = bytes.chunks_exact(SIGNED_COEFFICIENT_BYTES_V1);
-    for encoded in &mut coefficients {
-        let value = i64::from_be_bytes(
-            encoded
-                .try_into()
-                .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding)?,
-        );
+    let (coefficients, remainder) = bytes.as_chunks::<SIGNED_COEFFICIENT_BYTES_V1>();
+    for encoded in coefficients {
+        let value = i64::from_be_bytes(*encoded);
         match component {
             SourceComponentV1::Ephemeral => {
                 if !(-1..=1).contains(&value) {
@@ -2285,7 +2290,7 @@ fn validate_signed_chunk_v1(
             }
         }
     }
-    if !coefficients.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceEncoding);
     }
     Ok(())

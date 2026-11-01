@@ -8,16 +8,13 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 use std::sync::OnceLock;
-mod runtime_expectation;
+pub mod progress;
 pub mod set;
 pub mod specialized;
-pub(crate) use runtime_expectation::check_trigger_runtime;
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
 pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
 /// Internal registration-height metadata used to defer new trigger incarnations.
 pub(crate) const TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY: &str = "__registered_block_height";
-/// Immutable digest of the runtime closure admitted with this trigger incarnation.
-pub(crate) const TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY: &str = "__runtime_expectation_v1";
 /// Internal authorization mode captured when a data trigger is registered.
 pub(crate) const DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY: &str =
     "__data_scope_authorization_v1";
@@ -234,7 +231,7 @@ pub mod isi {
         "__registered_at_ms",
         DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
         DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
-        TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY,
+        progress::REMAINING_KEY,
     ];
     pub(super) const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
     pub(super) const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
@@ -743,6 +740,25 @@ pub mod isi {
                 ),
             ));
         }
+        let progress_attempts = progress::declaration(new_trigger.action().metadata())
+            .map_err(|message| InvalidParameterError::SmartContract(message.into()))?;
+        if progress_attempts.is_some() && state_transaction.is_trigger_execution_active() {
+            return Err(InvalidParameterError::SmartContract(
+                "a callback cannot acquire or replenish autonomous progress attempts".into(),
+            )
+            .into());
+        }
+        if progress_attempts.is_some()
+            && !matches!(
+                new_trigger.action().filter(),
+                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+            )
+        {
+            return Err(InvalidParameterError::SmartContract(
+                "native progress attempts require a scheduled Time trigger".into(),
+            )
+            .into());
+        }
         let duplicates_enacted_payout =
             |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
                 crate::validation_fee::is_enacted_validation_fee_payout_invocation(
@@ -795,11 +811,6 @@ pub mod isi {
         {
             use iroha_primitives::json::Json;
             enforce_trigger_metadata_limits(new_trigger.action().metadata(), state_transaction)?;
-            let runtime_expectation = runtime_expectation::capture_trigger_runtime(
-                new_trigger.action().executable(),
-                &state_transaction.world,
-                state_transaction._curr_block.height().get(),
-            )?;
             let key_height = TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse::<Name>()
                 .expect("Valid metadata key");
@@ -810,19 +821,11 @@ pub mod isi {
             let created_ms = state_transaction._curr_block.creation_time().as_millis();
             let created_ms = u64::try_from(created_ms).unwrap_or(u64::MAX);
             let mut metadata = new_trigger.action().clone().metadata;
-            let runtime_expectation = Json::try_new(runtime_expectation).map_err(|error| {
-                state_transaction.world.attempt_error_to_instruction_error(
-                    crate::execution_attempt::norito_decode_attempt_error(error, |error| {
-                        Error::Conversion(error.to_string())
-                    }),
-                )
-            })?;
-            metadata.insert(
-                runtime_expectation::metadata_key().clone(),
-                runtime_expectation,
-            );
             metadata.insert(key_height, Json::from(height));
             metadata.insert(key_time, Json::from(created_ms));
+            if let Some(attempts) = progress_attempts {
+                progress::initialize(&mut metadata, attempts);
+            }
             if let Some(authorization) = data_scope_authorization {
                 let (mode, grantee) = match authorization {
                     DataTriggerScopeAuthorization::Owned => {
@@ -1042,6 +1045,12 @@ pub mod isi {
                 ));
             }
             ensure_metadata_key_is_not_reserved(&key)?;
+            if key.as_ref() == progress::DECLARATION_KEY {
+                return Err(InvalidParameterError::SmartContract(
+                    "native progress declaration is registration-only".into(),
+                )
+                .into());
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -1082,6 +1091,12 @@ pub mod isi {
                 ));
             }
             ensure_metadata_key_is_not_reserved(self.key())?;
+            if self.key().as_ref() == progress::DECLARATION_KEY {
+                return Err(InvalidParameterError::SmartContract(
+                    "native progress declaration is registration-only".into(),
+                )
+                .into());
+            }
             let value = state_transaction
                 .world
                 .triggers
@@ -1660,8 +1675,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use std::{str::FromStr, time::Duration};
-    include!("applying_time_register_tests.rs");
-    include!("runtime_expectation_tests.rs");
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
@@ -3493,7 +3506,6 @@ mod tests {
             "__registered_block_height",
             DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
             DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
-            TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY,
         ] {
             let key: Name = raw.parse().expect("valid name");
             let err =

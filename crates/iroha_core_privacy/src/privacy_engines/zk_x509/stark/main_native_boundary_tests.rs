@@ -458,7 +458,7 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
                     opening.aux_current,
                     opening.aux_next,
                     &rows.fixed[current],
-                    source.post_base.projection(),
+                    &source.post_base.projection(),
                 )
                 .unwrap(),
                 SegmentAdapterIdV1::ByteMemory => io_constraint_residues_v1(

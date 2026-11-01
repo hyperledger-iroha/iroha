@@ -1209,8 +1209,19 @@ impl DaShardCursorJournal {
     }
 }
 fn sync_dir(path: &Path) -> std::io::Result<()> {
-    let file = fs::File::open(path)?;
-    file.sync_all()
+    #[cfg(windows)]
+    {
+        // A plain File::open cannot retain a Windows directory for its native
+        // publication barrier. Keep the directory and its ancestors through sync.
+        let directory = iroha_fs::OwnerDirectory::open(path)?;
+        directory.sync()?;
+        directory.revalidate()
+    }
+    #[cfg(not(windows))]
+    {
+        let file = fs::File::open(path)?;
+        file.sync_all()
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -1723,6 +1734,58 @@ mod tests {
         let (payload, flags) = norito::codec::encode_with_header_flags(value);
         norito::core::frame_bare_with_header_flags::<PersistedShardCursors>(&payload, flags)
             .expect("frame test payload under the actual cursor owner")
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_journal_persistence_and_promotion_sync_directory() {
+        let temp = tempdir().expect("temporary root");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temp.path().join("cursors"))
+            .expect("private cursor directory");
+        let identity = directory.identity().expect("original directory identity");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(directory.path());
+        let mut journal = DaShardCursorJournal::new(&config, path.clone());
+        journal
+            .record_commitment(1, &sample_record(0, 1, 2))
+            .expect("record cursor");
+        journal
+            .persist()
+            .expect("persist and sync the native directory");
+        let bytes = fs::read(&path).expect("published journal");
+        let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load journal");
+        let cursor = loaded
+            .cursor_for_lane(LaneId::new(0))
+            .expect("persisted cursor");
+        assert_eq!((cursor.epoch, cursor.sequence), (1, 2));
+        let temporary = DaShardCursorJournal::temp_path(&path);
+        assert!(!temporary.exists());
+        fs::rename(&path, &temporary).expect("stage the original journal for recovery");
+        let recovered = DaShardCursorJournal::load(&config, path.clone()).expect("promote journal");
+        let cursor = recovered
+            .cursor_for_lane(LaneId::new(0))
+            .expect("recovered cursor");
+        assert_eq!((cursor.epoch, cursor.sequence), (1, 2));
+        assert_eq!(fs::read(&path).expect("promoted journal"), bytes);
+        assert!(!temporary.exists());
+        sync_dir(directory.path()).expect("native directory barrier after recovery");
+        assert_eq!(directory.identity().expect("retained directory"), identity);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_journal_directory_sync_refuses_file_and_missing_path() {
+        let temp = tempdir().expect("temporary root");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temp.path().join("cursors"))
+            .expect("private cursor directory");
+        let path = directory.path().join("ordinary-file");
+        fs::write(&path, b"unchanged").expect("ordinary file");
+        assert!(sync_dir(&path).is_err());
+        assert_eq!(fs::read(&path).expect("unchanged file"), b"unchanged");
+        let missing = directory.path().join("missing");
+        assert!(sync_dir(&missing).is_err());
+        assert!(!missing.exists());
+        directory
+            .revalidate()
+            .expect("original directory remains valid");
     }
     #[test]
     fn journal_persists_and_recovers_cursors() {

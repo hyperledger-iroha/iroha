@@ -710,7 +710,7 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
     let bomb_bytes = norito::encode_canonical(&bomb).expect("encode allocation bomb");
     let canonical = norito::decode_canonical::<NestedDecodeBudgetProbeV1>(&bomb_bytes)
         .expect("decode canonical allocation probe before applying a broker budget");
-    assert!(canonical == bomb);
+    assert_eq!(canonical, bomb);
     // Frame decoding and the owned vector values both consume allocation.
     // A ceiling alone is insufficient: zero headroom clamps the budget to wire length.
     let generous_policy =
@@ -729,7 +729,7 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
         generous_policy,
     )
     .expect("the exact same frame must decode before imposing the allocation ceiling");
-    assert!(decoded == bomb);
+    assert_eq!(decoded, bomb);
     drop(generous_scope);
     let allocation_policy =
         DecodeResourcePolicyV1::new((1024, 1024), (1024, 32), (0, 0), 8, (4096, 4096));
@@ -761,7 +761,7 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
     let nested_bytes = norito::encode_canonical(&nested).expect("encode deep value");
     let decoded_nested = norito::decode_canonical::<Vec<Vec<Vec<u8>>>>(&nested_bytes)
         .expect("decode nested frame before imposing the depth ceiling");
-    assert!(decoded_nested == nested);
+    assert_eq!(decoded_nested, nested);
     // Keep the allocation allowance sufficient so this probe isolates nesting depth.
     let depth_policy =
         DecodeResourcePolicyV1::new((1024, 1024), (1024, 1024), (0, 1024), 1, (4096, 4096));

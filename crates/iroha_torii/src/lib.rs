@@ -22,6 +22,7 @@ mod certified_originals_auth;
 mod error_chain;
 mod finality_interval;
 mod game;
+mod game_partitions;
 mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
@@ -2806,7 +2807,7 @@ enum PipelineStatusKind {
     Rejected,
     Expired,
 }
-const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_mins(15);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP: usize = 1_024;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER: usize = 4;
@@ -8784,11 +8785,15 @@ async fn handler_account_transactions_query(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         query,
     )
     .await
 }
 /// Shared ingress for committed account transactions and movements.
+///
+/// `endpoint_label` names the route the caller used in its address telemetry; the GET and POST
+/// routes of one collection execute the same target.
 #[cfg(feature = "app_api")]
 async fn account_history_collection_read(
     app: &SharedAppState,
@@ -8796,10 +8801,10 @@ async fn account_history_collection_read(
     remote_ip: std::net::IpAddr,
     caller: Option<&AccountId>,
     target: routing::collection_sources::CollectionTarget,
+    endpoint_label: &'static str,
     query: iroha_torii_shared::list_query::ListQuery,
 ) -> Result<Response, Error> {
     let account_literal = target.scope();
-    let endpoint_label = target.endpoint();
     let limits = crate::routing::app_query_limits();
     if !limits::is_allowed_by_cidr(headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -9197,6 +9202,7 @@ async fn handler_account_transactions_get(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
         query,
     )
     .await
@@ -9225,6 +9231,7 @@ async fn handler_account_history_get(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
         list_query_from_query_string(uri.query())?,
     )
     .await
@@ -9244,6 +9251,7 @@ async fn handler_account_history_query(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
         list_query_from_json(body)?,
     )
     .await
@@ -13299,7 +13307,7 @@ async fn handler_runtime_propose_upgrade(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
+    let payload = crate::runtime::handle_runtime_propose_upgrade(body).await;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_cancel_upgrade(
@@ -13889,8 +13897,9 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
     let latest_block_ms = view.query_ledger_time_ms();
     let wall_clock_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        });
     let now_ms = wall_clock_ms.max(latest_block_ms);
     let world = view.world();
     let mut active_capability_adverts = 0_u64;
@@ -14354,8 +14363,7 @@ fn transaction_submission_receipt_response(
         let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
         let submitted_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let payload = TransactionSubmissionReceiptPayload {
             entrypoint_hash,
             signed_transaction_hash,
@@ -18246,7 +18254,7 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
         &verified_query.request,
         iroha_data_model::query::QueryRequest::Singular(_)
     ) {
-        return execute_torii_singular_query_via_fanout_for_routes_admitted(
+        return Box::pin(execute_torii_singular_query_via_fanout_for_routes_admitted(
             app,
             query_bytes,
             verified_query,
@@ -18254,7 +18262,7 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
             format,
             (envelope, fanout_reservation),
             proxy_memory,
-        )
+        ))
         .await;
     }
     // Iterable starts have no canonical cross-route projection.
@@ -22727,7 +22735,7 @@ fn resolve_hosted_http_runtime_target(
         method,
         uri,
     )
-    .ok_or_else(&no_healthy_replica)?;
+    .ok_or_else(no_healthy_replica)?;
     let placement_is_local = app
         .local_peer_id
         .as_ref()
@@ -27995,8 +28003,7 @@ async fn handler_iso_status(
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -28922,8 +28929,7 @@ fn insert_iso_metadata_fields(
             let updated_at_ms = entry
                 .updated_at()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-                .unwrap_or(0);
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
             item.insert(
                 "updated_at_ms".into(),
                 norito::json::native::Value::from(updated_at_ms),
@@ -37615,6 +37621,8 @@ impl Torii {
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_INTERVAL => public_get(handler_bridge_finality_interval);
             PRIVATE_DATASPACE_RECORD_PROOF => public_get(private_dataspaces::record_proof);
+            GAME_PARTITION_STATE => public_get(game_partitions::snapshot);
+            GAME_PARTITION_EXPORT_PROOF => public_get(game_partitions::export_proof);
             SNS_DATASPACE_LEASE => public_get(sns_lease::handler);
             PRIVATE_ROOT_REGISTRATION => private_root_owner_get(private_root_export::registration);
             PRIVATE_ROOT_ANCHOR => private_root_owner_get(private_root_export::anchor);
@@ -42169,6 +42177,25 @@ ingress,
             &mut workers,
         )
         .expect("prepared test enrollment service must retain its worker handle");
+        // `start` subscribes the Connect relay after preparing the router; do the same here so
+        // a fixture that asked for P2P observes the attached relay policy.
+        #[cfg(feature = "connect")]
+        if self.connect_enabled
+            && let Some(network) = self.p2p.clone()
+        {
+            let connect_bus = self.connect_bus.clone();
+            let shutdown = shutdown_signal.clone();
+            workers.push(ToriiCriticalWorker {
+                name: "connect_network",
+                task: tokio::spawn(async move {
+                    connect_bus
+                        .attach_network(network, shutdown)
+                        .await
+                        .await
+                        .unwrap_or(ToriiCriticalWorkerExit::UnexpectedExit)
+                }),
+            });
+        }
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -42232,13 +42259,14 @@ ingress,
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
-        let listener = match prebound_listener {
-            Some(listener) => adopt_torii_tcp_listener(&torii_address, listener),
-            None => bind_torii_tcp_listener(torii_address.clone()),
-        }
-        .change_context(Error::StartServer)
-        .attach("failed to bind to the specified address")
-        .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = prebound_listener
+            .map_or_else(
+                || bind_torii_tcp_listener(torii_address.clone()),
+                |listener| adopt_torii_tcp_listener(&torii_address, listener),
+            )
+            .change_context(Error::StartServer)
+            .attach("failed to bind to the specified address")
+            .attach_with(|| self.address.clone().into_attachment())?;
         let https = match https {
             Some(prepared) => Some(
                 prepared

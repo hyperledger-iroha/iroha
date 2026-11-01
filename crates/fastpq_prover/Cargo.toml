@@ -10,18 +10,20 @@ publish = false
 default = []
 dev-tools = []
 # Paired Keccak NEON/SSE2; all other targets retain deterministic scalar execution.
-simd = []
+simd = ["keccak/parallel"]
 # Synchronous GPU FFT/LDE planner helpers exercised by the `planner` benchmark.
 bench = []
 fastpq-gpu = ["dep:block", "dep:metal"]
 
 [dependencies]
+keccak = { version = "0.2.2", default-features = false }
 iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_allocation = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_fhe = { path = "../iroha_fhe", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 norito = { workspace = true, features = ["base-codec"], default-features = false }
@@ -85,6 +87,10 @@ path = "tests/offline_compact.rs"
 [[test]]
 name = "shared_backend_inventory"
 path = "tests/shared_backend_inventory.rs"
+
+[[test]]
+name = "rns_chain_air"
+path = "tests/rns_chain_air.rs"
 
 [build-dependencies]
 cc = "1.2.45"

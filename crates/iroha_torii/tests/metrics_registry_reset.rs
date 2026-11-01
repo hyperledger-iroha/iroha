@@ -1,7 +1,6 @@
 //! Smoke test for the shared metrics registry wiring used by Torii test suites.
+use crate::fixtures;
 use std::sync::Arc;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[test]
 fn shared_metrics_can_be_reset_for_clean_suites() {
     let first = fixtures::reset_shared_metrics();

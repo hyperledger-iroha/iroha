@@ -128,11 +128,10 @@ impl ReplayCacheConfig {
         }
     }
     fn default_capacity() -> NonZeroUsize {
-        NonZeroUsize::new(Self::DEFAULT_CAPACITY).map_or(NonZeroUsize::MIN, |capacity| capacity)
+        NonZeroUsize::new(Self::DEFAULT_CAPACITY).unwrap_or(NonZeroUsize::MIN)
     }
     fn default_lane_epoch_capacity() -> NonZeroUsize {
-        NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY)
-            .map_or(NonZeroUsize::MIN, |capacity| capacity)
+        NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY).unwrap_or(NonZeroUsize::MIN)
     }
     /// Override the per-lane capacity.
     #[must_use]

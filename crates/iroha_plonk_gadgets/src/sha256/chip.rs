@@ -1132,8 +1132,8 @@ impl<F: PastaField> Sha256Chip<F> {
         }
         let limb_values = bytes.map(|b| {
             let mut out = [0_u32; 8];
-            for (limb, chunk) in out.iter_mut().zip(b.chunks_exact(4)) {
-                *limb = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            for (limb, chunk) in out.iter_mut().zip(b.as_chunks::<4>().0) {
+                *limb = u32::from_le_bytes(*chunk);
             }
             out
         });

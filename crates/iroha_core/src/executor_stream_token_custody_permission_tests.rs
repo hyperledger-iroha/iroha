@@ -145,7 +145,7 @@ mod stream_token_custody_permission_tests {
                 Grant::account_permission(permission(1), BOB_ID.clone()).into()
             };
             Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, exact)
+                .execute_instruction(&mut transaction, &ALICE_ID, &exact)
                 .expect("exact role holder delegates or revokes");
             assert_eq!(
                 validate_initial_native_instruction_authority(
@@ -180,7 +180,7 @@ mod stream_token_custody_permission_tests {
                 Grant::account_role(role.clone(), BOB_ID.clone()).into()
             };
             Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, change)
+                .execute_instruction(&mut transaction, &ALICE_ID, &change)
                 .expect("exact role holder manages assigned role");
             assert_eq!(
                 validate_initial_native_instruction_authority(

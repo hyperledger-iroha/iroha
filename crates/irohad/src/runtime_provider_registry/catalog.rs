@@ -1129,14 +1129,13 @@ impl RuntimeProviderBindingWireV1 {
                 }
                 binding.evidence_viewer_transparency_publisher_public_key = Some(public_key);
             }
-            IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint => {
+            IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint
                 if revision
                     != sorafs_node::reputation::runtime::
                         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
-                {
+                => {
                     return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
                 }
-            }
             _ => {}
         }
         if RuntimeProviderBindingWireV1::try_from_binding(&binding)? != expected {

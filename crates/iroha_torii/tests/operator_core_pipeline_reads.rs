@@ -1,6 +1,5 @@
 //! Router-level authentication regressions for node-local core and pipeline reads.
-#[path = "common/norito_rpc_harness.rs"]
-mod norito_rpc_harness;
+use crate::norito_rpc_harness;
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},

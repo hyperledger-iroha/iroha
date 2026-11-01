@@ -23,8 +23,10 @@ fn typed_controlled_lock_calls_compile_to_four_distinct_effects() {
         .expect("typed lock operations compile");
     let parsed = ProgramMetadata::parse(&bytes).unwrap();
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     for syscall in [
         syscalls::SYSCALL_ASSET_LOCK_OPEN,
@@ -49,13 +51,15 @@ fn typed_controlled_lock_calls_compile_to_four_distinct_effects() {
 #[test]
 fn controlled_lock_open_rejects_wrong_quantity_and_deadline_types() {
     for (original, replacement) in [
+        // Positional arguments must precede named ones, so each wrongly typed value
+        // stays in its positional slot.
         (
             "key, source, destination, asset_definition, amount,",
-            "key, source, destination, asset_definition, amount: true,",
+            "key, source, destination, asset_definition, true,",
         ),
         (
             "release_until_ms, cancel_not_before_ms, expires_at_ms",
-            "release_until_ms: true, cancel_not_before_ms, expires_at_ms",
+            "true, cancel_not_before_ms, expires_at_ms",
         ),
     ] {
         let source = SOURCE.replace(original, replacement);

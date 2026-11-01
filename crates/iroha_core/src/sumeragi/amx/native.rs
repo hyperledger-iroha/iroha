@@ -359,6 +359,23 @@ fn authenticated_global_source(
     Ok(global)
 }
 
+/// Reuse the sole signed-G1/H2 verifier for a governed game peer. The bounded native
+/// partition retains the resulting immutable tracker; broader proof allocation custody
+/// remains the same explicit qualification boundary as the native source verifier.
+pub(crate) fn authenticate_game_peer(
+    chain_id: &iroha_model_base::chain::ChainId,
+    network: iroha_data_model::NetworkId,
+    genesis: &[u8],
+    successor: &[u8],
+    budget: &AllocationBudget,
+) -> Result<
+    iroha_data_model::sumeragi_amx::AmxForeignInstanceV1,
+    crate::execution_attempt::ExecutionAttemptError<Error>,
+> {
+    authenticated_global_source(chain_id, network, genesis, successor, budget)
+        .map(|source| source.canonical().clone())
+}
+
 impl Execute for RegisterAmxParticipantV1 {
     fn execute(
         self,

@@ -1,8 +1,12 @@
 # Confidential Gas Calibration Baselines
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `specs/confidential_assets.md#calibration-baselines--acceptance-gates`.
+This ledger retains historical confidential gas calibration measurements.
+They do not qualify the current combined source or substitute for the named
+reference platforms in `specs/confidential_assets.md#calibration-baselines--acceptance-gates`.
+An Intel i7-11800H is now available for engineering instruction checks, but the
+required Xeon Gold 6430 neutral/AVX2 baselines remain open. The Parliament Xeon
+Silver 4310 baseline is a separate requirement. See
+[Windows and Intel completion goals](windows_intel_completion_goals.md).
 
 | Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -16,13 +20,80 @@ the procedure described in `specs/confidential_assets.md#calibration-baselines--
 `iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
 the summed gas across the nine-instruction sample set.
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `specs/confidential_assets_calibration_neon_20251018.log`.
+The historical runs above did not retain the required Criterion `raw.csv`
+artifacts. Current benchmark builds enable the workspace `csv_output` feature;
+it is a compile-time reporter selection, not a `CRITERION_OUTPUT_TO` switch.
+Fresh named-host runs must retain the original CSV samples under
+`target/criterion/**/raw.csv` and follow the current [calibration
+procedure](confidential_assets.md#calibration-baselines--acceptance-gates).
+Console logs do not replace those samples or qualify a historical run. The
+retained arm64 console log is
+`specs/confidential_assets_calibration_neon_20251018.log`.
+
+The current ISI benchmark covers eight instructions (the rows below except
+`RegisterDomain`). Its `ISI_GAS_CALIBRATION` records report the measured fixture's
+gas quote for one execution. The IVM benchmark emits `IVM_GAS_CALIBRATION`
+records with operation count, actual total gas, HALT gas and per-operation gas;
+its raw samples measure the complete repeated-instruction program. Keep these
+records beside the original Criterion samples and derive current ratios from
+them, rather than reusing the historical nine-instruction denominator below.
+Benchmark IDs are unchanged. Neither emitted denominators nor a smoke run
+qualify a named-host timing baseline.
+
+The ISI target requires `--features bench,iroha-core-tests` to reuse the existing
+signed four-validator genesis owner. Each case retains that original initialized
+State and creates a fresh transaction against its authenticated parent for every
+iteration; dropping the uncommitted transaction rolls back its changes. Each
+measured transaction opens the existing bounded component invocation owner before
+any callback executes; that fixture owner grants no Network or block-publication
+authority. The callback regression consumes a one-shot empty trigger and checks
+that discarding the overlay restores it. Genesis startup and case preconditions
+stay outside timing. The `bench_repro` controls
+check retained genesis/network/root authority and successful account and
+domain-owned asset-definition registration followed by rollback, so a
+header-shaped pre-genesis fixture cannot qualify it. The asset's explicit owning
+domain authorizes post-genesis registration; deriving its identifier from a
+domain name alone supplies no ownership authority.
+Role cases retain the authority's own membership and grant or revoke the role
+on a distinct recipient; role-management permission alone does not authorize
+delegating an unheld role. The regression executes both operations and checks
+that dropping each transaction restores the recipient's original membership.
+
+The neutral profile's `-C target-feature=-avx,-avx2,-fma` flags alone do not
+establish scalar runtime execution. CPU detection can still select explicitly
+annotated kernels; for example, `iroha_fhe::active_backend()` selects AVX2 when
+the `simd` feature and CPU support are present. Retain the selected backend and
+the effective policy for every exercised acceleration owner with each
+qualification run; unavailable dispatch evidence leaves the neutral gate open.
+Both benchmarks accept the benchmark-only setting
+`IROHA_GAS_BENCH_IVM_POLICY=scalar`, which applies IVM's existing
+`AccelerationConfig` with SIMD, Metal and CUDA disabled and asserts its selected
+`Scalar` backend. The default `runtime` preserves the existing policy; unknown
+values refuse. `GAS_CALIBRATION_IVM_POLICY scope=ivm-only` records the requested
+policy, actual selection and effective backend enables. For example:
+
+```sh
+IROHA_GAS_BENCH_IVM_POLICY=scalar IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1 \
+  cargo bench --locked -p ivm --bench gas_calibration -- --test
+```
+
+This is a runnable smoke control, not a named-host timing measurement. The IVM
+benchmark exercises arithmetic programs and numeric/TLV operations, including
+their VM memory machinery. The ISI benchmark also generates Ed25519 accounts
+and uses model/Core hashing and execution owners outside IVM. An IVM policy
+receipt is neither their dispatch evidence nor an instruction-completion count.
+Neither benchmark loads node configuration; this setting exists only in their
+shared benchmark helper, and does not control FHE or third-party dispatch. The
+isolated `iroha_fhe --no-default-features` test suite proves only that component's
+scalar build; Cargo feature unification must be checked in a complete consumer.
+No benchmark command currently proves a completely scalar dependency graph.
+
+Current Linux component validation completes all eight ISI smoke cases under
+both `runtime` and `scalar`, with identical gas quotes, and passes all five
+`bench_repro` controls. The IVM smokes complete all 37 cases under both policies.
+These are execution and fixture controls on the development host, not the
+required Xeon neutral/AVX2 baselines; see the
+[Intel validation record](../docs/validation/intel_avx2.md).
 
 Per-instruction medians from the same run (`cargo bench -p iroha_core --features bench --bench isi_gas_calibration`):
 
@@ -58,9 +129,11 @@ Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --featur
 these medians (total `3.85717e7` ns across the nine-instruction set and 1,413
 gas units).
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+The 1,413-gas total is historical. The current
+`gas::tests::calibration_bench_gas_snapshot` checks the current instruction quotes,
+including `RegisterDomain`, and derives their sum. It does not establish that
+the eight-case benchmark still has this historical denominator; use the emitted
+current quotes for a new calibration report.
 
 ## Commitment Tree Telemetry Evidence (M2.2)
 
@@ -102,7 +175,8 @@ SDK Council granted a temporary waiver for the Phase C gate requiring
   → “Bad CPU type in executable”; see
   `specs/confidential_assets_calibration_avx2_attempt_20260428.log`).
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+The waiver records the earlier Apple-host limitation. Current release
+qualification still requires the named neutral/AVX2 measurements, canonical
+Criterion artifacts and the other reference-platform/telemetry evidence above.
+The available i7 instruction checks do not complete these timing baselines or
+change committed gas costs.

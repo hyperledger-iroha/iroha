@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn scaled_unsigned_constructor_matches_canonical_numeric() {
-        for amount in [0, 1, 10, 1_000_000_000, u64::MAX as u128, u128::MAX] {
+        for amount in [0, 1, 10, 1_000_000_000, u128::from(u64::MAX), u128::MAX] {
             for scale in [0, 9, 28, 29, 38, 39] {
                 let expected = Numeric::try_new(amount, scale)
                     .map(|value| Quantity::try_from_numeric(value).unwrap());

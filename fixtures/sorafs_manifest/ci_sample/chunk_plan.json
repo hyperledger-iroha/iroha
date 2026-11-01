@@ -1,8 +1,12 @@
-[
-  {
-    "chunk_index": 0,
-    "digest_blake3": "74813dc4d7de02bcba58c405e40308ec612a149d7788e35d31cf801b9686d80e",
-    "length": 201,
-    "offset": 0
-  }
-]
+{
+  "chunk_fetch_specs": [
+    {
+      "chunk_index": 0,
+      "digest_blake3": "74813dc4d7de02bcba58c405e40308ec612a149d7788e35d31cf801b9686d80e",
+      "length": 201,
+      "offset": 0
+    }
+  ],
+  "payload_digest_blake3_hex": "74813dc4d7de02bcba58c405e40308ec612a149d7788e35d31cf801b9686d80e",
+  "schema": "sorafs.chunk_fetch_plan.v1"
+}

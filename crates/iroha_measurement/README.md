@@ -3,7 +3,8 @@
 `iroha_measurement` owns the shared phase tree and resource observation record
 for proof, verification, native and SDK flows. It sits below the proof, Core
 and data-model crates: its only dependencies are `iroha_allocation`, the Norito
-codec and the C library, and `tests/layering.rs` fails if that changes.
+codec and native operating-system APIs (`libc` on Unix, `windows-sys` on Windows),
+and `tests/layering.rs` fails if that changes.
 
 ## Measurements never affect validity
 
@@ -79,6 +80,13 @@ Android probes are compile-checked only; Android usually denies an
 application the read, so a device run takes its thermal state from the SDK
 emitter. The harness rejects a record without thermal state when it is run
 with `--require-thermal-state`.
+
+On native Windows, process and thread CPU time comes from `GetProcessTimes` and
+`GetThreadTimes`; lifetime peak resident memory is `GetProcessMemoryInfo`'s
+`PeakWorkingSetSize` in bytes. Failed native calls remain unavailable. Windows
+does not report a Unix address-space limit, load average or thermal state through
+this recorder; job memory limits and committed bytes do not substitute for those
+measurements.
 
 ## One schema for every emitter
 

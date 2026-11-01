@@ -227,7 +227,7 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
             .gossip_batch_with_state(u32::try_from(txs.len())?, &state)
             .is_empty()
     );
-    assert!(queue.active_len() == 0);
+    assert_eq!(queue.active_len(), 0);
     let backlog_after = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])

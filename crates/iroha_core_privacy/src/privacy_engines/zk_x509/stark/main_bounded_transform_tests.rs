@@ -136,6 +136,41 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
 }
 
 #[test]
+fn measured_assembly_admits_sixteen_forward_columns_without_borrowing_other_reserves() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let policy = MainBoundedTransformPolicyV1 {
+        backend: Some(Backend::Metal),
+        ..MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730).unwrap()
+    };
+    let rows = 1 << 19;
+    for registration in &layout.registered_segments {
+        let adjusted = policy
+            .for_quotient_layout_v1(
+                registration.segment.base_width,
+                registration.segment.aux_width,
+            )
+            .unwrap();
+        assert_eq!(adjusted.forward_columns_v1(rows), 16);
+        assert_eq!(adjusted.columns_v1(rows), 8);
+        let required =
+            super::super::main_native_transform::required_forward_payload_v1(rows, 16).unwrap();
+        let exact = MainBoundedTransformPolicyV1 {
+            available: required,
+            ..adjusted
+        };
+        assert_eq!(exact.forward_columns_v1(rows), 16);
+        assert_eq!(
+            exact
+                .reserve_additional_v1(1)
+                .unwrap()
+                .forward_columns_v1(rows),
+            8
+        );
+        assert!(required <= adjusted.available);
+    }
+}
+
+#[test]
 fn staging_refuses_underfunded_and_oversized_actual_allocations_before_input_copy() {
     let need = required_v1(32, 2).unwrap();
     let mut calls = 0;
@@ -407,7 +442,7 @@ fn private_forward_adapter_matches_horner_and_preserves_separate_backend_counter
             )));
             assert!(receipt.contains("fixed_coset_metal_forward_columns=0"));
             assert!(receipt.contains("fixed_coset_cpu_forward_columns=0"));
-            assert_eq!(calls, if admitted == 0 { 0 } else { 8 / admitted });
+            assert_eq!(calls, 8_usize.checked_div(admitted).unwrap_or(0));
             assert_eq!(
                 erased.iter().map(|item| item.cells).sum::<usize>(),
                 if admitted == 0 { 0 } else { 8 * 32 }
@@ -789,7 +824,7 @@ fn inverse_only_adapter_matches_independent_dft_without_forward_or_diagonal() {
             let receipt = observation.finish_v1().public_text_v1();
             assert_eq!(values, expected);
             assert_eq!(values.iter().map(Vec::as_ptr).collect::<Vec<_>>(), pointers);
-            assert_eq!(calls, if admitted == 0 { 0 } else { 8 / admitted });
+            assert_eq!(calls, 8_usize.checked_div(admitted).unwrap_or(0));
             let metal = admitted > 0 && completed == Backend::Metal;
             assert!(receipt.contains(&format!(
                 "native_replay_cpu_inverse_columns={}",
@@ -815,7 +850,10 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
         available_goldilocks_transform_backend_v1, goldilocks_transform_completion_uncertain_v1,
     };
 
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     assert_eq!(
         available_goldilocks_transform_backend_v1(),
         Some(Backend::Metal)
@@ -849,7 +887,7 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                     goldilocks_transform_completion_uncertain_v1,
                 )
                 .unwrap();
-            let mut elapsed = [[0_u128; 3]; 2];
+            let mut elapsed = [Vec::with_capacity(3), Vec::with_capacity(3)];
             for round in 0..3 {
                 for device in if round % 2 == 0 {
                     [false, true]
@@ -886,7 +924,8 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                             goldilocks_transform_completion_uncertain_v1,
                         )
                         .unwrap();
-                    elapsed[usize::from(device)][round] = started.elapsed().as_nanos();
+                    let round_elapsed = started.elapsed();
+                    elapsed[usize::from(device)].push(round_elapsed);
                     assert_eq!(metal_columns, if device { width } else { 0 });
                     assert_eq!(
                         actual_device_batch_width,
@@ -900,7 +939,7 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
                     println!(
                         "x509_native_forward_cost native_log={native} width={width} workers={} round={round} device={device} admitted_device_batch_width={admitted_device_batch_width} actual_device_batch_width={actual_device_batch_width} transform_scratch_clear_ns={} parity=exact",
                         rayon::current_num_threads(),
-                        elapsed[usize::from(device)][round],
+                        round_elapsed.as_nanos(),
                     );
                 }
             }
@@ -910,10 +949,783 @@ fn native_forward_registered_cpu_and_metal_cost_keep_original_values() {
             println!(
                 "x509_native_forward_median native_log={native} width={width} workers={} admitted_device_batch_width={admitted_device_batch_width} cpu_ns={} metal_ns={} cpu_speedup={:.3} parity=exact",
                 rayon::current_num_threads(),
-                elapsed[0][1],
-                elapsed[1][1],
-                elapsed[1][1] as f64 / elapsed[0][1] as f64,
+                elapsed[0][1].as_nanos(),
+                elapsed[1][1].as_nanos(),
+                elapsed[1][1].div_duration_f64(elapsed[0][1]),
             );
         }
+    }
+}
+
+#[test]
+fn host_tiles_preserve_copy_scaling_validation_and_allocations_across_worker_counts() {
+    use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    // A partial final tile exercises the host helpers independently of FFT shape.
+    let rows = HOST_PARALLEL_ROWS_V1 + 17;
+    let original = (0..3)
+        .map(|column| {
+            (0..rows)
+                .map(|row| F((column * rows + row) as u64 * 31 + 17))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for workers in [1, 4, 20] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            assert!(canonical_field_columns_v1(&original));
+            for diagonal in [F::ONE, F(7), goldilocks_primitive_root_v1(19).unwrap()] {
+                let mut words = vec![vec![0; rows]; original.len()];
+                let word_storage = words
+                    .iter()
+                    .map(|column| (column.as_ptr(), column.capacity()))
+                    .collect::<Vec<_>>();
+                copy_fields_to_words_v1(&mut words, &original);
+                assert!(canonical_word_columns_v1(&words));
+                let mut expected = words.clone();
+                for column in &mut expected {
+                    let mut power = F::ONE;
+                    for value in column {
+                        *value = F(*value).mul(power).0;
+                        power = power.mul(diagonal);
+                    }
+                }
+                scale_word_columns_v1(&mut words, diagonal);
+                assert_eq!(words, expected);
+                assert_eq!(
+                    words
+                        .iter()
+                        .map(|column| (column.as_ptr(), column.capacity()))
+                        .collect::<Vec<_>>(),
+                    word_storage
+                );
+                let mut fields = vec![vec![F::ZERO; rows]; original.len()];
+                let field_storage = fields
+                    .iter()
+                    .map(|column| (column.as_ptr(), column.capacity()))
+                    .collect::<Vec<_>>();
+                copy_words_to_fields_v1(&mut fields, &words);
+                assert_eq!(
+                    fields
+                        .iter()
+                        .flatten()
+                        .map(|value| value.0)
+                        .collect::<Vec<_>>(),
+                    expected.into_iter().flatten().collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    fields
+                        .iter()
+                        .map(|column| (column.as_ptr(), column.capacity()))
+                        .collect::<Vec<_>>(),
+                    field_storage
+                );
+                for row in [0, HOST_TILE_ROWS_V1 - 1, HOST_TILE_ROWS_V1, rows - 1] {
+                    let field = fields[2][row];
+                    fields[2][row] = F(GOLDILOCKS_MODULUS_V1);
+                    assert!(!canonical_field_columns_v1(&fields));
+                    fields[2][row] = field;
+                    let word = words[2][row];
+                    words[2][row] = u64::MAX;
+                    assert!(!canonical_word_columns_v1(&words));
+                    words[2][row] = word;
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn tiled_transform_failure_keeps_original_columns_and_clears_complete_staging() {
+    let rows = HOST_PARALLEL_ROWS_V1;
+    let policy = MainBoundedTransformPolicyV1::for_test_v1(rows, 2);
+    let root = goldilocks_primitive_root_v1(16).unwrap();
+    let mut columns = vec![vec![F(17); rows]; 2];
+    let original = columns.clone();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let (result, erased) = pool.install(|| {
+        inspection::observe_v1(|| {
+            policy.apply_with_v1(
+                &mut columns,
+                root,
+                F(7),
+                false,
+                |words, _, _| {
+                    words[1][rows - 1] = u64::MAX;
+                    Ok(Backend::Metal)
+                },
+                || false,
+            )
+        })
+    });
+    assert_eq!(result, Err(ZkX509StarkErrorV1::NonCanonicalField));
+    assert_eq!(columns, original);
+    assert_eq!(
+        erased.iter().map(|entry| entry.cells).sum::<usize>(),
+        2 * rows
+    );
+    assert!(erased.iter().any(|entry| entry.nonzero_before != 0));
+    assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+}
+
+#[test]
+fn scoped_host_mode_restores_default_after_success_error_and_unwind() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+        assert!(use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+        with_host_tiles_for_testing_v1(false, || {
+            assert!(!use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+            with_host_tiles_for_testing_v1(true, || {
+                assert!(use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+                assert!(!use_host_tiles_v1(HOST_PARALLEL_ROWS_V1 - 1));
+            });
+            assert!(!use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+        });
+        assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+        let result: Result<(), ()> = with_host_tiles_for_testing_v1(false, || Err(()));
+        assert!(result.is_err());
+        assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+        assert!(
+            std::panic::catch_unwind(|| {
+                with_host_tiles_for_testing_v1(false, || panic!("diagnostic scope unwind"))
+            })
+            .is_err()
+        );
+        assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+        assert!(use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(|| {
+            with_host_tiles_for_testing_v1(true, || {
+                assert!(!use_host_tiles_v1(HOST_PARALLEL_ROWS_V1));
+            });
+        });
+}
+
+#[test]
+fn both_host_modes_keep_original_columns_and_clear_staging_after_error_and_unwind() {
+    let rows = HOST_PARALLEL_ROWS_V1;
+    let policy = MainBoundedTransformPolicyV1::for_test_v1(rows, 2);
+    let root = goldilocks_primitive_root_v1(16).unwrap();
+    let original = ZeroizingBaseColumnsV1(vec![vec![F(17); rows]; 2]);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        for tiled in [false, true] {
+            for unwind in [false, true] {
+                let mut columns = ZeroizingBaseColumnsV1(original.0.clone());
+                let (result, erased) = inspection::observe_v1(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        with_host_tiles_for_testing_v1(tiled, || {
+                            policy.apply_with_v1(
+                                &mut columns.0,
+                                root,
+                                F(7),
+                                false,
+                                |words, _, _| {
+                                    words[1][rows - 1] = u64::MAX;
+                                    assert!(!unwind, "diagnostic adapter unwind");
+                                    Ok(Backend::Metal)
+                                },
+                                || false,
+                            )
+                        })
+                    }))
+                });
+                if unwind {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap(), Err(ZkX509StarkErrorV1::NonCanonicalField));
+                }
+                assert_eq!(&*columns, &*original);
+                assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+                assert_eq!(
+                    erased.iter().map(|entry| entry.cells).sum::<usize>(),
+                    2 * rows
+                );
+                assert!(erased.iter().any(|entry| entry.nonzero_before != 0));
+                assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "isolated actual Metal host-mode A/B with process-wide telemetry; run alone in release"]
+fn native19_metal_host_modes_preserve_full_outputs_and_report_staging_costs() {
+    native19_metal_host_modes_with_caller_v1(false);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "external-caller Metal host-mode A/B; run alone in a fresh release process with RAYON_NUM_THREADS=20"]
+fn native19_metal_external_caller_host_modes_preserve_full_outputs_and_report_staging_costs() {
+    native19_metal_host_modes_with_caller_v1(true);
+}
+
+#[cfg(target_os = "macos")]
+fn native19_metal_host_modes_with_caller_v1(external_caller: bool) {
+    use std::time::{Duration, Instant};
+
+    use fastpq_prover::goldilocks_transform::{
+        available_goldilocks_transform_backend_v1, goldilocks_transform_completion_uncertain_v1,
+    };
+
+    assert!(!cfg!(debug_assertions), "use an optimized build");
+    if external_caller {
+        assert_eq!(
+            std::env::var("RAYON_NUM_THREADS").as_deref(),
+            Ok("20"),
+            "run the external-caller diagnostic alone in a fresh process with RAYON_NUM_THREADS=20"
+        );
+        assert_eq!(rayon::current_thread_index(), None);
+        assert_eq!(rayon::current_num_threads(), 20);
+    }
+    assert_eq!(
+        available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+        "actual Metal is required; do not substitute CPU timing"
+    );
+    // These public counters are process-wide. This ignored diagnostic must run
+    // alone, and the guard disables capture on error or unwind as well.
+    struct StopTelemetry;
+    impl Drop for StopTelemetry {
+        fn drop(&mut self) {
+            fastpq_prover::enable_queue_depth_stats(false);
+        }
+    }
+    fastpq_prover::enable_queue_depth_stats(true);
+    let _telemetry = StopTelemetry;
+    let run = || {
+        const ROUNDS: usize = 32;
+        let caller_context = if external_caller {
+            "external_test_thread"
+        } else {
+            "rayon_worker"
+        };
+        assert_eq!(rayon::current_thread_index().is_none(), external_caller);
+        assert_eq!(rayon::current_num_threads(), 20);
+        println!(
+            "x509_native19_metal_host_modes caller_context={caller_context} workers=20 calls_per_mode={ROUNDS} private_input=false"
+        );
+        let rows = 1 << 19;
+        let root = goldilocks_primitive_root_v1(19).unwrap();
+        for width in [1, 4, 8] {
+            let original = ZeroizingBaseColumnsV1(
+                (0..width)
+                    .map(|column| {
+                        (0..rows)
+                            .map(|row| F((31 * row + 17 * column + 1) as u64))
+                            .collect()
+                    })
+                    .collect(),
+            );
+            let policy = MainBoundedTransformPolicyV1::for_test_v1(rows, width);
+            assert_eq!(policy.columns_v1(rows), width);
+            for fixed_forward in [false, true] {
+                let operation = if fixed_forward {
+                    "fixed_forward_diagonal"
+                } else {
+                    "native_inverse"
+                };
+                let mut expected = ZeroizingBaseColumnsV1(original.0.clone());
+                if fixed_forward {
+                    // Independent full scalar diagonal and CPU FFT reference.
+                    for column in &mut expected.0 {
+                        let mut power = F::ONE;
+                        for value in column {
+                            *value = value.mul(power);
+                            power = power.mul(F(7));
+                        }
+                    }
+                    MainBoundedTransformPolicyV1::cpu_v1()
+                        .forward_with_v1(
+                            &mut expected.0,
+                            root,
+                            |_, _, _| panic!("reference is CPU-only"),
+                            goldilocks_transform_completion_uncertain_v1,
+                        )
+                        .unwrap();
+                } else {
+                    MainBoundedTransformPolicyV1::cpu_v1()
+                        .inverse_with_v1(
+                            &mut expected.0,
+                            root,
+                            |_, _, _| panic!("reference is CPU-only"),
+                            goldilocks_transform_completion_uncertain_v1,
+                        )
+                        .unwrap();
+                }
+                let mut elapsed = [[Duration::ZERO; ROUNDS]; 2];
+                let mut allocation = [Duration::ZERO; 2];
+                let mut adapter = [Duration::ZERO; 2];
+                let mut clearing = [Duration::ZERO; 2];
+                let mut staging = [fastpq_prover::ColumnStagingPhaseStats::default(); 2];
+                // One untimed warm-up for each mode precedes 32 complete calls
+                // per mode. Alternate order to distribute thermal/load drift.
+                for round in 0..=ROUNDS {
+                    for tiled in if round % 2 == 0 {
+                        [false, true]
+                    } else {
+                        [true, false]
+                    } {
+                        fastpq_prover::take_column_staging_stats().unwrap();
+                        let allocated_at = Instant::now();
+                        let mut actual = ZeroizingBaseColumnsV1(original.0.clone());
+                        let allocation_elapsed = allocated_at.elapsed();
+                        let transformed_at = Instant::now();
+                        let mut metal_columns = 0;
+                        with_host_tiles_for_testing_v1(tiled, || {
+                            let mut transform = |words: &mut [Vec<u64>], root, direction| {
+                                let backend = transform_goldilocks_columns_v1(
+                                    words,
+                                    root,
+                                    direction,
+                                    fastpq_prover::ExecutionMode::Gpu,
+                                )?;
+                                assert_eq!(backend, Backend::Metal);
+                                metal_columns += words.len();
+                                Ok(backend)
+                            };
+                            if fixed_forward {
+                                policy.apply_with_v1(
+                                    &mut actual.0,
+                                    root,
+                                    F(7),
+                                    false,
+                                    &mut transform,
+                                    goldilocks_transform_completion_uncertain_v1,
+                                )
+                            } else {
+                                policy.inverse_with_v1(
+                                    &mut actual.0,
+                                    root,
+                                    &mut transform,
+                                    goldilocks_transform_completion_uncertain_v1,
+                                )
+                            }
+                        })
+                        .unwrap();
+                        // The unchanged adapter has already cleared its entire
+                        // private staging allocation before this timestamp.
+                        let adapter_elapsed = transformed_at.elapsed();
+                        let captured = fastpq_prover::take_column_staging_stats().unwrap().fft();
+                        assert_eq!(metal_columns, width);
+                        assert_eq!(HOST_TILES_OVERRIDE_V1.with(|value| value.get()), None);
+                        // Compare every field outside measured work, then time
+                        // normal clearing and deallocation of the result owner.
+                        assert_eq!(&*actual, &*expected);
+                        let cleared_at = Instant::now();
+                        drop(actual);
+                        let clearing_elapsed = cleared_at.elapsed();
+                        if round != 0 {
+                            let mode = usize::from(tiled);
+                            allocation[mode] += allocation_elapsed;
+                            adapter[mode] += adapter_elapsed;
+                            clearing[mode] += clearing_elapsed;
+                            elapsed[mode][round - 1] =
+                                allocation_elapsed + adapter_elapsed + clearing_elapsed;
+                            staging[mode].batches += captured.batches;
+                            staging[mode].flatten_ms += captured.flatten_ms;
+                            staging[mode].wait_ms += captured.wait_ms;
+                        }
+                    }
+                }
+                for tiled in [false, true] {
+                    let mode = usize::from(tiled);
+                    elapsed[mode].sort_unstable();
+                    let total = allocation[mode] + adapter[mode] + clearing[mode];
+                    println!(
+                        "x509_native19_metal_host_mode caller_context={caller_context} operation={operation} width={width} workers={} tiled={tiled} calls={ROUNDS} total_ns={} median_ns={} min_ns={} max_ns={} allocation_ns={} adapter_and_staging_clear_ns={} result_clear_ns={} staging_batches={} flatten_ms={:.6} wait_ms={:.6} parity=all_fields_exact",
+                        rayon::current_num_threads(),
+                        total.as_nanos(),
+                        elapsed[mode][ROUNDS / 2].as_nanos(),
+                        elapsed[mode][0].as_nanos(),
+                        elapsed[mode][ROUNDS - 1].as_nanos(),
+                        allocation[mode].as_nanos(),
+                        adapter[mode].as_nanos(),
+                        clearing[mode].as_nanos(),
+                        staging[mode].batches,
+                        staging[mode].flatten_ms,
+                        staging[mode].wait_ms,
+                    );
+                }
+            }
+        }
+    };
+    if external_caller {
+        run();
+    } else {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(20)
+            .build()
+            .unwrap()
+            .install(run);
+    }
+}
+
+#[test]
+#[ignore = "native19 host copy/validation/scaling cost only; no complete-proof performance claim"]
+fn native19_host_tiles_cost_preserves_full_outputs() {
+    use std::time::Instant;
+    let rows = 1 << 19;
+    let diagonal = F(7);
+    let original = (0..8)
+        .map(|column| {
+            (0..rows)
+                .map(|row| F((column * rows + row) as u64 * 31 + 17))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let _initialized_workers = rayon::current_num_threads();
+    for width in [1, 4, 8] {
+        for round in 0..4 {
+            let mut reference_words = vec![vec![0; rows]; width];
+            let mut reference_output = vec![vec![F::ZERO; rows]; width];
+            let mut tiled_words = vec![vec![0; rows]; width];
+            let mut tiled_output = vec![vec![F::ZERO; rows]; width];
+            let mut timings = [std::time::Duration::ZERO; 2];
+            for tiled in if round % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = Instant::now();
+                if tiled {
+                    assert!(canonical_field_columns_v1(&original[..width]));
+                    copy_fields_to_words_v1(&mut tiled_words, &original[..width]);
+                    scale_word_columns_v1(&mut tiled_words, diagonal);
+                    assert!(canonical_word_columns_v1(&tiled_words));
+                    copy_words_to_fields_v1(&mut tiled_output, &tiled_words);
+                } else {
+                    assert!(
+                        original[..width]
+                            .iter()
+                            .flatten()
+                            .all(|value| F::canonical(value.0).is_some())
+                    );
+                    for (target, source) in reference_words.iter_mut().zip(&original[..width]) {
+                        for (target, value) in target.iter_mut().zip(source) {
+                            *target = value.0;
+                        }
+                    }
+                    reference_words.par_iter_mut().for_each(|column| {
+                        let mut power = F::ONE;
+                        for word in column {
+                            *word = F(*word).mul(power).0;
+                            power = power.mul(diagonal);
+                        }
+                    });
+                    assert!(
+                        reference_words
+                            .iter()
+                            .flatten()
+                            .all(|&word| F::canonical(word).is_some())
+                    );
+                    for (target, source) in reference_output.iter_mut().zip(&reference_words) {
+                        for (target, &word) in target.iter_mut().zip(source) {
+                            *target = F(word);
+                        }
+                    }
+                }
+                timings[usize::from(tiled)] = start.elapsed();
+            }
+            assert_eq!(tiled_words, reference_words);
+            assert_eq!(tiled_output, reference_output);
+            eprintln!(
+                "native19_host_tiles rows={rows} width={width} round={round} workers={} serial_copy_column_parallel_scale_ns={} tiled_host_ns={} parity=exact",
+                rayon::current_num_threads(),
+                timings[0].as_nanos(),
+                timings[1].as_nanos()
+            );
+        }
+    }
+}
+
+// Test-only candidate adapter. The production CPU baseline remains the original
+// forward_with_v1; this method is never used by a prover or a device dispatcher.
+impl MainBoundedTransformPolicyV1 {
+    pub(in super::super) fn diagnostic_cpu_policy_v1(self) -> Self {
+        Self {
+            backend: None,
+            ..self
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in super::super) fn diagnostic_reused_forward_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        retained: &mut Option<(usize, F, bool, Option<PublicPowers>)>,
+        constructors: &mut usize,
+        peak_public_payload: &mut usize,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        // Preserve private_with_v1's batch validation and completion order.
+        check_completion_v1(uncertain())?;
+        let rows = columns.first().map_or(0, Vec::len);
+        if columns.is_empty()
+            || columns.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || rows < 2
+            || !rows.is_power_of_two()
+            || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+            || columns.iter().any(|column| column.len() != rows)
+            || columns
+                .iter()
+                .flatten()
+                .any(|value| F::canonical(value.0).is_none())
+            || F::canonical(root.0).is_none()
+            || root.pow(rows as u128) != F::ONE
+            || root.pow((rows / 2) as u128) == F::ONE
+            || self.columns_v1(rows) != 0
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if retained
+            .as_ref()
+            .is_some_and(|(old_rows, old_root, old_reserved, _)| {
+                *old_rows != rows
+                    || *old_root != root
+                    || *old_reserved != self.public_powers_reserved
+            })
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if retained.is_none() {
+            // Lazy construction is at the first batch's original construction
+            // point. No inverse replay or second live table exists in this test.
+            let powers = self.cpu_powers_v1(rows, root)?;
+            if let Some(powers) = &powers {
+                let actual = powers
+                    .allocated_payload_bytes_v1()
+                    .map_err(map_transparent_error_v1)?;
+                if actual > SHARED_POWERS_ALLOWANCE_V1 {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                *peak_public_payload = (*peak_public_payload).max(actual);
+                *constructors += 1;
+            }
+            *retained = Some((rows, root, self.public_powers_reserved, powers));
+        }
+        let (_, _, _, powers) = retained
+            .as_ref()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        columns.par_iter_mut().try_for_each(|column| {
+            match powers {
+                Some(powers) => {
+                    crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_with_powers_v1(
+                        column, root, powers,
+                    )
+                }
+                None => crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_v1(
+                    column, root,
+                ),
+            }
+            .map_err(map_transparent_error_v1)
+        })?;
+        check_completion_v1(uncertain())?;
+        crate::privacy_engines::zk_x509::prover_observation::completed_quotient_backend_v1(
+            false,
+            columns.len(),
+        );
+        check_completion_v1(uncertain())
+    }
+}
+
+#[test]
+fn diagnostic_reused_forward_preserves_tiny_fallback_and_refusals() {
+    for rows in [32_usize, 256] {
+        let root = goldilocks_primitive_root_v1(u8::try_from(rows.ilog2()).unwrap()).unwrap();
+        let policy = MainBoundedTransformPolicyV1 {
+            available: 0,
+            backend: None,
+            public_powers_reserved: true,
+        };
+        let original = vec![vec![F(3); rows]; 2];
+        let mut retained = None;
+        let mut constructors = 0;
+        let mut peak = 0;
+        for _ in 0..3 {
+            let mut reference = original.clone();
+            policy
+                .forward_with_v1(&mut reference, root, |_, _, _| panic!("CPU"), || false)
+                .unwrap();
+            let mut candidate = original.clone();
+            policy
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root,
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false,
+                )
+                .unwrap();
+            assert_eq!(candidate, reference);
+        }
+        assert_eq!(constructors, usize::from(rows >= 256));
+        assert_eq!(
+            peak,
+            if rows >= 256 {
+                PublicPowers::required_payload_bytes_v1(rows).unwrap()
+            } else {
+                0
+            }
+        );
+        // A retained table must not select an unrelated domain/root; original
+        // per-batch construction has no such cross-call state. Explicitly reject.
+        let mut candidate = original.clone();
+        assert!(
+            policy
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root.inv().unwrap(),
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false
+                )
+                .is_err()
+        );
+        assert_eq!(candidate, original);
+        let changed_admission = MainBoundedTransformPolicyV1 {
+            public_powers_reserved: false,
+            ..policy
+        };
+        let mut candidate = original.clone();
+        assert!(
+            changed_admission
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root,
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false
+                )
+                .is_err()
+        );
+        assert_eq!(
+            candidate, original,
+            "retained owner cannot outlive its public admission"
+        );
+        let mut no_table = original.clone();
+        let mut no_table_constructors = 0;
+        let mut no_table_peak = 0;
+        changed_admission
+            .diagnostic_reused_forward_v1(
+                &mut no_table,
+                root,
+                &mut None,
+                &mut no_table_constructors,
+                &mut no_table_peak,
+                || false,
+            )
+            .unwrap();
+        assert_eq!((no_table_constructors, no_table_peak), (0, 0));
+        let mut reference = original.clone();
+        changed_admission
+            .forward_with_v1(&mut reference, root, |_, _, _| panic!("CPU"), || false)
+            .unwrap();
+        assert_eq!(reference, no_table);
+        for malformed in 0..4 {
+            let mut candidate = original.clone();
+            let mut invalid_root = root;
+            match malformed {
+                0 => candidate[0][0] = F(u64::MAX),
+                1 => {
+                    candidate[1].pop();
+                }
+                2 => invalid_root = F::ONE,
+                _ => candidate.clear(),
+            }
+            let before = candidate.clone();
+            assert!(
+                policy
+                    .diagnostic_reused_forward_v1(
+                        &mut candidate,
+                        invalid_root,
+                        &mut None,
+                        &mut 0,
+                        &mut 0,
+                        || false
+                    )
+                    .is_err()
+            );
+            assert_eq!(candidate, before);
+        }
+        // Preserve all three completion observations, including the final one
+        // after the CPU backend observation; compare the real production owner.
+        // A fourth-call injection proves that success observes exactly three.
+        for fail_at in 1..=4 {
+            let mut reference_calls = 0;
+            let mut reference = original.clone();
+            let reference_result = policy.forward_with_v1(
+                &mut reference,
+                root,
+                |_, _, _| panic!("CPU"),
+                || {
+                    reference_calls += 1;
+                    reference_calls == fail_at
+                },
+            );
+            let mut candidate_calls = 0;
+            let mut candidate = original.clone();
+            let candidate_result = policy.diagnostic_reused_forward_v1(
+                &mut candidate,
+                root,
+                &mut None,
+                &mut 0,
+                &mut 0,
+                || {
+                    candidate_calls += 1;
+                    candidate_calls == fail_at
+                },
+            );
+            assert_eq!(reference_calls, fail_at.min(3));
+            assert_eq!(candidate_calls, reference_calls);
+            if fail_at <= 3 {
+                assert!(matches!(
+                    reference_result,
+                    Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+                ));
+                assert!(matches!(
+                    candidate_result,
+                    Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+                ));
+            } else {
+                reference_result.unwrap();
+                candidate_result.unwrap();
+            }
+            assert_eq!(candidate, reference);
+            if fail_at == 1 {
+                assert_eq!(candidate, original);
+            }
+        }
+        let required = PublicPowers::required_payload_bytes_v1(rows).unwrap();
+        assert!(PublicPowers::new_v1(rows, root, required - 1).is_err());
+        assert!(
+            PublicPowers::new_v1(rows, root, usize::MAX)
+                .unwrap()
+                .allocated_payload_bytes_v1()
+                .unwrap()
+                <= SHARED_POWERS_ALLOWANCE_V1
+        );
     }
 }

@@ -276,7 +276,8 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and rounding steps."
+    clippy::suboptimal_flops,
+    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and separately rounded reduction steps."
 )]
 #[expect(
     clippy::suboptimal_flops,

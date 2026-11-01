@@ -1,8 +1,7 @@
 //! Tests covering Norito-RPC ingress policies and Content-Type enforcement.
 
 #![cfg(feature = "app_api")]
-#[path = "common/norito_rpc_harness.rs"]
-mod norito_rpc_harness;
+use crate::norito_rpc_harness;
 use axum::http::{StatusCode, header::RETRY_AFTER};
 use iroha_config::parameters::actual::NoritoRpcStage;
 use iroha_torii_shared::{ErrorEnvelope, route_catalog};

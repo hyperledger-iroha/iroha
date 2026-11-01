@@ -8,8 +8,10 @@ mod benchmark_session;
 mod matched_benchmark_workload;
 use matched_benchmark_workload::*;
 
+#[cfg(unix)]
 #[path = "atomic_private_settlement_executable_inventory.rs"]
 mod executable_inventory;
+#[cfg(unix)]
 use executable_inventory::{ExecutableInventory, sha256_regular_file};
 
 use base64::Engine as _;
@@ -22,12 +24,15 @@ use iroha::data_model::events::{
 use iroha_test_network::{PrivateSettlementRouteControlAction, PrivateSettlementRouteControlPhase};
 use norito::json::Value as HarnessJsonValue;
 use sha2::{Digest as Sha2Digest, Sha256};
+// The session, evidence filesystem and live-process owner remain Unix-only.
+// Pure protocol/observation controls and cold SDK consumers remain portable.
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     num::NonZeroU64,
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -2231,6 +2236,7 @@ struct LeakagePortManifestV1 {
     restricted_p2p_ports: Vec<u16>,
 }
 
+#[cfg(unix)]
 fn leakage_evidence_root() -> Result<PathBuf> {
     let root = PathBuf::from(
         std::env::var(HARNESS_EVIDENCE_DIR_ENV).wrap_err("missing leakage evidence directory")?,
@@ -2317,6 +2323,7 @@ fn collect_network_port_manifest(
     })
 }
 
+#[cfg(unix)]
 fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Result<()> {
     let path = PathBuf::from(
         std::env::var(HARNESS_PORT_MANIFEST_ENV)
@@ -2329,6 +2336,7 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
     )
 }
 
+#[cfg(unix)]
 fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect leakage source {}", path.display()))?;
@@ -2366,6 +2374,7 @@ fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(unix)]
 fn collect_leakage_source_files<F>(root: &Path, mut selected: F) -> Result<Vec<(String, Vec<u8>)>>
 where
     F: FnMut(&Path) -> bool,
@@ -2530,6 +2539,7 @@ fn leakage_source_binding(sources: &[&[u8]]) -> Result<(String, u64)> {
     Ok((hex::encode(digest.finalize()), total))
 }
 
+#[cfg(unix)]
 fn write_leakage_artifact(
     root: &Path,
     surface: &str,
@@ -2756,6 +2766,7 @@ fn leakage_telemetry_records(
     ))
 }
 
+#[cfg(unix)]
 fn leakage_operator_log_records(
     network: &Network,
 ) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
@@ -2816,6 +2827,7 @@ fn verify_controller_readiness(
     Ok(())
 }
 
+#[cfg(unix)]
 fn collect_process_inventory(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
@@ -2940,6 +2952,7 @@ struct RealProcessSmokeResultV1 {
     artifacts: Vec<SmokeEvidenceFileV1>,
 }
 
+#[cfg(unix)]
 fn write_smoke_evidence<T: norito::json::JsonSerialize>(
     root: &Path,
     name: &str,
@@ -2949,6 +2962,7 @@ fn write_smoke_evidence<T: norito::json::JsonSerialize>(
     write_smoke_evidence_bytes(root, name, &raw, ".json", HARNESS_MAX_JSON_BYTES)
 }
 
+#[cfg(unix)]
 fn write_smoke_evidence_bytes(
     root: &Path,
     name: &str,
@@ -2986,6 +3000,7 @@ fn write_smoke_evidence_bytes(
 }
 
 #[test]
+#[cfg(unix)]
 fn smoke_transport_prefix_is_retained_exactly_and_bounded() {
     let temporary = tempfile::tempdir().expect("temporary evidence directory");
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -3011,6 +3026,7 @@ fn smoke_transport_prefix_is_retained_exactly_and_bounded() {
 }
 
 #[test]
+#[cfg(unix)]
 fn smoke_evidence_binds_bytes_and_rejects_overwrite_or_path_escape() {
     let temporary = tempfile::tempdir().expect("temporary evidence directory");
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -3377,6 +3393,7 @@ fn smoke_inventory_transient_status_classifier_is_exact() {
     ));
 }
 
+#[cfg(unix)]
 fn smoke_process_inventory(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
@@ -3605,6 +3622,7 @@ fn fault_governed_legs(
         .collect()
 }
 
+#[cfg(unix)]
 fn write_owner_only_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -3637,6 +3655,7 @@ fn write_owner_only_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path).wrap_err("inspect owner-only file")?;
     ensure!(
@@ -3735,6 +3754,7 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     Ok(toml::to_string(&root)?.into_bytes())
 }
 
+#[cfg(unix)]
 struct CoordinatorProcessV1 {
     root: tempfile::TempDir,
     child: Child,
@@ -3743,6 +3763,7 @@ struct CoordinatorProcessV1 {
     revision: u64,
 }
 
+#[cfg(unix)]
 impl CoordinatorProcessV1 {
     fn start(client: &Client) -> Result<Self> {
         let root = tempfile::tempdir().wrap_err("create coordinator runtime root")?;
@@ -3904,6 +3925,7 @@ impl CoordinatorProcessV1 {
     }
 }
 
+#[cfg(unix)]
 impl Drop for CoordinatorProcessV1 {
     fn drop(&mut self) {
         let _ = write_owner_only_atomic(
@@ -3915,6 +3937,7 @@ impl Drop for CoordinatorProcessV1 {
     }
 }
 
+#[cfg(unix)]
 fn run_coordinator_helper_process() -> Result<()> {
     let root = PathBuf::from(
         std::env::var(COORDINATOR_ROOT_ENV).wrap_err("missing coordinator runtime root")?,
@@ -5768,6 +5791,7 @@ fn recovered_finality_requires_the_original_anchor_without_new_transport() {
     );
 }
 
+#[cfg(unix)]
 fn verify_signed_rs16_finality(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
@@ -5783,6 +5807,7 @@ fn verify_signed_rs16_finality(
     .0)
 }
 
+#[cfg(unix)]
 fn collect_signed_rs16_finality(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
@@ -5946,6 +5971,7 @@ fn collect_signed_rs16_finality(
 }
 
 /// A bounded prefix of the current process log; appends cannot alter retained evidence.
+#[cfg(unix)]
 fn transport_log_prefix(path: &Path) -> Result<Vec<u8>> {
     use std::os::unix::fs::MetadataExt as _;
     let before = fs::symlink_metadata(path)?;
@@ -5976,6 +6002,7 @@ fn transport_log_prefix(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(unix)]
 fn verify_signed_rs16_transport(
     network: &Network,
     peer: &iroha_test_network::NetworkPeer,
@@ -6962,6 +6989,7 @@ enum FreshRouteFaultV1 {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
 fn run_fresh_route_fault_trial(
     request: &RealProcessFaultRequestV1,
     bundle_ordinal: usize,
@@ -7388,6 +7416,7 @@ fn run_fresh_route_fault_trial(
     ))
 }
 
+#[cfg(unix)]
 fn write_fault_jsonl<T: norito::json::JsonSerialize>(path: &Path, rows: &[T]) -> Result<Vec<u8>> {
     ensure!(!rows.is_empty(), "fault evidence JSONL is empty");
     let mut bytes = Vec::new();
@@ -7405,6 +7434,7 @@ fn write_fault_jsonl<T: norito::json::JsonSerialize>(path: &Path, rows: &[T]) ->
     Ok(bytes)
 }
 
+#[cfg(unix)]
 fn fault_evidence_root() -> Result<PathBuf> {
     let root = PathBuf::from(
         std::env::var(HARNESS_EVIDENCE_DIR_ENV).wrap_err("missing fault evidence directory")?,
@@ -7427,6 +7457,7 @@ fn fault_evidence_root() -> Result<PathBuf> {
     Ok(root)
 }
 
+#[cfg(unix)]
 fn materialize_fault_campaign_payload(
     request: &RealProcessFaultRequestV1,
     trials: Vec<(FaultTrialDraftV1, FaultStateSnapshotV1)>,
@@ -7631,6 +7662,7 @@ fn materialize_fault_campaign_payload(
     }))
 }
 
+#[cfg(unix)]
 fn run_real_process_fault_campaign(
     request: RealProcessFaultRequestV1,
     request_sha: String,
@@ -8645,6 +8677,7 @@ fn fresh_transparent_control_replay(
     ))
 }
 
+#[cfg(unix)]
 fn run_real_process_transparent_control_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
@@ -8867,6 +8900,7 @@ fn verify_committee_proof_views(
     Ok(())
 }
 
+#[cfg(unix)]
 fn collect_network_leakage_sources<F>(
     network: &Network,
     mut selected: F,
@@ -8897,6 +8931,7 @@ where
     Ok(sources)
 }
 
+#[cfg(unix)]
 fn run_real_process_leakage_campaign(
     request: RealProcessLeakageRequestV1,
     request_sha: String,
@@ -9535,6 +9570,7 @@ fn run_real_process_leakage_campaign(
     })
 }
 
+#[cfg(unix)]
 fn run_real_process_private_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
@@ -9907,6 +9943,7 @@ fn run_real_process_private_benchmark(
     })
 }
 
+#[cfg(unix)]
 fn write_real_process_result<T: norito::json::JsonSerialize>(result: &T) -> Result<()> {
     let path = PathBuf::from(
         std::env::var(HARNESS_RESULT_ENV).wrap_err("missing real-process result path")?,
@@ -9914,6 +9951,7 @@ fn write_real_process_result<T: norito::json::JsonSerialize>(result: &T) -> Resu
     write_real_process_result_at(&path, result)
 }
 
+#[cfg(unix)]
 fn write_real_process_result_at<T: norito::json::JsonSerialize>(
     path: &Path,
     result: &T,
@@ -9974,6 +10012,7 @@ fn complete_benchmark_worker(
 
 #[test]
 #[ignore = "release-only: one retained 12-68 validator network per benchmark session"]
+#[cfg(unix)]
 fn atomic_private_settlement_real_process_benchmark_session_harness() -> Result<()> {
     thread::Builder::new()
         .name("atomic-private-settlement-benchmark-session".to_owned())
@@ -9986,12 +10025,14 @@ fn atomic_private_settlement_real_process_benchmark_session_harness() -> Result<
 
 #[test]
 #[ignore = "offline native verifier: requires exact owner-only vector inputs; starts no network"]
+#[cfg(unix)]
 fn atomic_private_settlement_verify_benchmark_economic_vector() -> Result<()> {
     benchmark_session::verify_vector_from_environment()
 }
 
 #[test]
 #[ignore = "release-only: starts 12-68 validators and runs the complete authenticated fault matrix"]
+#[cfg(unix)]
 fn atomic_private_settlement_real_process_fault_harness() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-real-process-fault-harness".to_owned())
@@ -10013,6 +10054,7 @@ fn atomic_private_settlement_real_process_fault_harness() -> Result<()> {
 
 #[test]
 #[ignore = "release-only: starts 16 validators and captures a real secret-only differential run"]
+#[cfg(unix)]
 fn atomic_private_settlement_real_process_leakage_harness() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-real-process-leakage-harness".to_owned())
@@ -10034,6 +10076,7 @@ fn atomic_private_settlement_real_process_leakage_harness() -> Result<()> {
 
 #[test]
 #[ignore = "release-only child: owner-only restartable private-settlement coordinator"]
+#[cfg(unix)]
 fn atomic_private_settlement_real_process_coordinator_helper() -> Result<()> {
     run_coordinator_helper_process()
 }
@@ -11060,6 +11103,7 @@ fn benchmark_terminal_success_requires_retained_request_identity() {
 }
 
 #[test]
+#[cfg(unix)]
 fn benchmark_terminal_publication_preserves_failures_and_panics() {
     let directory = tempfile::tempdir().unwrap();
     for (name, error, expected) in [
@@ -11123,6 +11167,7 @@ fn benchmark_terminal_publication_preserves_failures_and_panics() {
 }
 
 #[test]
+#[cfg(unix)]
 fn benchmark_terminal_publication_is_required_and_never_overwrites() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("result.json");

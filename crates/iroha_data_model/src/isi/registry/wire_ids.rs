@@ -20,6 +20,10 @@ pub(super) struct BuiltInWireId {
     /// Registered tolerantly: an instruction added after the frozen baseline
     /// (`specs/live_runtime_upgrades.md` §5.2, [`InstructionRegistry::register_with_id_tolerant`]).
     pub(super) tolerant: bool,
+    /// Structural layout of the payload type ([`super::payload_layout`]), pinned for every
+    /// baseline instruction.
+    #[cfg(test)]
+    pub(super) layout: fn() -> String,
     register: Registrar,
 }
 macro_rules! built_in_wire_id_with_scope {
@@ -34,6 +38,8 @@ macro_rules! built_in_wire_id_with_scope {
             #[cfg(test)]
             governance_only: $governance_only,
             tolerant: $tolerant,
+            #[cfg(test)]
+            layout: super::payload_layout::<$ty>,
             register: $register,
         }
     };
@@ -94,6 +100,14 @@ macro_rules! governance_wire_id {
             register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
         )
     };
+    ($ty:ty => $wire_id:literal, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = true,
+            tolerant = true,
+            register = |registry| registry.register_with_id_slice_tolerant::<$ty>($wire_id)
+        )
+    };
 }
 /// Complete canonical wire-ID inventory for built-in instructions.
 pub(super) const ALL: &[BuiltInWireId] = &[
@@ -123,6 +137,12 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_fi_context::AssertAssetFiTransferReceiptV1 => "iroha.asset.fi.transfer_receipt.assert.v1"),
     built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
     built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
+    built_in_wire_id!(crate::isi::game_partition::InstallGamePartitionV1 => "iroha.game_partition.install.v1", register),
+    built_in_wire_id!(crate::isi::game_partition::RegisterGamePartitionPeerV1 => "iroha.game_partition.register_peer.v1", register),
+    built_in_wire_id!(crate::isi::game_partition::SeedGameUnitV1 => "iroha.game_partition.seed.v1", register),
+    built_in_wire_id!(crate::isi::game_partition::AdvanceGameUnitV1 => "iroha.game_partition.advance.v1", register),
+    built_in_wire_id!(crate::isi::game_partition::ExportGameUnitV1 => "iroha.game_partition.export.v1", register),
+    built_in_wire_id!(crate::isi::game_partition::ImportGameUnitV1 => "iroha.game_partition.import.v1", register),
     built_in_wire_id!(crate::isi::sumeragi_amx::RegisterAmxDataspaceV1 => "iroha.sumeragi.amx.register_dataspace.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::RegisterPrivateDataspace => "iroha.private_dataspace.register.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::AnchorPrivateDataspace => "iroha.private_dataspace.anchor.v1", register),
@@ -492,6 +512,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::ProposeContractEmergencyHold => "iroha.instruction.v1::governance::ProposeContractEmergencyHold"),
     governance_wire_id!(governance::ProposeGlobalDataTriggerPermissionGovernance => "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance"),
     governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"),
+    governance_wire_id!(governance::ProposeEndorsedRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal", tolerant),
     governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha.instruction.v1::governance::ProposeSccpRouteGovernance"),
     governance_wire_id!(governance::ProposeSorafsProviderGovernance => "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance"),
     governance_wire_id!(governance::ProposeValidationFeePolicy => "iroha.instruction.v1::governance::ProposeValidationFeePolicy"),

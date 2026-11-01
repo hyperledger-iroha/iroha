@@ -73,7 +73,7 @@ impl AdmittedGas {
                 .custom()
                 .values()
                 .find(|p| p.id().name().as_ref() == id)
-                .map(|p| p.payload())
+                .map(iroha_data_model::parameter::CustomParameter::payload)
         };
         let technical = match payload(TECH_ACCOUNT) {
             Some(source) => {

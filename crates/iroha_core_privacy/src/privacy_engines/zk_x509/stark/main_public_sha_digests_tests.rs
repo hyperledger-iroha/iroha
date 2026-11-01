@@ -21,8 +21,8 @@ use iroha_data_model::privacy::{
 
 fn public_v1() -> ZkX509CrlPublicInputsV1 {
     ZkX509CrlPublicInputsV1 {
-        crl_der: core::array::from_fn(|i| i as u8 + 7),
-        issuer_spki: core::array::from_fn(|i| i as u8 + 107),
+        crl_der: core::array::from_fn(|i| u8::try_from(i).unwrap() + 7),
+        issuer_spki: core::array::from_fn(|i| u8::try_from(i).unwrap() + 107),
         this_update: 1,
         next_update: 2,
     }
@@ -150,7 +150,10 @@ fn authoritative_digest_rows_match_actual_fixed_schedule_for_every_shape() {
             let segment = m.first_logical_row / ZK_X509_SHA_SEGMENT_ROWS_V1;
             let row = m.first_logical_row % ZK_X509_SHA_SEGMENT_ROWS_V1 + m.maximum_local_rows - 8;
             let registration = layout
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .registered_segment(
+                    SegmentAdapterIdV1::Sha256CallBus,
+                    u16::try_from(segment).unwrap(),
+                )
                 .unwrap();
             assert_eq!(
                 plan.source_v1(i).unwrap(),

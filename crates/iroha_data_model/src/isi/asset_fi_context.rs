@@ -256,7 +256,9 @@ mod tests {
                         for width in [31_u64, 33] {
                             let mut malformed = bytes[..start].to_vec();
                             norito::core::write_len_to_vec_with_flags(&mut malformed, width, flags);
-                            malformed.extend_from_slice(&field[..field.len().min(width as usize)]);
+                            malformed.extend_from_slice(
+                                &field[..field.len().min(usize::try_from(width).unwrap())],
+                            );
                             if width == 33 {
                                 malformed.push(0);
                             }

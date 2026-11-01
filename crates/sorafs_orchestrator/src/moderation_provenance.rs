@@ -2,11 +2,14 @@
 //!
 //! Each update takes an exclusive sibling lock, re-reads and validates the latest canonical Norito
 //! segment, appends one hash-chained payload, writes a mode-`0600` temporary file, synchronizes it,
-//! atomically renames it, and synchronizes the containing directory. Unix file identity and
-//! link-count checks reject symlink and hard-link substitution. Non-Unix platforms fail closed
-//! until equivalent primitives are implemented.
+//! atomically renames it, and synchronizes the containing directory. Unix storage keeps its
+//! directory lock and inode/link checks. Windows retains a safe owner directory and a persistent
+//! private lock file, reads signed public segments through original native handles, and publishes
+//! private files through the shared atomic writer. Reparse/hardlink substitution and unsafe write
+//! custody fail closed. A failed durability step may leave a complete published segment visible;
+//! callers must reopen and reconcile it. Other platforms remain unsupported.
 use iroha_crypto::PublicKey;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use iroha_data_model::sorafs::moderation::MODERATION_PROVENANCE_MAX_ENTRIES_V1;
 use iroha_data_model::sorafs::moderation::{
     ModerationCommitteeAggregateError, ModerationCommitteeAggregateV1, ModerationProvenanceError,
@@ -14,7 +17,7 @@ use iroha_data_model::sorafs::moderation::{
     ModerationSignedResultError, ModerationSignedScreeningResultV1, ModerationTrustPolicyError,
     ModerationTrustPolicyV1,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use norito::core::DecodeLimits;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -30,15 +33,18 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
-#[cfg(unix)]
+
+#[cfg(windows)]
+mod native;
+#[cfg(any(unix, windows))]
 const MAX_PROVENANCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_PROVENANCE_STRING_BYTES: usize = 4096;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_PROVENANCE_SEQUENCE_ELEMENTS: usize = MODERATION_PROVENANCE_MAX_ENTRIES_V1;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_PROVENANCE_DECODE_DEPTH: usize = 64;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const TEMPFILE_ATTEMPTS: u64 = 64;
 #[cfg(unix)]
 static TEMPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -223,7 +229,14 @@ impl ModerationProvenanceStoreV1 {
             Ok(output)
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn update<T>(
+        &self,
+        update: impl FnOnce(&mut ModerationProvenanceLogV1) -> Result<T, ModerationProvenanceStoreError>,
+    ) -> Result<T, ModerationProvenanceStoreError> {
+        native::transact(&self.path, self.log_id, true, update)
+    }
+    #[cfg(not(any(unix, windows)))]
     fn update<T>(
         &self,
         _update: impl FnOnce(
@@ -239,7 +252,13 @@ impl ModerationProvenanceStoreV1 {
             &ValidatedParent,
         ) -> Result<T, ModerationProvenanceStoreError>,
     ) -> Result<T, ModerationProvenanceStoreError> {
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            native::transact(&self.path, self.log_id, false, |log| {
+                operation(log, &ValidatedParent)
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = operation;
             return Err(ModerationProvenanceStoreError::UnsupportedPlatform);
@@ -427,8 +446,15 @@ fn read_log(
             reason: "file changed while being read".to_string(),
         });
     }
+    decode_log(path, &bytes).map(Some)
+}
+#[cfg(any(unix, windows))]
+fn decode_log(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<ModerationProvenanceLogV1, ModerationProvenanceStoreError> {
     let allocation_limit = usize::try_from(MAX_PROVENANCE_FILE_BYTES)
-        .expect("64 MiB provenance limit fits usize on supported Unix targets");
+        .expect("64 MiB provenance limit fits usize on supported targets");
     let limits = DecodeLimits::new(
         MAX_PROVENANCE_STRING_BYTES,
         allocation_limit,
@@ -436,20 +462,20 @@ fn read_log(
         allocation_limit,
         MAX_PROVENANCE_DECODE_DEPTH,
     );
-    let log: ModerationProvenanceLogV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
+    let log: ModerationProvenanceLogV1 = norito::decode_from_bytes_with_limits(bytes, limits)
         .map_err(|error| ModerationProvenanceStoreError::Decode {
             path: path.to_path_buf(),
             reason: error.to_string(),
         })?;
     let canonical = norito::to_bytes(&log)
         .map_err(|error| ModerationProvenanceStoreError::Encode(error.to_string()))?;
-    if canonical != bytes {
+    if canonical.as_slice() != bytes {
         return Err(ModerationProvenanceStoreError::NonCanonical(
             path.to_path_buf(),
         ));
     }
     log.validate_chain()?;
-    Ok(Some(log))
+    Ok(log)
 }
 #[cfg(unix)]
 fn persist_log(

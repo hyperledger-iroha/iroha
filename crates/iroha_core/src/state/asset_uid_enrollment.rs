@@ -84,7 +84,7 @@ pub fn enrollment(
 }
 
 /// Read enrollment while retaining a transaction's original local decode refusal.
-pub(crate) fn enrollment_with_owner(
+pub fn enrollment_with_owner(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     owner: Option<&WorldTransaction<'_, '_>>,
@@ -144,7 +144,7 @@ pub fn beneficial(
 }
 
 /// Resolve categories in their existing order without losing transaction-local refusals.
-pub(crate) fn beneficial_with_owner(
+pub fn beneficial_with_owner(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
     account: &AccountId,
@@ -175,7 +175,7 @@ pub fn require_active_beneficial(world: &impl WorldReadOnly, id: &AssetId) -> Re
 }
 
 /// Apply ordinary monetary enrollment checks with the transaction's decode owner.
-pub(crate) fn require_active_beneficial_with_owner(
+pub fn require_active_beneficial_with_owner(
     world: &impl WorldReadOnly,
     id: &AssetId,
     owner: Option<&WorldTransaction<'_, '_>>,

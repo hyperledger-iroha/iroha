@@ -1126,7 +1126,7 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&excessive_rows),
-        Status::InvalidManifest
+        Status::DecodeResourceLimit
     );
 }
 #[test]

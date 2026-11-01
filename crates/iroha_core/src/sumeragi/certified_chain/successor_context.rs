@@ -20,7 +20,7 @@ type Attempt<T> = Result<T, ExecutionAttemptError<schedule::ScheduleError>>;
 /// Pending original history of one native successor, shared by its two authentication sites.
 /// No source or completed owner is replaced after an admission or physical refusal.
 #[derive(Default)]
-pub(crate) struct SuccessorContextPreparation {
+pub struct SuccessorContextPreparation {
     parent: Option<Parent>,
     genesis_authentication: Option<OriginalGenesisRead>,
     genesis: Option<Carrier>,
@@ -253,7 +253,7 @@ impl SuccessorContextPreparation {
         &mut self,
         state: &(impl StateReadOnly + ?Sized),
         header: &IrohaHeader,
-        supplied: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        supplied: Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
         expected: GlobalThresholdBeaconPulseContextV1,
     ) -> Attempt<()> {
         self.recheck(state, header, &expected)?;

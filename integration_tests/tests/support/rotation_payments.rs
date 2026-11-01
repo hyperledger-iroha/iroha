@@ -36,7 +36,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 
 /// An independently pinned, durable owner for the monetary workload used by the ceremony.
-pub(super) struct CustomerWorkload {
+pub struct CustomerWorkload {
     session: NativePaymentSession,
     asset: AssetDefinitionId,
     recipient: AccountId,
@@ -47,15 +47,15 @@ pub(super) struct CustomerWorkload {
 }
 impl CustomerWorkload {
     pub(super) fn new(
-        pins: SignedGenesisPinsV1,
-        genesis: Vec<u8>,
+        pins: &SignedGenesisPinsV1,
+        genesis: &[u8],
         asset: AssetDefinitionId,
         recipient: AccountId,
         fee: FeePaymentIntent,
         directory: PathBuf,
         last_height: NonZeroU64,
     ) -> Result<Self> {
-        let selected = authenticate_signed_genesis_v1(&genesis, &pins)?;
+        let selected = authenticate_signed_genesis_v1(genesis, pins)?;
         let verifier = SumeragiFinalityVerifier::new(
             selected.block(),
             &pins.chain_id,
@@ -124,7 +124,11 @@ impl CustomerWorkload {
 /// `session` retains the test's original independently signed-genesis-rooted verifier.
 /// `deadline` is the original absolute phase deadline, shared by transport and task wait.
 /// The caller must retain this original request/storage when its outcome is unknown.
-pub(super) async fn customer_payment_at_height(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "One payment receives its client, route, heights, fee, journal, session and deadline explicitly."
+)]
+pub async fn customer_payment_at_height(
     client: &Client,
     recipient: AccountId,
     asset: AssetDefinitionId,

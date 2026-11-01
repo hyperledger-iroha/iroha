@@ -11,9 +11,10 @@ use std::sync::Mutex;
 pub enum Boundary {
     /// The certified carrier and State have published, but no archive write began.
     BeforeWrite,
-    /// The complete stage was written and synced, before its canonical link.
+    /// The complete stage was written and synced, before canonical publication.
     StageSynced,
-    /// The canonical hard link and directory were synced; the stage still exists.
+    /// Canonical bytes and directory were synced. Unix retains the hard-linked stage;
+    /// Windows' exact-original rename has already removed its staging name.
     CanonicalSynced,
     /// Canonical publication and durable stage removal finished.
     Complete,

@@ -76,7 +76,7 @@ fn uncapped_timeouts(t_base: Millis, cap: Millis) -> impl Iterator<Item = Millis
 
 /// `⌈log2(x)⌉` for `x ≥ 1` (`0` for `x ≤ 1`).
 pub fn ceil_log2(x: u64) -> u32 {
-    u64::BITS - x.saturating_sub(1).leading_zeros()
+    x.saturating_sub(1).bit_width()
 }
 
 /// `T_req(nominal)` (§8.2 L3, §9.4) for a committee of `n` members:

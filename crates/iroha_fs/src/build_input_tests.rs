@@ -172,17 +172,14 @@ fn retained_build_input_checks_actual_extra_link_or_native_denial() {
     let input = RetainedBuildInput::open(&path).unwrap();
     let before = input.snapshot().unwrap();
     let third = temporary.path().join("third-link");
-    match fs::hard_link(&path, &third) {
-        Ok(()) => {
-            assert!(third.is_file());
-            assert!(input.revalidate().is_err());
-            assert!(input.snapshot().is_err());
-        }
-        Err(_) => {
-            // A held read-only source may make the native link operation impossible.
-            // Observe that denial and unchanged custody; do not pretend a mutation occurred.
-            assert!(!third.exists());
-            assert_eq!(input.snapshot().unwrap(), before);
-        }
+    if fs::hard_link(&path, &third).is_ok() {
+        assert!(third.is_file());
+        assert!(input.revalidate().is_err());
+        assert!(input.snapshot().is_err());
+    } else {
+        // A held read-only source may make the native link operation impossible.
+        // Observe that denial and unchanged custody; do not pretend a mutation occurred.
+        assert!(!third.exists());
+        assert_eq!(input.snapshot().unwrap(), before);
     }
 }

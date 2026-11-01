@@ -941,11 +941,11 @@ fn validate_prepared_instruction_bytes(
     code: &[u8],
     decoded: &[crate::ivm_cache::DecodedOp],
 ) -> Result<(), VMError> {
-    let words = code.chunks_exact(WIDE_INSTRUCTION_LEN as usize);
-    if !words.remainder().is_empty() || words.len() != decoded.len() {
+    let (words, remainder) = code.as_chunks::<{ WIDE_INSTRUCTION_LEN as usize }>();
+    if !remainder.is_empty() || words.len() != decoded.len() {
         return Err(VMError::DecodeError);
     }
-    for (index, (bytes, op)) in words.zip(decoded).enumerate() {
+    for (index, (bytes, op)) in words.iter().zip(decoded).enumerate() {
         let expected_pc = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_mul(WIDE_INSTRUCTION_LEN))

@@ -299,8 +299,7 @@ impl<C: PastaCurve> PinnedParams<C> {
     pub(crate) fn verification_memo_sizes(&self) -> (usize, usize) {
         self.verification_memo
             .lock()
-            .map(|memo| (memo.generators.len(), memo.proofs.len()))
-            .unwrap_or((0, 0))
+            .map_or((0, 0), |memo| (memo.generators.len(), memo.proofs.len()))
     }
 
     #[cfg(test)]

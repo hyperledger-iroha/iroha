@@ -67,6 +67,7 @@ pub struct CanonicalKuraEvidenceLimits {
     /// Maximum cumulative owned allocation per decoder invocation (at most 512 MiB).
     pub max_decode_allocation_bytes: usize,
     /// Independently expected Unix uid of the supplied immediate directory and all four files.
+    #[cfg(unix)]
     pub owner_uid: u32,
 }
 impl CanonicalKuraEvidenceLimits {
@@ -116,7 +117,10 @@ fn evidence_require(condition: bool, reason: &'static str) -> CanonicalKuraEvide
 /// This non-serializable token is not an anchored finality or useful-effect proof.
 /// The downstream authenticator must independently complete before publishing evidence.
 pub struct CanonicalKuraEvidenceComplete {
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     sources: canonical_evidence_read_only_fs::Sources,
     committed_height: u64,
     carrier_count: u64,
@@ -143,11 +147,17 @@ impl CanonicalKuraEvidenceComplete {
     /// Returns an error if retained source identities or contents changed,
     /// source revalidation fails, or the platform lacks the required descriptor APIs.
     pub fn recheck_sources(&self) -> CanonicalKuraEvidenceResult<()> {
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+        #[cfg(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        ))]
         {
             self.sources.check()
         }
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+        #[cfg(not(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        )))]
         {
             Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
         }
@@ -155,7 +165,7 @@ impl CanonicalKuraEvidenceComplete {
     /// Reject publication within any directory namespace actually read by Core.
     ///
     /// `ancestry` must come from the publication owner's held directory chain,
-    /// ordered from root to immediate parent. Only bounded dev/inode identities
+    /// ordered from root to immediate parent. Only complete native file identities
     /// cross this boundary; no raw descriptor or arbitrary callback escapes.
     ///
     /// # Errors
@@ -165,17 +175,23 @@ impl CanonicalKuraEvidenceComplete {
     /// the required descriptor APIs.
     pub fn ensure_publication_ancestry(
         &self,
-        ancestry: &[(u64, u64)],
+        ancestry: &[iroha_fs::FileIdentity],
     ) -> CanonicalKuraEvidenceResult<()> {
         evidence_require(
             !ancestry.is_empty() && ancestry.len() <= 64,
             "publication ancestry bound",
         )?;
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+        #[cfg(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        ))]
         {
             self.sources.ensure_publication_ancestry(ancestry)
         }
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+        #[cfg(not(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        )))]
         {
             Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
         }
@@ -199,8 +215,10 @@ impl CanonicalKuraEvidenceComplete {
 
 /// Immutable, bounded primary-store evidence reader with no mutation or recovery path.
 ///
-/// Unix targets with the required descriptor APIs use retained no-follow handles from
-/// the filesystem root. Redox, espidf and non-Unix targets fail closed. Only clean, nonempty, unpruned committed prefixes are
+/// Unix targets use retained no-follow descriptors from the filesystem root. Windows
+/// uses retained non-reparse handles and exact effective-user ownership for the store
+/// and each source; ancestors retain the native trusted-system-or-user custody policy.
+/// Other targets fail closed. Only clean, nonempty, unpruned committed prefixes are
 /// admitted: exact index/hash counts and contiguous data, with no uncommitted suffix.
 /// The admitted journal images remain resident (at most 48 MB combined), bounded by
 /// `max_committed_blocks`; native body decoding remains frame bounded.
@@ -220,7 +238,10 @@ pub struct CanonicalKuraEvidenceReader {
     next_height: u64,
     output_bytes: u64,
     poisoned: bool,
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     sources: canonical_evidence_read_only_fs::Sources,
 }
 impl CanonicalKuraEvidenceReader {
@@ -243,13 +264,19 @@ impl CanonicalKuraEvidenceReader {
         after_admission: impl FnMut(&Path),
     ) -> CanonicalKuraEvidenceResult<Self> {
         limits.validate()?;
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+        #[cfg(not(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        )))]
         {
             let _ = (block_store, after_admission);
-            // TODO: add retained descriptor APIs on Redox/espidf and Windows relative non-reparse handles; never reopen paths as a fallback.
+            // TODO: add retained descriptor APIs on Redox/espidf; never reopen paths as a fallback.
             return Err(CanonicalKuraEvidenceError::UnsupportedPlatform);
         }
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+        #[cfg(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        ))]
         {
             let sources = canonical_evidence_read_only_fs::Sources::open(
                 block_store,
@@ -367,12 +394,18 @@ impl CanonicalKuraEvidenceReader {
         consume: impl FnOnce(Vec<u8>) -> CanonicalKuraEvidenceResult<T>,
     ) -> CanonicalKuraEvidenceResult<T> {
         self.begin()?;
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+        #[cfg(not(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        )))]
         {
             let _ = (height, consume);
             Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
         }
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+        #[cfg(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        ))]
         {
             let wire = match self.prepare_carrier(height) {
                 Ok(wire) => wire,
@@ -392,7 +425,10 @@ impl CanonicalKuraEvidenceReader {
             Ok(result)
         }
     }
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     fn prepare_carrier(&self, height: u64) -> CanonicalKuraEvidenceResult<Vec<u8>> {
         evidence_require(
             height == self.next_height && height <= self.limits.last_height,
@@ -442,7 +478,10 @@ impl CanonicalKuraEvidenceReader {
         )?;
         Ok(wire)
     }
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     fn refuse_before_consumer<T>(
         &mut self,
         error: CanonicalKuraEvidenceError,
@@ -477,7 +516,10 @@ impl CanonicalKuraEvidenceReader {
         )?;
         self.check_sources()?;
         Ok(CanonicalKuraEvidenceComplete {
-            #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+            #[cfg(any(
+                windows,
+                all(unix, not(any(target_os = "redox", target_os = "espidf")))
+            ))]
             sources: self.sources,
             committed_height: self.marker.count,
             carrier_count: self.limits.last_height - self.limits.first_height + 1,
@@ -485,17 +527,26 @@ impl CanonicalKuraEvidenceReader {
         })
     }
     fn check_sources(&self) -> CanonicalKuraEvidenceResult<()> {
-        #[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+        #[cfg(not(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        )))]
         {
             Err(CanonicalKuraEvidenceError::UnsupportedPlatform)
         }
-        #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+        #[cfg(any(
+            windows,
+            all(unix, not(any(target_os = "redox", target_os = "espidf")))
+        ))]
         {
             self.sources.check()?;
             self.sources.marker.check_marker_bytes(&self.marker_bytes)
         }
     }
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     fn index(&self, height: u64) -> CanonicalKuraEvidenceResult<BlockIndex> {
         evidence_require(height > 0, "one-based index height")?;
         let offset = (height - 1)
@@ -522,7 +573,10 @@ impl CanonicalKuraEvidenceReader {
             ),
         })
     }
-    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "redox", target_os = "espidf")))
+    ))]
     fn hash(&self, height: u64) -> CanonicalKuraEvidenceResult<HashOf<BlockHeader>> {
         evidence_require(height > 0, "one-based hash height")?;
         let offset = (height - 1)
@@ -796,16 +850,19 @@ mod canonical_evidence_read_only_fs {
         pub(super) marker: Source,
     }
     impl Sources {
-        pub(super) fn ensure_publication_ancestry(&self, ancestry: &[(u64, u64)]) -> Result<()> {
+        pub(super) fn ensure_publication_ancestry(
+            &self,
+            ancestry: &[iroha_fs::FileIdentity],
+        ) -> Result<()> {
             self.check()?;
             for source in [&self.data, &self.index, &self.hashes, &self.marker] {
-                let root = source
+                let root = &source
                     .chain
                     .last()
                     .ok_or(Error::Invalid("source parent chain"))?
-                    .identity;
+                    .file;
                 require(
-                    !ancestry.contains(&(root.dev, root.ino)),
+                    !ancestry.contains(&iroha_fs::FileIdentity::of(root)?),
                     "publication inside protected Core source namespace",
                 )?;
             }
@@ -868,4 +925,9 @@ mod canonical_evidence_read_only_fs {
             Ok(())
         }
     }
+}
+
+#[cfg(windows)]
+mod canonical_evidence_read_only_fs {
+    include!("read_only_evidence_windows.rs");
 }

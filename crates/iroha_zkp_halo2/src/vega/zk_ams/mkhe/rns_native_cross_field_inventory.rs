@@ -1121,7 +1121,7 @@ fn canonical_inventory_root_v1(
     candidate_hash.update(&(PRE_DIRECT_CANDIDATE_POINTS_V1 as u32).to_be_bytes());
     candidate_hash.update(&(PRE_DIRECT_CANDIDATE_POINT_BYTES_V1 as u32).to_be_bytes());
     candidate_hash.update(&(PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1 as u32).to_be_bytes());
-    for (ordinal, encoded) in inventory.chunks_exact(POINT_BYTES_V1).enumerate() {
+    for (ordinal, encoded) in inventory.as_chunks::<POINT_BYTES_V1>().0.iter().enumerate() {
         #[cfg(test)]
         update_preflight_audit_counters_v1(|counters| {
             counters.point_validation_decodes += 1;

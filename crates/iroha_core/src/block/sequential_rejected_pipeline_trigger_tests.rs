@@ -6,7 +6,7 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
-    let mut world = World::with([domain], [account], []);
+    let world = World::with([domain], [account], []);
     let probe_state = State::new_with_chain_for_testing(
         World::with(
             [Domain::new(domain_id.clone()).build(&authority)],
@@ -97,102 +97,6 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
             .expect_err("probe transaction must reject")
             .clone()
     };
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_rejected_block_approved",
-        block_key.clone(),
-        PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_rejected_block_wrong_committed",
-        wrong_block_status_key.clone(),
-        PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Committed)),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_rejected",
-        rejected_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_approved",
-        approved_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_status(TransactionStatus::Approved),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_rejected",
-        wrong_rejected_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_status(TransactionStatus::Rejected(Box::new(
-                    TransactionRejectionReason::Validation(ValidationFail::TooComplex),
-                ))),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_hash_rejected",
-        wrong_hash_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(wrong_hash)
-                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_height_rejected",
-        wrong_height_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_block_height(Some(nonzero!(9999_u64)))
-                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_lane_rejected",
-        wrong_lane_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_lane_id(LaneId::new(7))
-                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
-        ),
-    );
-    add_pipeline_metadata_trigger(
-        &mut world,
-        &authority,
-        "sequential_external_wrong_dataspace_rejected",
-        wrong_dataspace_key.clone(),
-        PipelineEventFilterBox::from(
-            TransactionEventFilter::new()
-                .for_hash(external_hash)
-                .for_dataspace_id(DataSpaceId::new(7))
-                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
-        ),
-    );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -207,6 +111,102 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     state.configure_test_runtime_defaults();
     let native_chain = component_chain(state);
     let state = native_chain.state();
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_rejected_block_approved",
+        block_key.clone(),
+        PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_rejected_block_wrong_committed",
+        wrong_block_status_key.clone(),
+        PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Committed)),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_rejected",
+        rejected_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_approved",
+        approved_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_status(TransactionStatus::Approved),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_rejected",
+        wrong_rejected_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_status(TransactionStatus::Rejected(Box::new(
+                    TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                ))),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_hash_rejected",
+        wrong_hash_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(wrong_hash)
+                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_height_rejected",
+        wrong_height_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_block_height(Some(nonzero!(9999_u64)))
+                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_lane_rejected",
+        wrong_lane_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_lane_id(LaneId::new(7))
+                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
+        ),
+    );
+    add_pipeline_metadata_trigger(
+        state,
+        &authority,
+        "sequential_external_wrong_dataspace_rejected",
+        wrong_dataspace_key.clone(),
+        PipelineEventFilterBox::from(
+            TransactionEventFilter::new()
+                .for_hash(external_hash)
+                .for_dataspace_id(DataSpaceId::new(7))
+                .for_status(TransactionStatus::Rejected(Box::new(rejection.clone()))),
+        ),
+    );
     assert_eq!(
         state.network_id, network_id,
         "exact native genesis input identity"

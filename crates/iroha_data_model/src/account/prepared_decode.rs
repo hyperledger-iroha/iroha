@@ -24,7 +24,7 @@ pub enum AccountDecodeError {
     Invariant(&'static str),
 }
 mod json;
-pub(crate) use json::AccountJsonAdmissionError;
+pub use json::AccountJsonAdmissionError;
 pub use json::AccountLiteralAdmissionError;
 
 use AccountDecodeError as Error;

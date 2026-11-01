@@ -212,12 +212,14 @@ impl Cells {
             self.value(u128::try_from(raw.len()).map_err(|_| Error::BoundsFailure)?),
         )?;
         let messages = raw
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 iroha_plonk_gadgets::bytes::element::LeElement::assign(
                     &mut chip.uint(),
                     region,
-                    self.value(chunk.try_into().map_err(|_| Error::Synthesis)?),
+                    self.value(*chunk),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

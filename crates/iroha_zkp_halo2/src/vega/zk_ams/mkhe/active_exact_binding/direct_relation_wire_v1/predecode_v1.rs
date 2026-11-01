@@ -486,7 +486,7 @@ fn validate_responses(bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     if bytes.len() != RESPONSE_BYTES_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
-    for response in bytes.chunks_exact(8) {
+    for response in bytes.as_chunks::<8>().0 {
         validate_response_word(response)?;
     }
     Ok(())
@@ -495,7 +495,7 @@ fn validate_blind_responses(bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     if bytes.len() != BLIND_RESPONSE_BYTES_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
-    for scalar in bytes.chunks_exact(32) {
+    for scalar in bytes.as_chunks::<32>().0 {
         validate_blind_scalar(scalar)?;
     }
     Ok(())

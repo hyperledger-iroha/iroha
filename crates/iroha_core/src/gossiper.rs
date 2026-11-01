@@ -1427,13 +1427,6 @@ impl TransactionGossiper {
         gossip: &TransactionGossip,
         enqueued: &mut usize,
     ) -> Result<(), ExecutionDeferred> {
-        let TransactionGossip {
-            txs,
-            routes,
-            plans,
-            plane,
-        } = gossip;
-        let plane = *plane;
         struct MaterializedGossipCandidate {
             entrypoint: TransactionEntrypoint,
             payload: Arc<Vec<u8>>,
@@ -1444,6 +1437,13 @@ impl TransactionGossiper {
             ed25519_prechecked: bool,
             precheck_rejection: Option<AcceptTransactionFail>,
         }
+        let TransactionGossip {
+            txs,
+            routes,
+            plans,
+            plane,
+        } = gossip;
+        let plane = *plane;
 
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();

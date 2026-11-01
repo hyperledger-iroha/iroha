@@ -142,55 +142,56 @@ impl NativeGlobalAvailability {
             })
             .map(|(_, parent)| parent)
             .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC493")));
-        let parent = match start {
-            None => committed_block(&view, parent_height),
-            Some(start) => {
-                let index = usize::try_from(parent_height)
-                    .ok()
-                    .and_then(NonZeroUsize::new)
-                    .ok_or_else(|| {
-                        Attempt::Rejected(ChainReadError::NotCommitted {
-                            height: parent_height,
-                        })
-                    });
-                index.and_then(|index| {
-                    let mut parent = None;
-                    view.canonical_history()
-                        .visit_executed_backwards_from_identity(
-                            start,
-                            index,
-                            |_, _| Ok(()),
-                            |receipt| {
-                                if receipt.height() == parent_height {
-                                    parent = Some(receipt);
-                                }
-                                Ok(())
-                            },
-                        )
-                        .map_err(|error| {
-                            error.map_rejection(|error| ChainReadError::Malformed {
+        let parent = start
+            .map_or_else(
+                || committed_block(&view, parent_height),
+                |start| {
+                    let index = usize::try_from(parent_height)
+                        .ok()
+                        .and_then(NonZeroUsize::new)
+                        .ok_or_else(|| {
+                            Attempt::Rejected(ChainReadError::NotCommitted {
                                 height: parent_height,
-                                reason: error.to_string(),
                             })
-                        })?;
-                    parent.ok_or_else(|| {
-                        Attempt::Rejected(ChainReadError::Malformed {
-                            height: parent_height,
-                            reason:
-                                "requested execution was absent from its authenticated interval"
-                                    .into(),
+                        });
+                    index.and_then(|index| {
+                        let mut parent = None;
+                        view.canonical_history()
+                            .visit_executed_backwards_from_identity(
+                                start,
+                                index,
+                                |_, _| Ok(()),
+                                |receipt| {
+                                    if receipt.height() == parent_height {
+                                        parent = Some(receipt);
+                                    }
+                                    Ok(())
+                                },
+                            )
+                            .map_err(|error| {
+                                error.map_rejection(|error| ChainReadError::Malformed {
+                                    height: parent_height,
+                                    reason: error.to_string(),
+                                })
+                            })?;
+                        parent.ok_or_else(|| {
+                            Attempt::Rejected(ChainReadError::Malformed {
+                                height: parent_height,
+                                reason:
+                                    "requested execution was absent from its authenticated interval"
+                                        .into(),
+                            })
                         })
                     })
-                })
-            }
-        }
-        .map_err(|error| {
-            if cfg!(all(test, sumeragi_core_mutation = "HC47")) {
-                invalid(error).into()
-            } else {
-                error.map_rejection(invalid)
-            }
-        })?;
+                },
+            )
+            .map_err(|error| {
+                if cfg!(all(test, sumeragi_core_mutation = "HC47")) {
+                    invalid(error).into()
+                } else {
+                    error.map_rejection(invalid)
+                }
+            })?;
         if parent
             .header()
             .is_some_and(|header| header.instance != self.instance)

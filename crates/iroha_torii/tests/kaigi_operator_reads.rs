@@ -1,7 +1,6 @@
 //! Operator-authentication regressions for Kaigi relay diagnostic reads.
 #![cfg(feature = "app_api")]
-#[path = "common/norito_rpc_harness.rs"]
-mod norito_rpc_harness;
+use crate::norito_rpc_harness;
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},

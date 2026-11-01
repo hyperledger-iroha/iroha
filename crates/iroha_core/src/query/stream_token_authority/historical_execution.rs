@@ -266,8 +266,14 @@ pub fn authenticate_stream_token_history_to_floor_v1<'view, 'state>(
         let mut proof = PreparedStreamTokenHistoryV1::new(view, provider, operation_id, floor)?;
         let chain = SignerCertifiedWalkV1::new(view)
             .map_err(|error| error.map_rejection(|_| Error::Finality))?;
-        for block in chain.walk(proof.start_height(), floor.height) {
-            proof.consume(&block.map_err(|error| error.map_rejection(|_| Error::Finality))?)?;
+        // Borrow the iterator and match its receipt directly: both retain large fixed native
+        // proofs, which must not be copied through IntoIterator and Result::map_err frames.
+        let mut walk = chain.walk(proof.start_height(), floor.height);
+        for block in &mut walk {
+            match block {
+                Ok(block) => proof.consume(&block)?,
+                Err(error) => return Err(error.map_rejection(|_| Error::Finality)),
+            }
         }
         proof.finish()
     })

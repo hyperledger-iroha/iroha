@@ -1640,7 +1640,7 @@ async fn ballot_plain_builds_instruction_skeleton() {
     .expect("handler ok");
     let body = res.0;
     assert!(body.drafted);
-    assert!(body.tx_instructions.len() == 1);
+    assert_eq!(body.tx_instructions.len(), 1);
 }
 #[tokio::test]
 async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
@@ -2405,10 +2405,10 @@ fn signed_governed_manifest_for_verification(
 
 #[test]
 fn governed_manifest_verification_authenticates_exact_content_and_refunds_its_frame() {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
     // Retain unrelated constructor EBR generations while measuring only the
     // original reader/capture owners and their exact synchronous refunds.
     let _constructor_retirement = crossbeam_epoch::pin();
-    use iroha_core::execution_attempt::ExecutionAttemptError;
     let signing = crate::routing::manifest_signing_test_support::ManifestSigningFixture::new(1);
     let mut manifest = signed_governed_manifest_for_verification(&signing);
     let (state, _, _) = mk_basic_context();
@@ -2445,9 +2445,6 @@ fn governed_manifest_verification_authenticates_exact_content_and_refunds_its_fr
 
 #[test]
 fn governed_manifest_verification_preserves_counter_and_one_short_frame_capacity() {
-    // Retain unrelated constructor EBR generations while measuring only the
-    // original reader/capture owners and their exact synchronous refunds.
-    let _constructor_retirement = crossbeam_epoch::pin();
     use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
     use iroha_core::execution_attempt::ExecutionAttemptError;
     use std::{
@@ -2455,6 +2452,9 @@ fn governed_manifest_verification_preserves_counter_and_one_short_frame_capacity
         pin::pin,
         task::{Context, Poll, Waker},
     };
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
 
     let signing = crate::routing::manifest_signing_test_support::ManifestSigningFixture::new(1);
     let manifest = signed_governed_manifest_for_verification(&signing);
@@ -2541,11 +2541,11 @@ fn governed_manifest_verification_preserves_counter_and_one_short_frame_capacity
 
 #[test]
 fn governed_manifest_verification_keeps_an_enclosing_codec_refusal_local() {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use norito::core::DecodeBudgetContext;
     // Retain unrelated constructor EBR generations while measuring only the
     // original reader/capture owners and their exact synchronous refunds.
     let _constructor_retirement = crossbeam_epoch::pin();
-    use iroha_core::execution_attempt::ExecutionAttemptError;
-    use norito::core::DecodeBudgetContext;
 
     let signing = crate::routing::manifest_signing_test_support::ManifestSigningFixture::new(1);
     let manifest = signed_governed_manifest_for_verification(&signing);

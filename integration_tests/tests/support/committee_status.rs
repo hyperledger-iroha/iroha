@@ -1579,17 +1579,18 @@ mod status_observation_tests {
                 Some(std::io::ErrorKind::TimedOut)
             );
         }
-        let requests = transport.requests.lock().unwrap();
-        // Scheduling may exhaust the original deadline during the first sleep.
-        // The successful-retry test separately requires two reads; this refusal
-        // permits one or two, never a renewed deadline or a third request.
-        assert!((1..=2).contains(&requests.len()));
-        assert!(
-            requests
-                .windows(2)
-                .all(|pair| pair[1].timeout.unwrap() < pair[0].timeout.unwrap())
-        );
-        drop(requests);
+        {
+            let requests = transport.requests.lock().unwrap();
+            // Scheduling may exhaust the original deadline during the first sleep.
+            // The successful-retry test separately requires two reads; this refusal
+            // permits one or two, never a renewed deadline or a third request.
+            assert!((1..=2).contains(&requests.len()));
+            assert!(
+                requests
+                    .windows(2)
+                    .all(|pair| pair[1].timeout.unwrap() < pair[0].timeout.unwrap())
+            );
+        }
         let transport = fee_transport([]);
         let deadline = Instant::now();
         let account = client(transport.clone())

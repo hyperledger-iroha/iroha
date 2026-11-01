@@ -348,6 +348,10 @@ impl Flr {
     // Round this value to the nearest integer; the source must be in the
     // [-(2^63-1), +(2^63-1)] range.
     #[inline]
+    #[expect(
+        clippy::manual_midpoint,
+        reason = "the sticky-bit fold mirrors the Falcon reference rounding, not an average"
+    )]
     pub(crate) fn rint(self) -> i64 {
         // Shifted mantissa to be in the [2^62,2^63-1] range (with the top
         // bit set).
@@ -501,6 +505,10 @@ impl Flr {
     }
     // Multiplication.
     #[inline]
+    #[expect(
+        clippy::decimal_bitwise_operands,
+        reason = "pinned Falcon reference arithmetic: -1076 is the decimal zero exponent"
+    )]
     pub(crate) fn set_mul(&mut self, other: Self) {
         // Extract absolute values of mantissas, assuming non-zero
         // operands, and multiply them together.
@@ -566,6 +574,10 @@ impl Flr {
         self * self
     }
     // Division.
+    #[expect(
+        clippy::decimal_bitwise_operands,
+        reason = "pinned Falcon reference arithmetic: -1076 is the decimal zero exponent"
+    )]
     pub(crate) fn set_div(&mut self, other: Self) {
         // Extract mantissas (unsigned).
         let mut xu = (self.0 & M52) | (1u64 << 52);

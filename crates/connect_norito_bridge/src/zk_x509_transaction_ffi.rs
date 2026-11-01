@@ -290,7 +290,7 @@ impl Owner {
         let (profile, protocol_limits, limits) = policy(&manifest, network)?;
         let mut payload: TransactionPayload =
             norito::decode_canonical(payload).map_err(|_| CANONICAL)?;
-        ModelBuilder::from_payload(payload.clone()).map_err(|_| SOURCE)?;
+        let _ = ModelBuilder::from_payload(payload.clone()).map_err(|_| SOURCE)?;
         if payload.network_id() != Some(&network) {
             return Err(NETWORK);
         }
@@ -851,7 +851,7 @@ mod tests {
     #[test]
     fn ffi_invalid_handles_and_inputs_clear_outputs_without_dereferencing_handles() {
         use std::ptr;
-        let mut output = 1usize as *mut u8;
+        let mut output = ptr::dangling_mut::<u8>();
         let mut length = 99;
         assert_eq!(
             unsafe {

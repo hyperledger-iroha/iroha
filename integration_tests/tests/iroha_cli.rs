@@ -9,7 +9,9 @@ use integration_tests::{
         prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
         workspace_root,
     },
-    process::{CommandTimeoutExt, TokioCommandTimeoutExt, tokio_output_with_timeout},
+    process::{
+        output_with_timeout, process_timeout, tokio_output_with_timeout, tokio_status_with_timeout,
+    },
     sandbox,
 };
 use iroha::{
@@ -32,7 +34,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_model_base::domain::DomainId;
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, ResolvedCommand, ResolvedProgram};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
 use reqwest::Url;
@@ -68,10 +70,10 @@ fn nanos_to_quantity_fixture_spelling_is_canonical() {
         "1.23456789"
     );
 }
-fn program() -> PathBuf {
+fn program() -> ResolvedProgram {
     iroha_program().unwrap()
 }
-fn program_reuse_existing_or_build() -> PathBuf {
+fn program_reuse_existing_or_build() -> ResolvedProgram {
     iroha_program_reuse_existing_or_resolve().unwrap()
 }
 fn soracloud_fixture(path: &str) -> PathBuf {
@@ -416,13 +418,13 @@ async fn run_soracloud_command(
 ) -> eyre::Result<std::process::Output> {
     let effective_args = soracloud_command_args(args);
     let timeout = soracloud_subprocess_timeout(args);
-    let mut command = tokio::process::Command::new(program());
+    let mut command = program().command()?;
     command
         .current_dir(cwd)
         .arg("soracloud")
         .args(&effective_args)
         .envs(config.envs());
-    Ok(tokio_output_with_timeout(&mut command, timeout).await?)
+    Ok(tokio_output_with_timeout(command, timeout).await?)
 }
 
 struct SoracloudCli<'a> {
@@ -435,18 +437,18 @@ impl<'a> SoracloudCli<'a> {
         Self { cwd, config }
     }
 
-    fn command(&self) -> tokio::process::Command {
-        let mut command = tokio::process::Command::new(program());
+    fn command(&self) -> ResolvedCommand {
+        let mut command = program().command().expect("retain selected CLI command");
         command.current_dir(self.cwd).arg("soracloud");
         command
     }
 
     async fn bounded_output(
         &self,
-        mut command: tokio::process::Command,
+        mut command: ResolvedCommand,
     ) -> eyre::Result<std::process::Output> {
         command.envs(self.config.envs());
-        Ok(command.bounded_output().await?)
+        Ok(tokio_output_with_timeout(command, process_timeout()).await?)
     }
 }
 
@@ -542,6 +544,10 @@ async fn wait_for_soracloud_status_payload(
     )
     .await
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The poll forwards each Soracloud CLI argument and its readiness predicate explicitly."
+)]
 async fn wait_for_soracloud_hf_status_payload(
     cwd: &Path,
     config: &ProgramConfig,
@@ -742,7 +748,8 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-    let exit_status = tokio::process::Command::new(program())
+    let mut command = program().command()?;
+    command
         .current_dir(dir.path())
         .arg("ops")
         .arg("executor")
@@ -750,9 +757,8 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
         .arg("--path")
         .arg(sample_path)
         // Also pass envs to exercise the CLI's env handling and avoid dead-code.
-        .envs(config.envs())
-        .bounded_status()
-        .await?;
+        .envs(config.envs());
+    let exit_status = tokio_status_with_timeout(command, process_timeout()).await?;
     assert!(exit_status.success());
     Ok(())
 }
@@ -774,13 +780,13 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-    let exit_status = tokio::process::Command::new(program())
+    let mut command = program().command()?;
+    command
         .current_dir(dir.path())
         .arg("ledger")
         .arg("domain")
-        .arg("list")
-        .bounded_status()
-        .await?;
+        .arg("list");
+    let exit_status = tokio_status_with_timeout(command, process_timeout()).await?;
     assert!(exit_status.success());
     Ok(())
 }
@@ -797,15 +803,16 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
     let binary = program_reuse_existing_or_build();
     let started_at = Instant::now();
-    let output = std::process::Command::new(binary)
+    let mut command = binary.command()?;
+    command
         .current_dir(dir.path())
         .arg("tx")
         .arg("ivm")
         .arg("--fee-payer")
         .arg("authority")
         .arg("--path")
-        .arg(&program_path)
-        .bounded_output()?;
+        .arg(&program_path);
+    let output = output_with_timeout(command, process_timeout())?;
     let elapsed = started_at.elapsed();
     assert!(
         elapsed < Duration::from_secs(5),
@@ -841,7 +848,8 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
     let binary = program_reuse_existing_or_build();
     let started_at = Instant::now();
-    let output = std::process::Command::new(binary)
+    let mut command = binary.command()?;
+    command
         .current_dir(dir.path())
         .arg("tx")
         .arg("ivm")
@@ -850,8 +858,8 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
         .arg("--path")
         .arg(&program_path)
         .arg("--gas-limit")
-        .arg("42")
-        .bounded_output()?;
+        .arg("42");
+    let output = output_with_timeout(command, process_timeout())?;
     let elapsed = started_at.elapsed();
     assert!(
         elapsed < Duration::from_secs(5),
@@ -2100,9 +2108,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     // of exercising queued-window promotion.
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let promote_after_ms = u128::from(current_window_expires_at_ms).saturating_add(250);
-    let wait_ms = promote_after_ms
-        .saturating_sub(now_ms)
-        .min(u128::from(u64::MAX)) as u64;
+    let wait_ms = u64::try_from(promote_after_ms.saturating_sub(now_ms)).unwrap_or(u64::MAX);
     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
     let promote = run_soracloud_command(
         dir.path(),

@@ -93,10 +93,10 @@ impl Core {
             WireMessage::Vote(_)
             | WireMessage::Timeout(_)
             | WireMessage::Qc(_)
-            | WireMessage::Tc(_) => {
-                if self.cfg.committee.contains(from) {
-                    self.reply_status(from);
-                }
+            | WireMessage::Tc(_)
+                if self.cfg.committee.contains(from) =>
+            {
+                self.reply_status(from);
             }
             _ => {}
         }

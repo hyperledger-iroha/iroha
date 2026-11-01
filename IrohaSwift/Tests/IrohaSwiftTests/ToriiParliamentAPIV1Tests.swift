@@ -163,10 +163,10 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
 
     func testInitialSortitionDraftUsesOnlyTheEnclosingAttempt() throws {
         let transition = ToriiParliamentLifecycleTransitionV1.registerInitialSortition
-        XCTAssertEqual(transition.layout.noritoIndex, 12)
+        XCTAssertEqual(transition.layout.noritoIndex, 21)
         XCTAssertEqual(transition.layout.jsonTag, "RegisterInitialSortition")
         XCTAssertFalse(transition.layout.jsonPayloadRequired)
-        XCTAssertEqual(transition.layout.eventKindIndex, 15)
+        XCTAssertEqual(transition.layout.eventKindIndex, 24)
 
         let encoded = try ToriiParliamentAPIV1.transitionDraftRequestData(
             governanceAttemptId: attemptID,
@@ -231,10 +231,12 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         ]
         XCTAssertEqual(cases.count, ToriiParliamentAPIV1.publicTransitions.count)
         XCTAssertEqual(cases.map { $0.1 }, Array(0..<cases.count))
+        // Core's codec still numbers the retired timed-OVN transitions between these rows.
+        let noritoIndices = Array(0..<10) + [17, 20, 21]
         for (transition, expectedIndex) in cases {
             let layout = transition.layout
             XCTAssertEqual(layout, ToriiParliamentAPIV1.publicTransitions[expectedIndex])
-            XCTAssertEqual(Int(layout.noritoIndex), expectedIndex, layout.jsonTag)
+            XCTAssertEqual(Int(layout.noritoIndex), noritoIndices[expectedIndex], layout.jsonTag)
             let encoded = try ToriiParliamentAPIV1.transitionDraftRequestData(
                 governanceAttemptId: attemptID,
                 transition: transition

@@ -261,10 +261,14 @@ mod tests {
             || "signal.SIG_IGN".to_owned(),
             |code| format!("lambda *unused: sys.exit({code})"),
         );
-        let mut child = tokio::process::Command::new("python3")
+        let mut command = crate::development_process_command("python3")?;
+        command
             .args(["-c", &format!("import os,signal,sys\nsignal.signal(signal.SIGTERM, {action})\nos.write(1,b'R')\nwhile True: signal.pause()\n")])
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
-            .kill_on_drop(true).spawn().wrap_err("broker shutdown controls require python3 on PATH")?;
+            .kill_on_drop(true);
+        let mut child = crate::ResolvedCommand::from_development_command(command)
+            .spawn_async()
+            .wrap_err("broker shutdown controls require python3 on PATH")?;
         let mut ready = [0; 1];
         timeout(
             Duration::from_secs(5),
@@ -288,13 +292,15 @@ mod tests {
             assert!(outcome.cleanup.is_none());
             assert_eq!(outcome.require_success().is_ok(), code == 0);
 
-            let mut completed = tokio::process::Command::new("python3")
+            let mut command = crate::development_process_command("python3")?;
+            command
                 .args(["-c", &format!("import sys; sys.exit({code})")])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
+                .kill_on_drop(true);
+            let mut completed = crate::ResolvedCommand::from_development_command(command)
+                .spawn_async()
                 .wrap_err("broker natural-terminal controls require python3 on PATH")?;
             let original_terminal = timeout(Duration::from_secs(5), completed.wait()).await??;
             let natural = stop_disposable_broker(&mut completed).await;

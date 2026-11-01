@@ -36,7 +36,13 @@ fn cohort() -> Cohort {
     let mut setup = start();
     let began = Instant::now();
     let accounts: Vec<_> = (0..COUNT)
-        .map(|index| AccountId::new(key(FIRST_SEED + index as u8).public_key().clone()))
+        .map(|index| {
+            AccountId::new(
+                key(FIRST_SEED + u8::try_from(index).unwrap())
+                    .public_key()
+                    .clone(),
+            )
+        })
         .collect();
     assert_eq!(accounts.iter().collect::<BTreeSet<_>>().len(), COUNT);
     {
@@ -199,7 +205,7 @@ fn export_setup(cohort: &Cohort, output: &Path) {
                 &format!("account-{index:03}.norito"),
                 &norito::encode_canonical(account).unwrap(),
             );
-            norito::json!({"index":index,"seed":(FIRST_SEED + index as u8),"account":row})
+            norito::json!({"index":index,"seed":(FIRST_SEED + u8::try_from(index).unwrap()),"account":row})
         })
         .collect();
     let history = history(&cohort.setup, output);
@@ -284,7 +290,8 @@ fn activation_finality(block: &VerifiedSumeragiBlock, signed: &SignedTransaction
     let index = certified
         .network_entrypoints()
         .position(|entry| entry.hash() == entrypoint_hash)
-        .unwrap() as u32;
+        .unwrap();
+    let index = u32::try_from(index).unwrap();
     let (output_index, _) = certified.network_output_at(index).unwrap();
     KagemushaWalletLedgerFinalityV1 {
         version: 1,
@@ -518,7 +525,7 @@ fn execute_and_export(mut cohort: Cohort, output: &Path) {
                 &format!("activation-{index:03}.finality.norito"),
                 &finality,
             );
-            completed.push(norito::json!({"index":index,"seed":(FIRST_SEED + index as u8),
+            completed.push(norito::json!({"index":index,"seed":(FIRST_SEED + u8::try_from(index).unwrap()),
                 "account_digest_hex":(hex::encode(activations[index].2)),"wallet_id_hex":(hex::encode(activations[index].1)),
                 "activation_height":height,"signed_transaction":signed_row,"finality":finality_row}));
         }

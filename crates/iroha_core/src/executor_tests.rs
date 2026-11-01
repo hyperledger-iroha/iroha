@@ -890,7 +890,10 @@ fn borrowed_instruction_validator_payload_has_exact_canonical_owned_wire() {
         context: context(),
         target: norito::core::PayloadRef(&instruction),
     };
-    assert!(std::ptr::eq(&*borrowed.target, &instruction));
+    assert!(std::ptr::eq(
+        &raw const *borrowed.target,
+        &raw const instruction
+    ));
     let owned = ValidatePayload {
         context: context(),
         target: instruction.clone(),
@@ -2494,7 +2497,7 @@ fn initial_executor_genesis_rejects_unclassified_oracle_instruction() {
         "the regression must exercise the authenticated genesis context"
     );
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &authority, instruction)
+        .execute_instruction(&mut state_transaction, &authority, &instruction)
         .expect_err("genesis must not bypass the native instruction allowlist");
     assert!(
         matches!(&error, ValidationFail::NotPermitted(reason)
@@ -2642,7 +2645,7 @@ fn initial_executor_executes_kaigi_create_through_core() {
     .into();
 
     super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &host, instruction)
+        .execute_instruction(&mut state_transaction, &host, &instruction)
         .expect("Initial executor must dispatch Kaigi create to Core");
     let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
     assert!(
@@ -2699,7 +2702,7 @@ fn initial_executor_rejects_kaigi_create_in_foreign_domain() {
     .into();
 
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &intruder, instruction)
+        .execute_instruction(&mut state_transaction, &intruder, &instruction)
         .expect_err("a non-owner must not squat another domain's Kaigi namespace");
     assert!(
         matches!(
@@ -2750,7 +2753,7 @@ fn initial_executor_rejects_direct_native_kaigi_metadata_writes() {
     let instruction = SetKeyValue::domain(domain_id, key, Json::new("forged record")).into();
 
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &authority, instruction)
+        .execute_instruction(&mut state_transaction, &authority, &instruction)
         .expect_err("ordinary domain metadata must not overwrite native Kaigi state");
     assert!(
         matches!(
@@ -3937,7 +3940,7 @@ fn initial_executor_routes_threshold_key_lifecycle_to_core_qc_authentication() {
     );
 
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &authority, instruction)
+        .execute_instruction(&mut state_transaction, &authority, &instruction)
         .expect_err("an empty validator QC must fail in Core");
     assert!(
         format!("{error:?}").contains("threshold-key lifecycle certificate authentication failed"),
@@ -3977,7 +3980,7 @@ fn initial_executor_cannot_bypass_native_asset_transfer_control_metadata() {
 
     for instruction in instructions {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .execute_instruction(&mut state_transaction, &authority, &instruction)
             .expect_err("Initial executor must preserve Core's reserved metadata guard");
         assert!(
             format!("{error:?}").contains("reserved for native asset transfer controls"),
@@ -4016,7 +4019,7 @@ fn initial_executor_rejects_reserved_native_metadata_during_account_registration
         let instruction: InstructionBox =
             Register::account(NewAccount::new(target.clone()).with_metadata(metadata)).into();
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .execute_instruction(&mut state_transaction, &authority, &instruction)
             .expect_err("Initial executor must reject native metadata seeding");
         assert!(
             error.to_string().contains("reserved native metadata"),
@@ -4068,7 +4071,7 @@ fn initial_executor_rejects_account_removal_with_transfer_control_state() {
         .execute_instruction(
             &mut state_transaction,
             &target,
-            Unregister::account(target.clone()).into(),
+            &Unregister::account(target.clone()).into(),
         )
         .expect_err("Initial executor must preserve native transfer-control history");
     assert!(
@@ -4333,7 +4336,6 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
         (
             gov::ProposeRuntimeUpgradeProposal {
                 action: crate::runtime::change_set::test_support::schedule(foreign_network, 100),
-                provenance: Vec::new(),
             }
             .into(),
             "CanProposeRuntimeChangeSet",
@@ -4418,7 +4420,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
     );
     for (instruction, permission_name, _) in &probes {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction.clone())
+            .execute_instruction(&mut state_transaction, &authority, instruction)
             .expect_err("an adjacent governance scope must fail closed");
         assert!(
             format!("{error:?}").contains(&format!("exact {permission_name} target"))
@@ -4477,7 +4479,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
     );
     for (instruction, permission_name, downstream_error) in probes {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .execute_instruction(&mut state_transaction, &authority, &instruction)
             .expect_err("the exact scope must reach the deliberately invalid Core probe");
         assert!(
             format!("{error:?}").contains(downstream_error),
@@ -4612,7 +4614,7 @@ fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
     ];
     for instruction in instructions {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &attacker, instruction)
+            .execute_instruction(&mut state_transaction, &attacker, &instruction)
             .expect_err("an ordinary account must not mutate chain policy or a foreign controller");
         assert!(
             matches!(error, ValidationFail::NotPermitted(_)),
@@ -4682,7 +4684,7 @@ fn initial_executor_reserves_hijiri_parameters_for_dedicated_permission() {
         .execute_instruction(
             &mut state_transaction,
             &generic_parameter_admin,
-            instruction(),
+            &instruction(),
         )
         .expect_err("generic parameter permission must not control Hijiri fees");
     assert!(
@@ -4691,7 +4693,7 @@ fn initial_executor_reserves_hijiri_parameters_for_dedicated_permission() {
         "unexpected generic-admin rejection: {error:?}"
     );
     super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &hijiri_admin, instruction())
+        .execute_instruction(&mut state_transaction, &hijiri_admin, &instruction())
         .expect("dedicated Hijiri permission must install the initial parameter");
     assert!(
         state_transaction
@@ -5247,7 +5249,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
             .execute_instruction(
                 &mut state_transaction,
                 &legitimate_root,
-                Grant::account_permission(malformed, adjacent_owner.clone()).into(),
+                &Grant::account_permission(malformed, adjacent_owner.clone()).into(),
             )
             .expect_err("malformed scoped governance grant must fail before storage");
         assert!(
@@ -5295,7 +5297,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
             .execute_instruction(
                 &mut state_transaction,
                 &adjacent_owner,
-                Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                &Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
             )
             .expect_err("adjacent owner must not self-grant a scoped permission");
     }
@@ -5304,7 +5306,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
             .execute_instruction(
                 &mut state_transaction,
                 &legitimate_root,
-                Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                &Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
             )
             .unwrap_or_else(|error| panic!("legitimate root could not grant {name}: {error}"));
         let holder_delegable = !matches!(
@@ -5325,7 +5327,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
                 .execute_instruction(
                     &mut state_transaction,
                     &adjacent_owner,
-                    Grant::account_permission(permission.clone(), delegation_sink.clone()).into(),
+                    &Grant::account_permission(permission.clone(), delegation_sink.clone()).into(),
                 )
                 .expect_err("a leaf holder must not bypass its dedicated delegation root");
             assert!(
@@ -5345,7 +5347,7 @@ fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
             .execute_instruction(
                 &mut state_transaction,
                 &legitimate_root,
-                Revoke::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                &Revoke::account_permission(permission.clone(), adjacent_owner.clone()).into(),
             )
             .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
     }
@@ -5405,11 +5407,11 @@ fn initial_executor_rejects_noncanonical_governance_permission_selectors_before_
         for (path, instruction) in [
             (
                 "account",
-                Grant::account_permission(permission.clone(), destination.clone()).into(),
+                &Grant::account_permission(permission.clone(), destination.clone()).into(),
             ),
             (
                 "role",
-                Grant::role_permission(permission.clone(), role_id.clone()).into(),
+                &Grant::role_permission(permission.clone(), role_id.clone()).into(),
             ),
         ] {
             let error = super::Executor::Initial
@@ -5492,8 +5494,8 @@ fn initial_executor_requires_canonical_operational_governance_unit_permissions()
         validate_initial_permission_payload_constraints(&canonical)
             .unwrap_or_else(|error| panic!("canonical {name} token rejected: {error:?}"));
         for instruction in [
-            Grant::account_permission(canonical.clone(), destination.clone()).into(),
-            Grant::role_permission(canonical.clone(), role_id.clone()).into(),
+            &Grant::account_permission(canonical.clone(), destination.clone()).into(),
+            &Grant::role_permission(canonical.clone(), role_id.clone()).into(),
         ] {
             super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &authority, instruction)
@@ -5505,11 +5507,11 @@ fn initial_executor_requires_canonical_operational_governance_unit_permissions()
         for (path, instruction) in [
             (
                 "account",
-                Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                &Grant::account_permission(malformed.clone(), destination.clone()).into(),
             ),
             (
                 "role",
-                Grant::role_permission(malformed.clone(), role_id.clone()).into(),
+                &Grant::role_permission(malformed.clone(), role_id.clone()).into(),
             ),
         ] {
             let error = super::Executor::Initial
@@ -5592,21 +5594,21 @@ fn initial_executor_keeps_vpn_quote_issuer_leaf_manager_controlled() {
         .execute_instruction(
             &mut state_transaction,
             &issuer,
-            Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
+            &Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
         )
         .expect_err("an issuer leaf must not appoint another issuer");
     super::Executor::Initial
         .execute_instruction(
             &mut state_transaction,
             &manager,
-            Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
+            &Grant::account_permission(issuer_permission.clone(), destination.clone()).into(),
         )
         .expect("the issuer manager may appoint an issuer");
     super::Executor::Initial
         .execute_instruction(
             &mut state_transaction,
             &manager,
-            Revoke::account_permission(issuer_permission, destination).into(),
+            &Revoke::account_permission(issuer_permission, destination).into(),
         )
         .expect("the issuer manager may revoke an issuer");
 }
@@ -5684,7 +5686,7 @@ fn initial_executor_requires_direct_dpn_admin_for_dpn_permission_lifecycle() {
                 .execute_instruction(
                     &mut state_transaction,
                     unauthorized,
-                    Grant::account_permission(permission.clone(), destination.clone()).into(),
+                    &Grant::account_permission(permission.clone(), destination.clone()).into(),
                 )
                 .expect_err("a DPN leaf or role-derived admin must not delegate DPN markers");
         }
@@ -5695,7 +5697,7 @@ fn initial_executor_requires_direct_dpn_admin_for_dpn_permission_lifecycle() {
             .execute_instruction(
                 &mut state_transaction,
                 &admin,
-                Grant::account_permission(permission.clone(), destination.clone()).into(),
+                &Grant::account_permission(permission.clone(), destination.clone()).into(),
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -5707,7 +5709,7 @@ fn initial_executor_requires_direct_dpn_admin_for_dpn_permission_lifecycle() {
             .execute_instruction(
                 &mut state_transaction,
                 &admin,
-                Revoke::account_permission(permission.clone(), destination.clone()).into(),
+                &Revoke::account_permission(permission.clone(), destination.clone()).into(),
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -5847,7 +5849,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
                 .execute_instruction(
                     &mut state_transaction,
                     authority,
-                    Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
+                    &Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
                 )
                 .expect_err(
                     "neither namespace ownership alone nor account-alias permission may grant an exact asset alias",
@@ -5860,7 +5862,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
         .execute_instruction(
             &mut state_transaction,
             &asset_owner,
-            Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
+            &Grant::account_permission(exact_permission.clone(), holder.clone()).into(),
         )
         .expect("active asset owner with asset-alias namespace authority may grant exact scope");
     let permission_role: RoleId = "asset_alias_permission_lifecycle".parse().expect("role id");
@@ -5899,7 +5901,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
                 .execute_instruction(
                     &mut state_transaction,
                     authority,
-                    Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
+                    &Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
                 )
                 .expect_err(
                     "unrelated, exact-holder, and former grant-issuer identities are not namespace roots",
@@ -5917,7 +5919,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
         .execute_instruction(
             &mut state_transaction,
             &namespace_root,
-            Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
+            &Revoke::account_permission(exact_permission.clone(), holder.clone()).into(),
         )
         .expect("native namespace root may revoke exact scope after clear");
     assert!(
@@ -5931,7 +5933,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
         .execute_instruction(
             &mut state_transaction,
             &namespace_root,
-            Revoke::role_permission(exact_permission.clone(), permission_role.clone()).into(),
+            &Revoke::role_permission(exact_permission.clone(), permission_role.clone()).into(),
         )
         .expect("native namespace root may revoke exact role permission after clear");
     assert!(
@@ -5947,7 +5949,7 @@ fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_gu
         .execute_instruction(
             &mut state_transaction,
             &namespace_root,
-            Revoke::account_role(membership_role.clone(), holder.clone()).into(),
+            &Revoke::account_role(membership_role.clone(), holder.clone()).into(),
         )
         .expect("native namespace root may revoke exact role membership after clear");
     assert!(!authority_has_role(
@@ -6002,13 +6004,13 @@ fn initial_executor_authorizes_every_permission_and_role_mutation_path() {
     .execute(&administrator, &mut state_transaction)
     .expect("seed governed role fixture");
     let denied = [
-        Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
-        Revoke::account_permission(ordinary_permission.clone(), administrator.clone()).into(),
-        Grant::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
-        Revoke::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
-        Grant::account_role(ordinary_role.clone(), attacker.clone()).into(),
-        Revoke::account_role(ordinary_role.clone(), administrator.clone()).into(),
-        Unregister::role(ordinary_role.clone()).into(),
+        &Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
+        &Revoke::account_permission(ordinary_permission.clone(), administrator.clone()).into(),
+        &Grant::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
+        &Revoke::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
+        &Grant::account_role(ordinary_role.clone(), attacker.clone()).into(),
+        &Revoke::account_role(ordinary_role.clone(), administrator.clone()).into(),
+        &Unregister::role(ordinary_role.clone()).into(),
     ];
     for instruction in denied {
         super::Executor::Initial
@@ -6031,7 +6033,7 @@ fn initial_executor_authorizes_every_permission_and_role_mutation_path() {
         .execute_instruction(
             &mut state_transaction,
             &administrator,
-            Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
+            &Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
         )
         .expect("an exact holder may delegate an ordinary exact permission");
     assert!(
@@ -6042,8 +6044,8 @@ fn initial_executor_authorizes_every_permission_and_role_mutation_path() {
             .any(|permission| permission == &ordinary_permission)
     );
     for instruction in [
-        Grant::account_permission(genesis_only_permission.clone(), attacker.clone()).into(),
-        Grant::account_role(genesis_only_role.clone(), attacker.clone()).into(),
+        &Grant::account_permission(genesis_only_permission.clone(), attacker.clone()).into(),
+        &Grant::account_role(genesis_only_role.clone(), attacker.clone()).into(),
     ] {
         super::Executor::Initial
             .execute_instruction(&mut state_transaction, &administrator, instruction)
@@ -6147,7 +6149,7 @@ fn initial_executor_restricted_reader_cannot_mutate_direct_or_role_grants() {
     ];
     for (path, instruction) in denied {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &holder, instruction)
+            .execute_instruction(&mut state_transaction, &holder, &instruction)
             .expect_err("restricted-read permission mutations must be genesis-only");
         assert!(matches!(error, ValidationFail::NotPermitted(_)));
         assert!(
@@ -6368,7 +6370,7 @@ fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
             .execute_instruction_with_contract_runtime_context(
                 &mut state_transaction,
                 &contract_subject,
-                instruction,
+                &instruction,
                 Some(&context),
             )
             .expect_err("the common contract boundary must reject before user executor IVM");
@@ -6410,7 +6412,7 @@ fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
         .execute_instruction_with_contract_runtime_context(
             &mut state_transaction,
             &contract_subject,
-            Grant::account_permission(exact, destination.clone()).into(),
+            &Grant::account_permission(exact, destination.clone()).into(),
             Some(&context),
         )
         .expect_err("the denying user executor must receive an exact bound token");
@@ -6434,7 +6436,7 @@ fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
         .execute_instruction_with_contract_runtime_context(
             &mut state_transaction,
             &destination,
-            Grant::account_permission(inconsistent_exact, destination.clone()).into(),
+            &Grant::account_permission(inconsistent_exact, destination.clone()).into(),
             Some(&inconsistent_context),
         )
         .expect_err("an inconsistent contract subject/address context must fail closed");
@@ -6454,7 +6456,7 @@ fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
         .execute_instruction_with_contract_runtime_context(
             &mut state_transaction,
             &contract_subject,
-            Grant::account_permission(sibling, destination).into(),
+            &Grant::account_permission(sibling, destination).into(),
             Some(&context),
         )
         .expect_err("a contract may not delegate a sibling contract token");
@@ -10444,7 +10446,7 @@ fn initial_executor_denies_asset_definition_without_permission() {
         )
     }));
     let mut stx = block.transaction();
-    let res = executor.execute_instruction(&mut stx, &genesis_id, instruction);
+    let res = executor.execute_instruction(&mut stx, &genesis_id, &instruction);
     assert!(
         matches!(res, Err(ValidationFail::NotPermitted(_))),
         "initial executor should deny registering asset definition without permission"
@@ -10467,7 +10469,7 @@ fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain() {
         .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &owned_instruction)
         .expect("authenticate actual owned RegisterDomain input");
     executor
-        .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), owned_instruction)
+        .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), &owned_instruction)
         .expect("owned initial executor applies instruction");
     assert!(owned_tx.world.domains.get(&domain_id).is_some());
     let overlay_state = prepared_native_domain_genesis_fixture(&domain_id);
@@ -10516,7 +10518,7 @@ fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_account() 
                 .expect("borrowed account registration");
         } else {
             super::Executor::Initial
-                .execute_instruction(&mut tx, &ALICE_ID, instruction.clone())
+                .execute_instruction(&mut tx, &ALICE_ID, &instruction)
                 .expect("owned account registration");
         }
         assert!(tx.world.accounts.get(&account).is_some());
@@ -10546,7 +10548,7 @@ fn original_native_genesis_requires_source_capability_for_owned_and_borrowed_exe
                 None,
             )
         } else {
-            super::Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, instruction.clone())
+            super::Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &instruction)
         }
         .expect_err("missing original genesis capability rejects");
         assert!(
@@ -10792,7 +10794,7 @@ fn initial_executor_rejects_raw_domain_registration_after_genesis() {
         .execute_instruction(
             &mut state_transaction,
             &ALICE_ID,
-            Register::domain(Domain::new(domain_id)).into(),
+            &Register::domain(Domain::new(domain_id)).into(),
         )
         .expect_err("raw domain registration must be denied after genesis");
     assert!(
@@ -10849,7 +10851,7 @@ fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
     let res = super::Executor::Initial.execute_instruction(
         &mut stx,
         &seller,
-        InstructionBox::from(instruction),
+        &InstructionBox::from(instruction),
     );
     assert!(
         res.is_ok(),
@@ -10877,7 +10879,7 @@ fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
     assert_eq!(custody_balance, Quantity::from(40_u64));
     let cancel = iroha_data_model::isi::escrow::CancelAssetEscrow::new(escrow_id);
     let error = super::Executor::Initial
-        .execute_instruction(&mut stx, &BOB_ID, cancel.clone().into())
+        .execute_instruction(&mut stx, &BOB_ID, &cancel.clone().into())
         .expect_err("a different authority cannot refund the seller's escrow");
     assert!(
         format!("{error:?}").contains("only seller may cancel escrow"),
@@ -10892,7 +10894,7 @@ fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
         "a denied refund leaves custody untouched"
     );
     super::Executor::Initial
-        .execute_instruction(&mut stx, &seller, cancel.into())
+        .execute_instruction(&mut stx, &seller, &cancel.into())
         .expect("the seller can terminalize native escrow custody");
     assert_eq!(
         stx.world
@@ -10936,7 +10938,7 @@ fn initial_executor_rejects_domainless_asset_definition_registration_after_genes
         None,
     )));
     let mut stx = block.transaction();
-    let result = executor.execute_instruction(&mut stx, &alice_id, instruction);
+    let result = executor.execute_instruction(&mut stx, &alice_id, &instruction);
     assert!(
         matches!(
             result,
@@ -10991,7 +10993,7 @@ fn initial_executor_authorizes_wire_decoded_asset_definition_from_explicit_owner
     ));
     let mut transaction = block.transaction();
     super::Executor::Initial
-        .execute_instruction(&mut transaction, &ALICE_ID, InstructionBox::from(decoded))
+        .execute_instruction(&mut transaction, &ALICE_ID, &InstructionBox::from(decoded))
         .expect("explicit owning domain must authorize after wire decoding");
     assert!(transaction.world.asset_definition(&opaque_id).is_ok());
     assert_eq!(
@@ -11117,7 +11119,7 @@ fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
     let legacy_permission_mint = executor.execute_instruction(
         &mut stx,
         &retail,
-        InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+        &InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
     );
     assert!(
         matches!(
@@ -11139,7 +11141,7 @@ fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
     let wrong_destination_mint = executor.execute_instruction(
         &mut stx,
         &retail,
-        InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+        &InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
     );
     assert!(
         matches!(
@@ -11153,7 +11155,7 @@ fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
     let unprivileged_metadata = executor.execute_instruction(
         &mut stx,
         &retail,
-        InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+        &InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
             pkr.clone(),
             metadata_key.clone(),
             Json::new("retail"),
@@ -11185,14 +11187,14 @@ fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
         .execute_instruction(
             &mut stx,
             &retail,
-            InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+            &InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
         )
         .expect("the exact PKR destination mint grant must authorize minting");
     executor
         .execute_instruction(
             &mut stx,
             &retail,
-            InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+            &InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
                 pkr.clone(),
                 metadata_key,
                 Json::new("retail"),
@@ -11329,7 +11331,7 @@ fn initial_executor_denies_transfer_domain_without_ownership() {
         !(stx._curr_block.is_genesis() && stx.block_hashes.is_empty()),
         "test must execute in non-genesis context"
     );
-    let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = executor.execute_instruction(&mut stx, &alice_id, &instruction);
     assert!(
         matches!(res, Err(ValidationFail::NotPermitted(_))),
         "initial executor should deny domain transfer from another account, got: {res:?}"
@@ -11392,7 +11394,7 @@ fn initial_executor_denies_transfer_asset_by_asset_definition_domain_owner() {
         !allowed,
         "asset-definition domain ownership must not authorize transfers from another account"
     );
-    let result = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
+    let result = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, &instruction);
     assert!(
         matches!(
             result,
@@ -11492,7 +11494,7 @@ fn initial_executor_denies_transfer_asset_by_active_alias_domain_owner_for_all_s
     let boxed = InstructionBox::from(transfer.clone());
     let concrete = concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
     let boxed_result =
-        super::Executor::Initial.execute_instruction(&mut transaction, &alias_domain_owner, boxed);
+        super::Executor::Initial.execute_instruction(&mut transaction, &alias_domain_owner, &boxed);
     assert!(
         matches!(
             boxed_result,
@@ -11607,7 +11609,7 @@ fn initial_executor_trigger_registration_requires_exact_canonical_authority() {
     let attacker_result = super::Executor::Initial.execute_instruction(
         &mut transaction,
         &alias_domain_owner,
-        registration(),
+        &registration(),
     );
     assert!(
         matches!(
@@ -11621,7 +11623,7 @@ fn initial_executor_trigger_registration_requires_exact_canonical_authority() {
         "alias-domain owner must not install code for the canonical account: {attacker_result:?}",
     );
     super::Executor::Initial
-        .execute_instruction(&mut transaction, &trigger_owner, registration())
+        .execute_instruction(&mut transaction, &trigger_owner, &registration())
         .expect("the exact trigger owner must not need an alias or self-grant");
     assert!(
         transaction
@@ -11772,7 +11774,7 @@ fn initial_executor_transfer_asset_batch_requires_active_canonical_contract_cont
                 .execute_instruction_with_contract_runtime_context(
                     &mut transaction,
                     &contract_subject,
-                    batch.into(),
+                    &batch.into(),
                     Some(&context),
                 );
             if matches!(provenance, Provenance::Active) {
@@ -11919,7 +11921,7 @@ fn initial_executor_requires_an_active_consistent_contract_context_for_contract_
         .execute_instruction_with_contract_runtime_context(
             &mut transaction,
             &contract_subject,
-            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone()).into(),
+            &Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone()).into(),
             Some(&context),
         );
     assert!(
@@ -11946,7 +11948,7 @@ fn initial_executor_requires_an_active_consistent_contract_context_for_contract_
     let rejected = super::Executor::Initial.execute_instruction_with_contract_runtime_context(
         &mut transaction,
         &contract_subject,
-        Transfer::asset_quantity(source_asset_id, 1_u32, destination).into(),
+        &Transfer::asset_quantity(source_asset_id, 1_u32, destination).into(),
         Some(&inconsistent_context),
     );
     assert!(
@@ -12028,7 +12030,7 @@ fn contract_runtime_context_alias_does_not_bypass_asset_transfer_authorization()
     let result = executor.execute_instruction_with_contract_runtime_context(
         &mut stx,
         &alice_id,
-        instruction,
+        &instruction,
         Some(&context),
     );
     assert!(
@@ -12113,7 +12115,7 @@ fn contract_runtime_context_does_not_bypass_non_benefit_spend_entrypoints() {
     let res = executor.execute_instruction_with_contract_runtime_context(
         &mut stx,
         &alice_id,
-        instruction,
+        &instruction,
         Some(&context),
     );
     match res {
@@ -12179,7 +12181,7 @@ fn contract_runtime_context_alias_does_not_bypass_permission_grant_authorization
     let result = executor.execute_instruction_with_contract_runtime_context(
         &mut stx,
         &alice_id,
-        instruction,
+        &instruction,
         Some(&context),
     );
     assert!(
@@ -12233,7 +12235,7 @@ fn initial_executor_contract_alias_never_bypasses_permission_grant_validation() 
         super::Executor::Initial.execute_instruction_with_contract_runtime_context(
             &mut block.transaction(),
             &alice_id,
-            instruction,
+            &instruction,
             Some(&context),
         )
     }
@@ -12344,7 +12346,7 @@ fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() 
         super::Executor::Initial.execute_instruction_with_contract_runtime_context(
             &mut block.transaction(),
             &caller,
-            instruction,
+            &instruction,
             Some(&context),
         )
     }
@@ -12465,7 +12467,7 @@ fn initial_executor_denies_transfer_asset_definition_without_ownership() {
         !allowed,
         "alice should not be allowed to transfer user1-owned asset definition"
     );
-    let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = executor.execute_instruction(&mut stx, &alice_id, &instruction);
     match res {
         Err(ValidationFail::NotPermitted(msg)) => assert!(
             msg.contains("Can't transfer asset definition"),
@@ -12536,7 +12538,7 @@ fn initial_executor_denies_transfer_asset_definition_by_definition_domain_owner(
         !allowed,
         "definition-domain ownership must not authorize transfer without source ownership"
     );
-    let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, &instruction);
     match res {
         Err(ValidationFail::NotPermitted(msg)) => assert!(
             msg.contains("Can't transfer asset definition"),
@@ -12596,7 +12598,7 @@ fn initial_executor_denies_transfer_nft_without_ownership() {
         !allowed,
         "alice should not be allowed to transfer user1-owned nft"
     );
-    let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = executor.execute_instruction(&mut stx, &alice_id, &instruction);
     match res {
         Err(ValidationFail::NotPermitted(msg)) => assert!(
             msg.contains("Can't transfer NFT"),
@@ -12655,7 +12657,7 @@ fn initial_executor_allows_transfer_nft_by_nft_domain_owner() {
         allowed,
         "nft-domain owner should be allowed to transfer ownership"
     );
-    let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, &instruction);
     assert!(res.is_ok(), "expected transfer to succeed, got {res:?}");
 }
 #[test]
@@ -12720,7 +12722,7 @@ fn bench_profile_runs_without_logger() {
         .execute_instruction_with_profile(
             &mut tx,
             &authority,
-            instr,
+            &instr,
             InstructionExecutionProfile::Bench,
         )
         .expect("bench profile should execute without logger");
@@ -15365,7 +15367,7 @@ fn execution_fee_settlement_refuses_equal_value_from_a_different_predecessor() {
         0,
     );
     let settlement = {
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         let mut execution =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         execution.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

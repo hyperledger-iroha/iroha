@@ -906,7 +906,7 @@ pub(crate) mod tests {
         let high_s = -*s;
         let malleated = P256Signature::from_scalars(r.to_repr(), high_s.to_repr())
             .expect("valid high-s counterpart");
-        assert!(malleated.normalize_s() != malleated);
+        assert_ne!(malleated.normalize_s(), malleated);
         let mut witness = fixture.witness.clone();
         witness.wallet_ownership_signature_rs = malleated.to_bytes().into();
         assert_eq!(
@@ -923,7 +923,7 @@ pub(crate) mod tests {
         let (r, s) = signature.split_scalars();
         let high_s = P256Signature::from_scalars(r.to_repr(), (-*s).to_repr())
             .expect("valid high-s counterpart");
-        assert!(high_s.normalize_s() != high_s);
+        assert_ne!(high_s.normalize_s(), high_s);
         verify_p256_sha256_signature_v1(
             key.verifying_key().to_sec1_point(false).as_bytes(),
             message,
@@ -1292,7 +1292,7 @@ pub(crate) mod tests {
             .sign_prehash(&ownership_challenge)
             .expect("ownership prehash signing");
         let ownership_signature = ownership_signature.normalize_s();
-        assert!(ownership_signature.normalize_s() == ownership_signature);
+        assert_eq!(ownership_signature.normalize_s(), ownership_signature);
         Fixture {
             statement,
             trust_anchor,

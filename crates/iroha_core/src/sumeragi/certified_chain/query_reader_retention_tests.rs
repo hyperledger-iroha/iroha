@@ -11,9 +11,13 @@ use iroha_data_model::sumeragi::epoch::{MAX_VALIDATORS, ValidatorCommitteeMember
 fn maximum_epoch() -> ValidatorEpochContextV1 {
     let mut config = TestChainConfig::new(World::new(), 10_000);
     config.validator_keys = Some(
-        // Keep every BLS seed distinct and nonzero, including the first member.
-        (1..=MAX_VALIDATORS)
-            .map(|index| KeyPair::from_seed(vec![index as u8; 32], Algorithm::BlsNormal))
+        (0..MAX_VALIDATORS)
+            .map(|index| {
+                KeyPair::from_seed(
+                    vec![u8::try_from(index + 1).unwrap(); 32],
+                    Algorithm::BlsNormal,
+                )
+            })
             .collect(),
     );
     let prepared = CertifiedTestChain::prepare(config).unwrap();

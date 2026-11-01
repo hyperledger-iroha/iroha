@@ -5,6 +5,12 @@ submission and its source evidence before recording the dispatch marker. CLI ada
 `iroha_cli/src/sccp/flows.rs` verify the retained network, authority or destination and semantic
 intent before recovery. Keys and transport authentication headers are runtime-only.
 
+Journal selectors retain their original native directories across clones, child selection,
+record reads and empty-step recovery. Private keys and records require single-link regular
+files: Unix uses owner-only modes, and Windows uses protected current-owner access control.
+The shared filesystem owner rejects reparse points and changed custody. Native Windows
+wallet qualification remains required; a successful library compile does not establish it.
+
 A crash before or after dispatch leaves the same original pending. Ordinary recovery observes
 only. Explicit `--rebroadcast` reconciles first and may resend only the identical signed bytes;
 it never changes a nonce, seqno, fee or proof. `flow::drive_step_guarded` asks a refusal-only

@@ -232,7 +232,7 @@ fn top_up_original_roundtrip_retains_large_checkpoint_and_exact_movement() {
             .as_slice(),
         bytes.as_slice()
     );
-    let request = restored.request(&terms, Instant::now() + Duration::from_secs(900));
+    let request = restored.request(&terms, Instant::now() + Duration::from_mins(15));
     assert_eq!(request.deadline_unix_ms, terms.signing_deadline_unix_ms);
     assert_eq!(request.policy, original.policy);
     assert_eq!(request.partition, original.partition);
@@ -332,7 +332,7 @@ fn expired_top_up_preserves_utc_fees_and_lagged_partition_across_fresh_io() {
     journal::publish_intent(&directory, &original).unwrap();
     let bytes = directory.read("original.nrt", 256 * 1024).unwrap();
     let original = journal::read_intent(&directory).unwrap().unwrap();
-    let options = terms.options(Instant::now() + Duration::from_secs(900));
+    let options = terms.options(Instant::now() + Duration::from_mins(15));
     original
         .matches_intent(&original.intent())
         .and_then(|()| terms.matches(terms.requested_deadline_unix_ms, &options))

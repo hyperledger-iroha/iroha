@@ -340,7 +340,7 @@ const ZK_VK_DRAFT_MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
 /// Required lifetime for native `SoraFS` moderation transactions.
-pub const SORAFS_MODERATION_TRANSACTION_TTL: Duration = Duration::from_millis(5 * 60 * 1_000);
+pub const SORAFS_MODERATION_TRANSACTION_TTL: Duration = Duration::from_mins(5);
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
@@ -10283,7 +10283,7 @@ mod evidence_http_tests {
         let mut metadata_and_ttl_builder = builder
             .clone()
             .with_metadata(metadata_and_ttl_intent.metadata.clone());
-        metadata_and_ttl_builder.set_ttl(Duration::from_millis(42_000));
+        metadata_and_ttl_builder.set_ttl(Duration::from_secs(42));
         let mut response_value =
             prepared_contract_call_response(&metadata_and_ttl_intent, &metadata_and_ttl_builder);
         response_value

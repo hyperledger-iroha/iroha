@@ -154,14 +154,12 @@ async fn link_local_frame_from_authenticated_sender_is_delivered_without_signatu
         RelayTarget::Broadcast,
     ] {
         let frame = RelayMessage::new_link(peer.id().clone(), target, DEFAULT_RELAY_TTL, DummyMsg);
-        network
-            .peer_message(PeerMessage::new_for_connection(
-                peer.clone(),
-                frame,
-                1,
-                47_001,
-            ))
-            .await;
+        network.peer_message(PeerMessage::new_for_connection(
+            peer.clone(),
+            frame,
+            1,
+            47_001,
+        ));
         let delivered = rx
             .try_recv()
             .expect("the authenticated link proves a link-local frame's sender");
@@ -185,9 +183,7 @@ async fn unsigned_frame_claiming_another_origin_is_rejected_even_from_the_hub() 
         DEFAULT_RELAY_TTL,
         DummyMsg,
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(hub, forged, 1, 47_002))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(hub, forged, 1, 47_002));
     assert!(
         matches!(rx.try_recv(), Err(TryRecvError::Empty)),
         "a hub cannot speak for another origin without that origin's signature"
@@ -228,9 +224,7 @@ async fn forged_or_tampered_relayed_frame_from_the_hub_is_rejected() {
             frame
         };
         frame.ttl = DEFAULT_RELAY_TTL - 1;
-        network
-            .peer_message(PeerMessage::new_for_connection(hub, frame, 1, 47_003))
-            .await;
+        network.peer_message(PeerMessage::new_for_connection(hub, frame, 1, 47_003));
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
         assert!(network.protocol_rejected_connections.contains(&47_003));
     }
@@ -260,14 +254,12 @@ async fn hub_never_forwards_link_local_frames() {
         DEFAULT_RELAY_TTL,
         DummyMsg,
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            incoming.clone(),
-            broadcast,
-            1,
-            47_004,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        incoming.clone(),
+        broadcast,
+        1,
+        47_004,
+    ));
     rx.try_recv()
         .expect("the hub still consumes a link-local broadcast itself");
     assert!(
@@ -280,14 +272,12 @@ async fn hub_never_forwards_link_local_frames() {
         DEFAULT_RELAY_TTL,
         DummyMsg,
     );
-    network
-        .peer_message(PeerMessage::new_for_connection(
-            incoming,
-            misdirected,
-            1,
-            47_004,
-        ))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(
+        incoming,
+        misdirected,
+        1,
+        47_004,
+    ));
     assert!(matches!(
         other_receivers.try_recv_any(),
         Err(TryRecvError::Empty)
@@ -319,9 +309,7 @@ async fn hub_forwards_signed_frames_with_their_verified_origin_signature() {
     );
     let signed = RelayMessage::new_signed(&incoming_key, RelayTarget::Broadcast, 2, DummyMsg);
     let signature = signed.origin_signature.clone();
-    network
-        .peer_message(PeerMessage::new_for_connection(incoming, signed, 1, 47_006))
-        .await;
+    network.peer_message(PeerMessage::new_for_connection(incoming, signed, 1, 47_006));
     let forwarded = other_receivers
         .try_recv_any()
         .expect("a verified relayable broadcast is forwarded");

@@ -244,7 +244,7 @@ fn configured_chain_with_output(
 
 /// Replace exactly the existing explicit authored slot, never insert or deduplicate.
 /// This fixture operation happens before real signing and grants no runtime authority.
-pub(crate) fn replace_original_staking_parameter(
+pub fn replace_original_staking_parameter(
     config: &mut TestChainConfig,
     policy: &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
 ) {
@@ -263,7 +263,7 @@ pub(crate) fn replace_original_staking_parameter(
     *slot = Parameter::Custom(policy.clone().into_custom_parameter().unwrap());
 }
 
-pub(crate) fn register_genesis_members(
+pub fn register_genesis_members(
     config: &mut TestChainConfig,
     keys: &[KeyPair],
     staking: &iroha_data_model::block::consensus::PublicLaneStakingPolicy,

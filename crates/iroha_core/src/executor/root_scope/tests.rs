@@ -82,7 +82,7 @@ fn owned_borrowed_and_native_boxed_paths_reject_private_global_control_before_ef
         SetParameter::new(test_support::metadata(SumeragiRootScope::Global)).into();
     assert!(
         Executor::Initial
-            .execute_instruction(&mut tx, &ALICE_ID, control.clone())
+            .execute_instruction(&mut tx, &ALICE_ID, &control)
             .is_err()
     );
     assert!(
@@ -96,7 +96,7 @@ fn owned_borrowed_and_native_boxed_paths_reject_private_global_control_before_ef
     );
     let log: InstructionBox = Log::new(iroha_data_model::Level::INFO, "root-local".into()).into();
     Executor::Initial
-        .execute_instruction(&mut tx, &ALICE_ID, log.clone())
+        .execute_instruction(&mut tx, &ALICE_ID, &log)
         .unwrap();
     Executor::Initial
         .execute_borrowed_overlay_instruction(&mut tx, &ALICE_ID, &log, None)
@@ -193,7 +193,7 @@ fn height_one_without_authenticated_genesis_capability_has_no_instruction_author
         assert!(execution_root_scope(&mut tx).is_err());
         assert!(
             Executor::Initial
-                .execute_instruction(&mut tx, &ALICE_ID, log.clone())
+                .execute_instruction(&mut tx, &ALICE_ID, &log)
                 .is_err()
         );
         assert!(log.execute(&ALICE_ID, &mut tx).is_err());
@@ -292,7 +292,7 @@ fn private_roots_cannot_register_or_anchor_children_in_the_parent_registry() {
         assert_eq!(target.dataspace, Some(DataSpaceId::UNIVERSAL));
         assert!(target.global);
         let error = Executor::Initial
-            .execute_instruction(&mut tx, &ALICE_ID, instruction)
+            .execute_instruction(&mut tx, &ALICE_ID, &instruction)
             .unwrap_err();
         assert!(error.to_string().contains("global-control"));
     }

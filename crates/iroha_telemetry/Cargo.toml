@@ -79,5 +79,8 @@ blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+iroha_fs = { workspace = true }
+
 [dev-dependencies]
 expect-test = { workspace = true }

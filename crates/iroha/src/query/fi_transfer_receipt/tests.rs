@@ -88,17 +88,17 @@ fn response(
     more: bool,
     cursor: Option<ForwardCursor>,
 ) -> http::Response<Vec<u8>> {
-    encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+    encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
         QueryOutputBatchBox::AssetFiTransferReceiptV1(rows).into(),
         more,
         cursor,
     )))
 }
-fn encoded_response(value: QueryResponse) -> http::Response<Vec<u8>> {
+fn encoded_response(value: &QueryResponse) -> http::Response<Vec<u8>> {
     http::Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, APPLICATION_NORITO)
-        .body(norito::encode_canonical(&value).unwrap())
+        .body(norito::encode_canonical(value).unwrap())
         .unwrap()
 }
 fn decode(
@@ -165,7 +165,7 @@ fn duplicate_partial_cursor_and_wrong_item_are_refused_even_when_empty() {
     for rows in [vec![], vec![receipt.clone()]] {
         for reply in [
             response(rows.clone(), true, None),
-            encoded_response(QueryResponse::Iterable(QueryOutput {
+            encoded_response(&QueryResponse::Iterable(QueryOutput {
                 batch: QueryOutputBatchBox::AssetFiTransferReceiptV1(rows.clone()).into(),
                 remaining_items: Some(1),
                 has_more: false,
@@ -194,7 +194,7 @@ fn duplicate_partial_cursor_and_wrong_item_are_refused_even_when_empty() {
     for rows in [vec![], vec![query.account_id.clone()]] {
         assert!(
             decode(
-                &encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+                &encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
                     QueryOutputBatchBox::AccountId(rows).into(),
                     false,
                     None
@@ -301,13 +301,13 @@ fn client_signs_one_exact_ephemeral_query_and_never_retries() {
         crate::client::DataModelCompatibility::SubmitCompatible;
     assert_eq!(
         client
-            .get_asset_fi_transfer_receipt(query.clone(), TEST_RESPONSE_BYTES)
+            .get_asset_fi_transfer_receipt(&query, TEST_RESPONSE_BYTES)
             .unwrap(),
         Some(expected_original)
     );
     assert!(
         client
-            .get_asset_fi_transfer_receipt(query.clone(), TEST_RESPONSE_BYTES)
+            .get_asset_fi_transfer_receipt(&query, TEST_RESPONSE_BYTES)
             .is_err()
     );
     assert_eq!(
@@ -315,7 +315,7 @@ fn client_signs_one_exact_ephemeral_query_and_never_retries() {
         2,
         "one send for each explicitly requested read"
     );
-    assert!(client.get_asset_fi_transfer_receipt(query, 0).is_err());
+    assert!(client.get_asset_fi_transfer_receipt(&query, 0).is_err());
     assert_eq!(
         sent.load(Ordering::SeqCst),
         2,
@@ -413,11 +413,11 @@ mod accepted_receipt_regressions {
         (query, receipt)
     }
 
-    fn encoded_response(value: QueryResponse) -> http::Response<Vec<u8>> {
+    fn encoded_response(value: &QueryResponse) -> http::Response<Vec<u8>> {
         http::Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, APPLICATION_NORITO)
-            .body(norito::encode_canonical(&value).unwrap())
+            .body(norito::encode_canonical(value).unwrap())
             .unwrap()
     }
 
@@ -426,7 +426,7 @@ mod accepted_receipt_regressions {
         more: bool,
         cursor: Option<ForwardCursor>,
     ) -> http::Response<Vec<u8>> {
-        encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+        encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
             QueryOutputBatchBox::AssetFiTransferReceiptV1(rows).into(),
             more,
             cursor,
@@ -441,7 +441,7 @@ mod accepted_receipt_regressions {
             let expected = rows.first().cloned();
             for reply in [
                 response(rows.clone(), false, None),
-                encoded_response(QueryResponse::Iterable(QueryOutput::new(
+                encoded_response(&QueryResponse::Iterable(QueryOutput::new(
                     QueryOutputBatchBox::AssetFiTransferReceiptV1(rows.clone()).into(),
                     0,
                     None,
@@ -516,13 +516,13 @@ mod accepted_receipt_regressions {
                         gas_budget: None,
                     }),
                 ),
-                encoded_response(QueryResponse::Iterable(QueryOutput {
+                encoded_response(&QueryResponse::Iterable(QueryOutput {
                     batch: QueryOutputBatchBox::AssetFiTransferReceiptV1(rows.clone()).into(),
                     remaining_items: Some(1),
                     has_more: false,
                     continue_cursor: None,
                 })),
-                encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+                encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
                     QueryOutputBatchBoxTuple::new(vec![
                         QueryOutputBatchBox::AssetFiTransferReceiptV1(rows.clone()),
                         QueryOutputBatchBox::AssetFiTransferReceiptV1(rows.clone()),
@@ -539,14 +539,14 @@ mod accepted_receipt_regressions {
         }
         for reply in [
             response(vec![receipt.clone(), receipt.clone()], false, None),
-            encoded_response(QueryResponse::Iterable(QueryOutput::new_bounded(
+            encoded_response(&QueryResponse::Iterable(QueryOutput::new_bounded(
                 QueryOutputBatchBox::AccountId(vec![]).into(),
                 false,
                 None,
             ))),
-            encoded_response(QueryResponse::Singular(SingularQueryOutputBox::AccountIds(
-                vec![],
-            ))),
+            encoded_response(&QueryResponse::Singular(
+                SingularQueryOutputBox::AccountIds(vec![]),
+            )),
         ] {
             assert!(decode_receipt_response(&reply, &query, network, MAX_RESPONSE_BYTES).is_err());
         }
@@ -641,7 +641,10 @@ mod accepted_receipt_regressions {
             assert_eq!(request.params.fetch_size.fetch_size, NonZeroU64::new(1));
             assert_eq!(request.params.pagination.offset_value(), 0);
             assert_eq!(request.params.pagination.limit_value(), None);
-            assert_eq!(request.params.sorting, Default::default());
+            assert_eq!(
+                request.params.sorting,
+                iroha_data_model::query::parameters::Sorting::default()
+            );
             assert_eq!(
                 request.predicate_bytes,
                 CompoundPredicate::<AssetFiTransferReceiptV1>::PASS.encode()
@@ -685,13 +688,13 @@ mod accepted_receipt_regressions {
             crate::client::DataModelCompatibility::SubmitCompatible;
         assert_eq!(
             client
-                .get_asset_fi_transfer_receipt(query.clone(), TEST_RESPONSE_BYTES)
+                .get_asset_fi_transfer_receipt(&query, TEST_RESPONSE_BYTES)
                 .unwrap(),
             Some(expected_original)
         );
         assert!(
             client
-                .get_asset_fi_transfer_receipt(query.clone(), TEST_RESPONSE_BYTES)
+                .get_asset_fi_transfer_receipt(&query, TEST_RESPONSE_BYTES)
                 .is_err()
         );
         assert_eq!(
@@ -699,14 +702,10 @@ mod accepted_receipt_regressions {
             2,
             "one send for each explicitly requested read"
         );
+        assert!(client.get_asset_fi_transfer_receipt(&query, 0).is_err());
         assert!(
             client
-                .get_asset_fi_transfer_receipt(query.clone(), 0)
-                .is_err()
-        );
-        assert!(
-            client
-                .get_asset_fi_transfer_receipt(query, MAX_RESPONSE_BYTES + 1)
+                .get_asset_fi_transfer_receipt(&query, MAX_RESPONSE_BYTES + 1)
                 .is_err()
         );
         assert_eq!(

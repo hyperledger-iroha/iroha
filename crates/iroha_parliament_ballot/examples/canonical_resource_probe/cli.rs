@@ -68,7 +68,7 @@ fn parse(args: &[OsString]) -> Result<Arguments<'_>, ()> {
     let mut units = budget::VERIFICATION_UNITS;
     let mut input_bytes = budget::MAX_INPUT_BYTES as u64;
     let mut seen = 0u8;
-    for pair in args[3..].chunks_exact(2) {
+    for pair in args[3..].as_chunks::<2>().0 {
         let bit = match pair[0].to_str() {
             Some("--network") => {
                 network = Some(pair[1].to_str().ok_or(())?.parse().map_err(|_| ())?);

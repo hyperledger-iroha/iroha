@@ -67,6 +67,11 @@ pub struct NativeOperationReviewV1 {
 
 /// Constraint on a newly authenticated review; neither variant is execution authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a one-shot argument moved once into a review call; boxing would add a heap \
+              allocation per review and change the variant built by connect_norito_bridge"
+)]
 pub enum ReviewExpectationV1 {
     /// First review of a request whose permanent mapping must still be absent.
     Fresh,
@@ -96,7 +101,7 @@ fn require_review_identity(request_id: [u8; 32]) -> Result<(), Error> {
 pub enum ReviewMaintenanceWaitV1 {
     /// An actual source-selected Pending operation needs ordinary recovery.
     SelectedPending,
-    /// The current ArchiveSent head still needs its covering fold.
+    /// The current `ArchiveSent` head still needs its covering fold.
     ArchiveFold,
     /// An existing Archive reservation is still being reconciled.
     Busy,
@@ -113,6 +118,12 @@ impl ReviewMaintenanceWaitV1 {
 }
 
 /// A bounded request-bound review decision. Only `Ready` owns a new capability.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a one-shot result moved once to the caller; boxing the one-use review would \
+              add a heap allocation per review and change the variant matched by \
+              connect_norito_bridge"
+)]
 pub enum ReviewDecisionV1 {
     /// Actual freshly authenticated one-use review for new hardware approval.
     Ready(ReviewedOperationV1),
@@ -223,6 +234,7 @@ impl std::fmt::Debug for ReviewedExecutionFailureV1 {
             .debug_struct("ReviewedExecutionFailureV1")
             .field("error", &self.error)
             .field("retained_review", &self.retained_review.is_some())
+            .field("maintenance_wait", &self.maintenance_wait)
             .finish()
     }
 }
@@ -903,23 +915,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         Ok(())
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "forwards the owned expectation of the public `review_send`/`review_unload` \
+                  API; borrowing it here would only move this lint onto that API"
+    )]
     fn review_request_action(
         &mut self,
-        request: OperationRequestV1,
+        request: &OperationRequestV1,
         destination_original: Option<&[u8]>,
         unload_beneficiary: Option<&[u8]>,
         expectation: ReviewExpectationV1,
     ) -> Result<ReviewDecisionV1, Error> {
         require_review_identity(request.request_id)?;
-        if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation {
-            if expected.scheme_id != self.scheme_id
+        if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation
+            && (expected.scheme_id != self.scheme_id
                 || expected.wallet_id != self.wallet_id
-                || expected.kind != request.kind()
-            {
-                return Err(Error::OperationConflict);
-            }
+                || expected.kind != request.kind())
+        {
+            return Err(Error::OperationConflict);
         }
-        if let Some(bound) = self.bound_review_request(&request)? {
+        if let Some(bound) = self.bound_review_request(request)? {
             return Ok(ReviewDecisionV1::Existing(bound));
         }
         if let Some(wait) = self.review_maintenance_wait()? {
@@ -934,7 +950,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             true,
         )?;
         expectation.require_projection(&review.projection)?;
-        if let Some(bound) = self.bound_review_request(&request)? {
+        if let Some(bound) = self.bound_review_request(request)? {
             return Ok(ReviewDecisionV1::Existing(bound));
         }
         self.require_no_preparation_draft(request.request_id)?;
@@ -964,7 +980,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             return Err(Error::Invalid("review Request bound"));
         }
         self.review_request_action(
-            OperationRequestV1 {
+            &OperationRequestV1 {
                 request_id,
                 action: OperationActionV1::Send {
                     request: request_original.to_vec(),
@@ -1002,7 +1018,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             ));
         }
         self.review_request_action(
-            OperationRequestV1 {
+            &OperationRequestV1 {
                 request_id,
                 action: OperationActionV1::Unload { amount, charge },
             },

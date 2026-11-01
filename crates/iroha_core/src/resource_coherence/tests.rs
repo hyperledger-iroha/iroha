@@ -73,7 +73,7 @@ fn lower_limits(action: u32, block: u32) -> PrivacyConsensusLimitsV1 {
 }
 
 fn set_caps(world: &World, transaction: u64, block: u32) {
-    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(world).unwrap();
     crate::state::set_parameter_cell_for_testing(
         &mut parameters,
         Parameter::Transaction(TransactionParameter::MaxTxBytes(
@@ -94,7 +94,7 @@ fn set_caps(world: &World, transaction: u64, block: u32) {
 }
 
 fn set_signatures(world: &World, signatures: u64) {
-    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(world).unwrap();
     crate::state::set_parameter_cell_for_testing(
         &mut parameters,
         Parameter::Transaction(TransactionParameter::MaxSignatures(
@@ -785,7 +785,7 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
         manifest,
         PrivateSettlementAbortReasonV1::Expired,
     )])
-    .sign_multisig(keys[..2].iter().map(|key| key.private_key()));
+    .sign_multisig(keys[..2].iter().map(iroha_crypto::KeyPair::private_key));
     cleanup.verify_signature().unwrap();
     assert_eq!(cleanup.signature_count(), 2);
     let update = chain.sign(
@@ -822,10 +822,17 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
 
 #[test]
 fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
+    use iroha_data_model::privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1};
+    use iroha_data_model::{
+        isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+        privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+            PrivacyProtocolPolicyKeyV1,
+        },
+    };
     // The reduced generic transaction cap needs its own privacy-policy successor;
     // the private extension does not rewrite that immutable policy owner.
     let mut config = genesis_config(Some(2));
-    use iroha_data_model::privacy::{PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1};
     let mut limits = PrivateSettlementPolicyV1::protocol_default().current_limits;
     limits.max_participants = 16;
     config.genesis_parameters.push(Parameter::Custom(
@@ -840,13 +847,6 @@ fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
         .to_custom_parameter()
         .unwrap(),
     ));
-    use iroha_data_model::{
-        isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
-        privacy::{
-            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-            PrivacyProtocolPolicyKeyV1,
-        },
-    };
     let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     config.genesis_instructions.push(
         SchedulePrivacyProtocolLimitsUpdateV1::new(

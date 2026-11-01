@@ -302,7 +302,7 @@ fn kagemusha_values(rows: &mut Vec<Value>) {
         (-p256::Scalar::ONE).to_bytes(),
     )
     .unwrap();
-    assert!(high.normalize_s() != high);
+    assert_ne!(high.normalize_s(), high);
     assert!(KagemushaDeviceSignatureV1::from_raw_bytes(&high.to_bytes()).is_err());
     reject_payload::<KagemushaDeviceSignatureV1>(&high.to_bytes());
     family(rows, "kagemusha_device_public_key", &keys);

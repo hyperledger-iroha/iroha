@@ -455,7 +455,13 @@ pub(crate) fn recheck_progress_for_proposal(
         let height = assembly.parent.header().height().get().saturating_add(1);
         let policy = keepalive::clock_parameters(view.world())
             .map_err(|error| PayloadError::ParentService(error.into()))?;
-        let due = keepalive::due(view.world(), height, time_ms);
+        let due = keepalive::due(
+            view.world(),
+            view.native_execution_tip()
+                .map(|tip| tip.creation_time_ms()),
+            height,
+            time_ms,
+        );
         let fresh = !keepalive::needs_fresh_carrier(time_ms, wall_ms, policy.due_work_max_lag_ms);
         let mut kept = false;
         selected.retain(|transaction| {
@@ -473,7 +479,15 @@ pub(crate) fn recheck_progress_for_proposal(
             continue;
         }
         if !selected.is_empty() || !merges.merges.is_empty() {
-            match keepalive::stale_due_work(view.world(), height, time_ms, wall_ms, false) {
+            match keepalive::stale_due_work(
+                view.world(),
+                view.native_execution_tip()
+                    .map(|tip| tip.creation_time_ms()),
+                height,
+                time_ms,
+                wall_ms,
+                false,
+            ) {
                 Ok(false) => {}
                 Ok(true) => {
                     return Err(PayloadError::ParentService(
@@ -837,10 +851,9 @@ pub fn select(
                 && Duration::from_millis(payload.creation_time_ms)
                     <= wall_time
                         .saturating_add(view.world().parameters().sumeragi().max_clock_drift())
-                && payload
-                    .creation_time_ms
-                    .checked_add(1)
-                    .is_some_and(|time| keepalive::due(view.world(), height, time) == Ok(true)))
+                && payload.creation_time_ms.checked_add(1).is_some_and(|time| {
+                    keepalive::due(view.world(), committed_time_ms, height, time) == Ok(true)
+                }))
             .then_some((payload.creation_time_ms, transaction.hash_as_entrypoint()))
         })
         .max()

@@ -271,7 +271,7 @@ fn unique_label(prefix: &str) -> String {
     let normalized_prefix: String = prefix
         .chars()
         .map(|ch| ch.to_ascii_lowercase())
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect();
     let normalized_prefix = if normalized_prefix.is_empty() {
         "sns"

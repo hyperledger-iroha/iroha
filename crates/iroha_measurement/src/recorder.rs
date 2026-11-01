@@ -3165,8 +3165,8 @@ mod tests {
         };
         let boundary = Boundary::sample(&system);
         assert_eq!(boundary.thread, std::thread::current().id());
-        assert_eq!(boundary.thread_cpu.is_some(), cfg!(unix));
-        assert_eq!(system.process_cpu_ns().is_some(), cfg!(unix));
+        assert_eq!(boundary.thread_cpu.is_some(), cfg!(any(unix, windows)));
+        assert_eq!(system.process_cpu_ns().is_some(), cfg!(any(unix, windows)));
         let earlier = system.wall_ns();
         assert!(system.wall_ns() >= earlier);
         assert!(system.load_milli() < 100_000_000);

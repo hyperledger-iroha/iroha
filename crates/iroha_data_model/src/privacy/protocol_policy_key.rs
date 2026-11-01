@@ -38,8 +38,8 @@ impl PrivacyProtocolPolicyKeyV1 {
         self.protocol_id
     }
 
-    fn canonical_json_key(&self) -> String {
-        let encoded = norito::encode_canonical(self)
+    fn canonical_json_key(self) -> String {
+        let encoded = norito::encode_canonical(&self)
             .expect("fixed protocol policy key always canonically encodes");
         debug_assert!(encoded.len() <= MAX_POLICY_KEY_FRAME_BYTES);
         hex::encode_upper(encoded)
@@ -104,13 +104,13 @@ mod tests {
 
     #[test]
     fn model_owner_preserves_original_policy_key_identity_and_frame() {
+        // The original one-field key: canonical header, a four-byte enum field,
+        // and the IVM private-note protocol's unchanged discriminant (10).
+        const ORIGINAL_FRAME: &str = "4E5254300000B6E07A5A4519921C50F7C32D5AFE2A30000500000000000000903261DB39E620FD02040A000000";
         assert_eq!(
             norito::schema::identity::nominal_name::<PrivacyProtocolPolicyKeyV1>(),
             "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1"
         );
-        // The original one-field key: canonical header, a four-byte enum field,
-        // and the IVM private-note protocol's unchanged discriminant (10).
-        const ORIGINAL_FRAME: &str = "4E5254300000B6E07A5A4519921C50F7C32D5AFE2A30000500000000000000903261DB39E620FD02040A000000";
         let expected = hex::decode(ORIGINAL_FRAME).unwrap();
         let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         assert_eq!(norito::encode_canonical(&key).unwrap(), expected);

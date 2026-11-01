@@ -2360,7 +2360,7 @@ impl CircuitManager {
     #[must_use]
     pub fn active_circuits(&self) -> Vec<CircuitInfo> {
         let mut infos: Vec<_> = self.circuits.iter().map(Circuit::info).collect();
-        infos.sort_by(|left, right| left.entry.relay_id.cmp(&right.entry.relay_id));
+        infos.sort_by_key(|left| left.entry.relay_id);
         infos
     }
     /// Returns the recorded rotation history.
@@ -2392,7 +2392,7 @@ impl CircuitManager {
         let directory_valid_until = match directory.active_valid_until_at(now_unix) {
             Ok(valid_until) => valid_until,
             Err(error) => {
-                let drained: Vec<_> = self.circuits.drain(..).collect();
+                let drained: Vec<_> = std::mem::take(&mut self.circuits);
                 for circuit in drained {
                     self.record_retirement(
                         circuit,
@@ -2411,7 +2411,7 @@ impl CircuitManager {
             .iter()
             .map(|record| (record.relay_id, record))
             .collect();
-        let drained: Vec<_> = self.circuits.drain(..).collect();
+        let drained: Vec<_> = std::mem::take(&mut self.circuits);
         let mut retained = Vec::with_capacity(drained.len());
         for mut circuit in drained {
             if let Some(valid_until) = directory_valid_until {
@@ -2494,13 +2494,12 @@ impl CircuitManager {
             events.push(CircuitEvent::Built { info: info.clone() });
             self.circuits.push(circuit);
         }
-        self.circuits
-            .sort_by(|left, right| left.entry.relay_id.cmp(&right.entry.relay_id));
+        self.circuits.sort_by_key(|left| left.entry.relay_id);
         Ok(events)
     }
     /// Tears down every active circuit, returning the recorded rotation results.
     pub fn teardown_all(&mut self, now_unix: u64) -> Vec<CircuitRotationRecord> {
-        let drained: Vec<_> = self.circuits.drain(..).collect();
+        let drained: Vec<_> = std::mem::take(&mut self.circuits);
         let mut records = Vec::with_capacity(drained.len());
         for circuit in drained {
             let record =

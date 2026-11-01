@@ -125,6 +125,10 @@ async fn contract_event_page(
 /// ordinary transaction that merely claims a contract identity, an `emitted`
 /// provenance and a swap payload must stay invisible to both contract feeds.
 #[tokio::test]
+#[expect(
+    clippy::duration_suboptimal_units,
+    reason = "Unix timestamps stay in whole milliseconds"
+)]
 async fn contract_feeds_ignore_contract_metadata_on_non_contract_transactions() {
     let (authority, keypair) = account_with_key();
     let mut native_chain = contract_feed_chain(&authority);
@@ -160,6 +164,10 @@ async fn contract_feeds_ignore_contract_metadata_on_non_contract_transactions() 
 /// A rejected by-reference call remains in call history while its forged metadata
 /// cannot create an emission or contribute any native event payload.
 #[tokio::test]
+#[expect(
+    clippy::duration_suboptimal_units,
+    reason = "Unix timestamps stay in whole milliseconds"
+)]
 async fn contract_feeds_project_rejected_contract_call_from_signed_invocation() {
     let (authority, keypair) = account_with_key();
     let mut native_chain = contract_feed_chain(&authority);

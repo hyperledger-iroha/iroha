@@ -18,11 +18,11 @@ use iroha_executor_data_model::permission::domain::CanModifyDomainMetadata;
 use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::domain::DomainId;
 
-fn policy_reference(id: &VerifyingKeyId) -> Option<ZkVerifyingKeyRefV1> {
-    Some(ZkVerifyingKeyRefV1 {
-        backend: id.backend.to_string(),
+fn policy_reference(id: &VerifyingKeyId) -> ZkVerifyingKeyRefV1 {
+    ZkVerifyingKeyRefV1 {
+        backend: id.backend.clone(),
         name: id.name.clone(),
-    })
+    }
 }
 
 /// Register both Kaigi verifying keys, select them in the committed ZK policy and let
@@ -34,8 +34,8 @@ pub(super) fn append_private_calls(
     let [authorization, usage] =
         kaigi_verifying_key_registrations_v1().map_err(|error| eyre!(error.to_string()))?;
     let mut policy = ZkValidityPolicyV1::protocol_default();
-    policy.proofs.kaigi_authorization_vk = policy_reference(&authorization.0);
-    policy.proofs.kaigi_usage_vk = policy_reference(&usage.0);
+    policy.proofs.kaigi_authorization_vk = Some(policy_reference(&authorization.0));
+    policy.proofs.kaigi_usage_vk = Some(policy_reference(&usage.0));
     let mut builder = genesis
         .into_builder()
         .next_transaction()

@@ -3192,7 +3192,7 @@ fn guarded_archive_waits_for_due_and_exchange_gates_then_blocks_fresh_head_until
     assert_eq!(w.custody.signatures, signatures + 1);
     assert!(matches!(
         w.execute(request()),
-        Err(Error::FoldRequired) | Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
+        Err(Error::FoldRequired | Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
     ));
     assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 1);
     let current = w.released_steps().unwrap().pop().unwrap().frozen;
@@ -3207,7 +3207,7 @@ fn guarded_archive_waits_for_due_and_exchange_gates_then_blocks_fresh_head_until
     );
     assert!(matches!(
         w.commit(load),
-        Err(Error::FoldRequired) | Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
+        Err(Error::FoldRequired | Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
     ));
     assert_eq!(w.custody.signatures, signatures + 1);
     let mut w = restart(w);
@@ -3448,7 +3448,7 @@ fn late_fresh_work_preserves_running_and_parked_archive_fold() {
     );
     assert!(matches!(
         result,
-        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy)) | Err(Error::FoldRequired)
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy) | Error::FoldRequired)
     ));
     assert_eq!(
         w.fold_publish(proved.expect("fresh-work barrier preserves proof"))
@@ -3473,7 +3473,7 @@ fn late_fresh_work_preserves_running_and_parked_archive_fold() {
     );
     assert!(matches!(
         w.commit(load),
-        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy)) | Err(Error::FoldRequired)
+        Err(Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy) | Error::FoldRequired)
     ));
     assert!(w.scheduler().holds_retained_for_test());
     assert_eq!(w.custody.checkpoint, root);

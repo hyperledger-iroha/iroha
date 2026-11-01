@@ -1098,14 +1098,14 @@ fn sccp_original_block_proof_requires_native_hash_result_and_canonical_frame() -
         genesis.chain_id(),
     )?;
     let proof = second.tip();
-    let verified = verifier.verify(proof)?;
-    let height = NonZeroU64::new(verified.height()).unwrap();
+    let verified_block = verifier.verify(proof)?;
+    let height = NonZeroU64::new(verified_block.height()).unwrap();
     ensure!(height.get() == 2);
-    let scope = verified.root_scope();
+    let scope = verified_block.root_scope();
     let instance = verifier.instance().0;
-    let native_hash = verified.core_hash().0;
-    let result = verified.result().0;
-    let data_header_hash = *verified.block().hash().as_ref();
+    let native_hash = verified_block.core_hash().0;
+    let result = verified_block.result().0;
+    let data_header_hash = *verified_block.block().hash().as_ref();
     ensure!(
         data_header_hash != native_hash,
         "fixture must distinguish the two hash domains"
@@ -1177,24 +1177,24 @@ fn sccp_original_block_proof_binds_genuinely_certified_distinct_results() -> Res
     );
     let first_verifier = first.verifier();
     let other_verifier = other.verifier();
-    let first_verified = first_verifier.verify_retained_decision(&first_proof)?;
-    let other_verified = other_verifier.verify_retained_decision(&other_proof)?;
-    let height = NonZeroU64::new(first_verified.height()).unwrap();
+    let first_decision = first_verifier.verify_retained_decision(&first_proof)?;
+    let other_decision = other_verifier.verify_retained_decision(&other_proof)?;
+    let height = NonZeroU64::new(first_decision.height()).unwrap();
     let scope = first_verifier.root_scope();
     let instance = first_verifier.instance().0;
-    let native_hash = first_verified.core_hash().0;
-    let first_result = first_verified.result().0;
-    let other_result = other_verified.result().0;
+    let native_hash = first_decision.core_hash().0;
+    let first_result = first_decision.result().0;
+    let other_result = other_decision.result().0;
 
-    ensure!(height.get() == 2 && other_verified.height() == height.get());
+    ensure!(height.get() == 2 && other_decision.height() == height.get());
     ensure!(scope == SumeragiRootScope::Global && other_verifier.root_scope() == scope);
     ensure!(other_verifier.instance().0 == instance);
-    ensure!(first_verified.header().hash() == other_verified.header().hash());
-    ensure!(other_verified.core_hash().0 == native_hash);
+    ensure!(first_decision.header().hash() == other_decision.header().hash());
+    ensure!(other_decision.core_hash().0 == native_hash);
     ensure!(first_result != other_result);
     ensure!(
-        first_verified.block().executed_block_wire_identity()?
-            == other_verified.block().executed_block_wire_identity()?,
+        first_decision.block().executed_block_wire_identity()?
+            == other_decision.block().executed_block_wire_identity()?,
         "only the genuinely certified synthetic World result differs"
     );
     // Both frames and certificates are valid before the expected-R check.

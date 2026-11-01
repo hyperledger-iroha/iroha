@@ -22,8 +22,9 @@
 //! liteservers.
 //!
 //! **Progress keepalives** (`[sccp.keeper].keepalive`, §4.7.4) run independently of
-//! remote light clients for heartbeats and reconciliation deadlines. Each current validator
-//! waits its canonical committee stagger (one second per rank for reconciliation), retires
+//! remote light clients for heartbeats, reconciliation and committed scheduled Time outputs.
+//! Each current validator waits its canonical committee stagger (one second per rank for
+//! reconciliation and scheduled Time work), retires
 //! its stale pending carrier, and signs fresh due work with the keeper key.
 //! Parliament item scheduling awaits the authoritative due-work iterator.
 //!
@@ -588,7 +589,11 @@ fn submit_transaction_at(
     let iroha_core::queue::RoutingPlan::Single(route) = route else {
         eyre::bail!("SCCP submission requires one resolved route");
     };
-    let quote_view = state.query_view();
+    // Routing and quoting are separate finite observations. If publication moved
+    // between them, defer this poll; never spin while retaining a keeper worker.
+    let quote_view = state
+        .try_view_once()
+        .wrap_err("SCCP fee-quote snapshot is unavailable")?;
     let sccp_committed_time_ms =
         iroha_core::smartcontracts::isi::sccp::hold::committed_time_ms(&quote_view)
             .map_err(|error| eyre::eyre!("fee quote has invalid committed time: {error:?}"))?;

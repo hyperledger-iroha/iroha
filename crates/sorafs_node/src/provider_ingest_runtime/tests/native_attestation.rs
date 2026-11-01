@@ -121,7 +121,9 @@ mod native_attestation_capture {
                 8,
                 CaptureScannerLedgerFaultV1::None,
             ));
-            let root = tempfile::tempdir().unwrap();
+            let temporary = tempfile::tempdir().unwrap();
+            let root = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
+                .unwrap();
             let node = capture_coordinator_test_handle(root.path());
             node.ingest_manifest(&manifest, &fixture.plan, &mut fixture.payload.as_slice())
                 .unwrap();
@@ -163,7 +165,16 @@ mod native_attestation_capture {
             // phase only; the next retained read must refuse instead of renewing caller capacity.
             let original =
                 std::fs::read(root.path().join("provider-attestation-native/journal.nrt")).unwrap();
-            (driver, custody, inventory, signer, fixture, root, original)
+            // Keep the native root alive and drop it before the outer temporary directory.
+            (
+                driver,
+                custody,
+                inventory,
+                signer,
+                fixture,
+                (root, temporary),
+                original,
+            )
         });
         let tight = norito::DecodeLimits::new(
             8 * 1024 * 1024,
@@ -183,6 +194,7 @@ mod native_attestation_capture {
             std::fs::read(
                 driver
                     .5
+                    .0
                     .path()
                     .join("provider-attestation-native/journal.nrt")
             )
@@ -191,7 +203,8 @@ mod native_attestation_capture {
         );
         norito::with_decode_limits_scope(page_limits, || {
             runtime.block_on(async move {
-                let (mut driver, custody, inventory, signer, fixture, root, _) = driver;
+                let (mut driver, custody, inventory, signer, fixture, roots, _) = driver;
+                let root = &roots.0;
                 let provider = ProviderId::new(LOCAL_PROVIDER);
                 let first = driver.drive_one_bounded_page().await.unwrap();
                 assert_eq!(first.capture_candidates, 1);

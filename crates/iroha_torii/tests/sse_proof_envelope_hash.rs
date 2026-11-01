@@ -1,8 +1,7 @@
 //! Assert SSE filtering by `proof_envelope_hash` works and JSON contains the field.
 #![cfg(feature = "app_api")]
 #![allow(clippy::items_after_statements)]
-#[path = "common/proof_events.rs"]
-mod proof_events;
+use crate::proof_events;
 use axum::{Router, routing::get};
 use futures_util::StreamExt as _;
 // use http_body_util::BodyExt as _;

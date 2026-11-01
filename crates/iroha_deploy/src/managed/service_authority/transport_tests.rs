@@ -75,8 +75,8 @@ fn original_service_children_reuse_private_transport_with_original_peer_identity
         assert_eq!(actual.account, expected.account);
         assert_eq!(actual.network_id, expected.network_id);
         assert_eq!(actual.chain, expected.chain);
-        assert!(actual.key_pair == expected.key_pair);
-        assert!(actual.headers == expected.headers);
+        assert_eq!(actual.key_pair, expected.key_pair);
+        assert_eq!(actual.headers, expected.headers);
         assert_eq!(actual.torii_request_timeout, expected.torii_request_timeout);
         client.get_node_capabilities_json().unwrap();
     }

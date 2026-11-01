@@ -1,13 +1,17 @@
 //! Filesystem primitives shared by the finalized provider-ingest and reputation archives.
 //!
-//! Both archives stage immutable records under an exclusive temporary name, hard-link them to a
-//! canonical digest name, and re-validate every descriptor-relative identity before trusting it.
+//! Both archives stage immutable records under exclusive temporary names and publish canonical
+//! digest names without replacement. Unix uses descriptor-relative hard links; Windows uses
+//! retained-handle rename with explicit pending phases. Every original is revalidated.
 
 #[cfg(unix)]
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
 };
+
+#[cfg(windows)]
+pub(super) mod windows;
 
 /// Prefix of exclusive staged artifacts awaiting publication under their canonical name.
 pub(super) const STAGED_FILE_PREFIX: &str = ".staged-";

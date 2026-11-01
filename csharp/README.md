@@ -20,6 +20,9 @@ identity, for example `banka.universal`.
 These operations require the ABI-33 Rust domain validator and exact canonical ASCII
 labels, including admitted IDNA A-labels; raw Unicode and alternate spellings are
 rejected. The native pinned UTS-46 owner also decides underscore and hyphen admission.
+Name encoding uses the ABI-33 Rust NFC validator and requires its dedicated export.
+Names retain exact canonical Unicode spelling within 255 UTF-8 bytes; reserved
+separators, noncanonical NFC and invalid UTF-16 input are rejected before encoding.
 NFT instructions use the same fully qualified domain inside `name$domain.dataspace`.
 Typed transfer, metadata and trigger instructions preserve the native enum struct
 field and the `TriggerId`/`Json` newtype fields; transaction metadata uses that same
@@ -374,23 +377,40 @@ Run commands from `csharp/`:
 ```bash
 dotnet restore Hyperledger.Iroha.Sdk.sln
 dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
-dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build
-dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release --no-build
+dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build
+dotnet test --project tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release --no-build
 ```
 
 The integration suite is environment-gated; its test project documents the required
 variables. The executable sample lives in `samples/Hyperledger.Iroha.Sdk.Sample`.
 
-For focused validation, invoke the built xUnit v3 executable with its method
-selector. Microsoft.Testing.Platform ignores the VSTest `dotnet test --filter`
-and `--logger` switches. From the same `csharp/` directory after the build above:
+`global.json` selects Microsoft.Testing.Platform for the .NET 10 test runner.
+Run from `csharp/` so both the SDK pin and runner selection apply. Native-dependent
+tests require the matching ABI-33 bridge; missing native artifacts fail the suite.
+For focused validation, use the platform's method selector from that directory:
 
 ```bash
-dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net10.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
+dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build -- --filter-method '*Explorer*'
 ```
 
-The selector matches the fully qualified method name. Use `Debug` in the artifact
-path when validating a Debug build.
+The selector matches the fully qualified method name. Use `-c Debug` when
+validating a Debug build. VSTest options such as `--filter` and `--logger` do not
+apply to this runner.
+
+Public model and allocation-admission regressions cover immutable contract bytes
+and RAM-FHE profiles, hostile codec lengths, and caller collections whose counts
+change after admission. Run these focused checks with:
+
+```bash
+dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj -c Release --no-build -- \
+  --filter-method '*CompiledInterfacesUseRequiredNumericBytesAndImmutableSnapshots' \
+  --filter-method '*TypedProfileIsImmutableAcrossPolicyRecordCopies' \
+  --filter-method '*HostileCompactLengthsCountsAndNestedLengthsAreRejectedBeforeAllocation' \
+  --filter-method '*MutableCollectionCountsCannotExpandAdmittedAllocationBounds'
+```
+
+These controls check the API's ownership and input bounds. Whole-process peak
+allocation and native proving performance require separate measurements.
 
 ## Pack
 
@@ -445,9 +465,12 @@ application call view does not provide this retained model. Decoding does not
 verify the response's authenticity, roster root, proof, canonical account order,
 or account-rekey authority; those remain with the trusted ledger and verifier.
 
-Managed identity names currently require canonical ASCII Name/domain labels,
-matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
-NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
+Call names and metadata keys use the same ABI-33 Rust NFC validator as general
+transaction Name encoding. Canonical Unicode is retained exactly; there is no
+managed normalization or fallback. Kaigi domains use the same ABI-33 Rust
+UTS-46 validator as other domain instructions, accepting canonical ASCII labels
+including admitted IDNA A-labels and rejecting alternate spellings without
+normalization. Display text supports UTF-8. Account instruction
 encoding covers all eleven published controller curve IDs and complete canonical
 multisig policies with a u16 member count. Address decoding checks key envelopes;
 every public address constructor and parser additionally requires the ABI-33

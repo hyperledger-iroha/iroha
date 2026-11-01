@@ -115,7 +115,7 @@ impl PublicKeyCompact {
         // SAFETY: every payload pair is canonical and initializes one disjoint
         // byte; on failure the raw allocation is reclaimed with its exact layout.
         unsafe { allocation.as_ptr().write(Self::algorithm_tag(algorithm)) };
-        for (index, pair) in payload_hex.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in payload_hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let Some(byte) = multihash::decode_public_key_payload_byte(pair) else {
                 // SAFETY: `allocation` still has the exact `layout` above.
                 unsafe { std::alloc::dealloc(allocation.as_ptr(), layout) };

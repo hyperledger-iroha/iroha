@@ -667,7 +667,7 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
         Executor::Initial.execute_instruction_with_contract_runtime_context(
             tx,
             &controller,
-            instruction,
+            &instruction,
             context,
         )
     };
@@ -703,7 +703,7 @@ fn uid_controlled_lock_retains_payer_and_blocks_generic_or_unframed_mutation() {
             .execute_instruction_with_contract_runtime_context(
                 &mut tx,
                 &other_address.subject_id(),
-                other.into(),
+                &other.into(),
                 Some(&other_context),
             )
             .expect_err("another authenticated controller cannot squat this id");

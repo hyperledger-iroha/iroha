@@ -366,10 +366,9 @@ pub(super) fn validate_grant(
         || grant.provider.provider_id_hex != hex::encode(config.binding.provider_id)
         || grant.provider.privacy_events_url.is_some()
         || validate_manifest(manifest, &PinPolicyConstraints::default()).is_err()
-        || manifest
-            .digest()
-            .map(|digest| digest.as_bytes() != &authorization.manifest_digest())
-            .unwrap_or(true)
+        || manifest.digest().map_or(true, |digest| {
+            digest.as_bytes() != &authorization.manifest_digest()
+        })
         || manifest.root_cid != authorization.manifest_cid()
         || manifest.content_length != authorization.content_length()
         || manifest.content_length > config.limits.max_payload_bytes

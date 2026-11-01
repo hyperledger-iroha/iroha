@@ -371,7 +371,9 @@ mod tests {
         use std::io::BufWriter;
         let global = ExecutedGlobalSources::new();
         let temporary = tempfile::tempdir().unwrap();
-        let private = temporary.path().join("private");
+        // Private sources refuse linked ancestors such as macOS `/var` -> `/private/var`.
+        let root = temporary.path().canonicalize().unwrap();
+        let private = root.join("private");
         let alias = "amxcli";
         let name = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
         let spec = iroha_deploy::sora_network::PrivateRootSpec {
@@ -392,13 +394,13 @@ mod tests {
         let original_manifest = std::fs::read(&manifest).unwrap();
         let original_config = iroha_fs::read_private(config, 1024 * 1024).unwrap();
         let original_key = iroha_fs::read_private(&key, 4096).unwrap();
-        let g1 = temporary.path().join("global-g1.nrt");
-        let h2 = temporary.path().join("global-h2.nrt");
+        let g1 = root.join("global-g1.nrt");
+        let h2 = root.join("global-h2.nrt");
         std::fs::write(&g1, &global.genesis).unwrap();
         std::fs::write(&h2, &global.successor).unwrap();
-        let signed_path = temporary.path().join("amx-signed.nrt");
-        let bound_path = temporary.path().join("amx-bound.json");
-        let identity_path = temporary.path().join("amx-network-id");
+        let signed_path = root.join("amx-signed.nrt");
+        let bound_path = root.join("amx-bound.json");
+        let identity_path = root.join("amx-network-id");
         let chain_label = global.chain_id.to_string();
         let public_key = client.key_pair.public_key().to_string();
         let args = super::super::Args::try_parse_from([
@@ -446,12 +448,15 @@ mod tests {
         assert_eq!(std::fs::read(&g1).unwrap(), global.genesis);
         assert_eq!(std::fs::read(&h2).unwrap(), global.successor);
         assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
-        assert!(
+        assert_eq!(
             iroha_fs::read_private(config, 1024 * 1024)
                 .unwrap()
-                .as_slice()
-                == original_config.as_slice()
+                .as_slice(),
+            original_config.as_slice()
         );
-        assert!(iroha_fs::read_private(&key, 4096).unwrap().as_slice() == original_key.as_slice());
+        assert_eq!(
+            iroha_fs::read_private(&key, 4096).unwrap().as_slice(),
+            original_key.as_slice()
+        );
     }
 }

@@ -323,7 +323,12 @@ pub(crate) fn build_witness<const N: usize>(
         let states = witness
             .get_mut(offset / 8..offset / 8 + GROUPS * STATE_BYTES)
             .unwrap_or(&mut []);
-        for (index, state) in states.chunks_exact_mut(STATE_BYTES).enumerate() {
+        for (index, state) in states
+            .as_chunks_mut::<STATE_BYTES>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             evaluation.write_state(index + 1, state);
         }
     }

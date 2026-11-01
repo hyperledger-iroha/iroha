@@ -2541,7 +2541,7 @@ mod tests {
             64 * 1024,
         )
         .expect("bounded fixture digest");
-        let noncanonical_account = format!(" {} ", &*ALICE_ID);
+        let noncanonical_account = format!(" {} ", *ALICE_ID);
         let account_cursor = encode_explorer_cursor(
             ExplorerCursorCollection::Accounts,
             account_digest,

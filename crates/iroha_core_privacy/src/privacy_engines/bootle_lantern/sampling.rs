@@ -32,7 +32,9 @@ const SAMPLING_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
 const DECAY_TABLES_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.decay-tables-digest.v1";
 /// Canonical algorithm/schema identity for the complete fixed prover sampler.
 pub(crate) const BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1: &[u8] = b"bootle-lantern-sampling-v1|seed:health-checked-crypto-rng-32|expand:SHAKE256(frame-u32be(domain)+frame-u32be(seed32)+frame-u32be(stage)+frame-u32be(stream-u64be))|uniform:u64be-largest-multiple-rejection|ternary:byte<255-mod3|gaussian:randomized-rounding-base-CDT-31/20+exact-rational-Q256-correction+strict-truncation|rejection:standard-or-bimodal-exact-dot-norm+Q256-threshold+strict-draw-less-than|decay:integer-table+fraction-table+residual-alternating-series-nearest-rounding|binding:all-domains+dimensions+caps+sigma+truncation+M-limbs+full-CDT+decay-geometry";
-const Q256_FRACTION_BITS_V1: usize = 256;
+/// Q256 fraction width as a big-integer shift amount; the profile binding records it as `usize`.
+const Q256_FRACTION_SHIFT_V1: u32 = 256;
+const Q256_FRACTION_BITS_V1: usize = Q256_FRACTION_SHIFT_V1 as usize;
 const GAUSSIAN_VARIANCE_NUMERATOR_V1: u64 =
     GAUSSIAN_SIGMA_NUMERATOR_V1 * GAUSSIAN_SIGMA_NUMERATOR_V1;
 const GAUSSIAN_HALF_VARIANCE_DENOMINATOR_V1: u64 =
@@ -43,7 +45,9 @@ const GAUSSIAN_HALF_VARIANCE_DENOMINATOR_V1: u64 =
 // seed series has a smaller remainder, and the 16-term residual series has
 // remainder below 2^-252.  Including table accumulation and rounded products,
 // the absolute evaluation error is below 2^16 Q256 ulps, i.e. below 2^-240.
-const FRACTION_TABLE_BITS_V1: usize = 12;
+/// Fractional decay-table seed width as a big-integer shift amount.
+const FRACTION_TABLE_SHIFT_V1: u32 = 12;
+const FRACTION_TABLE_BITS_V1: usize = FRACTION_TABLE_SHIFT_V1 as usize;
 const FRACTION_TABLE_LEN_V1: usize = 1 << FRACTION_TABLE_BITS_V1;
 const MAX_DECAY_INTEGER_V1: usize = 178;
 const UNIT_DECAY_SERIES_TERMS_V1: usize = 96;
@@ -145,7 +149,9 @@ impl BootleSamplingProfileV1 {
         // The profile limbs are fixed u64 values, not target-sized bigint words.
         let mut bytes = [0_u8; 64];
         for (chunk, limb) in bytes
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(REJECTION_M_Q256_LIMBS_V1[self.index()])
         {
             chunk.copy_from_slice(&limb.to_le_bytes());
@@ -723,7 +729,7 @@ fn gaussian_correction_exponent_q256_v1(
     let delta: U512 = offset.concatenating_mul(&linear);
     let numerator = delta
         .wrapping_mul(&U512::from_u64(GAUSSIAN_HALF_VARIANCE_DENOMINATOR_V1))
-        .shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+        .shl_vartime(Q256_FRACTION_SHIFT_V1);
     let denominator = U512::from_u128(
         u128::from(scale) * u128::from(scale) * u128::from(GAUSSIAN_VARIANCE_NUMERATOR_V1),
     );
@@ -807,7 +813,7 @@ fn unsigned_profile_exponent_q256_v1(
     profile: BootleSamplingProfileV1,
 ) -> U512 {
     let product: U512 = value.concatenating_mul(&U256::from_u64(factor));
-    let numerator = product.shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let numerator = product.shl_vartime(Q256_FRACTION_SHIFT_V1);
     let denominator = U512::from_u64(GAUSSIAN_VARIANCE_NUMERATOR_V1)
         .shl_vartime(u32::from(profile.log2_sigma()) * 2);
     rational_to_q256_round_v1(numerator, denominator)
@@ -823,15 +829,15 @@ fn rational_to_q256_round_v1(numerator: U512, denominator: U512) -> U512 {
     }
 }
 fn q256_one_v1() -> U512 {
-    U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32)
+    U512::ONE.shl_vartime(Q256_FRACTION_SHIFT_V1)
 }
 fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
     // All callers prove operands below 6 * 2^256.  The product and half-ulp
     // rounding term therefore fit U1024, and the rounded result fits U512.
     let product: U1024 = left.concatenating_mul(&right);
     let rounded = product
-        .wrapping_add(&U1024::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - 1) as u32))
-        .shr_vartime((Q256_FRACTION_BITS_V1) as u32);
+        .wrapping_add(&U1024::ONE.shl_vartime(Q256_FRACTION_SHIFT_V1 - 1))
+        .shr_vartime(Q256_FRACTION_SHIFT_V1);
     let (low, high) = rounded.split();
     debug_assert_eq!(high, U512::ZERO);
     low
@@ -887,7 +893,7 @@ fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
     static TABLE: OnceLock<Box<[U512; FRACTION_TABLE_LEN_V1]>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let one = q256_one_v1();
-        let step = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
+        let step = U512::ONE.shl_vartime(Q256_FRACTION_SHIFT_V1 - FRACTION_TABLE_SHIFT_V1);
         let decay_step = small_decay_q256_v1(step, FRACTION_STEP_SERIES_TERMS_V1);
         let mut table = vec![U512::ZERO; FRACTION_TABLE_LEN_V1];
         table[0] = one;
@@ -912,10 +918,9 @@ fn decay_q256_v1(value: U512) -> U512 {
     }
     let fraction_word = (u16::from(bytes[32]) << 4) | u16::from(bytes[33] >> 4);
     let fraction_index = usize::from(fraction_word);
-    let integer_part =
-        U512::from_u64(u64::from(integer_byte)).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let integer_part = U512::from_u64(u64::from(integer_byte)).shl_vartime(Q256_FRACTION_SHIFT_V1);
     let fraction_part = U512::from_u64(u64::from(fraction_word))
-        .shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
+        .shl_vartime(Q256_FRACTION_SHIFT_V1 - FRACTION_TABLE_SHIFT_V1);
     let residual = value
         .wrapping_sub(&integer_part)
         .wrapping_sub(&fraction_part);
@@ -945,7 +950,7 @@ fn ratio_threshold_q256_v1(numerator: U512, denominator: U512) -> BernoulliThres
     if denominator == U512::ZERO || numerator >= denominator {
         return BernoulliThresholdV1::Always;
     }
-    let scaled = U1024::from(&numerator).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let scaled = U1024::from(&numerator).shl_vartime(Q256_FRACTION_SHIFT_V1);
     let denominator = U1024::from(&denominator);
     let nonzero = Option::<NonZero<U1024>>::from(NonZero::new(denominator))
         .expect("ordered ratio denominator is non-zero");

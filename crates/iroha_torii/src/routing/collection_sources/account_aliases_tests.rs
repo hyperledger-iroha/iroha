@@ -40,7 +40,7 @@ struct Fixture {
 }
 
 /// alice: primary `alice@mibank` and `shop@otherbank`; bob: `bob@otherbank`; carol: no alias;
-/// dave: two bindings in the MiBank scope.
+/// dave: two bindings in the `MiBank` scope.
 fn fixture() -> Fixture {
     let [alice, bob, carol, dave] = [0xD1, 0xD2, 0xD3, 0xD4].map(authority);
     let domains =

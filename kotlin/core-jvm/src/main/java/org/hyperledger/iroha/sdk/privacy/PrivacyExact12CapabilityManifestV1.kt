@@ -516,7 +516,10 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
                 "$path.execution_mode",
             ),
         )
-        val featureMask = uint32(row["privacy_feature_mask"], "$path.privacy_feature_mask")
+        val featureMask = uint32(
+            tupleField(row["privacy_feature_mask"], "$path.privacy_feature_mask"),
+            "$path.privacy_feature_mask",
+        )
         require(featureMask <= 0xff) { "$path.privacy_feature_mask must fit uint8" }
         val compiled = parseCompiledProfile(row["compiled_profile"], protocol, "$path.compiled_profile")
         val readiness = parseReadiness(row["readiness"], "$path.readiness")
@@ -790,7 +793,17 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
     }
 
     private fun fixed32(value: Any?, path: String): PrivacyFixed32V1 {
-        return PrivacyFixed32V1(fixedBytes(value, 32, path))
+        return PrivacyFixed32V1(fixedBytes(tupleField(value, path), 32, path))
+    }
+
+    /**
+     * Core's Norito JSON writes a one-field tuple struct as a one-element array, so digests and the
+     * feature mask arrive as `[value]`. The parsed model exposes the inner value.
+     */
+    private fun tupleField(value: Any?, path: String): Any? {
+        val fields = list(value, path)
+        require(fields.size == 1) { "$path must be a one-element tuple-struct array" }
+        return fields[0]
     }
 
     private fun fixedBytes(value: Any?, size: Int, path: String): ByteArray {

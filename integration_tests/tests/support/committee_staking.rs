@@ -415,6 +415,8 @@ impl WithdrawalLifecycle {
     }
 
     /// Prove replacement, retain slashable custody, then withdraw the full real bond.
+    // The restart joins the Unix external-signer broker's original shutdown evidence.
+    #[cfg(unix)]
     pub(super) async fn complete_withdrawal(
         self,
         network: &sandbox::SerializedNetwork,

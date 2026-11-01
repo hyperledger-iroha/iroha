@@ -497,7 +497,7 @@ fn elastic_committee(
     if ranked.len() < size {
         return None;
     }
-    ranked.sort_by(|a, b| a.0.cmp(&b.0));
+    ranked.sort_by_key(|a| a.0);
     ranked.truncate(size);
     let order = canonical_committee(ranked.iter().map(|(_, peer, _)| peer.clone())).ok()?;
     Some(

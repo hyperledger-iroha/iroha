@@ -217,7 +217,7 @@ impl<T> JsonDeserialize for MerkleTreeCommitment<T> {
     }
 }
 fn proof_depth_for_leaf_count(leaf_count: NonZeroU64) -> usize {
-    (u64::BITS - leaf_count.get().saturating_sub(1).leading_zeros()) as usize
+    leaf_count.get().saturating_sub(1).bit_width() as usize
 }
 fn proof_shape_is_canonical<T>(
     leaf_index: u32,
@@ -722,11 +722,11 @@ trait CompleteBinaryTree {
     }
     /// Returns the height of the tree, defined as the number of edges from root to any leaf.
     fn height(&self) -> u32 {
-        (usize::BITS - self.len().leading_zeros()).saturating_sub(1)
+        self.len().bit_width().saturating_sub(1)
     }
     /// Returns the height of a complete binary tree with the given number of leaves.
     fn height_from_n_leaves(n: usize) -> u32 {
-        usize::BITS - n.saturating_sub(1).leading_zeros()
+        n.saturating_sub(1).bit_width()
     }
     /// Returns the maximum number of nodes the tree can contain without increasing its height.
     fn capacity(&self) -> usize {
@@ -949,7 +949,7 @@ impl<T> MerkleTree<T> {
         let offset = if self.nodes.is_empty() {
             0
         } else {
-            let height = (usize::BITS - self.nodes.len().leading_zeros()).saturating_sub(1);
+            let height = self.nodes.len().bit_width().saturating_sub(1);
             (1usize << height) - 1
         };
         if !self.nodes.is_empty() {
@@ -972,7 +972,7 @@ impl<T> MerkleTree<T> {
             return Ok(());
         }
         let len = nodes.len();
-        let height = (usize::BITS - len.leading_zeros()).saturating_sub(1);
+        let height = len.bit_width().saturating_sub(1);
         let height_usize = height as usize;
         if height_usize >= usize::BITS as usize {
             return Err(MerkleError::InvalidLayout(

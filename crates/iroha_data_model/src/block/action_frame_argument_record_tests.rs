@@ -176,7 +176,7 @@ fn every_atom_wire_variant_preserves_original_bytes_without_graph_admission() {
 fn unknown_tags_bad_scalars_and_extra_variant_payload_refuse() {
     let unit = payload(&Atom::Unit);
     assert_eq!(unit, 4_u32.to_le_bytes());
-    let valid = record_payload(&[7; 32], &[unit.clone()]);
+    let valid = record_payload(&[7; 32], std::slice::from_ref(&unit));
     assert_eq!(
         frame(&valid),
         norito::encode_canonical(&record(vec![Atom::Unit])).unwrap()

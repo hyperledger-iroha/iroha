@@ -225,6 +225,74 @@ pub fn private_dataspace_record_proof(
     Ok(Some(proof))
 }
 
+/// Authenticate one native game export against its original retained certified writes.
+/// Current World supplies discovery only; no current projection substitutes for the archive.
+///
+/// # Errors
+/// Uncertified carrier, missing archive, substituted export or malformed native result.
+pub fn game_partition_export_proof(
+    view: &impl StateReadOnly,
+    expected: &iroha_data_model::game_partition::GameUnitExportV1,
+) -> Result<Option<iroha_data_model::game_partition::GameUnitImportProofV1>, String> {
+    use iroha_data_model::{
+        game_partition::{GameUnitExportV1, GameUnitImportProofV1},
+        sumeragi_amx::{AmxCertifiedBlockV1, AmxWriteProofV1},
+    };
+    let source = original_source(view, expected.source_height)?;
+    let key = expected.witness_key();
+    let Some(written) = source
+        .witness
+        .get()
+        .writes
+        .iter()
+        .rev()
+        .find(|w| w.key == key)
+    else {
+        return Ok(None);
+    };
+    let record: GameUnitExportV1 = norito::decode_canonical_with_limits(
+        &written.value,
+        norito::canonical_decode_limits(written.value.len()),
+    )
+    .map_err(|e| e.to_string())?;
+    if &record != expected {
+        return Err("game export differs from its original certified write".into());
+    }
+    let decoded = source
+        .finality
+        .decode_checked(source.scope)
+        .map_err(|e| e.to_string())?;
+    let carrier = norito::core::with_decode_limits_scope(
+        norito::canonical_decode_limits(source.finality.block_wire.len()),
+        || decode_framed_signed_block(&source.finality.block_wire),
+    )
+    .map_err(|e| e.to_string())?;
+    let certificate = carrier
+        .commit_certificate()
+        .ok_or("game export carrier lacks native certificate")?;
+    let (path, value) = AmxWriteProofV1::from_writes(
+        source
+            .witness
+            .get()
+            .writes
+            .iter()
+            .map(|w| (w.key.as_slice(), w.value.as_slice())),
+        &key,
+    )
+    .map_err(|e| e.to_string())?;
+    if value != written.value
+        || path.root(&key, &value).map_err(|e| e.to_string())?
+            != decoded.execution().ordinary_writes_root
+    {
+        return Err("game export path differs from certified writes".into());
+    }
+    Ok(Some(GameUnitImportProofV1 {
+        record,
+        block: AmxCertifiedBlockV1::from_certificate(certificate),
+        path,
+    }))
+}
+
 /// Derive the exact fee policy opening from a certified historical execution.
 ///
 /// # Errors

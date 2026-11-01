@@ -298,7 +298,7 @@ fn certified_tip_uses_one_public_endpoint_without_claiming_peer_readiness() {
     let proof = native.checkpoint().tip().clone();
     let transport = Arc::new(CertifiedTipTransport {
         proof: proof.clone(),
-        paths: Default::default(),
+        paths: std::sync::Mutex::default(),
     });
     let client = client_with_transport(
         native.network_id(),

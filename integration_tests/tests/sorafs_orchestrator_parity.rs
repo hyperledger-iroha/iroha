@@ -1,4 +1,4 @@
-//! Cross-runtime local SoraFS parity against the actual Node module and C ABI.
+//! Cross-runtime local `SoraFS` parity against the actual Node module and C ABI.
 #[cfg(feature = "js_host_parity")]
 mod js_host_parity {
     use norito::{json, json::Value};

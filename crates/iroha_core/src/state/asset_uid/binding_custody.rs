@@ -8,7 +8,7 @@ use iroha_data_model::asset::uid::{
 use norito::core::{OwnedPreparedDecodeError, PreparedDecodeError, PreparedDecodeScopeError};
 
 #[path = "binding_custody/retry.rs"]
-pub(crate) mod retry;
+pub mod retry;
 
 type DecodeError = OwnedPreparedDecodeError<AssetUidBindingDecodeError>;
 

@@ -255,9 +255,16 @@ function taggedUnit(value, tagKey, contentKey, permitted, path) {
 function tagged(value, tagKey, contentKey) { return { [tagKey]: value, [contentKey]: null }; }
 
 function fixedBytes(value, path) {
-  const bytes = fixedBytesWithLength(value, 32, path);
+  const bytes = fixedBytesWithLength(tupleField(value, path), 32, path);
   if (bytes.every((byte) => byte === 0)) fail("must not be all zero", path);
   return bytes;
+}
+
+// Core's Norito JSON writes a one-field tuple struct as a one-element array, so digests and the
+// feature mask arrive as [value]. The parsed model exposes the inner value.
+function tupleField(value, path) {
+  if (!Array.isArray(value) || value.length !== 1) fail("must be a one-element tuple-struct array", path);
+  return value[0];
 }
 
 function fixedBytesWithLength(value, length, path) {
@@ -701,7 +708,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       executionMode,
       `${path}.execution_mode`,
     );
-    if (row.privacy_feature_mask !== featureMask) {
+    if (tupleField(row.privacy_feature_mask, `${path}.privacy_feature_mask`) !== featureMask) {
       manifestFailV1(
         `must equal the closed feature mask ${featureMask}`,
         `${path}.privacy_feature_mask`,
@@ -829,7 +836,8 @@ function manifestTaggedUnitV1(value, tagKey, contentKey, expected, path) {
   return { [tagKey]: expected, [contentKey]: null };
 }
 
-function manifestFixed32V1(value, path) {
+function manifestFixed32V1(wrapper, path) {
+  const value = tupleField(wrapper, path);
   if (!Array.isArray(value) || value.length !== 32) {
     manifestFailV1("must contain exactly 32 bytes", path);
   }

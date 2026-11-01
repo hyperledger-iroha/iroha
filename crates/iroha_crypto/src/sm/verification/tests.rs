@@ -134,8 +134,7 @@ fn borrowed_owned_and_pinned_verifiers_agree_on_signatures_and_mutations() {
                     .is_ok();
                 assert_eq!(borrowed.verify(candidate, bytes).is_ok(), expected);
                 let owned_result = Sm2Signature::from_bytes(bytes)
-                    .ok()
-                    .is_some_and(|signature| owned.verify(candidate, &signature).is_ok());
+                    .is_ok_and(|signature| owned.verify(candidate, &signature).is_ok());
                 assert_eq!(owned_result, expected);
             }
         }

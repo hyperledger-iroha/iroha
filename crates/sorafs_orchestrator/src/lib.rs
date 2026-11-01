@@ -321,7 +321,7 @@ pub mod prelude {
         },
         bindings::{ConfigJsonError, config_from_json, config_to_json},
         compliance::{CompliancePolicy, ComplianceReason},
-        fetch_via_gateway, fetch_via_gateway_to_writer,
+        fetch_via_gateway, fetch_via_gateway_to_writer, fetch_via_gateway_with_context,
         incentives::{RelayRewardEngine, RewardConfig, RewardConfigError},
         provider_supports_pq, provider_supports_soranet,
         proxy::{
@@ -5327,6 +5327,45 @@ pub async fn fetch_via_gateway(
     telemetry: Option<&TelemetrySnapshot>,
     max_peers: Option<usize>,
 ) -> Result<FetchSession, GatewayOrchestratorError> {
+    fetch_via_gateway_using(
+        config,
+        plan,
+        || GatewayFetchContext::new(gateway_config, providers),
+        telemetry,
+        max_peers,
+    )
+    .await
+}
+
+/// Retrieve and verify through an already admitted gateway transport context.
+///
+/// This consumes the same typed context produced by the gateway's public HTTPS,
+/// pinned TLS, or authenticated generated-local constructors. It does not admit
+/// a new URL, relax transport policy, or replace the caller's native authority
+/// and freshness checks. The ordinary manifest, plan, integrity, provider-limit
+/// and session-deadline checks are shared with [`fetch_via_gateway`]. Context
+/// construction precedes this function's session deadline.
+///
+/// # Errors
+/// Returns the same build, resource, manifest and retrieval refusals as
+/// [`fetch_via_gateway`].
+pub async fn fetch_via_gateway_with_context(
+    config: OrchestratorConfig,
+    plan: &CarBuildPlan,
+    context: GatewayFetchContext,
+    telemetry: Option<&TelemetrySnapshot>,
+    max_peers: Option<usize>,
+) -> Result<FetchSession, GatewayOrchestratorError> {
+    fetch_via_gateway_using(config, plan, || Ok(context), telemetry, max_peers).await
+}
+
+async fn fetch_via_gateway_using(
+    config: OrchestratorConfig,
+    plan: &CarBuildPlan,
+    make_context: impl FnOnce() -> Result<GatewayFetchContext, GatewayBuildError>,
+    telemetry: Option<&TelemetrySnapshot>,
+    max_peers: Option<usize>,
+) -> Result<FetchSession, GatewayOrchestratorError> {
     if !config.fetch.verify_lengths || !config.fetch.verify_digests {
         return Err(GatewayOrchestratorError::IntegrityVerificationDisabled);
     }
@@ -5339,14 +5378,8 @@ pub async fn fetch_via_gateway(
             )),
         ));
     }
-    let (context, mut orchestrator, scoreboard) = prepare_gateway_fetch(
-        config,
-        plan,
-        gateway_config,
-        providers,
-        telemetry,
-        max_peers,
-    )?;
+    let (context, mut orchestrator, scoreboard) =
+        prepare_gateway_fetch_using(config, plan, make_context, telemetry, max_peers)?;
     let gateway_manifest = tokio::time::timeout_at(deadline, context.fetch_manifest())
         .await
         .map_err(|_| OrchestratorError::from(multi_fetch::MultiSourceError::DeadlineExceeded))??;
@@ -5372,10 +5405,26 @@ pub async fn fetch_via_gateway(
 }
 
 fn prepare_gateway_fetch(
-    mut config: OrchestratorConfig,
+    config: OrchestratorConfig,
     plan: &CarBuildPlan,
     gateway_config: GatewayFetchConfig,
     providers: impl IntoIterator<Item = GatewayProviderInput>,
+    telemetry: Option<&TelemetrySnapshot>,
+    max_peers: Option<usize>,
+) -> Result<(GatewayFetchContext, Orchestrator, Scoreboard), GatewayOrchestratorError> {
+    prepare_gateway_fetch_using(
+        config,
+        plan,
+        || GatewayFetchContext::new(gateway_config, providers),
+        telemetry,
+        max_peers,
+    )
+}
+
+fn prepare_gateway_fetch_using(
+    mut config: OrchestratorConfig,
+    plan: &CarBuildPlan,
+    make_context: impl FnOnce() -> Result<GatewayFetchContext, GatewayBuildError>,
     telemetry: Option<&TelemetrySnapshot>,
     max_peers: Option<usize>,
 ) -> Result<(GatewayFetchContext, Orchestrator, Scoreboard), GatewayOrchestratorError> {
@@ -5384,7 +5433,7 @@ fn prepare_gateway_fetch(
         .fetch
         .validate_plan_limits(plan)
         .map_err(OrchestratorError::from)?;
-    let context = GatewayFetchContext::new(gateway_config, providers)?;
+    let context = make_context()?;
     let metadata: Vec<ProviderMetadata> = context
         .providers()
         .into_iter()
@@ -5457,6 +5506,9 @@ fn prepare_gateway_fetch(
 }
 
 #[cfg(test)]
+mod generated_gateway_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -5500,7 +5552,7 @@ mod tests {
         fmt,
         fs::File,
         io::{Read, Write},
-        net::{TcpListener, TcpStream},
+        net::TcpListener,
         num::{NonZeroU32, NonZeroUsize},
         path::PathBuf,
         sync::{
@@ -6827,7 +6879,7 @@ mod tests {
         assert!(
             used.iter().all(|provider| provider == "alpha"),
             "expected only the highest-ranked provider to be used, got: {:?}",
-            &*used
+            *used
         );
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
         assert_eq!(session.policy_report.selected_soranet_total, 1);
@@ -9615,170 +9667,7 @@ mod tests {
                 .to_bytes(),
         )
     }
-    struct MockGateway {
-        base_url: String,
-        join_handle: Option<thread::JoinHandle<()>>,
-    }
-    impl MockGateway {
-        fn spawn(manifest_id_hex: String, plan: CarBuildPlan, payload: Vec<u8>) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
-            listener
-                .set_nonblocking(false)
-                .expect("set blocking mode failed");
-            let address = listener.local_addr().expect("local addr");
-            let base_url = format!("http://{address}/");
-            let expected = Arc::new(Mutex::new(build_chunk_map(
-                &manifest_id_hex,
-                &plan,
-                &payload,
-            )));
-            let join_handle = {
-                let expected = Arc::clone(&expected);
-                thread::spawn(move || serve_chunks(listener, expected))
-            };
-            Self {
-                base_url,
-                join_handle: Some(join_handle),
-            }
-        }
-        fn base_url(&self) -> &str {
-            &self.base_url
-        }
-    }
-    impl Drop for MockGateway {
-        fn drop(&mut self) {
-            if let Some(handle) = self.join_handle.take() {
-                handle.join().expect("mock gateway thread");
-            }
-        }
-    }
-    fn build_chunk_map(
-        manifest_id_hex: &str,
-        plan: &CarBuildPlan,
-        payload: &[u8],
-    ) -> HashMap<String, Vec<u8>> {
-        let mut map = HashMap::new();
-        for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
-            let digest_hex = to_hex(&spec.digest);
-            let path = format!("/v1/sorafs/storage/chunk/{manifest_id_hex}/{digest_hex}");
-            let start = spec.offset as usize;
-            let end = start + spec.length as usize;
-            map.insert(path, payload[start..end].to_vec());
-        }
-        map
-    }
-    fn read_request(stream: &mut TcpStream) -> Option<String> {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("set timeout");
-        let mut buffer = [0u8; 4096];
-        let mut request = Vec::new();
-        loop {
-            let read = stream.read(&mut buffer).ok()?;
-            if read == 0 {
-                break;
-            }
-            request.extend_from_slice(&buffer[..read]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-            if request.len() > 16 * 1024 {
-                break;
-            }
-        }
-        String::from_utf8(request).ok()
-    }
-    fn respond(mut stream: TcpStream, body: Vec<u8>) {
-        let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).expect("write header");
-        stream.write_all(&body).expect("write body");
-    }
-    fn serve_chunks(listener: TcpListener, responses: Arc<Mutex<HashMap<String, Vec<u8>>>>) {
-        loop {
-            let (mut stream, _) = match listener.accept() {
-                Ok(pair) => pair,
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(_) => break,
-            };
-            let Some(request) = read_request(&mut stream) else {
-                continue;
-            };
-            let path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .map(str::to_string);
-            let Some(path) = path else {
-                continue;
-            };
-            let body = {
-                let mut guard = responses.lock().expect("lock responses");
-                guard.remove(&path)
-            };
-            if let Some(body) = body {
-                respond(stream, body);
-            } else {
-                let error =
-                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                stream.write_all(error).expect("write error");
-            }
-            if responses.lock().expect("lock responses").is_empty() {
-                break;
-            }
-        }
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "needs loopback socket permissions"]
-    async fn fetch_via_gateway_streams_chunks() {
-        let payload = sample_payload(8 * 1024);
-        let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let manifest_id_hex = to_hex(plan.payload_digest.as_bytes());
-        let chunker_handle = "sorafs.sf1@1.0.0".to_string();
-        let provider_id_hex = "aa".repeat(32);
-        let token_b64 = stream_token_b64(&manifest_id_hex, &provider_id_hex, &chunker_handle, 4);
-        let gateway = MockGateway::spawn(manifest_id_hex.clone(), plan.clone(), payload.clone());
-        let gateway_config = GatewayFetchConfig {
-            manifest_id_hex: manifest_id_hex.clone(),
-            chunker_handle: chunker_handle.clone(),
-            manifest_envelope_b64: None,
-            client_id: Some("sdk-test".to_string()),
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
-            blinded_cid_b64: None,
-            salt_epoch: None,
-            expected_cache_version: None,
-        };
-        let provider_input = GatewayProviderInput {
-            name: "alpha".to_string(),
-            provider_id_hex: provider_id_hex.clone(),
-            gateway_public_key_hex: gateway_public_key_hex(),
-            base_url: gateway.base_url().to_string(),
-            stream_token_b64: token_b64,
-            privacy_events_url: None,
-        };
-        let mut config = OrchestratorConfig::default();
-        config.fetch.per_chunk_retry_limit = Some(2);
-        let session = fetch_via_gateway(
-            config,
-            &plan,
-            gateway_config,
-            [provider_input],
-            None,
-            Some(2),
-        )
-        .await
-        .expect("fetch outcome");
-        assert_eq!(
-            session.outcome.chunks.len(),
-            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
-        );
-        let assembled: Vec<u8> = session.outcome.chunks.concat();
-        assert_eq!(assembled, payload);
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "needs loopback socket permissions"]
+    #[tokio::test]
     async fn fetch_via_gateway_errors_without_providers() {
         let payload = sample_payload(1024);
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
@@ -9804,7 +9693,10 @@ mod tests {
         .await
         .expect_err("expected failure");
         assert!(
-            matches!(err, GatewayOrchestratorError::Build(_)),
+            matches!(
+                err,
+                GatewayOrchestratorError::Build(GatewayBuildError::NoProviders)
+            ),
             "unexpected error {err:?}"
         );
     }

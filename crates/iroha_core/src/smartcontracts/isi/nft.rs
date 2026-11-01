@@ -291,8 +291,7 @@ pub mod isi {
                 let nft = state_transaction.world.nft_mut(&object)?;
                 if nft.owned_by != source {
                     return Err(Error::InvariantViolation(
-                        format!("Can't transfer NFT {object} since {source} doesn't own it",)
-                            .into(),
+                        format!("Can't transfer NFT {object} since {source} doesn't own it").into(),
                     ));
                 }
                 nft.owned_by = destination.clone();

@@ -284,14 +284,14 @@ fn asset_account_range() {
         .zip(asset_definitions)
         .map(|(account, asset_definition)| AssetId::new(asset_definition, account))
         .map(|asset| (asset, ()))
-        .chain([(
+        .chain(std::iter::once((
             AssetId::with_scope(
                 AssetDefinitionId::derive_from_components(domain_id, "g".parse().unwrap()),
                 account_id.clone(),
                 AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::new(7)),
             ),
             (),
-        )])
+        )))
         .collect();
     let view = map.view();
     let range = view.range(AssetByAccountBounds::new(&account_id));

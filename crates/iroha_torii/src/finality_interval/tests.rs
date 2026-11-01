@@ -3,7 +3,7 @@
 #[path = "maximum_payment.rs"]
 mod maximum_payment;
 
-pub(crate) use maximum_payment::paid_chain as maximum_paid_chain_for_testing;
+pub use maximum_payment::paid_chain as maximum_paid_chain_for_testing;
 
 use super::*;
 use iroha_core::{

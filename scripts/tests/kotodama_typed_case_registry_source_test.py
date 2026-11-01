@@ -20,9 +20,9 @@ IVM_SOURCE = Path("crates/ivm/tests/kotodama.rs")
 IR_SOURCE = Path("crates/kotodama_lang/src/ir.rs")
 FIXTURE_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
 
-IVM_REGION_SHA256 = "81e841a583ba2ac9e7968aed426b6b09e65bb80a699342b40225943fa37ddfdf"
+IVM_REGION_SHA256 = "7d3a7607a54280b5f44eef1337837bb579be0f3f5eae1a902f97a393db7400c2"
 IR_REGION_SHA256 = "41562e7743c639e665fb3674538986ac99ab1d91691c41c7966e596d91b7aadc"
-IVM_CODE_SHA256 = "d6e75fc454eed1e51a73c77bbf840ad9e4a6d78419324db8b7f5616f40353bf1"
+IVM_CODE_SHA256 = "eba6ae53c4c025962e8f2c7516eb2cc56ad0cc6de6ae3eee2df5498ee563d44f"
 IR_CODE_SHA256 = "7b089765de4004f3e2634ee9807324377348e7aec831d401bf7c3e927ee5ad5a"
 REGISTRY_FIXTURES = ROOT / "fixtures/documentation/kotodama-registry"
 IVM_CASE_IDS_SHA256 = "9c2a8f00d546b43ea86589639998900a540961bdc6b4b4b9b4a6e2b4ce1c92cc"

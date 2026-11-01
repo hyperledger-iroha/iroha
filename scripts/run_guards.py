@@ -21,6 +21,7 @@ GUARDS: tuple[tuple[str, ...], ...] = (
     ("bash", "scripts/check_no_legacy_codec.sh"),
     ("python3", "scripts/check_first_release_history.py"),
     ("python3", "scripts/check_zk_x509_presentation_interval.py"),
+    ("python3", "scripts/check_zk_x509_proof_geometry.py"),
     ("python3", "scripts/check_zk_resource_contract.py"),
     ("python3", "scripts/fhe_bgv_cost_model.py"),
     ("python3", "crates/iroha_fhe/tests/vectors/bgv_reference.py", "--check"),

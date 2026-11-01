@@ -233,12 +233,11 @@ fn certificate_partial_and_published_unwind_retire_only_the_original_physical_ow
                 assert!(CommitCertificate::ptr_eq(&owner, &reader));
                 assert!(reader.admitted_to(&budget));
                 panic!("interrupted with original published readers");
-            } else {
-                let layout = pending.allocation_layouts().unwrap()[2];
-                assert!(refused(layout, || pending.prepare(&source)).is_err());
-                assert!(pending.initialized(&source).unwrap()[0].is_some());
-                panic!("interrupted with original partial decoder");
             }
+            let layout = pending.allocation_layouts().unwrap()[2];
+            assert!(refused(layout, || pending.prepare(&source)).is_err());
+            assert!(pending.initialized(&source).unwrap()[0].is_some());
+            panic!("interrupted with original partial decoder");
         }));
         assert!(failed.is_err());
         assert_eq!(budget.reserved_bytes(), floor);

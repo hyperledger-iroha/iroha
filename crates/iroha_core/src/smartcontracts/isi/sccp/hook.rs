@@ -1150,9 +1150,6 @@ mod tests {
     }
     #[test]
     fn retained_height_owner_survives_native_hook_capacity_refusal_and_success() {
-        // Keep retired fixture State generations from reopening this original pool.
-        // Only the tested admission and synchronous owner refunds may change capacity.
-        let _constructor_retirement = crossbeam_epoch::pin();
         use crate::{
             smartcontracts::isi::sccp::height::RetainedSccpHeightInputsV1,
             state::WorldReadOnly as _, sumeragi::test_chain::CertifiedTestChain,
@@ -1162,6 +1159,9 @@ mod tests {
             block::consensus::SumeragiRootScope, parameter::system::ConsensusMode,
         };
         use std::task::{Context, Poll, Waker};
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let chain =
             CertifiedTestChain::start(native_init_config(SumeragiRootScope::Global)).unwrap();
         let view = chain.state().view();

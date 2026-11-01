@@ -82,8 +82,10 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
             instruction::wide::memory::STORE64
         };
         let accesses = |code: &[u8]| {
-            code.chunks_exact(4)
-                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            code.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| u32::from_le_bytes(*bytes))
                 .filter(|word| instruction::wide::opcode(*word) == opcode)
                 .collect::<Vec<_>>()
         };
@@ -101,8 +103,10 @@ fn saved_register_windows_keep_every_ordered_memory_access_and_amortize_literal_
             DataKey(DataKind::I64, window_anchor.to_string())
         );
         let words = windows
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
         assert_eq!(
             words[1],

@@ -3088,10 +3088,10 @@ impl<'a> BlockUses<'a> {
                             writes.insert(target as *const Expr);
                         }
                     }
-                    Statement::Break | Statement::Continue | Statement::Return(_) => {
-                        if uses.exits.last() != Some(&index) {
-                            uses.exits.push(index);
-                        }
+                    Statement::Break | Statement::Continue | Statement::Return(_)
+                        if uses.exits.last() != Some(&index) =>
+                    {
+                        uses.exits.push(index);
                     }
                     _ => {}
                 },

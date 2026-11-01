@@ -283,7 +283,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
             "  --> english-pub-fn-in-module.ko:2:5\n",
             "    2 |     pub fn double(int value) -> int {\n",
             "      |     ^^^\n",
-            "  = help: a module shares functions, structs, error enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku\n",
+            "  = help: a module shares functions, structs, enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku\n",
             "  = fix: replace `pub` with `export`",
         ),
     ),
@@ -375,7 +375,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
     ),
     (
         "bidi-control-in-string",
-        "seiyaku Counter {\n    view fn label() authorize(anyone) -> string {\n        return \"admin\\u{202e} user\";\n    }\n}\n",
+        "seiyaku Counter {\n    view fn label() authorize(anyone) -> string {\n        return \"admin\u{202e} user\";\n    }\n}\n",
         concat!(
             "error[E_BIDI_CONTROL_CHARACTER] lex: source contains the invisible bidirectional control character U+202E (RIGHT-TO-LEFT OVERRIDE)\n",
             "  --> bidi-control-in-string.ko:3:22\n",
@@ -955,12 +955,29 @@ fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
             "{} has invalid byte range {start}..{end}",
             diagnostic.code
         );
+        // The `-->` line names the start position; the excerpt's underline shows the
+        // exact extent, as in every rendered snapshot above.
         assert!(
             human.contains(&format!(
-                "{source_name}:{}:{}-{}:{}",
-                span.start.line, span.start.column, span.end.line, span.end.column
+                "--> {source_name}:{}:{}\n",
+                span.start.line, span.start.column
             )),
-            "human output omitted the exact span for {}: {human}",
+            "human output omitted the exact span start for {}: {human}",
+            diagnostic.code
+        );
+        assert_eq!(
+            span.start.line, span.end.line,
+            "{} spans one source line",
+            diagnostic.code
+        );
+        let underline = format!(
+            "      | {}{}",
+            " ".repeat(span.start.column - 1),
+            "^".repeat(span.end.column - span.start.column)
+        );
+        assert!(
+            human.lines().any(|line| line == underline),
+            "human output omitted the exact span underline for {}: {human}",
             diagnostic.code
         );
         for label in &diagnostic.labels {

@@ -113,7 +113,9 @@ fn all_eleven_instructions_match_untraced_execution_and_record_state() {
     assert_eq!(&final_state[64..128], output.slots[0].c1.as_slice());
     assert_eq!(format!("{trace:?}"), "[REDACTED RAM-LFE execution trace]");
     let tags: std::collections::BTreeSet<_> = trace.instructions[..trace.steps * INSTRUCTION_WIDTH]
-        .chunks_exact(INSTRUCTION_WIDTH)
+        .as_chunks::<INSTRUCTION_WIDTH>()
+        .0
+        .iter()
         .map(|row| row[0])
         .collect();
     assert_eq!(tags, (0..11).collect());

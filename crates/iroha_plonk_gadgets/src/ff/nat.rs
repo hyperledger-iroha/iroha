@@ -516,7 +516,7 @@ mod tests {
         let expected = Fp::from(2u64).pow_vartime([576]) - Fp::ONE;
         assert_eq!(all_ones.to_field::<Fp>(), expected);
         assert_eq!(all_ones.to_field_signed::<Fp>(), -Fp::ONE);
-        assert!(Nat::select(true, &Nat::ONE, &Nat::ZERO) == Nat::ONE);
-        assert!(Nat::select(false, &Nat::ONE, &Nat::ZERO) == Nat::ZERO);
+        assert_eq!(Nat::select(true, &Nat::ONE, &Nat::ZERO), Nat::ONE);
+        assert_eq!(Nat::select(false, &Nat::ONE, &Nat::ZERO), Nat::ZERO);
     }
 }

@@ -248,13 +248,15 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         }
         // This existing owner clears rows on every error and unwind path.
         let mut inner = StreamingRowCommitmentV1 {
+            #[cfg(test)]
+            observation: commitment_observation::ContextV1::default(),
             rows,
             width,
             received_columns: 0,
             failed: false,
             context,
             node_role,
-            digest_streams,
+            digest_streams: RowStreamsV1::Scalar(digest_streams),
             opening_indices: opening_indices.to_vec(),
             opened_rows: BTreeMap::new(),
         };
@@ -311,6 +313,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         inner.failed = true;
         let failure = inner
             .digest_streams
+            .scalar_mut_v1()?
             .par_iter_mut()
             .zip(&self.selected_rows)
             .enumerate()
@@ -386,6 +389,7 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         inner.failed = true;
         let failure = inner
             .digest_streams
+            .scalar_mut_v1()?
             .par_iter_mut()
             .zip(&self.selected_rows)
             .map(|(stream, &row)| {
@@ -447,13 +451,13 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         )?;
         let mut offset = 0usize;
         let mut tile = DigestCutTileV1([PrivacyOuterDigestV1::default(); CUT_ROWS_V1]);
-        for rows in self.selected_rows.chunks_exact(CUT_ROWS_V1) {
+        for rows in self.selected_rows.as_chunks::<CUT_ROWS_V1>().0 {
             let first = rows[0];
             let original = self.cut.roots[first / CUT_ROWS_V1];
             for (slot, stream) in tile
                 .0
                 .iter_mut()
-                .zip(&mut inner.digest_streams[offset..offset + CUT_ROWS_V1])
+                .zip(&mut inner.digest_streams.scalar_mut_v1()?[offset..offset + CUT_ROWS_V1])
             {
                 *slot = stream
                     .finalize_in_place_v1()
@@ -498,3 +502,7 @@ impl Drop for DigestCutTileV1 {
 #[cfg(test)]
 #[path = "retained_commitment_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "initial_preflighted_cost_tests.rs"]
+mod initial_preflighted_cost_tests;

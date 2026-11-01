@@ -156,7 +156,9 @@ fn transfer_syscall_with_tlv_pointers() {
     vm.memory
         .preload_input(dataspace_offset, &dataspace_tlv)
         .expect("preload input");
-    vm.set_register(14, Memory::INPUT_START + dataspace_offset);
+    // Every definition modeled by the fixture host has Global policy, so the
+    // transfer names the global bucket with a null scope.
+    vm.set_register(14, 0);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
@@ -167,6 +169,12 @@ fn transfer_syscall_with_tlv_pointers() {
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let host = WsvHost::new_with_subject(wsv2, bob.clone());
     vm.set_host(host);
+    // The permission does not admit an explicit dataspace scope for a
+    // Global-policy definition, not even the universal one.
+    vm.set_register(14, Memory::INPUT_START + dataspace_offset);
+    vm.load_program(&prog).unwrap();
+    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    vm.set_register(14, 0);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
 }

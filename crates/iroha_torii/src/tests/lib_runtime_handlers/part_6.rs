@@ -761,8 +761,8 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
             // a specialized recoverable worker across those separate phases.
             for boundary in [
                 "spawn_blocking_recoverable(move||{",
-                "let_admission=admission;",
-                "HistoryProducerOwner::from_admission(&_admission)?",
+                "letadmission=admission;",
+                "HistoryProducerOwner::from_admission(&admission)?",
                 "owner.physical_scope(||{",
                 "join_recoverable(worker).await",
             ] {
@@ -3102,6 +3102,9 @@ pub fn app_with_root_scope_for_handler_test(world: World, private: bool) -> Shar
 
     let mut config = TestChainConfig::new(world, 1_000);
     if private {
+        use iroha_data_model::nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+        };
         config.root_scope = SumeragiRootScope::Dataspace {
             parent_network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; 32])),
@@ -3109,9 +3112,6 @@ pub fn app_with_root_scope_for_handler_test(world: World, private: bool) -> Shar
             dataspace_id: DataSpaceId::new(u64::MAX - 1),
         };
         let dataspace_id = DataSpaceId::new(u64::MAX - 1);
-        use iroha_data_model::nexus::{
-            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
-        };
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.lane_catalog = LaneCatalog::new(
             1_u32.try_into().unwrap(),

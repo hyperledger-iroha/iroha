@@ -253,15 +253,12 @@ fn replay_limb<P>(
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
 {
-    for residues in destination.chunks_exact_mut(RESIDUES_PER_READ_V1) {
+    for residues in destination.as_chunks_mut::<RESIDUES_PER_READ_V1>().0 {
         if transaction.read_next(provider, scratch)? != scratch.len() {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
-        for (residue, encoded) in residues.iter_mut().zip(scratch.chunks_exact(8)) {
-            let value = u64::from_be_bytes([
-                encoded[0], encoded[1], encoded[2], encoded[3], encoded[4], encoded[5], encoded[6],
-                encoded[7],
-            ]);
+        for (residue, encoded) in residues.iter_mut().zip(scratch.as_chunks::<8>().0) {
+            let value = u64::from_be_bytes(*encoded);
             if value >= modulus {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
             }

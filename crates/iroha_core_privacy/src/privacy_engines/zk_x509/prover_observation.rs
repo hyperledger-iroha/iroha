@@ -1,15 +1,25 @@
 //! Bounded public observations for isolated native prover diagnostics.
 //!
-//! Collection is explicitly scoped to the calling test thread. It never
+//! Collection starts on the calling test thread. Worker phases require an
+//! explicit parent token; unrelated threads remain unobserved. Collection never
 //! records field values, source bytes, random masks or witness-dependent row
-//! positions. Durations of nested phases overlap and must not be summed.
+//! positions. Durations of nested and overlapping phases must not be summed.
+//! Flat receipt counters remain on the initiating thread; opted-in workers
+//! contribute only to the shared phase tree. The separate closed seven-operation
+//! aggregate commitment inventory also contributes only to that tree, through
+//! an explicit context from the initial `BaseSampleAndCommit` timer. Its
+//! coordinator intervals include existing worker joins, not per-worker CPU.
 //!
 //! Every timer also opens a phase in the shared `iroha_measurement` tree of
 //! its observation, so the same instrumentation yields inclusive and exclusive
 //! times and the unattributed share. The public geometry counters and the
 //! proof size are recorded in the same record as work and byte counters. The
-//! record carries only the static labels below and never returns a value to
-//! the prover.
+//! record carries only the static phase labels below and the aggregate
+//! commitment operation labels; it never returns a value to the prover. The
+//! 75 flat phase counters and their indices remain unchanged.
+//! Whole joined transform batches also open closed relation-family children.
+//! Their original backend work counters follow the opening coordinator scope;
+//! finished diagnostic coverage validates the canonical call/column partition.
 //!
 //! When a harness directory is given, the session itself writes the record
 //! there, so a producer that fails, returns early or unwinds still leaves a
@@ -23,8 +33,12 @@ use std::{
 
 use iroha_measurement::{
     ByteKind, CollectingSink, DirectoryReport, DirectorySink, FlowKind, MeasurementRecord,
-    PhaseGuard, RecordSink, RunContext, RunIdentity, Session, TeeSink, WorkerDeclaration,
+    PhaseGuard, PhaseParent, RecordSink, RunContext, RunIdentity, Session, TeeSink,
+    WorkerDeclaration,
 };
+
+#[path = "prover_observation_transform.rs"]
+pub(super) mod transform;
 
 /// Fixed public implementation phases; the receipt cannot grow with the witness.
 #[derive(Clone, Copy, Debug)]
@@ -95,14 +109,18 @@ pub(super) enum PhaseV1 {
     SourceP256ValueBusAux,
     SourceP256ScalarBitBusBase,
     SourceP256ScalarBitBusAux,
-    MainFriMaskOracles,
+    JointAuxiliaryBinding,
+    MainJointOraclePreparation,
+    MainFriMaskCommitment,
     CaJointOracleCommitment,
-    MainProofEncodingAndExplicitCleanup,
-    CaFinalProof,
+    JointPointDerivation,
+    MainJointPointPreparation,
+    MainProofEncoding,
+    CaJointFinalization,
     CompositionShaFixedRows,
     CompositionShaFixedInverseTransform,
 }
-const PHASES: [PhaseV1; 71] = [
+const PHASES: [PhaseV1; 75] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -168,10 +186,14 @@ const PHASES: [PhaseV1; 71] = [
     PhaseV1::SourceP256ValueBusAux,
     PhaseV1::SourceP256ScalarBitBusBase,
     PhaseV1::SourceP256ScalarBitBusAux,
-    PhaseV1::MainFriMaskOracles,
+    PhaseV1::JointAuxiliaryBinding,
+    PhaseV1::MainJointOraclePreparation,
+    PhaseV1::MainFriMaskCommitment,
     PhaseV1::CaJointOracleCommitment,
-    PhaseV1::MainProofEncodingAndExplicitCleanup,
-    PhaseV1::CaFinalProof,
+    PhaseV1::JointPointDerivation,
+    PhaseV1::MainJointPointPreparation,
+    PhaseV1::MainProofEncoding,
+    PhaseV1::CaJointFinalization,
     PhaseV1::CompositionShaFixedRows,
     PhaseV1::CompositionShaFixedInverseTransform,
 ];
@@ -243,10 +265,14 @@ const PHASE_LABELS_V1: [&str; PHASES.len()] = [
     "SourceP256ValueBusAux",
     "SourceP256ScalarBitBusBase",
     "SourceP256ScalarBitBusAux",
-    "MainFriMaskOracles",
+    "JointAuxiliaryBinding",
+    "MainJointOraclePreparation",
+    "MainFriMaskCommitment",
     "CaJointOracleCommitment",
-    "MainProofEncodingAndExplicitCleanup",
-    "CaFinalProof",
+    "JointPointDerivation",
+    "MainJointPointPreparation",
+    "MainProofEncoding",
+    "CaJointFinalization",
     "CompositionShaFixedRows",
     "CompositionShaFixedInverseTransform",
 ];
@@ -440,6 +466,33 @@ impl Drop for ObservationV1 {
     }
 }
 
+/// A phase started inside a consuming operation and closed after its owners drop.
+///
+/// The caller retains this slot while the operation returns or unwinds. This
+/// covers implicit destructors without adding a parent across existing guards.
+#[derive(Default)]
+pub(super) struct CompletionPhaseV1 {
+    timer: Option<PhaseTimerV1>,
+}
+
+impl CompletionPhaseV1 {
+    /// Start the single completion interval at its actual operation boundary.
+    pub(super) fn start_v1(&mut self, phase: PhaseV1) {
+        assert!(self.timer.is_none(), "completion phase cannot restart");
+        self.timer = Some(PhaseTimerV1::start_v1(phase));
+    }
+
+    /// Close only a successful operation after its consumed owners have dropped.
+    pub(super) fn finish_v1<T, E>(mut self, result: Result<T, E>) -> Result<T, E> {
+        if result.is_ok()
+            && let Some(timer) = self.timer.take()
+        {
+            timer.complete_v1();
+        }
+        result
+    }
+}
+
 /// RAII records errors and unwinds without needing an error payload.
 pub(super) struct PhaseTimerV1 {
     active: Option<(PhaseV1, Instant, std::rc::Rc<()>, Option<PhaseGuard>)>,
@@ -469,6 +522,43 @@ impl PhaseTimerV1 {
     pub(super) fn complete_v1(mut self) {
         self.complete = true;
     }
+
+    /// Attribute one original joined batch under this exact transform timer.
+    /// The synchronous evaluator and its workers finish before this timer ends.
+    pub(super) fn transform_context_v1(&self) -> transform::ContextV1 {
+        transform::ContextV1::from_parent(
+            self.active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        )
+    }
+
+    /// Share this exact open phase with workers, without activating their
+    /// thread-local prover counters. Join workers before completing the timer.
+    pub(super) fn worker_parent_v1(&self) -> WorkerPhaseParentV1 {
+        WorkerPhaseParentV1 {
+            parent: self
+                .active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        }
+    }
+
+    /// Share this exact phase with aggregate commitment operations, without
+    /// opening another session or adding flat phase counters. The caller keeps
+    /// the timer open until the synchronous commitment and its workers join.
+    pub(super) fn commitment_context_v1(
+        &self,
+    ) -> crate::privacy_engines::aggregate_stark::commitment_observation::ContextV1 {
+        crate::privacy_engines::aggregate_stark::commitment_observation::ContextV1::from_parent(
+            self.active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        )
+    }
 }
 impl Drop for PhaseTimerV1 {
     fn drop(&mut self) {
@@ -493,6 +583,58 @@ impl Drop for PhaseTimerV1 {
                     count.elapsed += started.elapsed();
                 }
             });
+        }
+    }
+}
+
+/// Sendable ownership of one diagnostic phase, using only the existing static
+/// phase inventory. An inactive token never adopts a worker's local observation.
+///
+/// Worker phases contribute to the shared tree only; the flat receipt counters
+/// remain owned by the initiating thread. The recorder retains its original
+/// semantics: an ended parent in a live observation is counted as stale and its
+/// child attaches to the root; an ended observation cannot receive new entries.
+///
+/// TODO(WI5): instrument real transform and other worker boundaries with these
+/// tokens. This prerequisite alone does not establish the phase-detail bound.
+#[derive(Clone)]
+pub(super) struct WorkerPhaseParentV1 {
+    parent: Option<PhaseParent>,
+}
+
+impl WorkerPhaseParentV1 {
+    /// Open a phase on the current worker under this explicit parent. No label
+    /// or error payload comes from the workload.
+    pub(super) fn enter_v1(&self, phase: PhaseV1) -> WorkerPhaseV1 {
+        WorkerPhaseV1 {
+            guard: self
+                .parent
+                .as_ref()
+                .map(|parent| parent.enter(PHASE_LABELS_V1[phase as usize])),
+        }
+    }
+}
+
+/// A worker-local shared-tree phase. The underlying guard stays on its opening
+/// thread; dropping it without completion retains interruption and unwind facts.
+pub(super) struct WorkerPhaseV1 {
+    guard: Option<PhaseGuard>,
+}
+
+impl WorkerPhaseV1 {
+    /// Explicitly nest another worker phase under this still-open operation.
+    /// All children must join before this guard completes or drops.
+    pub(super) fn worker_parent_v1(&self) -> WorkerPhaseParentV1 {
+        WorkerPhaseParentV1 {
+            parent: self.guard.as_ref().map(PhaseGuard::parent),
+        }
+    }
+
+    /// Complete this operation; ordinary error returns and unwinds leave its
+    /// guard to record the original interrupted outcome instead.
+    pub(super) fn complete_v1(self) {
+        if let Some(guard) = self.guard {
+            guard.complete();
         }
     }
 }
@@ -528,10 +670,12 @@ pub(super) fn completed_transform_v1(metal: bool, columns: usize) {
         }
     });
 }
-/// Completed public fixed-column work, recorded after each bounded batch.
-/// Recovery IFFTs are additional work introduced by the bounded matrix owner.
+/// Completed public fixed-column work after one bounded forward group.
+/// A sixteen-column logical recovery group still dispatches inverses in batches
+/// of at most eight; actual backend counters separately enforce those limits.
 pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bool) {
-    assert!((1..=8).contains(&columns) && rows.is_power_of_two());
+    let maximum = fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1;
+    assert!((1..=maximum).contains(&columns) && rows.is_power_of_two());
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             let columns = columns as u64;
@@ -552,7 +696,12 @@ pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bo
 
 /// Actual completed fixed-coset arithmetic, separated by direction and backend.
 pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: usize) {
-    assert!((1..=8).contains(&columns));
+    let maximum = if metal && !inverse {
+        fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+    } else {
+        8
+    };
+    assert!((1..=maximum).contains(&columns));
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.fixed_backend_columns[usize::from(metal)][usize::from(inverse)] +=
@@ -572,7 +721,12 @@ pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: us
 
 /// Completed private quotient stripe FFTs; fixed and common-domain counters stay separate.
 pub(super) fn completed_quotient_backend_v1(metal: bool, columns: usize) {
-    assert!((1..=8).contains(&columns));
+    let maximum = if metal {
+        fastpq_prover::goldilocks_transform::MAX_GOLDILOCKS_PREPARED_FORWARD_COLUMNS_V1
+    } else {
+        8
+    };
+    assert!((1..=maximum).contains(&columns));
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
             receipt.quotient_backend_columns[usize::from(metal)] += columns as u64;
@@ -693,6 +847,10 @@ impl ReceiptV1 {
 }
 
 #[cfg(test)]
+#[path = "prover_observation_worker_tests.rs"]
+mod worker_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -738,9 +896,278 @@ mod tests {
         }
     }
 
+    struct CompletionDropProbe;
+    impl Drop for CompletionDropProbe {
+        fn drop(&mut self) {
+            PhaseTimerV1::start_v1(PhaseV1::CompositionCaRetention).complete_v1();
+        }
+    }
+
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the control requires the original argument's automatic destruction before returning"
+    )]
+    fn consume_completion_owner(
+        original: CompletionDropProbe,
+        completion: &mut CompletionPhaseV1,
+        fail: bool,
+    ) -> Result<(), &'static str> {
+        completion.start_v1(PhaseV1::MainProofEncoding);
+        std::hint::black_box(&original);
+        if fail {
+            Err("encoding refused")
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn completion_phase_includes_original_argument_drop_on_success_and_error() {
+        for fail in [false, true] {
+            let observation = ObservationV1::begin_v1();
+            let mut completion = CompletionPhaseV1::default();
+            let result = consume_completion_owner(CompletionDropProbe, &mut completion, fail);
+            assert_eq!(
+                completion.finish_v1(result),
+                if fail {
+                    Err("encoding refused")
+                } else {
+                    Ok(())
+                }
+            );
+            let receipt = observation.finish_v1();
+            let record = receipt.measurement_v1().unwrap();
+            let (parent_index, parent) = tree_node(record, "MainProofEncoding");
+            let (_, dropped) = tree_node(record, "CompositionCaRetention");
+            assert_eq!(dropped.parent, Some(parent_index));
+            assert_eq!(
+                (
+                    parent.calls,
+                    parent.completed,
+                    parent.interrupted,
+                    parent.unwound
+                ),
+                (1, u64::from(!fail), u64::from(fail), 0)
+            );
+        }
+    }
+
+    #[test]
+    fn completion_phase_includes_whole_state_drop_during_unwind() {
+        let observation = ObservationV1::begin_v1();
+        assert!(
+            std::panic::catch_unwind(|| {
+                let mut completion = CompletionPhaseV1::default();
+                let original = CompletionDropProbe;
+                {
+                    let state = original;
+                    completion.start_v1(PhaseV1::MainProofEncoding);
+                    std::hint::black_box(&state);
+                    panic!("encoding unwind");
+                };
+            })
+            .is_err()
+        );
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        let (parent_index, parent) = tree_node(record, "MainProofEncoding");
+        let (_, dropped) = tree_node(record, "CompositionCaRetention");
+        assert_eq!(dropped.parent, Some(parent_index));
+        assert_eq!(
+            (
+                parent.calls,
+                parent.completed,
+                parent.interrupted,
+                parent.unwound
+            ),
+            (1, 0, 1, 1)
+        );
+    }
+
+    #[test]
+    fn completion_phase_refuses_restarting_and_does_not_invent_unreached_work() {
+        let observation = ObservationV1::begin_v1();
+        assert_eq!(
+            CompletionPhaseV1::default().finish_v1::<(), _>(Err("preflight refused")),
+            Err("preflight refused")
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let mut completion = CompletionPhaseV1::default();
+                completion.start_v1(PhaseV1::MainProofEncoding);
+                completion.start_v1(PhaseV1::MainProofEncoding);
+            })
+            .is_err()
+        );
+        let receipt = observation.finish_v1();
+        let phase = receipt.phases[PhaseV1::MainProofEncoding as usize];
+        assert_eq!(
+            (
+                phase.calls,
+                phase.completed,
+                phase.interrupted,
+                phase.unwound
+            ),
+            (1, 0, 1, 1)
+        );
+    }
+
+    #[test]
+    fn joint_completion_phases_append_without_renumbering_the_original_inventory() {
+        let original_labels = [
+            "Preparation",
+            "Assembly",
+            "BaseSources",
+            "BaseSampleAndCommit",
+            "CompactCa",
+            "BoundSources",
+            "DerBinding",
+            "RfcBinding",
+            "AuxSampleAndCommit",
+            "Composition",
+            "DeepAndFri",
+            "QueryOpenings",
+            "EnvelopeAndSelfCheck",
+            "SampleSourceColumns",
+            "SampleMaskDraws",
+            "CompositionRegistration",
+            "CompositionTraceCache",
+            "CompositionDenominators",
+            "CompositionBaseReplay",
+            "CompositionAuxReplay",
+            "CompositionFixedReplay",
+            "CompositionResiduesAndFold",
+            "CompositionInverseTransform",
+            "CompositionDegreeChunks",
+            "InitialJoinedSourceBatch",
+            "InitialJoinedTransform",
+            "QueryJoinedSourceBatch",
+            "QueryJoinedTransform",
+            "CompositionArithmeticFixedRows",
+            "CompositionArithmeticFixedInverseTransform",
+            "CompositionProviders",
+            "CompositionRegisteredProviders",
+            "CompositionRegistrationFold",
+            "CompositionTerminalLinks",
+            "CompositionKeyLinks",
+            "CompositionShaUnion",
+            "CompositionCaRetention",
+            "CompositionCaLinks",
+            "CompositionBlinding",
+            "CompositionFp4Evaluations",
+            "CompositionCommitment",
+            "SourceByteMemoryBase",
+            "SourceByteMemoryAux",
+            "SourceStrictDerBase",
+            "SourceStrictDerAux",
+            "SourceRfc5280Base",
+            "SourceRfc5280Aux",
+            "SourceSha256CallBusBase",
+            "SourceSha256CallBusAux",
+            "SourceCaAccumulatorBase",
+            "SourceCaAccumulatorAux",
+            "SourceProjectionBase",
+            "SourceProjectionAux",
+            "SourceP256ArithmeticBase",
+            "SourceP256ArithmeticAux",
+            "SourceP256ReductionBase",
+            "SourceP256ReductionAux",
+            "SourceP256LowSBase",
+            "SourceP256LowSAux",
+            "SourceP256WindowBase",
+            "SourceP256WindowAux",
+            "SourceP256ValueBusBase",
+            "SourceP256ValueBusAux",
+            "SourceP256ScalarBitBusBase",
+            "SourceP256ScalarBitBusAux",
+        ];
+        assert_eq!(&PHASE_LABELS_V1[..65], original_labels);
+        assert_eq!(
+            &PHASE_LABELS_V1[65..],
+            [
+                "JointAuxiliaryBinding",
+                "MainJointOraclePreparation",
+                "MainFriMaskCommitment",
+                "CaJointOracleCommitment",
+                "JointPointDerivation",
+                "MainJointPointPreparation",
+                "MainProofEncoding",
+                "CaJointFinalization",
+                "CompositionShaFixedRows",
+                "CompositionShaFixedInverseTransform"
+            ]
+        );
+    }
+
+    #[test]
+    fn joint_completion_phases_record_success_error_and_unwind() {
+        let observation = ObservationV1::begin_v1();
+        for phase in PHASES[65..73].iter().copied() {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+            drop(PhaseTimerV1::start_v1(phase));
+            let result = std::panic::catch_unwind(|| {
+                let _timer = PhaseTimerV1::start_v1(phase);
+                panic!("synthetic joint completion unwind");
+            });
+            assert!(result.is_err());
+        }
+        observation.record_failure_v1("producer", "error");
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        for phase in PHASES[65..73].iter().copied() {
+            let flat = receipt.phases[phase as usize];
+            let (_, node) = tree_node(record, PHASE_LABELS_V1[phase as usize]);
+            assert_eq!(
+                (flat.calls, flat.completed, flat.interrupted, flat.unwound),
+                (3, 1, 2, 1)
+            );
+            assert_eq!(
+                (node.calls, node.completed, node.interrupted, node.unwound),
+                (3, 1, 2, 1)
+            );
+            assert_eq!(node.parent, Some(0));
+        }
+        assert_eq!(record.outcome, iroha_measurement::RunOutcome::Failed);
+        assert_eq!(record.failures.entries[0].code, "error");
+    }
+
+    #[test]
+    fn joint_completion_siblings_do_not_cross_the_retained_deep_guard() {
+        let observation = ObservationV1::begin_v1();
+        for phase in PHASES[65..71].iter().copied() {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+        }
+        let deep = PhaseTimerV1::start_v1(PhaseV1::DeepAndFri);
+        PhaseTimerV1::start_v1(PhaseV1::CompositionCaLinks).complete_v1();
+        deep.complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::QueryOpenings).complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::MainProofEncoding).complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::CaJointFinalization).complete_v1();
+        let receipt = observation.finish_v1();
+        let record = receipt.measurement_v1().unwrap();
+        let (deep_index, deep) = tree_node(record, "DeepAndFri");
+        let (_, nested) = tree_node(record, "CompositionCaLinks");
+        assert_eq!(nested.parent, Some(deep_index));
+        assert_eq!((deep.calls, deep.completed, deep.interrupted), (1, 1, 0));
+        for label in &PHASE_LABELS_V1[65..73] {
+            let (_, node) = tree_node(record, label);
+            assert_eq!(node.parent, Some(0));
+            assert_eq!((node.calls, node.completed, node.interrupted), (1, 1, 0));
+        }
+        let (_, root) = tree_node(record, MEASUREMENT_ROOT_V1);
+        let children: u64 = record
+            .phase_tree
+            .nodes
+            .iter()
+            .filter(|node| node.parent == Some(0))
+            .map(|node| node.wall_inclusive_ns)
+            .sum();
+        assert_eq!(root.wall_exclusive_ns, root.wall_inclusive_ns - children);
+    }
+
     #[test]
     fn fine_phase_inventory_is_fixed_unique_and_preserves_every_old_phase() {
-        assert_eq!(PHASES.len(), 71);
+        assert_eq!(PHASES.len(), 75);
         let observation = ObservationV1::begin_v1();
         for (index, phase) in PHASES.iter().copied().enumerate() {
             assert_eq!(phase as usize, index);
@@ -756,7 +1183,7 @@ mod tests {
             text.lines()
                 .filter(|line| line.starts_with("phase="))
                 .count(),
-            71
+            75
         );
         for phase in [
             PhaseV1::Composition,
@@ -765,10 +1192,10 @@ mod tests {
             PhaseV1::CompositionFp4Evaluations,
             PhaseV1::SourceStrictDerBase,
             PhaseV1::SourceP256ScalarBitBusAux,
-            PhaseV1::MainFriMaskOracles,
+            PhaseV1::MainFriMaskCommitment,
             PhaseV1::CaJointOracleCommitment,
-            PhaseV1::MainProofEncodingAndExplicitCleanup,
-            PhaseV1::CaFinalProof,
+            PhaseV1::MainProofEncoding,
+            PhaseV1::CaJointFinalization,
         ] {
             assert!(text.contains(&format!("phase={phase:?} calls=1 completed=1")));
         }
@@ -913,8 +1340,39 @@ mod tests {
     }
 
     #[test]
+    fn fixed_observation_admits_sixteen_only_for_metal_forward_groups() {
+        let observation = ObservationV1::begin_v1();
+        completed_fixed_backend_v1(true, false, 16);
+        completed_fixed_backend_v1(true, true, 8);
+        completed_fixed_backend_v1(true, true, 8);
+        completed_fixed_backend_v1(false, false, 8);
+        completed_fixed_backend_v1(false, true, 8);
+        completed_fixed_coset_v1(16, 32, true);
+        for (metal, inverse) in [(false, false), (false, true), (true, true)] {
+            for width in [9, 16] {
+                assert!(
+                    std::panic::catch_unwind(|| {
+                        completed_fixed_backend_v1(metal, inverse, width);
+                    })
+                    .is_err()
+                );
+            }
+        }
+        assert!(std::panic::catch_unwind(|| completed_fixed_backend_v1(true, false, 17)).is_err());
+        assert!(std::panic::catch_unwind(|| completed_fixed_coset_v1(17, 32, true)).is_err());
+        let receipt = observation.finish_v1();
+        assert_eq!(receipt.fixed_backend_columns, [[8, 8], [16, 16]]);
+        assert_eq!(receipt.fixed_forward_columns, 16);
+        assert_eq!(receipt.fixed_inverse_columns, 16);
+        assert_eq!(receipt.fixed_forward_butterflies, 16 * 16 * 5);
+        assert_eq!(receipt.fixed_inverse_butterflies, 16 * 16 * 5);
+        assert_eq!(receipt.quotient_backend_columns, [0, 0]);
+        assert_eq!(receipt.native_replay_backend_columns, [0, 0]);
+    }
+
+    #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
-        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let observation = ObservationV1::begin_v1();
         std::thread::spawn(|| completed_transform_v1(true, 8))
@@ -945,10 +1403,10 @@ mod tests {
     #[test]
     fn previously_unattributed_operations_preserve_success_error_and_unwind_counts() {
         let phases = [
-            PhaseV1::MainFriMaskOracles,
+            PhaseV1::MainFriMaskCommitment,
             PhaseV1::CaJointOracleCommitment,
-            PhaseV1::MainProofEncodingAndExplicitCleanup,
-            PhaseV1::CaFinalProof,
+            PhaseV1::MainProofEncoding,
+            PhaseV1::CaJointFinalization,
         ];
         let observation = ObservationV1::begin_v1();
         for phase in phases {
@@ -1005,7 +1463,7 @@ mod tests {
         .join()
         .unwrap();
         let receipt = observation.finish_v1();
-        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         for phase in phases {
             let count = receipt.phases[phase as usize];
@@ -1048,7 +1506,7 @@ mod tests {
             assert_eq!(count.unwound, 1);
         }
         assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
-        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 75 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let next = ObservationV1::begin_v1();
         stale.complete_v1();
@@ -1342,7 +1800,7 @@ mod tests {
         completed_fixed_backend_v1(true, false, 3);
         completed_fixed_backend_v1(true, true, 1);
         completed_quotient_backend_v1(false, 8);
-        completed_quotient_backend_v1(true, 3);
+        completed_quotient_backend_v1(true, 16);
         completed_native_replay_backend_v1(false, 8);
         completed_native_replay_backend_v1(true, 4);
         failed_fixed_coset_v1();
@@ -1351,6 +1809,7 @@ mod tests {
         observation.record_proof_bytes_v1(8_123_456);
         let receipt = observation.finish_v1();
         let record = receipt.measurement_v1().unwrap();
+        assert_eq!(receipt.quotient_backend_columns, [8, 16]);
         // Every flat counter of the receipt has the same value in the record:
         // (number of reports, sum of units).
         for (label, expected) in [

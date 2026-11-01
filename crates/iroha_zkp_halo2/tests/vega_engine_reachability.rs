@@ -104,7 +104,7 @@ fn public_native_roots_use_only_the_complete_canonical_six_lane_type() {
 
     let from_word = |word: u64| {
         let mut bytes = [0_u8; 48];
-        for lane in bytes.chunks_exact_mut(8) {
+        for lane in bytes.as_chunks_mut::<8>().0 {
             lane.copy_from_slice(&word.to_le_bytes());
         }
         RnsNativeProofDigestV1::from_le_bytes(bytes).expect("canonical six lanes")

@@ -154,6 +154,10 @@ impl SecretU256V1 {
         }
         integer
     }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "deliberate low-byte extraction from each limb; no secret word temporary"
+    )]
     fn encode_le_v1(&self) -> SecretEncodedScalarV1 {
         // Write directly into the erasing byte owner; no extra Copy encoded-integer
         // temporary retains the private scalar after the conversion.
@@ -1208,7 +1212,7 @@ mod tests {
         for bytes in [
             [0; 32],
             [0xff; 32],
-            core::array::from_fn(|index| (index * 7 + 3) as u8),
+            core::array::from_fn(|index| u8::try_from(index * 7 + 3).unwrap()),
         ] {
             let integer = SecretU256V1::from_borrowed_le_bytes_v1(&bytes);
             let encoding = integer.encode_le_v1();

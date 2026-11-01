@@ -76,7 +76,7 @@ impl Component {
         let vxx = self.sum_xx / n - cx * cx;
         let vyy = self.sum_yy / n - cy * cy;
         let vxy = self.sum_xy / n - cx * cy;
-        let mean = 0.5 * (vxx + vyy);
+        let mean = f64::midpoint(vxx, vyy);
         let spread = (0.25 * (vxx - vyy).powi(2) + vxy * vxy).sqrt();
         let (major, minor) = (mean + spread, (mean - spread).max(0.0));
         if major <= 0.0 {
@@ -338,7 +338,7 @@ pub fn select_triple(finders: &[Finder]) -> Option<([Finder; 4], usize)> {
                     let legs = lu.max(lv) / lu.min(lv);
                     let cos = (ux * vx + uy * vy) / (lu * lv);
                     // canvas geometry: side / finder diameter = 880 / 120
-                    let ratio = 0.5 * (lu + lv) / mean_size;
+                    let ratio = f64::midpoint(lu, lv) / mean_size;
                     if legs > 2.0 || cos.abs() > 0.5 || !(4.8..=10.5).contains(&ratio) {
                         continue;
                     }
@@ -618,7 +618,10 @@ impl Iterator for Candidates<'_> {
 fn complete_triple(finders: &[Finder], quad: [Finder; 4], missing: usize) -> Option<[Finder; 4]> {
     let d = quad[missing];
     let distance = |f: &Finder| ((f.x - d.x).powi(2) + (f.y - d.y).powi(2)).sqrt();
-    let leg = 0.5 * (distance(&quad[(missing + 1) % 4]) + distance(&quad[(missing + 3) % 4]));
+    let leg = f64::midpoint(
+        distance(&quad[(missing + 1) % 4]),
+        distance(&quad[(missing + 3) % 4]),
+    );
     let fourth = finders
         .iter()
         .filter(|f| f.size >= 0.3 * d.size && distance(f) <= 0.3 * leg)

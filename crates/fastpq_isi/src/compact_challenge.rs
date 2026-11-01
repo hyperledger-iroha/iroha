@@ -174,8 +174,8 @@ impl RawTapeV1 {
         if self.round.0 == 1 {
             return Ok(RawTapeMessageV1::Dummy);
         }
-        let mut accepted = self.bytes.chunks_exact(8).filter_map(|bytes| {
-            let word = u64::from_le_bytes(bytes.try_into().expect("exact raw u64 word"));
+        let mut accepted = self.bytes.as_chunks::<8>().0.iter().filter_map(|bytes| {
+            let word = u64::from_le_bytes(*bytes);
             (word < FIELD_MODULUS).then_some(word)
         });
         if self.round.0 == 10 {

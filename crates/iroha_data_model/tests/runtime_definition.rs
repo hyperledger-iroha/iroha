@@ -89,7 +89,7 @@ fn bond_permission() -> DefinitionDescriptorV1 {
     })
 }
 
-pub(crate) fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescriptorV1 {
+pub fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescriptorV1 {
     DefinitionDescriptorV1::Interface(InterfaceDescriptorV1 {
         wire_id: wire_id.into(),
         payload: codec("iroha_data_model::isi::bond::BondInstructionBox"),
@@ -100,7 +100,7 @@ pub(crate) fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescrip
     })
 }
 
-pub(crate) struct Ids {
+pub struct Ids {
     pub(crate) kernel: DefinitionId,
     pub(crate) commitment: DefinitionId,
     pub(crate) services: DefinitionId,
@@ -110,11 +110,7 @@ pub(crate) struct Ids {
     pub(crate) permission: DefinitionId,
 }
 
-pub(crate) fn implementation(
-    ids: &Ids,
-    interface: DefinitionId,
-    module: &str,
-) -> DefinitionDescriptorV1 {
+pub fn implementation(ids: &Ids, interface: DefinitionId, module: &str) -> DefinitionDescriptorV1 {
     DefinitionDescriptorV1::Implementation(ImplementationDescriptorV1 {
         entrypoint: EntrypointV1::Instructions(vec![interface]),
         code: ImplementationCodeV1::Native {
@@ -134,12 +130,12 @@ pub(crate) fn implementation(
     })
 }
 
-pub(crate) fn sorted(mut ids: Vec<DefinitionId>) -> Vec<DefinitionId> {
+pub fn sorted(mut ids: Vec<DefinitionId>) -> Vec<DefinitionId> {
     ids.sort();
     ids
 }
 
-pub(crate) fn publish(
+pub fn publish(
     catalog: &mut BTreeMap<DefinitionId, DefinitionDescriptorV1>,
     descriptor: DefinitionDescriptorV1,
 ) -> DefinitionId {
@@ -149,7 +145,7 @@ pub(crate) fn publish(
 }
 
 /// A catalog with one bond interface, its implementation and a valid selection.
-pub(crate) fn bond_root() -> (
+pub fn bond_root() -> (
     BTreeMap<DefinitionId, DefinitionDescriptorV1>,
     Ids,
     RootSelectionV1,

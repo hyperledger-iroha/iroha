@@ -2582,7 +2582,7 @@ impl Bus {
         {
             let map = self.inner.read().await;
             session_count = map.len();
-            for (_k, sess) in map.iter() {
+            for sess in map.values() {
                 let b = *sess.buffer_bytes.lock().await;
                 if b > 0 {
                     buffered_sessions += 1;

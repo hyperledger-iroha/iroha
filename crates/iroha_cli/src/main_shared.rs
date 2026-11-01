@@ -40,11 +40,17 @@ mod staking;
 mod subscriptions;
 mod sumeragi;
 mod taira;
+mod taira_config_retirement_evidence;
 mod taira_dataspace_deploy;
+#[cfg(any(unix, test))]
+mod taira_inrou_validation;
 pub use taira_dataspace_deploy::{
     DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
+#[cfg(test)]
+mod deployment_genesis_fixture;
+#[cfg(unix)]
 mod taira_public_reset;
 mod transaction_journal;
 mod transaction_load;
@@ -1610,16 +1616,19 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         ))
         .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::RetireValidatorConfig(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira retire-validator-config")?;
         return map_command_result(command.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    #[cfg(unix)]
     if let Command::Taira(taira::Command::StoppedOwnerMaintenance(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira stopped-owner-maintenance")?;
         return map_command_result(command.run_without_client_config(io::stdout()))
@@ -4181,7 +4190,7 @@ mod multisig {
                 signatories.push(account);
             }
             let mut signatories_with_weights = BTreeMap::new();
-            for (account, weight) in signatories.into_iter().zip(self.weights.into_iter()) {
+            for (account, weight) in signatories.into_iter().zip(self.weights) {
                 if weight == 0 {
                     return Err(eyre!("signatory weights must be non-zero"));
                 }
@@ -5316,16 +5325,13 @@ mod transaction {
         format!("{base}-{}", index + 1)
     }
     fn ping_nonce_seed() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| {
-                u64::from_le_bytes(
-                    d.as_nanos().to_le_bytes()[..8]
-                        .try_into()
-                        .expect("eight-byte nonce seed"),
-                )
-            })
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+            u64::from_le_bytes(
+                d.as_nanos().to_le_bytes()[..8]
+                    .try_into()
+                    .expect("eight-byte nonce seed"),
+            )
+        })
     }
     fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
         if metadata.contains(&PING_NONCE_KEY) {
@@ -6522,7 +6528,7 @@ mod trigger {
             eyre::bail!("--data-proof hash must be 32 bytes (64 hex chars)");
         }
         let mut proof_hash = [0u8; 32];
-        for (index, chunk) in hash_hex.as_bytes().chunks_exact(2).enumerate() {
+        for (index, chunk) in hash_hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let byte_text =
                 std::str::from_utf8(chunk).map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
             proof_hash[index] = u8::from_str_radix(byte_text, 16)

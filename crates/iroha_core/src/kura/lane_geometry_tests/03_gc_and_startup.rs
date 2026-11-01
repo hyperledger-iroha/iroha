@@ -894,8 +894,17 @@ fn configured_catalog_preflight_recovers_exact_first_start_temp() {
         configured_catalog_hash: Some(LaneLifecycleParameterV1::catalog_hash(&configured)),
         ..LaneGeometryJournal::default()
     };
+    #[cfg(not(windows))]
     fs::write(root.join(JOURNAL_TEMP_FILE_NAME), expected.encode())
         .expect("simulate synced first-start temp before hard-link promotion");
+    #[cfg(windows)]
+    write_initial_configured_catalog_temp(
+        &root,
+        configured_catalog_store_root_identity(&root).unwrap(),
+        &root.join(JOURNAL_TEMP_FILE_NAME),
+        &expected.encode(),
+    )
+    .expect("simulate synced private first-start temp before hard-link promotion");
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect("reconstructed process must promote the exact baseline temp");
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());

@@ -66,7 +66,7 @@ impl OwnedProof {
     #[allow(unsafe_code)]
     pub(super) fn from_native_frame(
         frame: crate::kura::NativeFrameBytes,
-        header: iroha_data_model::block::BlockHeader,
+        header: &iroha_data_model::block::BlockHeader,
         members: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],
         budget: &AllocationBudget,
         deadline: Instant,
@@ -86,7 +86,7 @@ impl OwnedProof {
         charges.push_reserved(charge);
         let mut owned = Self {
             proof: SumeragiFinalityProof {
-                block_header: header,
+                block_header: *header,
                 block_wire: wire,
                 committee: Vec::new(),
             },

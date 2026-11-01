@@ -286,7 +286,7 @@ fn current_cut_public_twiddle_coarse_cost_keeps_complete_masks_and_query_coordin
                     let values = (0..1usize << native)
                         .map(|i| F((i * 17 + column * 43 + 13) as u64))
                         .collect::<Vec<_>>();
-                    let mask = (0..MASK_DEGREE + 1)
+                    let mask = (0..=MASK_DEGREE)
                         .map(|i| F((i * 29 + column * 71 + 7) as u64))
                         .collect::<Vec<_>>();
                     Column::from_vec_v1(

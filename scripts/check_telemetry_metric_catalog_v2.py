@@ -92,6 +92,7 @@ RETIRED_METRICS = (
         "zk_verifier_cache_events_total",
         "iroha_zk_verifier_cache_events_total",
         "nexus_public_lane_reward_total",
+        "runtime_upgrade_provenance_rejections_total",
     )
 )
 

@@ -285,7 +285,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
                     .transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
                 stx.nexus = nexus.clone();
                 let error = crate::executor::Executor::Initial
-                    .execute_instruction(&mut stx, &validator, instruction.clone().into())
+                    .execute_instruction(&mut stx, &validator, &instruction.clone().into())
                     .unwrap_err();
                 assert!(
                     matches!(

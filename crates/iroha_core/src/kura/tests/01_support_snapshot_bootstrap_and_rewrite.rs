@@ -387,6 +387,66 @@ fn temporary_configured_kura_owns_authenticated_storage_lifetime() {
     );
 }
 
+#[cfg(windows)]
+fn assert_native_temporary_catalog_and_lifetime(kura: Arc<Kura>, catalog: &LaneCatalog) {
+    let root = kura.store_root();
+    let owner =
+        iroha_fs::OwnerDirectory::open(&root).expect("retain the actual temporary Kura directory");
+    let identity = owner.identity().expect("observe the original directory");
+    let catalog_hash = LaneLifecycleParameterV1::catalog_hash(catalog);
+    assert_eq!(
+        kura.configured_lane_catalog_baseline().unwrap(),
+        Some(catalog_hash)
+    );
+    sync_dir(&root).expect("complete the actual native directory publication boundary");
+    owner
+        .revalidate()
+        .expect("retain the original directory after sync");
+    assert_eq!(owner.identity().unwrap(), identity);
+    assert!(sync_dir(&root.join(STORE_ROOT_LOCK_FILE_NAME)).is_err());
+    assert!(
+        kura.verify_configured_lane_catalog_baseline(Hash::new(b"different catalog"))
+            .is_err()
+    );
+    assert_eq!(
+        kura.configured_lane_catalog_baseline().unwrap(),
+        Some(catalog_hash)
+    );
+    drop(owner);
+    let last_owner = Arc::clone(&kura);
+    drop(kura);
+    assert!(
+        root.is_dir(),
+        "temporary storage survives a remaining Kura owner"
+    );
+    drop(last_owner);
+    assert!(
+        !root.exists(),
+        "last Kura owner removes its temporary storage"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn temporary_configured_kura_native_directory_sync_preserves_catalog_and_lifetime() {
+    let catalog = LaneCatalog::default();
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let config = kura_config_for_path(
+        Path::new("unused-native-temporary-configured-kura"),
+        BLOCKS_IN_MEMORY,
+    );
+    let kura = Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
+        .expect("initialize the genuine configured temporary Kura on Windows");
+    assert_native_temporary_catalog_and_lifetime(kura, &catalog);
+}
+
+#[cfg(windows)]
+#[test]
+fn blank_kura_native_directory_sync_preserves_catalog_and_lifetime() {
+    let kura = Kura::blank_kura_for_testing();
+    assert_native_temporary_catalog_and_lifetime(kura, &LaneCatalog::default());
+}
+
 #[test]
 fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
     let temp_dir = TempDir::new().expect("create Kura store root");

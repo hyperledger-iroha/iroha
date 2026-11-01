@@ -980,7 +980,7 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
         )
         .unwrap(),
         None,
-        &mut Default::default(),
+        &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
         &crate::execution_attempt::PolicyDecodeControls::try_new(&state.ivm_execution_budget())
             .unwrap(),
     )

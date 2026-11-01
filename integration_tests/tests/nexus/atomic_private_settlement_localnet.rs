@@ -76,7 +76,7 @@ use iroha::{
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
             PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
             PrivacyRecipientIdV1, PrivacyRootV1, PrivateSettlementPolicyUpdateV1,
-            PrivateSettlementPolicyV1, PrivateSettlementValidityLimitsV1,
+            PrivateSettlementPolicyV1,
         },
         query::block::prelude::FindBlocks,
         sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
@@ -164,30 +164,21 @@ fn approve_all_audit_material(_: PrivateSettlementAuditEvaluationV1<'_>) -> bool
     true
 }
 
-/// The fixture's private-payment limits; every other field keeps the native V1 baseline.
-fn private_settlement_limits() -> PrivateSettlementValidityLimitsV1 {
-    PrivateSettlementValidityLimitsV1 {
-        max_participants: 16,
-        max_expiry_blocks: MAX_EXPIRY_BLOCKS,
-        audit_timeout_blocks: 1_024,
-        prepare_timeout_blocks: 1_024,
-        commit_timeout_blocks: 1_024,
-        sidecar_retention_blocks: SIDECAR_RETENTION_BLOCKS,
-        ..PrivateSettlementValidityLimitsV1::protocol_default()
-    }
-}
-
-/// The committed private-settlement policy genesis writes: the native baseline now, and
-/// the fixture's limits scheduled for the first ordinary block.
-fn private_settlement_policy() -> PrivateSettlementPolicyV1 {
-    PrivateSettlementPolicyV1 {
-        pending_update: Some(PrivateSettlementPolicyUpdateV1 {
-            scheduled_at_height: GENESIS_HEIGHT,
-            effective_at_height: PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
-            next_limits: private_settlement_limits(),
-        }),
-        ..PrivateSettlementPolicyV1::protocol_default()
-    }
+fn private_settlement_genesis_policy() -> PrivateSettlementPolicyV1 {
+    let mut policy = PrivateSettlementPolicyV1::protocol_default();
+    let mut next_limits = policy.current_limits;
+    next_limits.max_participants = 16;
+    next_limits.max_expiry_blocks = MAX_EXPIRY_BLOCKS;
+    next_limits.audit_timeout_blocks = 1_024;
+    next_limits.prepare_timeout_blocks = 1_024;
+    next_limits.commit_timeout_blocks = 1_024;
+    next_limits.sidecar_retention_blocks = SIDECAR_RETENTION_BLOCKS;
+    policy.pending_update = Some(PrivateSettlementPolicyUpdateV1 {
+        scheduled_at_height: GENESIS_HEIGHT,
+        effective_at_height: PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
+        next_limits,
+    });
+    policy
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -566,9 +557,9 @@ fn genesis_post_topology(
     // custody settings never select payment validity.
     universal.push(
         SetParameter::new(Parameter::Custom(
-            private_settlement_policy()
+            private_settlement_genesis_policy()
                 .to_custom_parameter()
-                .expect("fixture private-settlement policy is canonical"),
+                .expect("canonical signed private-settlement policy"),
         ))
         .into(),
     );
@@ -3360,6 +3351,7 @@ fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
 
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(unix)]
 enum N3SettlementExperimentV1 {
     HappyDay,
     RestartRecovery,
@@ -3367,6 +3359,7 @@ enum N3SettlementExperimentV1 {
 }
 
 #[cfg(feature = "atomic-private-settlement-smoke")]
+#[cfg(unix)]
 fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Result<()> {
     let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
@@ -4055,6 +4048,7 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "release-only: starts 16 real validators and generates three native STARK proofs"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3".to_owned())
@@ -4070,6 +4064,7 @@ fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "starts 16 real validators and completes a three-dataspace happy-day payment"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_happy_day() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3-happy-day".to_owned())
@@ -4085,6 +4080,7 @@ fn atomic_private_settlement_n3_happy_day() -> Result<()> {
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "genuine one-call wallet/prover in fresh SDK processes; restarts all 16 validators"]
+#[cfg(unix)]
 fn atomic_private_settlement_n3_cold_one_call() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3-cold".to_owned())
@@ -4754,21 +4750,23 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .map(|peer| GenesisTopologyEntry::new(peer, vec![1]))
         .collect::<Vec<_>>();
     let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
-    let expected_privacy = private_settlement_policy();
-    expected_privacy.validate().unwrap();
+    let expected_privacy = private_settlement_genesis_policy();
+    expected_privacy
+        .validate_at_committed_height(GENESIS_HEIGHT)
+        .unwrap();
     assert_eq!(
         expected_privacy.current_limits,
-        PrivateSettlementValidityLimitsV1::protocol_default(),
-        "genesis keeps the native baseline until the first ordinary block"
+        PrivateSettlementPolicyV1::protocol_default().current_limits
     );
-    let scheduled = expected_privacy
+    let pending = expected_privacy
         .pending_update
-        .expect("genesis schedules the fixture's payment limits");
+        .expect("initial private payment schedule");
+    assert_eq!(pending.scheduled_at_height, GENESIS_HEIGHT);
     assert_eq!(
-        scheduled.effective_at_height,
+        pending.effective_at_height,
         PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT
     );
-    let private_limits = scheduled.next_limits;
+    let private_limits = pending.next_limits;
     assert_eq!(private_limits.max_participants, 16);
     assert_eq!(private_limits.max_expiry_blocks, MAX_EXPIRY_BLOCKS);
     assert_eq!(private_limits.audit_timeout_blocks, 1_024);
@@ -4788,7 +4786,7 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
             };
             (custom.id() == PrivateSettlementPolicyV1::parameter_id()).then(|| {
                 PrivateSettlementPolicyV1::from_custom_parameter(custom)
-                    .expect("canonical private-settlement policy")
+                    .expect("canonical signed private-settlement policy")
             })
         })
         .collect::<Vec<_>>();
@@ -4815,9 +4813,12 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         transactions.iter().flatten().all(|instruction| {
             !instruction
                 .as_any()
-                .is::<SchedulePrivacyProtocolLimitsUpdateV1>()
+                .is::<SchedulePrivacyConsensusPolicyUpdateV1>()
+                && !instruction
+                    .as_any()
+                    .is::<SchedulePrivacyProtocolLimitsUpdateV1>()
         }),
-        "native defaults need no ordinary protocol-policy update in genesis"
+        "native resource defaults need no ordinary privacy-policy update in genesis"
     );
     // Building the real signed topology pre-executes every normalized genesis
     // transaction through Initial. This catches admission failures and rollback
@@ -4827,7 +4828,7 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .name("atomic-private-settlement-genesis".to_owned())
         .stack_size(TEST_STACK_BYTES)
         .spawn(move || {
-            let network = n3_smoke_builder(shape).build();
+            let network = localnet_builder(shape).build();
             let validated_genesis = network.genesis();
             signed_participant_lane_policy(&network, shape)
                 .expect("signed genesis retains exact native participant committees");
@@ -4859,13 +4860,10 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
                         && let Parameter::Custom(custom) = set.inner()
                         && custom.id() == PrivateSettlementPolicyV1::parameter_id()
                     {
+                        let policy = PrivateSettlementPolicyV1::from_custom_parameter(custom)
+                            .expect("canonical original signed private-settlement policy");
                         assert!(
-                            signed_privacy
-                                .replace(
-                                    PrivateSettlementPolicyV1::from_custom_parameter(custom)
-                                        .expect("canonical original signed payment policy"),
-                                )
-                                .is_none(),
+                            signed_privacy.replace(policy).is_none(),
                             "normalized signed genesis must retain exactly one payment policy"
                         );
                     }

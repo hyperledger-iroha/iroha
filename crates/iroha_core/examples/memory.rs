@@ -106,7 +106,7 @@ mod util {
     }
     pub fn done<T>(value: T) {
         eprintln!("Done");
-        std::thread::sleep(std::time::Duration::from_secs(86400));
+        std::thread::sleep(std::time::Duration::from_hours(24));
         std::hint::black_box(value);
     }
     #[cfg(test)]

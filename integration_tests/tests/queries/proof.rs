@@ -1,5 +1,8 @@
 //! Integration tests for proof queries.
 //! The mixed native PIPA-R/STARK network scenario requires the `zk-stark` feature and daemon.
+use crate::proof_fixtures::confidential_attachment;
+#[cfg(feature = "zk-stark")]
+use crate::proof_fixtures::rejected_confidential_attachment;
 #[cfg(feature = "zk-stark")]
 use eyre::Result;
 #[cfg(feature = "zk-stark")]
@@ -17,16 +20,11 @@ use iroha::data_model::{
 use iroha::data_model::{isi::verifying_keys, proof::ProofAttachment};
 #[cfg(feature = "zk-stark")]
 use iroha_core_zk::hash_vk;
-#[path = "../proof_fixtures.rs"]
-mod proof_fixtures;
 use iroha_data_model::zk::OpenVerifyEnvelope;
 #[cfg(feature = "zk-stark")]
 use iroha_test_network::NetworkBuilder;
 #[cfg(feature = "zk-stark")]
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-use proof_fixtures::confidential_attachment;
-#[cfg(feature = "zk-stark")]
-use proof_fixtures::rejected_confidential_attachment;
 #[cfg(feature = "zk-stark")]
 use std::{thread::sleep, time::Duration};
 #[cfg(feature = "zk-stark")]

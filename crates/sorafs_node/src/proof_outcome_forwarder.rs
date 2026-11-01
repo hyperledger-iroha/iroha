@@ -5,7 +5,7 @@
 //! finalized.  This module retains only bounded delivery metadata and the exact
 //! signed transaction selected by the runtime signer.  It never projects an
 //! outcome independently of finalized ledger state.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use crate::durable_transaction_forwarder::CheckpointWriterGuard;
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
@@ -48,9 +48,10 @@ const CHECKPOINT_LOCK_FILE_NAME: &str = "proof-outcome-forwarder-state.lock";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.proof-outcome.forwarder.operation.v1\0";
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 4;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 16;
-// Maximum-valid PDP/PoTR state requires 93,187 bytes beyond 16x wire.
-// Round up to two 64 KiB quanta and retain one further quantum as margin.
-const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 3 * 64 * 1024;
+// Sparse, saturated and maximum-payload checkpoint controls bound the shared
+// fixed decode overhead. Keep one 64 KiB quantum plus one safety quantum;
+// payload growth remains capped by the unchanged 16x wire allowance.
+const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 2 * 64 * 1024;
 const CHECKPOINT_MAX_NESTING_DEPTH: usize = 128;
 const PDP_ARCHIVE_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
     128 * 1024,
@@ -1392,6 +1393,18 @@ mod tests {
     use std::os::unix::fs::OpenOptionsExt as _;
     use std::{fs, io::Write as _, time::Duration};
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -1421,15 +1434,26 @@ mod tests {
             .expect("frame externally supplied nested payload")
     }
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options
-            .open(path)
-            .expect("create private checkpoint fixture");
-        file.write_all(bytes)
-            .expect("write private checkpoint fixture");
+        #[cfg(windows)]
+        {
+            let mut file = iroha_fs::RetainedFile::create_new_private(path)
+                .expect("create private checkpoint fixture");
+            file.file_mut()
+                .write_all(bytes)
+                .expect("write private checkpoint fixture");
+        }
+        #[cfg(not(windows))]
+        {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options
+                .open(path)
+                .expect("create private checkpoint fixture");
+            file.write_all(bytes)
+                .expect("write private checkpoint fixture");
+        }
     }
     fn policy() -> ProofOutcomeOutboxPolicyV1 {
         ProofOutcomeOutboxPolicyV1 {
@@ -1478,6 +1502,9 @@ mod tests {
         signed_receipt_with_request_id([5; 16])
     }
     fn maximum_bounded_signed_receipt() -> PotrReceiptV1 {
+        maximum_bounded_signed_receipt_for_request([0xA5; 16])
+    }
+    fn maximum_bounded_signed_receipt_for_request(request_id: [u8; 16]) -> PotrReceiptV1 {
         let gateway = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).unwrap();
         let provider = KeyPair::try_from_seed(vec![2; 32], Algorithm::MlDsa).unwrap();
         sign_potr_receipt_v1(
@@ -1494,7 +1521,7 @@ mod tests {
                 recorded_at_ms: 1_011,
                 range_start: 0,
                 range_end: 31,
-                request_id: Some([0xA5; 16]),
+                request_id: Some(request_id),
                 trace_id: Some([0x5A; 16]),
                 note: Some("x".repeat(POTR_RECEIPT_MAX_NOTE_BYTES_V1)),
                 gateway_signature: None,
@@ -1811,7 +1838,7 @@ mod tests {
     }
     #[test]
     fn crash_recovery_resets_only_isolated_signing_and_retains_ambiguous_transaction() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let receipt_a = signed_receipt();
         let mut receipt_b = signed_receipt();
         receipt_b.request_id = Some([10; 16]);
@@ -1855,7 +1882,7 @@ mod tests {
     }
     #[test]
     fn crash_before_rename_orphan_does_not_replace_the_last_durable_checkpoint() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let receipt = signed_receipt();
         let outbox = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         let operation = outbox
@@ -1874,7 +1901,7 @@ mod tests {
     }
     #[test]
     fn poisoned_checkpoint_source_binding_fails_closed_on_restart() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let receipt = signed_receipt();
         let outbox = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         outbox.enqueue_potr(&receipt, [6; 32]).unwrap();
@@ -1913,7 +1940,7 @@ mod tests {
         );
         replace_norito_schema::<PotrReceiptV1>(&mut allocation_bomb);
         let allocation_checkpoint = checkpoint_with_corrupt_potr_source(allocation_bomb);
-        let allocation_dir = TempDir::new().unwrap();
+        let allocation_dir = private_state_tempdir().unwrap();
         write_private_checkpoint(
             &allocation_dir
                 .path()
@@ -1966,7 +1993,7 @@ mod tests {
         );
         replace_norito_schema::<PotrReceiptV1>(&mut depth_bytes);
         let depth_checkpoint = checkpoint_with_corrupt_potr_source(depth_bytes);
-        let depth_dir = TempDir::new().unwrap();
+        let depth_dir = private_state_tempdir().unwrap();
         write_private_checkpoint(
             &depth_dir
                 .path()
@@ -1978,6 +2005,128 @@ mod tests {
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
+    fn checkpoint_allocation_fixed_requirement(
+        checkpoint: &ProofOutcomeOutboxCheckpointV1,
+        policy: ProofOutcomeOutboxPolicyV1,
+        label: &str,
+    ) -> usize {
+        validate_checkpoint(checkpoint, policy).expect("valid measured checkpoint shape");
+        validate_checkpoint_source_bindings(checkpoint).expect("valid measured source bindings");
+        let bytes = norito::to_bytes(checkpoint).expect("bounded checkpoint frame");
+        let minimum = minimum_checkpoint_allocation_budget(&bytes);
+        let proportional = bytes
+            .len()
+            .checked_mul(CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT)
+            .unwrap();
+        eprintln!(
+            "checkpoint shape={label} wire={} minimum_allocation={minimum} proportional={proportional}",
+            bytes.len()
+        );
+        let limits = checkpoint_decode_limits(bytes.len()).unwrap();
+        assert!(
+            limits.max_total_allocated_bytes() >= minimum,
+            "{label}: production budget must admit measured shape"
+        );
+        let decoded: ProofOutcomeOutboxCheckpointV1 =
+            norito::decode_from_bytes_with_limits(&bytes, limits)
+                .expect("measured shape fits production decode budget");
+        assert_eq!(&decoded, checkpoint, "{label}: exact checkpoint roundtrip");
+        minimum.saturating_sub(proportional)
+    }
+    fn sparse_and_saturated_checkpoint_allocation_requirement() -> usize {
+        let mut maximum_fixed = checkpoint_allocation_fixed_requirement(
+            &ProofOutcomeOutboxCheckpointV1::default(),
+            policy(),
+            "empty",
+        );
+        for maximum_note in [false, true] {
+            for count in [1, policy().max_pending] {
+                let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
+                // Build terminal and pending vectors through the real transition APIs.
+                // The final shape simultaneously fills all three policy capacities.
+                for phase in 0_u8..3 {
+                    let mut sources = Vec::new();
+                    for index in 0..count {
+                        let identity =
+                            phase.checked_mul(16).unwrap() + u8::try_from(index + 1).unwrap();
+                        let receipt = if maximum_note {
+                            maximum_bounded_signed_receipt_for_request([identity; 16])
+                        } else {
+                            signed_receipt_with_request_id([identity; 16])
+                        };
+                        let operation = outbox
+                            .enqueue_potr(&receipt, [0x76; 32])
+                            .unwrap()
+                            .operation_id();
+                        sources.push((operation, receipt));
+                    }
+                    for signed in [false, true] {
+                        if signed {
+                            for (index, (operation, _receipt)) in sources.iter().enumerate() {
+                                let claimed =
+                                    outbox.claim_for_signing(*operation, cursor(1, 1)).unwrap();
+                                outbox
+                                    .store_signed_transaction(
+                                        *operation,
+                                        signed_transaction(
+                                            &claimed,
+                                            u8::try_from(index + 20).unwrap(),
+                                        ),
+                                    )
+                                    .unwrap();
+                            }
+                        }
+                        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+                        assert_eq!(checkpoint.pending.len(), count);
+                        assert_eq!(
+                            checkpoint.completed.len(),
+                            if phase >= 1 { count } else { 0 }
+                        );
+                        assert_eq!(
+                            checkpoint.dead_letters.len(),
+                            if phase >= 2 { count } else { 0 }
+                        );
+                        let label = format!(
+                            "note_max={maximum_note}/count={count}/phase={phase}/signed={signed}"
+                        );
+                        maximum_fixed = maximum_fixed.max(checkpoint_allocation_fixed_requirement(
+                            &checkpoint,
+                            policy(),
+                            &label,
+                        ));
+                    }
+                    if phase < 2 {
+                        for (operation, receipt) in &sources {
+                            let pending = outbox
+                                .pending(count)
+                                .unwrap()
+                                .into_iter()
+                                .find(|item| item.operation_id == *operation)
+                                .unwrap();
+                            let mut record = finalized(&pending, receipt);
+                            if phase == 0 {
+                                outbox.mark_finalized(*operation, &record).unwrap();
+                            } else {
+                                record.outcome.outcome_digest[0] ^= 1;
+                                assert!(matches!(
+                                    outbox.mark_finalized(*operation, &record),
+                                    Err(ProofOutcomeOutboxError::FinalizedConflict)
+                                ));
+                            }
+                        }
+                        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+                        maximum_fixed = maximum_fixed.max(checkpoint_allocation_fixed_requirement(
+                            &checkpoint,
+                            policy(),
+                            "terminal-only",
+                        ));
+                    }
+                }
+            }
+        }
+        maximum_fixed
+    }
+
     #[test]
     fn checkpoint_decode_budget_accepts_exact_policy_maximum_and_rejects_one_byte_over() {
         let outbox = ProofOutcomeOutbox::in_memory(ProofOutcomeOutboxPolicyV1 {
@@ -2009,7 +2158,9 @@ mod tests {
             .len()
             .checked_mul(CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT)
             .unwrap();
-        let fixed_requirement = minimum_allocation.saturating_sub(proportional_allocation);
+        let fixed_requirement = minimum_allocation
+            .saturating_sub(proportional_allocation)
+            .max(sparse_and_saturated_checkpoint_allocation_requirement());
         const MARGIN_QUANTUM: usize = 64 * 1024;
         let rounded_requirement = fixed_requirement
             .checked_div(MARGIN_QUANTUM)
@@ -2050,7 +2201,7 @@ mod tests {
         };
         validate_checkpoint(&decoded, exact_policy).unwrap();
         validate_checkpoint_source_bindings(&decoded).unwrap();
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         write_private_checkpoint(
             &dir.path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
@@ -2103,7 +2254,7 @@ mod tests {
             norito::core::from_bytes_view(&compressed).is_err(),
             "zero-copy preflight must reject compressed checkpoint archives"
         );
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         write_private_checkpoint(
             &dir.path()
                 .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
@@ -2322,7 +2473,7 @@ mod tests {
 
     #[test]
     fn checkpoint_schema_binds_durable_proof_outcomes_and_rejects_a_submission_frame() {
-        let directory = TempDir::new().unwrap();
+        let directory = private_state_tempdir().unwrap();
         let outbox = ProofOutcomeOutbox::open(directory.path(), policy()).unwrap();
         let operation = outbox
             .enqueue_potr(&signed_receipt(), [6; 32])

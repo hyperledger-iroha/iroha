@@ -237,6 +237,7 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         plan.masks + plan.retained_cuts + plan.quotient_stage + plan.replay_batch,
         plan.masks
             + plan.retained_cuts
+            + plan.retained_oracle_cuts
             + plan.selected_replay
             + plan.replay_batch
             + plan.composition
@@ -256,10 +257,29 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     }
     assert_eq!(
         plan.joined_streams,
-        layout.common_lde_size()
-            * core::mem::size_of::<
-                crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
-            >()
+        aggregate::streaming_row_state_payload_v1(layout.common_lde_size()).unwrap()
+    );
+    assert!(
+        plan.joined_streams
+            < layout.common_lde_size()
+                * core::mem::size_of::<
+                    crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
+                >()
+    );
+
+    // Reconstruct the immediately preceding scalar/coalesced owner plan. The
+    // initial backing shrinks, whereas selected replay charges one extra enum
+    // discriminant word. Paired-only finalizer scratch is not a query owner.
+    let mut scalar_plan = plan;
+    scalar_plan.joined_streams = layout.common_lde_size()
+        * core::mem::size_of::<
+            crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
+        >();
+    scalar_plan.initial_commit_batch -= layout.common_lde_size().div_ceil(1024) * 128;
+    scalar_plan.selected_replay -= core::mem::size_of::<usize>();
+    assert_eq!(
+        plan.joined_transform_admission_v1(0).unwrap(),
+        scalar_plan.joined_transform_admission_v1(0).unwrap() + core::mem::size_of::<usize>()
     );
     let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
     assert_eq!(plan.quotient_cache_reserve, 67_341_896);
@@ -284,7 +304,10 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
         core::mem::size_of::<E>()
     );
-    assert_eq!(plan.quotient_stage, 3_166_719_464);
+    assert_eq!(
+        plan.quotient_stage,
+        3_166_719_464 + MAIN_FIXED_OWNER_METADATA_BYTES_V1
+    );
     assert_eq!(
         plan.maximum_live_buffers,
         main_resources::CURRENT_FULL_PROFILE_PEAK_V1
@@ -731,7 +754,11 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         // unspent remainder retains a public fixed coefficient prefix; later
         // stripes recover the remaining suffix in place.
         let retained_fixed = cache
-            .fixed_prefix_columns_v1(n as usize, fixed as usize, stripes as usize)
+            .fixed_prefix_columns_v1(
+                usize::try_from(n).unwrap(),
+                usize::try_from(fixed).unwrap(),
+                usize::try_from(stripes).unwrap(),
+            )
             .unwrap() as u64;
         fixed_recovery_iffts += (fixed - retained_fixed) * (stripes - 1);
         fixed_recovery_butterflies += (fixed - retained_fixed)
@@ -916,11 +943,23 @@ fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache()
         let cache = buffers
             .quotient_cache_plan_v1(&layout, *registration)
             .unwrap();
+        let (cache, transformed_width) = if segment.adapter == SegmentAdapterIdV1::P256Arithmetic {
+            (
+                cache
+                    .reserve_fixed_owner_v1(
+                        main_fixed_coset::arithmetic_basis::DESCRIPTOR_RESERVATION,
+                    )
+                    .unwrap(),
+                main_fixed_coset::arithmetic_basis::BASIS_WIDTH,
+            )
+        } else {
+            (cache, segment.fixed_width)
+        };
         let fixed = cache
-            .fixed_prefix_columns_v1(segment.trace_size(), segment.fixed_width, stripes)
+            .fixed_prefix_columns_v1(segment.trace_size(), transformed_width, stripes)
             .unwrap();
         original_recoveries += segment.fixed_width * (stripes - 1);
-        retained_recoveries += (segment.fixed_width - fixed) * (stripes - 1);
+        retained_recoveries += (transformed_width - fixed) * (stripes - 1);
         match segment.adapter {
             SegmentAdapterIdV1::Sha256CallBus => {
                 assert_eq!(
@@ -931,7 +970,7 @@ fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache()
             SegmentAdapterIdV1::P256Arithmetic => {
                 assert_eq!(
                     (cache.base_columns, cache.aux_columns, fixed),
-                    (211, 72, 27)
+                    (211, 72, 26)
                 );
             }
             SegmentAdapterIdV1::Rfc5280 => {
@@ -941,8 +980,8 @@ fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache()
         }
     }
     assert_eq!(original_recoveries, 7_202);
-    assert_eq!(retained_recoveries, 2_046);
-    assert_eq!(original_recoveries - retained_recoveries, 5_156);
+    assert_eq!(retained_recoveries, 696);
+    assert_eq!(original_recoveries - retained_recoveries, 6_506);
 }
 
 #[test]
@@ -969,6 +1008,7 @@ fn registration_quotient_phase_ledger_retains_originals_chunks_and_growth() {
             + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<&mut [F]>()
             + 2 * main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1 * core::mem::size_of::<F>()
             + 16 * core::mem::size_of::<usize>()
+            + MAIN_FIXED_OWNER_METADATA_BYTES_V1
             + main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
                 main_quotient_stripes::MainQuotientStripeV1::new_v1(
@@ -1062,4 +1102,59 @@ fn current_registration_resource_owner_plan_diagnostic() {
         plan.maximum_live_buffers,
         main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
+}
+
+impl ZkX509MainRegistrationShapeV1 {
+    /// Inspect the canonical public hash batches and their existing funding in tests.
+    pub(crate) fn row_hash_diagnostic_geometry_v1()
+    -> Result<(Vec<(u8, usize, usize)>, usize, usize, usize, usize), ZkX509StarkErrorV1> {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+        let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout)?;
+        Ok((
+            layout
+                .trace_groups
+                .iter()
+                .map(|group| (group.native_trace_log2, group.base_width, group.aux_width))
+                .collect(),
+            layout.common_lde_size(),
+            buffers.joined_streams,
+            buffers.replay_batch,
+            main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+        ))
+    }
+}
+
+#[test]
+fn row_hash_diagnostic_geometry_matches_original_batches_and_funding() {
+    let (groups, rows, streams, replay, runtime) =
+        ZkX509MainRegistrationShapeV1::row_hash_diagnostic_geometry_v1().unwrap();
+    assert_eq!(
+        groups.iter().map(|&(log, _, _)| log).collect::<Vec<_>>(),
+        [5, 8, 15, 16, 18, 19]
+    );
+    assert_eq!(groups.iter().map(|&(_, base, _)| base).sum::<usize>(), 3213);
+    assert_eq!(groups.iter().map(|&(_, _, aux)| aux).sum::<usize>(), 2618);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|&(_, base, _)| base.div_ceil(8))
+            .sum::<usize>(),
+        404
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .map(|&(_, _, aux)| aux.div_ceil(8))
+            .sum::<usize>(),
+        329
+    );
+    assert_eq!(rows, 1 << 22);
+    assert_eq!(
+        streams,
+        rows * core::mem::size_of::<
+            crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
+        >()
+    );
+    assert!(replay >= 8 * rows * core::mem::size_of::<F>());
+    assert_eq!(runtime, 1 << 30);
 }

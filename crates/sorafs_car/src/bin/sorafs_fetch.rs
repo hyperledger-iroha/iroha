@@ -18,6 +18,9 @@
 //! captured during discovery. Each provider record includes `metadata.range_capability`,
 //! `metadata.stream_budget`, and `metadata.transport_hints` when the source advert supplied them so
 //! dashboards and fixtures can reason about the same scheduling inputs as the orchestrator.
+#[cfg(not(windows))]
+use std::fs::File;
+
 use blake3::Hasher;
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;
@@ -46,8 +49,12 @@ use sorafs_car::{
 };
 #[path = "common/output_fs.rs"]
 mod output_fs;
-use output_fs::{ensure_parent_dir, open_output_file, validate_output_path};
-use sorafs_car::set_no_follow_flag;
+#[cfg(not(windows))]
+#[path = "common/output_path.rs"]
+mod output_path;
+use output_fs::open_output_file;
+#[cfg(not(windows))]
+use output_path::{ensure_parent_dir, validate_output_path};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
@@ -68,8 +75,7 @@ const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
 ];
 use std::{
     collections::{HashMap, HashSet},
-    env,
-    fs::{self, File},
+    env, fs,
     io::{self, BufWriter, Read, Write},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
@@ -922,10 +928,8 @@ fn run() -> Result<(), String> {
     let mut car_stats = if let Some(spool) = car_spool.as_mut() {
         let mut writer = BufWriter::new(spool);
         let stats = if let Some(payload_writer) = streaming_writer.as_ref() {
-            let mut reader = payload_writer
-                .lock()
-                .map_err(|error| error.to_string())?
-                .reader()?;
+            let payload_guard = payload_writer.lock().map_err(|error| error.to_string())?;
+            let mut reader = payload_guard.reader()?;
 
             CarStreamingWriter::new(&plan)
                 .write_from_reader(&mut reader, &mut writer)
@@ -944,10 +948,8 @@ fn run() -> Result<(), String> {
     let mut car_verification = None;
     if let Some(manifest_ref) = manifest.as_ref() {
         let verification = if let Some(payload_writer) = streaming_writer.as_ref() {
-            let mut reader = payload_writer
-                .lock()
-                .map_err(|error| error.to_string())?
-                .reader()?;
+            let payload_guard = payload_writer.lock().map_err(|error| error.to_string())?;
+            let mut reader = payload_guard.reader()?;
             sorafs_car::payload_verifier::verify_payload_reader(manifest_ref, &plan, &mut reader)
         } else {
             let mut reader = sorafs_car::payload_verifier::ChunkPayloadReader::new(&outcome.chunks);
@@ -1468,6 +1470,7 @@ fn load_json_file(path: &Path) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|err| format!("failed to read {path:?}: {err}"))?;
     from_slice(&bytes).map_err(|err| format!("failed to parse JSON from {path:?}: {err}"))
 }
+#[cfg(not(windows))]
 fn private_output_spool(path: &Path) -> Result<tempfile::NamedTempFile, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -1479,6 +1482,7 @@ fn private_output_spool(path: &Path) -> Result<tempfile::NamedTempFile, String> 
     tempfile::NamedTempFile::new_in(parent)
         .map_err(|error| format!("failed to create private output spool: {error}"))
 }
+#[cfg(not(windows))]
 fn publish_output_spool(spool: tempfile::NamedTempFile, path: &Path) -> Result<(), String> {
     validate_output_path(path)?;
     spool
@@ -1490,8 +1494,40 @@ fn publish_output_spool(spool: tempfile::NamedTempFile, path: &Path) -> Result<(
         .map_err(|error| format!("failed to publish verified output: {}", error.error))?;
     Ok(())
 }
+#[cfg(windows)]
+type OutputSpool = iroha_fs::StagedOutputFile;
+#[cfg(not(windows))]
+type OutputSpool = tempfile::NamedTempFile;
+
+#[cfg(windows)]
+fn private_output_spool(path: &Path) -> Result<OutputSpool, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| "output requires a direct regular file name".to_owned())?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let directory = iroha_fs::OwnerDirectory::open_or_create(parent)
+        .map_err(|error| format!("failed to retain private output spool parent: {error}"))?;
+    directory
+        .stage_output(name)
+        .map_err(|error| format!("failed to create private output spool: {error}"))
+}
+
+#[cfg(windows)]
+fn publish_output_spool(spool: OutputSpool, path: &Path) -> Result<(), String> {
+    let requested = std::path::absolute(path).map_err(|error| error.to_string())?;
+    if requested != spool.destination() {
+        return Err("verified output destination differs from its bound staging owner".to_owned());
+    }
+    spool
+        .publish()
+        .map_err(|error| format!("failed to publish verified output: {error}"))
+}
+
 struct StreamingWriter {
-    writer: BufWriter<tempfile::NamedTempFile>,
+    writer: BufWriter<OutputSpool>,
     hasher: Hasher,
     total: u64,
 }
@@ -1515,10 +1551,18 @@ impl StreamingWriter {
     fn flush(&mut self) -> Result<(), std::io::Error> {
         self.writer.flush()
     }
+    #[cfg(not(windows))]
     fn reader(&self) -> Result<File, String> {
         self.writer
             .get_ref()
             .reopen()
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(windows)]
+    fn reader(&self) -> Result<iroha_fs::StagedOutputReader<'_>, String> {
+        self.writer
+            .get_ref()
+            .reader()
             .map_err(|error| error.to_string())
     }
     fn publish(self, path: &Path) -> Result<(), String> {
@@ -1910,44 +1954,11 @@ fn load_provider_advert(
     provider_advert_to_metadata(advert)
 }
 fn read_provider_advert_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    let maximum_u64 = u64::try_from(PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
-        .map_err(|_| "provider advert byte ceiling exceeds u64".to_owned())?;
-    let before = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect provider advert {path:?}: {err}"))?;
-    if before.file_type().is_symlink() || !before.is_file() || before.len() > maximum_u64 {
-        return Err(format!(
-            "provider advert {path:?} must be a direct regular file within the {PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1}-byte ceiling"
-        ));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options
-        .open(path)
-        .map_err(|err| format!("failed to open provider advert {path:?}: {err}"))?;
-    let opened = file
-        .metadata()
-        .map_err(|err| format!("failed to inspect open provider advert {path:?}: {err}"))?;
-    if !opened.is_file() || opened.len() > maximum_u64 || opened.len() != before.len() {
-        return Err(format!(
-            "provider advert {path:?} changed or exceeded its byte ceiling while being opened"
-        ));
-    }
-    let capacity =
-        usize::try_from(opened.len()).map_err(|_| "provider advert is too large".to_owned())?;
-    let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
-        .take(maximum_u64.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|err| format!("failed to read provider advert {path:?}: {err}"))?;
-    if bytes.len() > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1
-        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) != opened.len()
-    {
-        return Err(format!(
-            "provider advert {path:?} changed or exceeded its byte ceiling while being read"
-        ));
-    }
-    Ok(bytes)
+    let mut bytes = iroha_fs::read_regular(path, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
+        .map_err(|err| format!("failed to read retained provider advert {path:?}: {err}"))?;
+    // The advertisement is public. Transfer the already bounded, validated backing
+    // without allocating a second copy or reopening its source.
+    Ok(std::mem::take(&mut *bytes))
 }
 fn metadata_for_provider_spec(
     spec: &ProviderSpec,
@@ -2711,3 +2722,7 @@ fn parse_bps(value: &Value, field: &'static str, idx: usize) -> Result<u16, Stri
 #[cfg(test)]
 #[path = "sorafs_fetch/tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "sorafs_fetch/staged_output_windows_tests.rs"]
+mod staged_output_windows_tests;

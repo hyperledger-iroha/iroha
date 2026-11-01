@@ -352,7 +352,7 @@ fn canonical_request_pair_limit_error() -> crate::Error {
 }
 
 /// Preserve canonical authentication resource refusal as a query-capacity response.
-pub(crate) fn canonical_request_capacity_error() -> crate::Error {
+pub fn canonical_request_capacity_error() -> crate::Error {
     crate::Error::Query(ValidationFail::QueryFailed(
         QueryExecutionFail::CapacityLimit,
     ))
@@ -1305,13 +1305,16 @@ fn parse_canonical_account_header_address(
         return Err(invalid_account_header());
     }
     let mut canonical = allocate_exact_canonical_auth_bytes(encoded.len() / 2)?;
-    for (destination, pair) in canonical.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+    for (destination, [high, low]) in canonical
+        .iter_mut()
+        .zip(encoded.as_bytes().as_chunks::<2>().0)
+    {
         let nibble = |byte| match byte {
             b'0'..=b'9' => byte - b'0',
             b'a'..=b'f' => byte - b'a' + 10,
             _ => unreachable!("canonical account-header hex was preflighted"),
         };
-        *destination = (nibble(pair[0]) << 4) | nibble(pair[1]);
+        *destination = (nibble(*high) << 4) | nibble(*low);
     }
     AccountAddress::from_canonical_bytes(&canonical)
         .and_then(|address| {
@@ -1711,7 +1714,7 @@ fn validate_expected_account(
 /// This capability retains no decoded identity or signer list. Its fields are private and it
 /// is minted only after successful replay insertion; it never replaces credential verification.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CanonicalRequestReplayAdmission {
+pub struct CanonicalRequestReplayAdmission {
     request_binding: Hash,
     replay_key: Hash,
 }
@@ -1947,7 +1950,7 @@ pub fn verify_canonical_network_request(
 
 /// Reverify an internally retried HTTP operation while retaining only its replay admission.
 /// External callers use [`verify_canonical_network_request`] and never receive this capability.
-pub(crate) fn verify_canonical_network_request_with_replay_admission(
+pub fn verify_canonical_network_request_with_replay_admission(
     state: &Arc<CoreState>,
     network_id: &NetworkId,
     headers: &HeaderMap,
@@ -2016,7 +2019,7 @@ fn canonical_request_replay_binding(
             let values = headers.get_all(name);
             let count = u64::try_from(values.iter().count()).map_err(std::io::Error::other)?;
             writer.write_all(&count.to_le_bytes())?;
-            for value in values.iter() {
+            for value in &values {
                 field(writer, value.as_bytes())?;
             }
         }
@@ -4470,6 +4473,7 @@ mod tests {
     }
     #[test]
     fn internal_replay_admission_is_exact_and_never_replaces_verification() {
+        const NONCE: &str = "internal-replay-exact-request";
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let key_pair = checked_app_auth_key_fixture();
         let account = AccountId::new(key_pair.public_key().clone());
@@ -4477,7 +4481,6 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/accounts/query?limit=500".parse().unwrap();
         let body = br#"{"limit":500}"#;
-        const NONCE: &str = "internal-replay-exact-request";
         let headers = signed_headers_for_test(
             state.network_id_ref(),
             &account,
@@ -4608,7 +4611,7 @@ mod tests {
             )
             .expect_err("valid changed auth headers cannot reuse the nonce"),
         );
-        let missing = minimal_state_without_accounts_for_network(state.network_id_ref().clone());
+        let missing = minimal_state_without_accounts_for_network(*state.network_id_ref());
         let missing_error = verify_canonical_network_request_with_replay_admission(
             &missing,
             missing.network_id_ref(),
@@ -4623,10 +4626,8 @@ mod tests {
         // An already-used nonce of another valid account cannot borrow this admission.
         let other_key = checked_app_auth_key_fixture();
         let other_account = AccountId::new(other_key.public_key().clone());
-        let other_state = minimal_state_with_account_and_network_id(
-            &other_account,
-            state.network_id_ref().clone(),
-        );
+        let other_state =
+            minimal_state_with_account_and_network_id(&other_account, *state.network_id_ref());
         let other_headers = signed_headers_for_test(
             other_state.network_id_ref(),
             &other_account,

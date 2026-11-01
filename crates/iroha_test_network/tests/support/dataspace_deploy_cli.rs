@@ -18,6 +18,7 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
+use iroha_test_network::ResolvedProgram;
 use iroha_version::codec::DecodeVersioned as _;
 use norito::{codec::Encode as _, json::JsonSerialize};
 use std::{
@@ -90,7 +91,7 @@ struct Trust {
 
 /// Exact fresh fixture inputs supplied after native beacon installation.
 pub(super) struct PaidDeploymentFixture<'a> {
-    pub binary: &'a Path,
+    pub binary: &'a ResolvedProgram,
     /// Exact immutable harness identity admitted before the shared custody ceremony.
     pub build_identity: BuildIdentity,
     pub config: &'a Path,
@@ -373,7 +374,7 @@ fn public_phase_summary(report: Option<&Value>) -> Vec<Value> {
 }
 
 struct Cli {
-    binary: PathBuf,
+    binary: ResolvedProgram,
     config: PathBuf,
     operator: PathBuf,
 }
@@ -386,7 +387,7 @@ impl Cli {
             "clean-client CLI {operation}: start, remaining {}ms",
             deadline.saturating_duration_since(started).as_millis()
         );
-        let mut command = tokio::process::Command::new(&self.binary);
+        let mut command = self.binary.command()?;
         command
             .env_clear()
             .args(["--machine", "--config"])
@@ -395,15 +396,15 @@ impl Cli {
             .arg(&self.operator)
             .args(["taira", "dataspace-deploy"])
             .args(arguments)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stdout(iroha_fs::ProcessStdio::piped())
+            .stderr(iroha_fs::ProcessStdio::inherit())
             .kill_on_drop(true);
         if matches!(arguments.first(), Some(&"apply" | &"status")) {
             let remaining_ms = remaining_cli_budget_ms(deadline, Instant::now())?;
             command.args(["--timeout-ms", &remaining_ms.to_string()]);
         }
         let child = command
-            .spawn()
+            .spawn_async()
             .wrap_err("failed to start native deployment CLI")?;
         let output = timeout_at(deadline, child.wait_with_output())
             .await
@@ -673,7 +674,7 @@ where
     use std::os::unix::fs::PermissionsExt as _;
     init_instruction_registry();
     ensure!(
-        fixture.binary.is_file(),
+        fixture.binary.diagnostic_path()?.is_file(),
         "exact prebuilt native CLI is absent"
     );
     let owner = iroha::config::Config::load_file(fixture.config)
@@ -691,7 +692,7 @@ where
     fs::create_dir(&journal)?;
     fs::set_permissions(&journal, fs::Permissions::from_mode(0o700))?;
     let cli = Cli {
-        binary: fixture.binary.to_owned(),
+        binary: fixture.binary.clone(),
         config: fixture.config.to_owned(),
         operator: fixture.operator.to_owned(),
     };
@@ -777,7 +778,7 @@ where
         idle_before.iter().all(|(height, _, _)| *height == 5),
         "missing-provider test must start at certified install height 5"
     );
-    let mut pending = tokio::process::Command::new(&cli.binary);
+    let mut pending = cli.binary.command()?;
     pending
         .env_clear()
         .args(["--machine", "--config"])
@@ -787,12 +788,12 @@ where
         .args(["taira", "dataspace-deploy", "apply", "--journal-dir"])
         .arg(&journal)
         .args(["--operation-id", OPERATION, "--timeout-ms", "15000"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(iroha_fs::ProcessStdio::piped())
+        .stderr(iroha_fs::ProcessStdio::piped())
         .kill_on_drop(true);
     let output = timeout_at(
         (Instant::now() + Duration::from_secs(30)).min(deadline),
-        pending.output(),
+        pending.output_async(),
     )
     .await??;
     write_private(&root.join("provider-unavailable.stdout"), &output.stdout)?;

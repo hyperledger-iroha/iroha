@@ -1813,7 +1813,7 @@ pub(crate) mod query_errors_handling {
         transaction_details_fixture_for(signed, result)
     }
     /// A committed-row response for one exact signed transaction and result.
-    pub(crate) fn transaction_details_fixture_for(
+    pub fn transaction_details_fixture_for(
         signed: SignedTransaction,
         result: iroha_data_model::transaction::TransactionResult,
     ) -> (

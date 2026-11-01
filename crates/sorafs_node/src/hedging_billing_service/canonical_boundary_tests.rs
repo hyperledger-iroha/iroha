@@ -2,7 +2,7 @@
 
 #[test]
 fn billing_identity_signatures_and_checkpoint_ignore_ambient_norito_layout() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, feed_policy, reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     settle_first_period(&service, &reference);
@@ -111,7 +111,7 @@ fn billing_identity_signatures_and_checkpoint_ignore_ambient_norito_layout() {
 
 #[test]
 fn billing_checkpoint_exact_byte_ceiling_ignores_ambient_norito_layout() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, feed_policy, _reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     let source_limit =
@@ -170,7 +170,7 @@ fn billing_checkpoint_exact_byte_ceiling_ignores_ambient_norito_layout() {
 
 #[test]
 fn epoch_witness_has_one_bounded_canonical_persistence_format() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, reference, verifier, _publisher, _acknowledgement_authority) =
         ready_service(root.path());
     settle_first_period(&service, &reference);
@@ -276,8 +276,37 @@ fn billing_checkpoint_rejects_compression_before_decode_allocation() {
             &policy,
             &feed_policy
         )),
+        Ok(checkpoint.clone()),
+        "an empty checkpoint has no owned collection payload to allocate",
+    );
+    let root = private_state_tempdir().expect("populated checkpoint root");
+    let (service, populated_feed_policy, _reference, _verifier, _publisher, _ack_authority) =
+        ready_service(root.path());
+    service
+        .ingest_finalized_page(&page(vec![event(1, "allocation-control", "1")]))
+        .expect("admit a valid nonempty finalized page");
+    let populated = service
+        .state
+        .lock()
+        .expect("checkpoint state")
+        .checkpoint
+        .clone();
+    assert!(!populated.source_pages.is_empty());
+    let populated_bytes = encode_checkpoint(&populated, &policy, &populated_feed_policy)
+        .expect("valid populated checkpoint frame");
+    assert_eq!(
+        decode_checkpoint(&populated_bytes, &policy, &populated_feed_policy)
+            .expect("populated checkpoint fits ordinary production limits"),
+        populated,
+    );
+    assert_eq!(
+        norito::with_decode_limits_scope(zero_allocation, || decode_checkpoint(
+            &populated_bytes,
+            &policy,
+            &populated_feed_policy
+        )),
         Err(HedgingBillingServiceError::InvalidCheckpoint),
-        "the allocation budget must still apply to an admitted uncompressed decode",
+        "the allocation budget must still reject an admitted nonempty uncompressed decode",
     );
     assert_eq!(
         decode_checkpoint(&canonical, &policy, &feed_policy).expect("ordinary canonical recovery"),

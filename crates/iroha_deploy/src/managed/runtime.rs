@@ -2,6 +2,8 @@
 
 use super::*;
 use iroha_fs::{PrivateDirectory, PublishMode};
+pub(super) use iroha_managed_ipc::continuous_remaining;
+use iroha_managed_ipc::same_token;
 use std::{
     fs::File,
     process::{Child, Command, Stdio},
@@ -114,7 +116,7 @@ pub fn run_worker(
         budget
             .check()
             .map_err(|failure| Error::Invalid(failure.message()))?;
-        let listeners = listeners::WorkerListeners::receive(
+        let listeners = listeners::receive_worker_listeners(
             &directory,
             &retained.prepared,
             startup_deadline_ns,
@@ -229,7 +231,7 @@ pub fn run_worker(
                     &mut processes,
                     &cancelled,
                     progress.unconfirmed(),
-                    error,
+                    error.into(),
                 ));
             }
         };
@@ -597,16 +599,6 @@ fn observe_readiness<T>(
     }
 }
 
-pub(super) fn same_token(left: &str, right: &str) -> bool {
-    left.len() == 64
-        && right.len() == 64
-        && left
-            .bytes()
-            .zip(right.bytes())
-            .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
-            == 0
-}
-
 pub(super) fn daemon_command(
     daemon: &std::path::Path,
     config: &std::path::Path,
@@ -865,16 +857,6 @@ pub(super) fn startup_deadline(started: Instant, timeout: Duration) -> Result<u1
         .ok_or_else(|| Error::Invalid("startup continuous deadline overflow".into()))
 }
 
-pub(super) fn continuous_remaining(deadline: u128) -> std::io::Result<Option<Duration>> {
-    let now = iroha_primitives::time::native_continuous_clock_nanos()?;
-    let Some(nanos) = deadline.checked_sub(now).filter(|value| *value > 0) else {
-        return Ok(None);
-    };
-    let seconds = u64::try_from(nanos / 1_000_000_000)
-        .map_err(|_| std::io::Error::other("startup continuous remainder overflow"))?;
-    Ok(Some(Duration::new(seconds, (nanos % 1_000_000_000) as u32)))
-}
-
 pub(super) fn startup_remaining_until(
     started: Instant,
     timeout: Duration,
@@ -944,14 +926,6 @@ mod tests {
             ["--sora".as_ref(), "--config".as_ref(), config.as_os_str()]
         );
         assert_eq!(private.get_current_dir(), Some(temporary.path()));
-    }
-
-    #[test]
-    fn control_authentication_rejects_short_and_different_tokens() {
-        assert!(same_token(&"a".repeat(64), &"a".repeat(64)));
-        assert!(!same_token("", ""));
-        assert!(!same_token(&"a".repeat(64), &"b".repeat(64)));
-        assert!(!same_token(&"a".repeat(63), &"a".repeat(63)));
     }
 
     #[test]
@@ -1712,7 +1686,7 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.send(Ok(())).unwrap();
         let original_start = Instant::now()
-            .checked_sub(Duration::from_secs(86_400))
+            .checked_sub(Duration::from_hours(24))
             .unwrap();
         assert!(original_start.elapsed() > Duration::from_secs(600));
         let renewal_start = Instant::now();

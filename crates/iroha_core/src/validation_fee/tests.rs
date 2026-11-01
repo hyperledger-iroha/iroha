@@ -267,7 +267,7 @@ fn payout_permissions_require_dedicated_instance_roles() {
 }
 
 /// Ledger identities and definitions before any original signed monetary policy exists.
-pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+pub fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
         Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
@@ -322,8 +322,8 @@ fn validation_fee_payout_genesis_parameters() -> [iroha_data_model::parameter::P
     ]
 }
 
-/// Author explicit NPoS payout genesis; the supplied World retains no pre-genesis policy.
-pub(crate) fn validation_fee_payout_config(
+/// Author explicit `NPoS` payout genesis; the supplied World retains no pre-genesis policy.
+pub fn validation_fee_payout_config(
     deployer: &AccountId,
     genesis_time_ms: u64,
 ) -> crate::sumeragi::test_chain::TestChainConfig {

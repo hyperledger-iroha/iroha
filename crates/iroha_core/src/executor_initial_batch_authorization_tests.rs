@@ -43,7 +43,7 @@ fn initial_executor_denies_transfer_asset_without_owner_signature() {
         !(stx._curr_block.is_genesis() && stx.block_hashes.is_empty()),
         "test must execute in non-genesis context"
     );
-    let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+    let res = executor.execute_instruction(&mut stx, &alice_id, &instruction);
     match res {
         Err(ValidationFail::NotPermitted(msg)) => assert!(
             msg.contains("source asset owner must sign the transaction"),
@@ -115,7 +115,7 @@ fn initial_executor_allows_source_owner_and_both_exact_transfer_permissions() {
         let result = super::Executor::Initial.execute_instruction(
             &mut transaction,
             &authority,
-            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone()).into(),
+            &Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone()).into(),
         );
         assert!(
             result.is_ok(),
@@ -152,7 +152,7 @@ fn initial_executor_transfer_asset_batch_classifies_owner_atomic_and_rolls_back_
     let mut transaction =
         block.transaction_for_fastpq_testing(Hash::new(b"initial-owner-atomic-batch"));
     super::Executor::Initial
-        .execute_instruction(&mut transaction, &fixture.source, instruction)
+        .execute_instruction(&mut transaction, &fixture.source, &instruction)
         .expect("the source owner must be able to execute an atomic batch");
     assert_eq!(
         initial_batch_balance(&transaction.world, &fixture.source_asset),
@@ -187,7 +187,7 @@ fn initial_executor_transfer_asset_batch_classifies_owner_atomic_and_rolls_back_
         .execute_instruction(
             &mut transaction,
             &fixture.source,
-            TransferAssetBatch::new(vec![
+            &TransferAssetBatch::new(vec![
                 TransferAssetBatchEntry::with_leg_id(
                     "authorized-first",
                     fixture.source.clone(),
@@ -240,7 +240,7 @@ fn initial_executor_transfer_asset_batch_independent_isolates_unauthorized_sourc
         .execute_instruction(
             &mut transaction,
             &fixture.source,
-            TransferAssetBatch::independent(vec![
+            &TransferAssetBatch::independent(vec![
                 TransferAssetBatchEntry::with_leg_id(
                     "authorized-first",
                     fixture.source.clone(),
@@ -348,7 +348,7 @@ fn initial_executor_transfer_asset_batch_accepts_direct_definition_and_role_dele
         let result = super::Executor::Initial.execute_instruction(
             &mut transaction,
             &fixture.delegate,
-            TransferAssetBatch::new(vec![TransferAssetBatchEntry::with_leg_id(
+            &TransferAssetBatch::new(vec![TransferAssetBatchEntry::with_leg_id(
                 "delegated",
                 fixture.source.clone(),
                 fixture.first_destination.clone(),

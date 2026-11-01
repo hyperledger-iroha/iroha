@@ -51,6 +51,13 @@ input bound is checked before reading or allocating. SDK callers must retain the
 provided spelling and reject missing native admission; this API does not normalize
 Unicode input or provide a managed fallback.
 
+`connect_norito_name_validate_v1` admits exact canonical UTF-8 `Name` text through
+the pinned native NFC owner. It checks the 255-byte bound before reading input;
+reserved separators, controls, whitespace and noncanonical NFC spellings are
+rejected without normalization. This additive export retains ABI 33 because no
+existing calling convention or layout changes. C/JNI, C# and Apple artifact
+admission require the new symbol explicitly; ABI identity alone is insufficient.
+
 KAGEMUSHA canonical wallet objects are owned by
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge retains one native
 runtime or admitted wallet per opaque handle. Trusted embedding-app initialization

@@ -38,12 +38,14 @@ fn customer() -> AccountId {
 }
 
 fn global_root() -> Result<amx::Root> {
-    let mut npos = SumeragiNposParameters::default();
-    npos.epoch_length_blocks = NonZeroU64::new(EPOCH).unwrap();
-    npos.max_validators = 7;
-    npos.min_self_bond = 1_000_u64.into();
-    npos.evidence_horizon_blocks = EPOCH * 2;
-    npos.slashing_delay_blocks = 1;
+    let npos = SumeragiNposParameters {
+        epoch_length_blocks: NonZeroU64::new(EPOCH).unwrap(),
+        max_validators: 7,
+        min_self_bond: 1_000_u64.into(),
+        evidence_horizon_blocks: EPOCH * 2,
+        slashing_delay_blocks: 1,
+        ..Default::default()
+    };
     npos.validate().map_err(|error| eyre!(error))?;
     let api_token = amx::listener_credential()?;
     let mut builder = NetworkBuilder::new()
@@ -55,7 +57,7 @@ fn global_root() -> Result<amx::Root> {
         .with_base_seed("native-amx-real-four-seven-four")
         .with_genesis_keypair(amx::genesis_key(0))
         .with_block_cadence(Duration::from_millis(amx::CADENCE_MS))
-        .with_peer_startup_timeout(Duration::from_secs(20 * 60))
+        .with_peer_startup_timeout(Duration::from_mins(20))
         .with_npos_genesis_bootstrap(1_000_u64.into())
         .with_committee_validator_p2p_bootstrap(CommitteeValidatorP2pBootstrap::new(4)?)?
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -150,6 +152,7 @@ fn operators(network: &Network) -> Result<BTreeMap<PeerId, Operator>> {
         .collect()
 }
 
+#[cfg(unix)]
 fn install_genesis_custody(
     global: &amx::Root,
     runtime: &tokio::runtime::Runtime,
@@ -166,8 +169,11 @@ fn install_genesis_custody(
         network.start_all().await?;
         let bundle = network.native_genesis_provisioning_bundle()?;
         ensure!(bundle.block_hash == hash);
-        let dkg =
-            run_disposable_genesis_dkg(network, finality_limits(), 5, |height, _, deadline| {
+        let dkg = Box::pin(run_disposable_genesis_dkg(
+            network,
+            finality_limits(),
+            5,
+            |height, _, deadline| {
                 let admin = admin.clone();
                 async move {
                     advance_exact_genesis_phase_with_workload(
@@ -184,8 +190,9 @@ fn install_genesis_custody(
                     })
                     .await
                 }
-            })
-            .await?;
+            },
+        ))
+        .await?;
         let install: Vec<InstructionBox> =
             norito::json::from_slice(&fs::read(&dkg.install_instruction_path)?)?;
         ensure!(install.len() == 1);
@@ -252,6 +259,7 @@ fn parent_registration_sources(
 
 #[test]
 #[ignore = "16 actual processes, real all-seat DKG and paid 4→7→4 workload; needs three isolated network permits"]
+#[cfg(unix)]
 fn original_epoch_zero_commit_releases_paid_escrow_after_real_four_seven_four_rotation_and_restart()
 -> Result<()> {
     ensure!(
@@ -270,6 +278,7 @@ fn original_epoch_zero_commit_releases_paid_escrow_after_real_four_seven_four_ro
 
 // Retain only the durable owners between phases. The original test held its
 // later proof and rotation frames while native genesis was still executing.
+#[cfg(unix)]
 struct RotationSetup {
     exchange: amx::Exchange,
     dkg: DisposableGenesisDkgOutput,
@@ -284,6 +293,7 @@ struct RotationSetup {
 // borrows this same setup without moving the large Exchange through the wrapper.
 // TODO: Qualify this phase boundary with the complete default-stack network test.
 #[inline(never)]
+#[cfg(unix)]
 fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -291,8 +301,8 @@ fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let global = global_root()?;
     let customer_journal = global.network.env_dir().join("rotation-customer-workflows");
     let workload = rotation_payments::CustomerWorkload::new(
-        global.pins.clone(),
-        global.genesis_wire.clone(),
+        &global.pins,
+        &global.genesis_wire,
         customer_asset(),
         customer(),
         amx::fee_intent(),
@@ -334,8 +344,8 @@ fn prepare_rotation_exchange() -> Result<Box<RotationSetup>> {
     let exchange = amx::Exchange::attach(
         global,
         runtime,
-        genesis,
-        successor,
+        &genesis,
+        &successor,
         [
             amx::BankFeeProfile::Metered,
             amx::BankFeeProfile::UnfundedRelay,
@@ -363,6 +373,7 @@ struct FrozenRotationPayment {
     old_decision: iroha_data_model::sumeragi_amx::AmxCertifiedBlockV1,
 }
 
+#[cfg(unix)]
 struct FirstRotationHandoff {
     first: PreparedRotation,
     survivors: BTreeSet<PeerId>,
@@ -370,6 +381,7 @@ struct FirstRotationHandoff {
 
 // Prepared custody retains owner-private credential directories. Keep both exact
 // ceremony owners alive through bank restart, fee audit and the final idle check.
+#[cfg(unix)]
 struct RetainedRotationCustody {
     _second: PreparedRotation,
     _first: PreparedRotation,
@@ -378,6 +390,7 @@ struct RetainedRotationCustody {
 // Keep only durable owners on this orchestration frame. Each completed ceremony
 // and proof acquisition frame returns before the next phase is entered.
 #[inline(never)]
+#[cfg(unix)]
 fn recover_original_decision_after_rotation(setup: &mut RotationSetup) -> Result<()> {
     let pending = freeze_original_rotation_payment(&mut setup.exchange)?;
     let first = perform_first_rotation_handoff(setup, &pending)?;
@@ -440,7 +453,7 @@ fn freeze_original_rotation_payment(
     let global_client = exchange.roots[0].client(&amx::relay(0));
     let global_tip = exchange
         .runtime
-        .block_on(amx::status_poll::read_once(
+        .block_on(crate::status_poll::read_once(
             global_client.client().torii_request_timeout(),
             || async {
                 global_client
@@ -482,6 +495,7 @@ fn freeze_original_rotation_payment(
 }
 
 #[inline(never)]
+#[cfg(unix)]
 fn perform_first_rotation_handoff(
     setup: &RotationSetup,
     pending: &FrozenRotationPayment,
@@ -587,6 +601,7 @@ fn perform_first_rotation_handoff(
 }
 
 #[inline(never)]
+#[cfg(unix)]
 fn perform_second_rotation_handoff(
     setup: &RotationSetup,
     pending: &FrozenRotationPayment,
@@ -773,7 +788,7 @@ fn assert_final_customer_effects(
             .block_header
             .height()
             .get();
-        let final_block = evidence::global_at(&exchange.roots[0], height).await?;
+        let final_block = Box::pin(evidence::global_at(&exchange.roots[0], height)).await?;
         let world = cut.world_snapshot.authenticate(&final_block)?;
         ensure!(
             world.schema_hash()

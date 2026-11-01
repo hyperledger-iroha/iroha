@@ -501,7 +501,7 @@ fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_r
         "authenticated archive cases require the ordinary signed-genesis root"
     );
     crate::executor::Executor::Initial
-        .execute_instruction(&mut transaction, &publisher, instruction.clone().into())
+        .execute_instruction(&mut transaction, &publisher, &instruction.clone().into())
         .expect("Initial executor routes the authenticated archive registration through Core");
     let registered = transaction
         .world
@@ -529,7 +529,7 @@ fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_r
     assert_eq!(take_musubi_events(&mut transaction).len(), 2);
 
     crate::executor::Executor::Initial
-        .execute_instruction(&mut transaction, &publisher, instruction.clone().into())
+        .execute_instruction(&mut transaction, &publisher, &instruction.clone().into())
         .expect("exact original registrant replay remains idempotent");
     assert_eq!(
         transaction.world.musubi_archives.get(&archive_id),
@@ -537,7 +537,7 @@ fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_r
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
     let error = crate::executor::Executor::Initial
-        .execute_instruction(&mut transaction, &account(0x90), instruction.into())
+        .execute_instruction(&mut transaction, &account(0x90), &instruction.into())
         .expect_err("an unrelated authority cannot replay the registrant's receipt");
     let iroha_data_model::ValidationFail::InstructionFailed(error) = error else {
         panic!("unauthorized replay must reach the Core handler: {error:?}");
@@ -616,7 +616,7 @@ fn initial_executor_musubi_archive_registration_keeps_native_authority_and_polic
         }
         let archive_id = instruction.commitment.archive_id();
         let error = crate::executor::Executor::Initial
-            .execute_instruction(&mut transaction, &authority, instruction.into())
+            .execute_instruction(&mut transaction, &authority, &instruction.into())
             .expect_err("native archive checks must remain mandatory through Initial");
         let iroha_data_model::ValidationFail::InstructionFailed(error) = error else {
             panic!("{case} must reach the actual Core handler: {error:?}");

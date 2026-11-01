@@ -5,9 +5,10 @@
 //! is the single place where one of them is viewed as a
 //! [`SemanticAir`](super::SemanticAir). The out-of-domain check, run by the
 //! verifier and by the producer before it commits its answers, evaluates the
-//! relation through that view, and both engine preflights read the relation's
-//! declared shape through it, so the interface and the committed engine cannot
-//! describe different equations or geometry.
+//! relation through that view. Both engine preflights and the transcript
+//! context read its declared shape through it; the context also binds its outer
+//! identity and complete statement. The interface and the committed engine
+//! therefore use the same equations, geometry and statement bytes.
 //!
 //! [`VerifierLimits`] and [`ProducerLimits`] are the engine's own limit types:
 //! bounded verification and the producer's whole-attempt plan take them and
@@ -32,8 +33,7 @@
 //! result.
 //!
 //! TODO: B.2 moves the remaining direct readers of a sealed relation behind
-//! the interface: transcript binding reads the relation's identity and
-//! statement from `FixedAir`, the producer's masked quotient uses the prepared
+//! the interface: the producer's masked quotient uses the prepared
 //! evaluator and degree owner of `CompactTransferAir`, and both sides rebuild
 //! the public columns with the closed-form `PublicColumnReconstruction`
 //! instead of [`SemanticAir::public_value`](super::SemanticAir::public_value).

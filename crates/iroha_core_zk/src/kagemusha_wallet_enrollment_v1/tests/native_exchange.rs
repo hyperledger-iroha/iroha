@@ -1318,19 +1318,19 @@ fn finish_exchange_to(
             .unwrap();
     if automatic_maintenance_handoff {
         let receive = automatic_maintenance::retain(
-            &output,
+            output,
             "receive",
             automatic_maintenance::PendingReceipt {
                 wallet: &mut a,
                 device: &device_a,
                 frames: &frames_a,
-                send: &send_ab,
+                send: send_ab,
                 payment: &payment_ab,
                 original: &credited_ab,
             },
         );
         let status = automatic_maintenance::retain(
-            &output,
+            output,
             "status",
             automatic_maintenance::PendingReceipt {
                 wallet: &mut b,
@@ -1345,10 +1345,10 @@ fn finish_exchange_to(
         drop(b);
         drop(c);
         automatic_maintenance::publish_handoff(
-            &output,
-            &sources,
-            &setup,
-            &target_bytes,
+            output,
+            sources,
+            setup,
+            target_bytes,
             [receive, status],
         );
         return;
@@ -1356,7 +1356,7 @@ fn finish_exchange_to(
     let (reopened_a, archived_ab) = archive::exercise(
         a,
         &device_a,
-        &sources,
+        sources,
         &f,
         &frames_a,
         &send_ab.request_id,
@@ -1366,7 +1366,7 @@ fn finish_exchange_to(
     let (reopened_b, archived_bc) = archive::exercise(
         b,
         &device_b,
-        &sources,
+        sources,
         &f_b,
         &frames_b,
         &send_bc.request_id,
@@ -1675,8 +1675,8 @@ fn finish_unload(
         &bad_sigma_claim,
     );
     let (message_envelopes, payer_companions) = message_census::retain(
-        &output,
-        &sources,
+        output,
+        sources,
         [(&request_ab, &companion_ab), (&request_bc, &companion_bc)],
         [&payment_ab, &payment_bc],
         [&credited_ab, &credited_bc],

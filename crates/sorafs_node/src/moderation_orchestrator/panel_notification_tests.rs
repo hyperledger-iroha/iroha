@@ -1146,5 +1146,24 @@ fn checkpoint_failure_latches_the_process_fail_closed() {
     );
     assert!(orchestrator.snapshot().is_none());
 }
+#[test]
+fn checkpoint_hardlink_failure_latches_after_custody_is_repaired() {
+    orchestrator_fixture!(orchestrator; temp = tempfile::tempdir().expect("tempdir"); reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32]))); submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound { observed_finalized_height: 1 })); bounds = config(&temp, "checkpoint.norito"); checkpoint_path = bounds.checkpoint_path.clone(); => bounds; deps(reader, submitter); "orchestrator");
+    let original = std::fs::read(&checkpoint_path).unwrap();
+    let alias = checkpoint_path.with_extension("alias");
+    std::fs::hard_link(&checkpoint_path, &alias).unwrap();
+    assert!(matches!(
+        orchestrator.reconcile(),
+        Err(ModerationOrchestratorError::CheckpointIo(_))
+    ));
+    assert_eq!(std::fs::read(&checkpoint_path).unwrap(), original);
+    assert_eq!(std::fs::read(&alias).unwrap(), original);
+    std::fs::remove_file(alias).unwrap();
+    assert_eq!(
+        orchestrator.reconcile(),
+        Err(ModerationOrchestratorError::DurabilityFaulted)
+    );
+    assert!(orchestrator.snapshot().is_none());
+}
 include!("terminal_handoff_tests.rs");
 include!("checkpoint_store_tests.rs");

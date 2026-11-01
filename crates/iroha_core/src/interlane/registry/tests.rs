@@ -12,14 +12,14 @@ fn statuses() -> [LaneManifestStatus; 2] {
     std::array::from_fn(|index| {
         let count = if index == 0 { 3 } else { 7 };
         status_with_commitments(
-            LaneId::new(index as u32 + 1),
+            LaneId::new(u32::try_from(index).unwrap() + 1),
             DataSpaceId::new(12),
             (0..count)
                 .rev()
                 .map(|id| {
                     LanePrivacyCommitment::merkle(
                         LaneCommitmentId::new(id),
-                        MerkleCommitment::from_root_bytes([id as u8; 32], 8),
+                        MerkleCommitment::from_root_bytes([u8::try_from(id).unwrap(); 32], 8),
                     )
                 })
                 .collect(),

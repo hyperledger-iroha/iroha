@@ -178,7 +178,7 @@ fn capacity_original_utc_and_fee_terms_never_renew_and_large_components_refuse()
     let (_temporary, _prepared, coordinator) = fixture();
     let mut original = codec_original(&coordinator);
     terms.signing_deadline_unix_ms = 1;
-    let io = Instant::now() + Duration::from_secs(900);
+    let io = Instant::now() + Duration::from_mins(15);
     let options = terms.options(io);
     original
         .matches_intent(&original.policy)

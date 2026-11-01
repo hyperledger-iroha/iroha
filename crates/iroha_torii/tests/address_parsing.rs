@@ -1,5 +1,6 @@
 //! Ensure Torii account endpoints accept canonical I105 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
+use crate::fixtures;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -15,6 +16,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::test_utils::percent_encode;
 use iroha_torii::{
     Torii,
@@ -37,7 +39,7 @@ const ACCOUNTS_ASSETS_CTX: &str = "/v1/accounts/{account_id}/assets";
 const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v1/accounts/{account_id}/assets/query";
 const KAIGI_RELAY_DETAIL_CTX: &str = "/v1/kaigi/relays/{relay_id}";
 const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
-const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
+const REPO_AGREEMENTS_QUERY_ENDPOINT: &str = "/v1/repo/agreements/query";
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     let filter = FilterExpr::Eq(FieldPath(field.to_string()), json::Value::from(literal));
     let query = ListQuery::new().filter(filter).limit(1);
@@ -46,8 +48,22 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
 fn encode_query_value(value: &str) -> String {
     percent_encode(value).into_owned()
 }
+/// Sign one repo-agreement query as the account the fixture registers for authenticated reads.
+fn signed_repo_agreements_query(
+    app: &fixtures::CommittedToriiRouterRuntime,
+    body: Vec<u8>,
+) -> Request<Body> {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/repo/agreements/query")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.clone()))
+        .unwrap();
+    fixtures::app_signed_request(&app.network_id(), &ALICE_ID, &ALICE_KEYPAIR, request, &body)
+}
 #[tokio::test]
 async fn transactions_endpoint_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_account_segments() {
         let resp = app
@@ -73,6 +89,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn transactions_endpoint_rejects_invalid_account_segment() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     let literal = "not-an-i105@banka.dataspace";
     let resp = app
@@ -90,6 +107,7 @@ async fn transactions_endpoint_rejects_invalid_account_segment() {
 }
 #[tokio::test]
 async fn transactions_endpoint_accepts_default_domain_without_suffix() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_default_domain_segments() {
         let resp = app
@@ -115,6 +133,7 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
 }
 #[tokio::test]
 async fn transactions_query_accepts_default_domain_without_suffix() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_default_domain_segments() {
         let resp = app
@@ -142,6 +161,7 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
 }
 #[tokio::test]
 async fn transactions_endpoint_rejects_public_key_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
@@ -171,6 +191,7 @@ async fn transactions_endpoint_rejects_public_key_segments() {
 }
 #[tokio::test]
 async fn invalid_account_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -204,6 +225,7 @@ async fn invalid_account_segments_increment_metric() {
 }
 #[tokio::test]
 async fn malformed_segments_increment_invalid_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
@@ -237,6 +259,7 @@ async fn malformed_segments_increment_invalid_metric() {
 }
 #[tokio::test]
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_account_segments() {
         let resp = app
@@ -264,6 +287,7 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     let literal = "sorainvalid";
     let resp = app
@@ -283,6 +307,7 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
 }
 #[tokio::test]
 async fn transactions_query_invalid_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -318,6 +343,7 @@ async fn transactions_query_invalid_segments_increment_metric() {
 }
 #[tokio::test]
 async fn transactions_query_rejects_checksum_mismatch() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let bad_literal = tampered_tx_query_literal();
     let reason = AccountAddressErrorCode::ChecksumMismatch.as_str();
@@ -347,6 +373,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
 }
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "ignored@banka.dataspace";
     let reason = AccountId::parse_encoded(literal)
@@ -378,6 +405,7 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
 }
 #[tokio::test]
 async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let envelope =
         query_envelope_with_account_filter("authority", &fixtures::TX_QUERY_ACCOUNT.canonical);
@@ -413,6 +441,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
 }
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_public_key_segment() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
@@ -444,6 +473,7 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
 }
 #[tokio::test]
 async fn assets_endpoint_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_account_segments() {
         let resp = app
@@ -469,6 +499,7 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn assets_endpoint_accepts_default_domain_without_suffix() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_default_domain_segments() {
         let resp = app
@@ -494,6 +525,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
 }
 #[tokio::test]
 async fn assets_endpoint_rejects_invalid_segment() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     let literal = "sorainvalid";
     let resp = app
@@ -511,6 +543,7 @@ async fn assets_endpoint_rejects_invalid_segment() {
 }
 #[tokio::test]
 async fn assets_endpoint_invalid_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -544,6 +577,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
 }
 #[tokio::test]
 async fn assets_endpoint_rejects_public_key_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
@@ -573,6 +607,7 @@ async fn assets_endpoint_rejects_public_key_segments() {
 }
 #[tokio::test]
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_account_segments() {
         let resp = app
@@ -600,6 +635,7 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -635,6 +671,7 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
 }
 #[tokio::test]
 async fn assets_query_endpoint_rejects_public_key_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
@@ -666,6 +703,7 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
 }
 #[tokio::test]
 async fn permissions_endpoint_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_account_segments() {
         let resp = app
@@ -691,6 +729,7 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn permissions_endpoint_accepts_default_domain_without_suffix() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for segment in accepted_default_domain_segments() {
         let resp = app
@@ -716,6 +755,7 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
 }
 #[tokio::test]
 async fn permissions_endpoint_invalid_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -749,6 +789,7 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
 }
 #[tokio::test]
 async fn explorer_domains_query_accepts_encoded_account_params() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_account_segments() {
         let resp = app
@@ -777,6 +818,7 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
 }
 #[tokio::test]
 async fn explorer_domains_query_invalid_account_param_records_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
     let reason = AccountId::parse_encoded(literal)
@@ -814,6 +856,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
 }
 #[tokio::test]
 async fn explorer_account_detail_accepts_encoded_account_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_account_segments() {
         let resp = app
@@ -839,6 +882,7 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
 }
 #[tokio::test]
 async fn explorer_account_detail_invalid_segments_increment_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
     let reason = AccountId::parse_encoded(literal)
@@ -873,6 +917,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
 }
 #[tokio::test]
 async fn explorer_account_qr_returns_svg_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     let (canonical, _) = account_segments();
     let resp = app
@@ -914,19 +959,13 @@ async fn explorer_account_qr_returns_svg_literal() {
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_encoded_literals() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_account_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/repo/agreements/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
+            .oneshot(signed_repo_agreements_query(&app, body))
             .await
             .unwrap();
         assert!(
@@ -942,19 +981,13 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_default_domain_literals() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/repo/agreements/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
+            .oneshot(signed_repo_agreements_query(&app, body))
             .await
             .unwrap();
         assert!(
@@ -970,6 +1003,7 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorabaddigest";
     let reason = AccountId::parse_encoded(literal)
@@ -977,19 +1011,12 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
         .code_str();
     let counter = metrics
         .torii_address_invalid_total
-        .with_label_values(&[REPO_AGREEMENTS_ENDPOINT, reason]);
+        .with_label_values(&[REPO_AGREEMENTS_QUERY_ENDPOINT, reason]);
     let before = counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repo/agreements/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(signed_repo_agreements_query(&app, body))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1002,6 +1029,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
 }
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_malformed_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
@@ -1009,19 +1037,12 @@ async fn repo_agreements_query_filter_rejects_malformed_literal() {
         .code_str();
     let invalid_counter = metrics
         .torii_address_invalid_total
-        .with_label_values(&[REPO_AGREEMENTS_ENDPOINT, reason]);
+        .with_label_values(&[REPO_AGREEMENTS_QUERY_ENDPOINT, reason]);
     let invalid_before = invalid_counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repo/agreements/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(signed_repo_agreements_query(&app, body))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1034,6 +1055,7 @@ async fn repo_agreements_query_filter_rejects_malformed_literal() {
 }
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, operator_key_pair) = test_router_with_operator_key();
     for literal in accepted_account_segments() {
         let request = Request::builder()
@@ -1058,6 +1080,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
 }
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, operator_key_pair) = test_router_with_operator_key();
     let literal = "sorainvalid";
     let request = Request::builder()
@@ -1074,6 +1097,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
 }
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics, operator_key_pair) = build_test_router();
     let literal = "sorainvalid";
     let reason = AccountId::parse_encoded(literal)
@@ -1098,6 +1122,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
 }
 #[tokio::test]
 async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics, operator_key_pair) = build_test_router();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
@@ -1122,6 +1147,7 @@ async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_account_segments() {
         let encoded = encode_query_value(&literal);
@@ -1150,6 +1176,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     let literal = "sorainvalid";
     let resp = app
@@ -1169,6 +1196,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     for literal in accepted_default_domain_segments() {
         let encoded = encode_query_value(&literal);
@@ -1197,6 +1225,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let encoded = encode_query_value(&literal);
@@ -1229,6 +1258,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
     let encoded = encode_query_value(literal);
@@ -1257,6 +1287,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 }
 #[tokio::test]
 async fn nexus_public_lane_stake_malformed_literal_increments_invalid_metric() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
     let encoded = encode_query_value(literal);
@@ -1301,15 +1332,16 @@ fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, 
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
     let account = Account::new(account_id.clone()).build(&account_id);
+    let reader = Account::new(ALICE_ID.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
-    let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    let world = World::with([domain], [account, reader], Vec::<AssetDefinition>::new());
     let native_chain = fixtures::commit_genesis_fixture(
         world,
         cfg.common.chain.clone(),
         &cfg.common.key_pair,
         Vec::new(),
         None,
-        TimeSource::new_system(),
+        &TimeSource::new_system(),
     );
     let state = native_chain.state().clone();
     let kura = native_chain.kura().clone();
@@ -1383,6 +1415,7 @@ fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, 
 }
 #[tokio::test]
 async fn address_parsing_fixture_has_applied_global_root_authority() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let app = test_router();
     assert_eq!(app.state().view().height(), 1);
     assert_eq!(
@@ -1446,5 +1479,4 @@ fn counter_total(counter: &prometheus::IntCounterVec) -> u64 {
         .sum()
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

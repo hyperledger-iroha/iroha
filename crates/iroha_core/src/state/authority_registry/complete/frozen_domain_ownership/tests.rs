@@ -190,12 +190,12 @@ fn missing_wrong_foreign_and_wrong_owner_reject_either_original_image() {
                     0 => state.world.domains_by_owner = Storage::new(),
                     1 => {
                         state.world.domains_by_owner =
-                            Storage::from_iter([(row(&*BOB_ID, "live"), ())])
+                            Storage::from_iter([(row(&BOB_ID, "live"), ())])
                     }
                     2 => {
                         state.world.domains_by_owner = Storage::from_iter([
-                            (row(&*ALICE_ID, "live"), ()),
-                            (row(&*ALICE_ID, "ghost"), ()),
+                            (row(&ALICE_ID, "live"), ()),
+                            (row(&ALICE_ID, "ghost"), ()),
                         ])
                     }
                     3 => {
@@ -214,16 +214,13 @@ fn missing_wrong_foreign_and_wrong_owner_reject_either_original_image() {
                         block
                             .world
                             .domains_by_owner
-                            .insert(row(&*ALICE_ID, "live"), ());
+                            .insert(row(&ALICE_ID, "live"), ());
                         if defect == 1 {
-                            block.world.domains_by_owner.remove(row(&*BOB_ID, "live"));
+                            block.world.domains_by_owner.remove(row(&BOB_ID, "live"));
                         }
                     }
                     2 => {
-                        block
-                            .world
-                            .domains_by_owner
-                            .remove(row(&*ALICE_ID, "ghost"));
+                        block.world.domains_by_owner.remove(row(&ALICE_ID, "ghost"));
                     }
                     3 => {
                         block
@@ -236,20 +233,20 @@ fn missing_wrong_foreign_and_wrong_owner_reject_either_original_image() {
             } else {
                 match defect {
                     0 => {
-                        block.world.domains_by_owner.remove(row(&*ALICE_ID, "live"));
+                        block.world.domains_by_owner.remove(row(&ALICE_ID, "live"));
                     }
                     1 => {
-                        block.world.domains_by_owner.remove(row(&*ALICE_ID, "live"));
+                        block.world.domains_by_owner.remove(row(&ALICE_ID, "live"));
                         block
                             .world
                             .domains_by_owner
-                            .insert(row(&*BOB_ID, "live"), ());
+                            .insert(row(&BOB_ID, "live"), ());
                     }
                     2 => {
                         block
                             .world
                             .domains_by_owner
-                            .insert(row(&*ALICE_ID, "ghost"), ());
+                            .insert(row(&ALICE_ID, "ghost"), ());
                     }
                     3 => {
                         block

@@ -24,8 +24,6 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{ConfidentialGas, PipaR, Sccp, Stark, VerifyingKeyRef, Zk};
-#[cfg(test)]
-use iroha_data_model::parameter::CustomParameter;
 use iroha_data_model::parameter::Parameters;
 pub use iroha_data_model::zk_validity_policy::{
     ZkConfidentialValidityV1, ZkPipaRValidityV1, ZkProofValidityV1, ZkSccpValidityV1,
@@ -482,37 +480,6 @@ pub fn effective_zk(installed: Zk, parameters: &Parameters) -> Zk {
     effective
 }
 
-/// Validate a `SetParameter` of the committed ZK validity policy.
-///
-/// Returns `Ok(false)` when `custom` is another parameter and `Ok(true)` when
-/// it is a policy that may be committed. `pending_transition_counts` are the
-/// committed confidential-policy transition counts by effective height.
-///
-/// The decision uses the instruction bytes and committed State only, so every
-/// validator reaches it identically. A committed change takes effect from the
-/// next block; proofs submitted under the previous policy are judged by the
-/// policy frozen for the block that executes them, without grandfathering.
-/// Limits and retention windows may shrink while the policy stays coherent;
-/// widening a retention window does not restore records already pruned.
-///
-/// # Errors
-///
-/// Returns an error when the payload is malformed, violates a structural or
-/// coherence rule, or lowers the per-height transition limit below a committed
-/// pending count.
-#[cfg(test)]
-fn validate_set_parameter(
-    custom: &CustomParameter,
-    pending_transition_counts: impl IntoIterator<Item = (u64, u32)>,
-) -> Result<bool, ZkValidityPolicyChangeError> {
-    let Some(policy) = ZkValidityPolicyV1::from_custom_parameter(custom) else {
-        return Ok(false);
-    };
-    let policy = policy?;
-    validate_pending_transitions(&policy, pending_transition_counts)?;
-    Ok(true)
-}
-
 /// Check retained transitions against an already admitted and intrinsically
 /// validated successor. The instruction path must not decode the policy again.
 ///
@@ -545,10 +512,40 @@ mod boundary_tests;
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::parameter::Parameter;
+    use iroha_data_model::parameter::{CustomParameter, Parameter};
 
     use super::*;
     use crate::state::{compute_zk_consensus_policy_hash, default_zk_config};
+
+    /// Validate a `SetParameter` of the committed ZK validity policy.
+    ///
+    /// Returns `Ok(false)` when `custom` is another parameter and `Ok(true)` when
+    /// it is a policy that may be committed. `pending_transition_counts` are the
+    /// committed confidential-policy transition counts by effective height.
+    ///
+    /// The decision uses the instruction bytes and committed State only, so every
+    /// validator reaches it identically. A committed change takes effect from the
+    /// next block; proofs submitted under the previous policy are judged by the
+    /// policy frozen for the block that executes them, without grandfathering.
+    /// Limits and retention windows may shrink while the policy stays coherent;
+    /// widening a retention window does not restore records already pruned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload is malformed, violates a structural or
+    /// coherence rule, or lowers the per-height transition limit below a committed
+    /// pending count.
+    fn validate_set_parameter(
+        custom: &CustomParameter,
+        pending_transition_counts: impl IntoIterator<Item = (u64, u32)>,
+    ) -> Result<bool, ZkValidityPolicyChangeError> {
+        let Some(policy) = ZkValidityPolicyV1::from_custom_parameter(custom) else {
+            return Ok(false);
+        };
+        let policy = policy?;
+        validate_pending_transitions(&policy, pending_transition_counts)?;
+        Ok(true)
+    }
 
     /// The local resource settings of `zk`, for comparison. Exhaustive like
     /// [`policy_of`]: every field is either a local resource listed here or a

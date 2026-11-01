@@ -1518,19 +1518,18 @@ mod tests {
             panic!("next_u64 not supported in StubRng")
         }
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                let sample = self
-                    .samples
-                    .get(self.idx)
-                    .expect("StubRng ran out of samples");
-                self.idx += 1;
-                assert_eq!(
-                    sample.len(),
-                    dest.len(),
-                    "StubRng sample length must match destination length"
-                );
-                dest.copy_from_slice(sample);
-            })
+            let sample = self
+                .samples
+                .get(self.idx)
+                .expect("StubRng ran out of samples");
+            self.idx += 1;
+            assert_eq!(
+                sample.len(),
+                dest.len(),
+                "StubRng sample length must match destination length"
+            );
+            dest.copy_from_slice(sample);
+            Ok(())
         }
     }
     struct FixedRng {
@@ -1545,9 +1544,8 @@ mod tests {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                dest.fill(self.byte);
-            })
+            dest.fill(self.byte);
+            Ok(())
         }
     }
     #[test]

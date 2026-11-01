@@ -59,7 +59,7 @@ pub use retention::{FoldRetentionCountsV1, perturb_retained_key_for_test};
 
 /// `Error::Invalid` field of a Receive refused by admission (§3.2): the fold would burn this
 /// exact Payment, so no retry of the same bytes can accept it.
-pub(crate) const RECEIVE_ADMISSION_REFUSAL: &str = "incoming lineage verdict";
+pub const RECEIVE_ADMISSION_REFUSAL: &str = "incoming lineage verdict";
 
 /// Metadata-only execution owner; the admitted wallet retains the only original store.
 /// A prepared job holds its own copy, which shares the installed sources.

@@ -326,7 +326,7 @@ fn build_genesis_for_mode(
     validate_npos_crypto_policy(genesis, consensus_mode)
 }
 /// Resolve the producer's asset and liability bounds before the first manifest build.
-pub(crate) fn resolve_staking_policy(
+pub fn resolve_staking_policy(
     public_xor_asset_definition_id: Option<&AssetDefinitionId>,
     sccp: bool,
 ) -> color_eyre::Result<PublicLaneStakingPolicy> {
@@ -396,11 +396,11 @@ fn append_public_xor_binding(
                 iroha_data_model::isi::register::RegisterBox::Domain(register) => {
                     has_domain |= register.object.id == public_xor_domain;
                 }
-                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
-                    if register.object.id == *asset_definition_id {
-                        ensure_public_xor_definition(&register.object, asset_definition_id)?;
-                        has_asset_definition = true;
-                    }
+                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register)
+                    if register.object.id == *asset_definition_id =>
+                {
+                    ensure_public_xor_definition(&register.object, asset_definition_id)?;
+                    has_asset_definition = true;
                 }
                 _ => {}
             }

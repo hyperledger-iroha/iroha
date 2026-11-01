@@ -132,12 +132,37 @@ impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {
 pub struct ProposeRuntimeUpgradeProposal {
     /// The change set to schedule, or the scheduled change set to withdraw.
     pub action: RuntimeUpgradeActionV1,
+}
+impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
+/// Propose to schedule or cancel a runtime change set through SORA Parliament with the trusted
+/// release signers' endorsements of what it publishes (`specs/runtime_upgrades.md`, "Provenance
+/// policy").
+///
+/// A release addition after the frozen baseline: until a change set activates it, every root
+/// rejects its wire ID as `definition_inactive`, and the baseline
+/// [`ProposeRuntimeUpgradeProposal`] keeps its original layout and semantics. Ledger admission
+/// requires the `CanProposeRuntimeChangeSet` permission.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal")]
+pub struct ProposeEndorsedRuntimeUpgradeProposal {
+    /// The change set to schedule, or the scheduled change set to withdraw.
+    pub action: RuntimeUpgradeActionV1,
     /// Trusted release signers' endorsements of the change set to schedule, at most one per
     /// trusted signer; the committed `runtime_provenance_policy_v1` decides how many it needs.
     /// A cancellation, or a proposal to a root without that policy, carries none.
     pub provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 }
-impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
+impl crate::seal::Instruction for ProposeEndorsedRuntimeUpgradeProposal {}
 /// Propose one SCCP v1 governance decision to the SORA Parliament (`specs/sccp.md` §4.14.3).
 #[derive(
     Clone,
@@ -464,6 +489,9 @@ impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance 
     proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
+    action: RuntimeUpgradeActionV1,
+});
+impl_governance_decode_from_slice!(ProposeEndorsedRuntimeUpgradeProposal {
     action: RuntimeUpgradeActionV1,
     provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 });
@@ -932,14 +960,23 @@ mod tests {
             key.private_key(),
         )
         .expect("endorse");
-        let ins = ProposeRuntimeUpgradeProposal {
+        let ins = ProposeEndorsedRuntimeUpgradeProposal {
             action: runtime_action(),
             provenance: vec![endorsement],
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
-        let dec = ProposeRuntimeUpgradeProposal::decode(&mut cur).unwrap();
+        let dec = ProposeEndorsedRuntimeUpgradeProposal::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
+        let baseline = ProposeRuntimeUpgradeProposal {
+            action: runtime_action(),
+        };
+        let enc = norito::codec::Encode::encode(&baseline);
+        let mut cur = enc.as_slice();
+        assert_eq!(
+            ProposeRuntimeUpgradeProposal::decode(&mut cur).unwrap(),
+            baseline
+        );
     }
     #[test]
     fn sccp_route_governance_proposal_roundtrip() {
@@ -992,6 +1029,9 @@ mod tests {
             manifest_provenance: None,
         });
         assert_slice_roundtrip(ProposeRuntimeUpgradeProposal {
+            action: runtime_action(),
+        });
+        assert_slice_roundtrip(ProposeEndorsedRuntimeUpgradeProposal {
             action: runtime_action(),
             provenance: Vec::new(),
         });
@@ -1059,6 +1099,12 @@ mod tests {
         assert_registry_decodes(
             &registry,
             ProposeRuntimeUpgradeProposal {
+                action: runtime_action(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            ProposeEndorsedRuntimeUpgradeProposal {
                 action: runtime_action(),
                 provenance: Vec::new(),
             },
@@ -1149,6 +1195,9 @@ mod frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             super::ProposeRuntimeUpgradeProposal,
         >("iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::ProposeEndorsedRuntimeUpgradeProposal,
+        >("iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal");
         crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeSccpRouteGovernance>(
             "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
         );

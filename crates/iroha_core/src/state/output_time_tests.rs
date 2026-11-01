@@ -3,6 +3,8 @@
 //! journal adds no fragment when the Time phase starts.
 
 use super::*;
+#[path = "output_progress_tests.rs"]
+mod native_progress;
 #[path = "output_scheduled_contract_tests.rs"]
 mod scheduled_contract_callbacks;
 use crate::exec_witness;

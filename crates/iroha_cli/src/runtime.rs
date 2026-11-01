@@ -201,15 +201,21 @@ impl Run for CancelArgs {
 }
 /// The SORA Parliament proposal that carries `action` and its endorsements
 /// (`specs/live_runtime_upgrades.md` §6); the node admits it when the transaction executes.
+/// Without endorsements it is the baseline proposal; with them, the release addition's endorsed
+/// proposal, which a root executes once a change set activates it.
 fn runtime_proposal(
     action: iroha::data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
     provenance: Vec<iroha::data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
 ) -> Vec<iroha::data_model::isi::InstructionBox> {
-    use iroha::data_model::isi::{InstructionBox, governance::ProposeRuntimeUpgradeProposal};
-    vec![InstructionBox::from(ProposeRuntimeUpgradeProposal {
-        action,
-        provenance,
-    })]
+    use iroha::data_model::isi::{
+        InstructionBox,
+        governance::{ProposeEndorsedRuntimeUpgradeProposal, ProposeRuntimeUpgradeProposal},
+    };
+    vec![if provenance.is_empty() {
+        InstructionBox::from(ProposeRuntimeUpgradeProposal { action })
+    } else {
+        InstructionBox::from(ProposeEndorsedRuntimeUpgradeProposal { action, provenance })
+    }]
 }
 #[derive(clap::Args, Debug)]
 pub struct EndorseChangeSetArgs {
@@ -396,7 +402,10 @@ fn decode_hex_32(what: &str, value: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use iroha::data_model::{
-        isi::{InstructionBox, governance::ProposeRuntimeUpgradeProposal},
+        isi::{
+            InstructionBox,
+            governance::{ProposeEndorsedRuntimeUpgradeProposal, ProposeRuntimeUpgradeProposal},
+        },
         prelude::Executable,
         runtime::{
             definition::SelectionId,
@@ -506,7 +515,7 @@ mod tests {
         }
         .run(&mut context)
         .expect("propose");
-        let expected = InstructionBox::from(ProposeRuntimeUpgradeProposal {
+        let expected = InstructionBox::from(ProposeEndorsedRuntimeUpgradeProposal {
             action: RuntimeUpgradeActionV1::Schedule(change_set),
             provenance: vec![endorsement],
         });
@@ -526,7 +535,6 @@ mod tests {
         .expect("cancel");
         let expected = InstructionBox::from(ProposeRuntimeUpgradeProposal {
             action: RuntimeUpgradeActionV1::Cancel(ChangeSetId([0xA5; 32])),
-            provenance: Vec::new(),
         });
         assert_eq!(
             context.submitted,

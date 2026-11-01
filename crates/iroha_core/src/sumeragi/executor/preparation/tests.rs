@@ -432,9 +432,6 @@ fn immutable_preparation_short_prepaid_parent_requires_recovery_without_losing_c
 
 #[test]
 fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
-    // Keep constructor-retired State generations outside this operation's
-    // original-pool refusal and synchronous refund observations.
-    let _state_retirement = crossbeam_epoch::pin();
     use super::super::{
         FinishingPhase, NativeContextArchiveError, NativeLaneStateProofError, PublicationDeferral,
     };
@@ -443,6 +440,9 @@ fn cold_prepare_refusal_retains_original_finishing_owner_and_exact_release() {
         EventBox,
         pipeline::{BlockEvent, BlockStatus, PipelineEventBox},
     };
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     for phase in 0..3 {
         publication_tests::with_worker(move |chain, worker, blocks, events| {
             let mut registration = crate::unit_test_support::release_registration(

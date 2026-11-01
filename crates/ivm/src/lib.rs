@@ -128,6 +128,8 @@ mod zk_poseidon;
 pub mod zk_verify;
 use std::sync::{Mutex, OnceLock};
 // Host concurrency policy and declared state access.
+/// Bounded direct-IVM movement adapter for the independent-root unit prototype.
+pub mod game_unit_step;
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
 pub mod prebuilt_fixtures;

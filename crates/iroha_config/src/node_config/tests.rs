@@ -5,6 +5,7 @@ use crate::parameters::actual::{self, NodeSecretFile};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::account::AccountId;
 use std::{
+    fmt::Write as _,
     fs,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -855,7 +856,7 @@ fn data_dir_service_paths_respect_layered_enablement_and_explicit_paths() {
             );
             let mut node = "extends = \"base.toml\"\ndata_dir = \"data\"\n".to_owned();
             if let Some(enabled) = override_enabled {
-                node.push_str(&format!("[{section}]\nenabled = {enabled}\n"));
+                writeln!(node, "[{section}]\nenabled = {enabled}").unwrap();
             }
             let path = dir.write("node.toml", &node);
             let reader = open(&path).unwrap();

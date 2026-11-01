@@ -52,7 +52,7 @@ fn retained_native_base_phase_transfer_is_unique_and_clears_on_release() {
     assert_eq!(bound.retained_base_heap_bytes_v1(), 64);
     assert!(base.retain_native_base_v1().is_err());
     assert!(base.bind_v1(&credential_binding(0x72)).is_err());
-    let (_, observations) = inspection::observe_v1(|| bound.zeroize_private_v1());
+    let ((), observations) = inspection::observe_v1(|| bound.zeroize_private_v1());
     assert!(bound.private_is_zeroized_v1());
     assert_eq!(bound.retained_base_heap_bytes_v1(), 0);
     assert_eq!(

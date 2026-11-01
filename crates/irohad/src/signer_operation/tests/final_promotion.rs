@@ -313,7 +313,7 @@ fn final_promotion_constructor_rejects_foreign_journal_role_and_empty_coordinate
         let result = SignerFinalPromotionServiceV1::new(
             fixture.coordinator,
             expected,
-            Arc::from([b'x']),
+            Arc::from(*b"x"),
             SignerReceiptJournalV1::open_test(&path, purpose).unwrap(),
         )
         .unwrap_err();

@@ -25,7 +25,7 @@ fn every_phase_produces_only_its_current_completed_or_release_marker() {
         let mut evidence = Evidence::new(phase);
         assert_eq!(evidence.request.magic, *b"IRSTKQ01");
         assert_eq!(evidence.state.body.magic, *b"IRSTKS01");
-        let pending_debug = format!("{:?}", &evidence.attempt);
+        let pending_debug = format!("{:?}", evidence.attempt);
         for value in [
             &evidence.receipt.binding.key_handle,
             &evidence.receipt.token.body.token_id,

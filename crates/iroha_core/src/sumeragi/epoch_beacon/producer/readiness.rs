@@ -192,22 +192,22 @@ impl NativeBeaconProducer {
             .then(|| current.authorization.last_height.checked_sub(1))
             .flatten()
             .filter(|height| *height >= context.height);
-        let local =
-            current
-                .committee
-                .iter()
-                .position(|seat| {
-                    seat.validator.public_key().try_to_bytes().ok().is_some_and(
-                        |(algorithm, bytes)| {
-                            algorithm == iroha_crypto::Algorithm::BlsNormal
-                                && self
-                                    .local_bls
-                                    .as_ref()
-                                    .is_some_and(|key| key.as_slice() == bytes)
-                        },
-                    )
-                })
-                .and_then(|index| u16::try_from(index + 1).ok());
+        let local = current
+            .committee
+            .iter()
+            .position(|seat| {
+                seat.validator
+                    .public_key()
+                    .try_to_bytes()
+                    .is_ok_and(|(algorithm, bytes)| {
+                        algorithm == iroha_crypto::Algorithm::BlsNormal
+                            && self
+                                .local_bls
+                                .as_ref()
+                                .is_some_and(|key| key.as_slice() == bytes)
+                    })
+            })
+            .and_then(|index| u16::try_from(index + 1).ok());
         let mut horizon = BeaconHorizonStatusV1 {
             epoch_length_blocks: if current.mode == ConsensusMode::Npos {
                 current.authorization.last_height - current.authorization.first_height + 1

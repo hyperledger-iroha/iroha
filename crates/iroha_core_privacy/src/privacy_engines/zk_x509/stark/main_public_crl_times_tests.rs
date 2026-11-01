@@ -48,9 +48,9 @@ fn public_time_quotients_use_one_original_column_and_reject_each_mismatch() {
         vec![slope.sub(y.mul(F(11))), F(11)],
         vec![slope.sub(x.mul(F(11))), F(11)],
     ];
-    for i in 0..2 {
+    for (i, expected_quotient) in expected.iter().enumerate() {
         let q = plan.quotient_v1(i, &source).unwrap();
-        assert_eq!(&q[..2], &expected[i]);
+        assert_eq!(&q[..2], expected_quotient);
         assert_eq!(q[2], F::ZERO);
         let changed = if i == 0 {
             plan_v1(plan.values[0].0 + 1, plan.values[1].0)

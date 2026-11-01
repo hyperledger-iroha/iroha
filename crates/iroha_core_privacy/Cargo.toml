@@ -17,8 +17,8 @@ workspace = true
 [features]
 default = ["zk-stark", "simd"]
 zk-stark = []
-# SHA-3 selects supported CPU acceleration at runtime; portable results are identical.
-simd = []
+# Enable runtime-admitted CPU arithmetic and SHA-3; scalar results are identical.
+simd = ["fastpq_prover/simd"]
 privacy-release-evidence = ["zk-stark", "iroha_data_model/privacy-exact12-conformance"]
 test-utils = ["dep:rand_chacha"]
 # Opt-in diagnostic: measures the transparent FASTPQ replay prover, which

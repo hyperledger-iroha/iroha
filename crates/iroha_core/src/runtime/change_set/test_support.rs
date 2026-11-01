@@ -25,11 +25,11 @@ use iroha_data_model::{
 use crate::runtime::release_catalog;
 
 /// Wire identity of the instruction [`add_instruction`] adds.
-pub(crate) const ADDED_WIRE_ID: &str = "iroha.test.added.v1";
+pub const ADDED_WIRE_ID: &str = "iroha.test.added.v1";
 
 /// A structurally closed retirement that the current lifecycle engine cannot execute: every
 /// instruction and its conservative bundle are retired before one baseline table leaves.
-pub(crate) fn retire_baseline_storage(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+pub fn retire_baseline_storage(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
     let catalog = release_catalog().expect("release catalog");
     let predecessor = &catalog.baseline;
     let bundle = predecessor.bindings[0].implementation;
@@ -74,11 +74,7 @@ pub(crate) fn retire_baseline_storage(network: NetworkId, effective_height: u64)
 }
 
 /// Install either an empty table or a cell whose initial bytes require lifecycle support.
-pub(crate) fn install_storage(
-    network: NetworkId,
-    effective_height: u64,
-    cell: bool,
-) -> ChangeSetV1 {
+pub fn install_storage(network: NetworkId, effective_height: u64, cell: bool) -> ChangeSetV1 {
     let catalog = release_catalog().expect("release catalog");
     let predecessor = &catalog.baseline;
     let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
@@ -112,7 +108,7 @@ pub(crate) fn install_storage(
 }
 
 /// A closed migration activation whose cursor and barrier engine is not implemented.
-pub(crate) fn activate_migration(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+pub fn activate_migration(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
     let catalog = release_catalog().expect("release catalog");
     let predecessor = &catalog.baseline;
     let migration = DefinitionDescriptorV1::Migration(MigrationDescriptorV1 {
@@ -149,7 +145,7 @@ pub(crate) fn activate_migration(network: NetworkId, effective_height: u64) -> C
 
 /// A change set of `network`'s universal root, effective at `effective_height`, that adds one
 /// instruction answered by a new native implementation to the baseline selection.
-pub(crate) fn add_instruction(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+pub fn add_instruction(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
     let catalog = release_catalog().expect("release catalog");
     let predecessor = catalog.baseline.clone();
     let bundle = predecessor.bindings[0].implementation;
@@ -222,7 +218,7 @@ pub(crate) fn add_instruction(network: NetworkId, effective_height: u64) -> Chan
 
 /// A change set of `network`'s universal root, effective at `effective_height`, that only
 /// deprecates the baseline's native bundle: every definition stays one this release implements.
-pub(crate) fn deprecate_baseline_bundle(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
+pub fn deprecate_baseline_bundle(network: NetworkId, effective_height: u64) -> ChangeSetV1 {
     let predecessor = release_catalog().expect("release catalog").baseline.clone();
     let bundle = predecessor.bindings[0].implementation;
     let mut successor = predecessor.clone();
@@ -248,7 +244,7 @@ pub(crate) fn deprecate_baseline_bundle(network: NetworkId, effective_height: u6
 
 /// A change set of `network`'s universal root, effective at `effective_height`, that applies
 /// `restriction` to the baseline interface bound to `wire_id`.
-pub(crate) fn restrict_baseline_interface(
+pub fn restrict_baseline_interface(
     network: NetworkId,
     effective_height: u64,
     wire_id: &str,
@@ -283,7 +279,7 @@ pub(crate) fn restrict_baseline_interface(
 }
 
 /// A live asset lock of `seed`: custody not yet paid out or refunded.
-pub(crate) fn live_escrow(seed: u8) -> iroha_data_model::escrow::AssetEscrowRecord {
+pub fn live_escrow(seed: u8) -> iroha_data_model::escrow::AssetEscrowRecord {
     use iroha_data_model::escrow::{
         AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId,
     };
@@ -314,12 +310,12 @@ pub(crate) fn live_escrow(seed: u8) -> iroha_data_model::escrow::AssetEscrowReco
 }
 
 /// The governance action that schedules [`add_instruction`].
-pub(crate) fn schedule(network: NetworkId, effective_height: u64) -> RuntimeUpgradeActionV1 {
+pub fn schedule(network: NetworkId, effective_height: u64) -> RuntimeUpgradeActionV1 {
     RuntimeUpgradeActionV1::Schedule(add_instruction(network, effective_height))
 }
 
 /// A policy of `blocks` blocks of notice and no time floor, for both kinds of change.
-pub(crate) fn short_policy(blocks: u64) -> RuntimeUpgradePolicyV1 {
+pub fn short_policy(blocks: u64) -> RuntimeUpgradePolicyV1 {
     let notice = RuntimeNoticeV1 {
         blocks,
         ms: 0,
@@ -332,7 +328,7 @@ pub(crate) fn short_policy(blocks: u64) -> RuntimeUpgradePolicyV1 {
 }
 
 /// Commit `policy` as the universal root's runtime upgrade policy.
-pub(crate) fn commit_policy(
+pub fn commit_policy(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     policy: &RuntimeUpgradePolicyV1,
 ) {
@@ -345,7 +341,7 @@ pub(crate) fn commit_policy(
 }
 
 /// `count` release signers, sorted by public key as a provenance policy lists them.
-pub(crate) fn release_signers(count: u8) -> Vec<KeyPair> {
+pub fn release_signers(count: u8) -> Vec<KeyPair> {
     let mut keys: Vec<KeyPair> = (1..=count)
         .map(|seed| KeyPair::from_seed(vec![0x40 + seed; 32], Algorithm::Ed25519))
         .collect();
@@ -354,7 +350,7 @@ pub(crate) fn release_signers(count: u8) -> Vec<KeyPair> {
 }
 
 /// The provenance policy that trusts `signers` and needs `threshold` of them.
-pub(crate) fn provenance_policy(signers: &[KeyPair], threshold: u32) -> RuntimeProvenancePolicyV1 {
+pub fn provenance_policy(signers: &[KeyPair], threshold: u32) -> RuntimeProvenancePolicyV1 {
     RuntimeProvenancePolicyV1 {
         signers: signers.iter().map(|key| key.public_key().clone()).collect(),
         threshold,
@@ -362,7 +358,7 @@ pub(crate) fn provenance_policy(signers: &[KeyPair], threshold: u32) -> RuntimeP
 }
 
 /// `signer`'s endorsement of the change set `action` schedules.
-pub(crate) fn endorse(action: &RuntimeUpgradeActionV1, signer: &KeyPair) -> ChangeSetEndorsementV1 {
+pub fn endorse(action: &RuntimeUpgradeActionV1, signer: &KeyPair) -> ChangeSetEndorsementV1 {
     let RuntimeUpgradeActionV1::Schedule(change_set) = action else {
         panic!("only a change set to schedule is endorsed");
     };
@@ -375,7 +371,7 @@ pub(crate) fn endorse(action: &RuntimeUpgradeActionV1, signer: &KeyPair) -> Chan
 }
 
 /// A validator's signed support of an arbitrary change set, as the instruction that records it.
-pub(crate) fn attest_instruction() -> AttestRuntimeSupportV1 {
+pub fn attest_instruction() -> AttestRuntimeSupportV1 {
     let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
     let attestation = SupportAttestationV1 {
         network: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(

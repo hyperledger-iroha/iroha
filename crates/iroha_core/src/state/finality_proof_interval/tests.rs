@@ -30,7 +30,7 @@ fn limits(height: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }
@@ -289,23 +289,24 @@ fn waiting_interval_keeps_the_original_busy_release_once_its_deadline_passes() {
     let mut waiter = waiter(&waiters);
     let wait = Duration::from_millis(150);
     chain.kura().reset_canonical_query_reads_for_test();
-    let (result, expected, waited) = state.with_held_view_publication_for_reader_test(|expected| {
-        // This thread holds the publication, so only the deadline can end the wait.
-        let started = Instant::now();
-        let result = state.read_finality_proof_interval_waiting(
-            &owner,
-            &limits_until(4, started + wait),
-            &AtomicBool::new(false),
-            &mut waiter,
-        );
-        (result, expected, started.elapsed())
-    });
+    let (result, expected, elapsed) =
+        state.with_held_view_publication_for_reader_test(|expected| {
+            // This thread holds the publication, so only the deadline can end the wait.
+            let started = Instant::now();
+            let result = state.read_finality_proof_interval_waiting(
+                &owner,
+                &limits_until(4, started + wait),
+                &AtomicBool::new(false),
+                &mut waiter,
+            );
+            (result, expected, started.elapsed())
+        });
     let Err(FinalityProofIntervalReadError::StateView(StateViewError::Busy(original))) = result
     else {
         panic!("an expired wait must keep the publisher's original Busy release");
     };
     assert_eq!(original, expected);
-    assert!(waited >= wait, "the reader waited out its whole deadline");
+    assert!(elapsed >= wait, "the reader waited out its whole deadline");
     assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
     assert!(state.finality_prefix_checkpoints.heights().is_empty());
     assert_eq!(frames.reserved_bytes(), 0);
@@ -410,7 +411,7 @@ fn single(height: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }
@@ -424,7 +425,7 @@ fn ladder(
         owner,
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
         &AtomicBool::new(false),
         step,
     )
@@ -751,7 +752,7 @@ fn interval(from: u64, to: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(to).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }

@@ -49,9 +49,9 @@ async fn test_sleep() {
         return;
     }
     let sleep_times = vec![
-        Duration::from_nanos(100_000_000),
-        Duration::from_nanos(70_000_000),
-        Duration::from_nanos(80_000_000),
+        Duration::from_millis(100),
+        Duration::from_millis(70),
+        Duration::from_millis(80),
     ];
     let future_telemetry = iroha_logger::test_logger()
         .subscribe_on_telemetry(Channel::Future)

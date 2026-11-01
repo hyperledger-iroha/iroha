@@ -126,7 +126,7 @@ fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
     crate::sorafs::AliasCachePolicy::new(
         Duration::from_secs(600),
         Duration::from_secs(60),
-        Duration::from_secs(1_200),
+        Duration::from_mins(20),
         Duration::from_secs(60),
         Duration::from_secs(120),
         Duration::from_secs(10_000),

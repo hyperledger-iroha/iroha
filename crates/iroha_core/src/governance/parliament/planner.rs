@@ -231,11 +231,7 @@ impl ParliamentAttemptStateV1 {
         let bodies: Vec<_> = state.active_bodies.values().copied().collect();
         for body_id in &bodies {
             let body_id = *body_id;
-            loop {
-                let Some(status) = state.bodies.get(&body_id).map(|body| body.instance.status)
-                else {
-                    break;
-                };
+            while let Some(status) = state.bodies.get(&body_id).map(|body| body.instance.status) {
                 let target = match status {
                     BodyInstanceStatusV1::RosterSealed => DeliberationPhaseV1::Orientation,
                     BodyInstanceStatusV1::Deliberating(phase) => {

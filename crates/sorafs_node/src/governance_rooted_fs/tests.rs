@@ -13,11 +13,12 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::cell::Cell;
     #[cfg(unix)]
+    use std::io::{Seek as _, SeekFrom, Write as _};
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     use std::{
         ffi::{OsStr, OsString},
-        fs,
-        io::{self, Seek as _, SeekFrom, Write as _},
+        fs, io,
         panic::AssertUnwindSafe,
         sync::{Arc, Barrier, mpsc},
         thread,
@@ -1771,9 +1772,11 @@ mod tests {
     mod platform_security_tests {
         //! Descriptor-bound ACL and platform policy regressions for rooted stores.
         use super::test_root;
+        use std::io;
         #[cfg(target_os = "macos")]
         use std::process::Command;
-        use std::{ffi::OsStr, fs, io};
+        #[cfg(unix)]
+        use std::{ffi::OsStr, fs};
         #[cfg(target_os = "linux")]
         use std::{
             ffi::{CString, c_char, c_int, c_void},
@@ -2773,8 +2776,16 @@ mod tests {
             temp.path().join("original.lock"),
         )
         .expect("detach retained file");
+        #[cfg(not(windows))]
         fs::write(temp.path().join(".service.lock"), b"replacement")
             .expect("install name replacement");
+        #[cfg(windows)]
+        {
+            let mut replacement = super::platform::create_file(&root.handle,
+                OsStr::new(".service.lock")).expect("create private replacement");
+            std::io::Write::write_all(&mut replacement, b"replacement")
+                .expect("install name replacement");
+        }
         #[cfg(unix)]
         fs::set_permissions(
             temp.path().join(".service.lock"),
@@ -2844,8 +2855,9 @@ mod tests {
         fs::write(&stale, b"opened-object").expect("seed stale object");
         let opened =
             super::platform::open_file(&root.handle, name, true).expect("open exact stale object");
-        let identity = super::file_identity(&opened.metadata().expect("inspect opened object"))
-            .expect("capture Windows file identity");
+        let identity =
+            super::file_identity(&super::native_metadata(&opened).expect("inspect opened object"))
+                .expect("capture Windows file identity");
         fs::rename(&stale, &moved).expect("move opened stale object");
         fs::write(&stale, b"name-replacement").expect("replace stale pathname");
         super::platform::remove_open_file(&root.handle, &opened, name, Some(identity))

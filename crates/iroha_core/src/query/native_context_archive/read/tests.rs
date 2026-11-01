@@ -25,7 +25,10 @@ fn fixture(bytes: &[u8], budget: AllocationBudget) -> (tempfile::TempDir, Native
         fastpq_maximum: None,
         fastpq_replay_target: None,
     };
+    #[cfg(not(windows))]
     fs::write(canonical_path(directory.path()), bytes).unwrap();
+    #[cfg(windows)]
+    publish_record(&archive.directory, 2, hash(), bytes).unwrap();
     let read = archive.read_job(2, hash());
     (directory, read)
 }
@@ -55,8 +58,17 @@ fn refused_archive_read_never_reopens_the_original_selected_inode() {
     assert_eq!(read.read.length, Some(original.len()));
     assert!(read.read.bytes.is_none());
     let path = canonical_path(directory.path());
-    fs::rename(&path, directory.path().join("original-held-file")).unwrap();
-    fs::write(&path, vec![9; original.len()]).unwrap();
+    #[cfg(not(windows))]
+    {
+        fs::rename(&path, directory.path().join("original-held-file")).unwrap();
+        fs::write(&path, vec![9; original.len()]).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        assert!(fs::rename(&path, directory.path().join("original-held-file")).is_err());
+        assert!(fs::write(&path, vec![9; original.len()]).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
     drop(blocker);
     let bytes = complete(&mut read);
     assert!(read.has_pinned_source());
@@ -111,21 +123,47 @@ fn refused_archive_read_preserves_original_length_and_namespace_checks() {
             ))
         ));
         budget.set_limit_bytes(original.len());
-        if replace_directory {
-            fs::rename(
-                directory.path().join("native-contexts"),
-                directory.path().join("original-namespace"),
-            )
-            .unwrap();
-            fs::create_dir(directory.path().join("native-contexts")).unwrap();
-        } else {
-            fs::write(canonical_path(directory.path()), [9]).unwrap();
+        #[cfg(windows)]
+        {
+            if replace_directory {
+                assert!(
+                    fs::rename(
+                        directory.path().join("native-contexts"),
+                        directory.path().join("original-namespace"),
+                    )
+                    .is_err()
+                );
+            } else {
+                assert!(fs::write(canonical_path(directory.path()), [9]).is_err());
+            }
+            assert!(read.read.file.is_some());
+            assert_eq!(read.read.length, Some(original.len()));
+            assert!(read.read.bytes.is_none());
+            assert_eq!(budget.reserved_bytes(), 0);
+            let bytes = complete(&mut read);
+            assert_eq!(bytes.as_slice(), original);
+            read.recheck_namespace().unwrap();
+            drop(bytes);
+            assert_eq!(budget.reserved_bytes(), 0);
         }
-        assert!(read.poll().is_err());
-        assert!(read.read.file.is_some());
-        assert_eq!(read.read.length, Some(original.len()));
-        assert!(read.read.bytes.is_none());
-        assert_eq!(budget.reserved_bytes(), 0);
+        #[cfg(not(windows))]
+        {
+            if replace_directory {
+                fs::rename(
+                    directory.path().join("native-contexts"),
+                    directory.path().join("original-namespace"),
+                )
+                .unwrap();
+                fs::create_dir(directory.path().join("native-contexts")).unwrap();
+            } else {
+                fs::write(canonical_path(directory.path()), [9]).unwrap();
+            }
+            assert!(read.poll().is_err());
+            assert!(read.read.file.is_some());
+            assert_eq!(read.read.length, Some(original.len()));
+            assert!(read.read.bytes.is_none());
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
     }
 }
 
@@ -173,8 +211,16 @@ fn one_shot_interruption_retries_the_original_partial_read_without_reopening() {
     assert!(read.poll().unwrap().is_none());
     let pointer = read.read.bytes.as_ref().unwrap().as_slice().as_ptr();
     let path = canonical_path(directory.path());
-    fs::rename(&path, directory.path().join("original-partial-read")).unwrap();
-    fs::write(&path, vec![9; original.len()]).unwrap();
+    #[cfg(not(windows))]
+    {
+        fs::rename(&path, directory.path().join("original-partial-read")).unwrap();
+        fs::write(&path, vec![9; original.len()]).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        assert!(fs::rename(&path, directory.path().join("original-partial-read")).is_err());
+        assert!(fs::write(&path, vec![9; original.len()]).is_err());
+    }
     let mut interrupted = false;
     let bytes = to_completion(|| {
         if !interrupted {
@@ -239,9 +285,34 @@ fn returning_archive_cancels_pending_bytes_but_preserves_completed_byte_owner() 
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
+#[cfg(windows)]
 #[test]
-#[cfg(unix)]
+fn completed_native_read_rechecks_original_private_custody_at_receiver_finish() {
+    let original = vec![0x42; 5000];
+    let budget = AllocationBudget::new(original.len());
+    let (directory, mut read) = fixture(&original, budget.clone());
+    let bytes = complete(&mut read);
+    let pointer = bytes.as_slice().as_ptr();
+    read.recheck_namespace().unwrap();
+    assert!(
+        std::process::Command::new("icacls.exe")
+            .arg(canonical_path(directory.path()))
+            .args(["/grant", "*S-1-1-0:R"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(read.recheck_namespace().is_err());
+    assert_eq!(bytes.as_slice(), original);
+    assert_eq!(bytes.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), original.len());
+    drop(bytes);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn original_intent_read_shares_exact_descriptor_capacity_and_prefix_custody() {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt as _;
 
     let original = vec![0x42; 5_000];
@@ -262,17 +333,36 @@ fn original_intent_read_shares_exact_descriptor_capacity_and_prefix_custody() {
         ))
     ));
     assert!(read.has_pinned_source());
+    #[cfg(unix)]
     let metadata = read.read.file.as_ref().unwrap().metadata().unwrap();
+    #[cfg(unix)]
     let identity = (metadata.dev(), metadata.ino());
-    fs::rename(&path, directory.path().join("original-held-intent")).unwrap();
-    fs::write(&path, vec![0x66; original.len()]).unwrap();
+    #[cfg(windows)]
+    let identity = read.read.file.as_ref().unwrap().identity().unwrap();
+    #[cfg(unix)]
+    {
+        fs::rename(&path, directory.path().join("original-held-intent")).unwrap();
+        fs::write(&path, vec![0x66; original.len()]).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        assert!(fs::rename(&path, directory.path().join("original-held-intent")).is_err());
+        assert!(fs::write(&path, vec![0x66; original.len()]).is_err());
+    }
     drop(blocker);
     assert!(read.poll().unwrap().is_none());
     let pointer = read.acquired_prefix().unwrap().as_ptr();
     assert_eq!(read.acquired_prefix().unwrap(), &original[..4096]);
     let bytes = complete(&mut read);
+    #[cfg(unix)]
     let retained = read.read.file.as_ref().unwrap().metadata().unwrap();
+    #[cfg(unix)]
     assert_eq!((retained.dev(), retained.ino()), identity);
+    #[cfg(windows)]
+    assert_eq!(
+        read.read.file.as_ref().unwrap().identity().unwrap(),
+        identity
+    );
     assert_eq!(bytes.as_slice().as_ptr(), pointer);
     assert_eq!(
         bytes.as_slice(),

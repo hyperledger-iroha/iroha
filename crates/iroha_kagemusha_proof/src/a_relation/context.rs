@@ -709,10 +709,8 @@ impl ContextPlan {
                     .kagemusha_digest(q.verifier().binding())
                     .map_err(|_| Error::Synthesis)?,
             );
-            for limb in q.verifier().binding().digest().chunks_exact(16) {
-                constants.push(Fp::from_u128(u128::from_le_bytes(
-                    limb.try_into().map_err(|_| Error::Synthesis)?,
-                )));
+            for limb in q.verifier().binding().digest().as_chunks::<16>().0 {
+                constants.push(Fp::from_u128(u128::from_le_bytes(*limb)));
             }
             let d = q.verifier().binding().descriptor();
             constants.push(Fp::from(
@@ -769,10 +767,8 @@ impl ContextPlan {
                 )
             {
                 constants.push(Fp::from(u64::from(binding.descriptor().k)));
-                for limb in binding.digest().chunks_exact(16) {
-                    constants.push(Fp::from_u128(u128::from_le_bytes(
-                        limb.try_into().map_err(|_| Error::Synthesis)?,
-                    )));
+                for limb in binding.digest().as_chunks::<16>().0 {
+                    constants.push(Fp::from_u128(u128::from_le_bytes(*limb)));
                 }
             }
             Some(plan)

@@ -20,7 +20,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 
-pub(crate) fn paid_chain() -> CertifiedTestChain {
+pub fn paid_chain() -> CertifiedTestChain {
     native_payment::maximum_payment_chain(PaymentKind::Applied)
 }
 
@@ -127,16 +127,17 @@ fn verify(
             .unwrap();
     }
     for proof in proofs {
-        let verified = verifier.verify(proof).unwrap();
-        let expected = originals
-            .map(|blocks| &blocks[usize::try_from(verified.header().height().get() - 2).unwrap()]);
+        let verified_block = verifier.verify(proof).unwrap();
+        let expected = originals.map(|blocks| {
+            &blocks[usize::try_from(verified_block.header().height().get() - 2).unwrap()]
+        });
         if expected.is_some() {
-            assert_eq!(verified.block().network_entrypoint_count(), 2);
-            assert_eq!(verified.block().external_transactions().count(), 2);
+            assert_eq!(verified_block.block().network_entrypoint_count(), 2);
+            assert_eq!(verified_block.block().external_transactions().count(), 2);
         }
-        for (index, original) in verified.block().external_transactions().enumerate() {
-            let evidence = selected(verified.block(), u32::try_from(index).unwrap());
-            verified
+        for (index, original) in verified_block.block().external_transactions().enumerate() {
+            let evidence = selected(verified_block.block(), u32::try_from(index).unwrap());
+            verified_block
                 .verify_committed_transaction(&chain.network_id(), &evidence)
                 .unwrap();
             if let Some(expected) = expected {
@@ -147,8 +148,11 @@ fn verify(
             }
             assert!(evidence.result().is_ok());
             let fee = evidence.result().nexus_fee_receipt().unwrap();
-            fee.validate_for_network_input(evidence.entrypoint(), verified.header().height().get())
-                .unwrap();
+            fee.validate_for_network_input(
+                evidence.entrypoint(),
+                verified_block.header().height().get(),
+            )
+            .unwrap();
             assert_eq!(fee.fee_amount, 1_u32.into());
             assert_eq!(fee.fee_asset_id, fee_asset());
             assert_eq!(
@@ -160,7 +164,7 @@ fn verify(
             let receipt = project_atomic_payment_receipt_unverified(
                 chain.network_id(),
                 payment,
-                &verified.header(),
+                &verified_block.header(),
                 evidence.entrypoint(),
                 evidence.result(),
             )
@@ -177,7 +181,7 @@ fn verify(
                     project_atomic_payment_receipt_unverified(
                         chain.network_id(),
                         intent(&expected[1 - index]),
-                        &verified.header(),
+                        &verified_block.header(),
                         evidence.entrypoint(),
                         evidence.result(),
                     )

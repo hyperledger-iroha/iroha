@@ -776,11 +776,10 @@ mod tests {
     fn fields_are_named_by_config_key_and_rendered_by_type() {
         let fields = nexus_amx_context_fields_v1(&preimage(&sample())).unwrap();
         let field = |path: &str| {
-            fields
-                .iter()
-                .find(|field| field.path == path)
-                .map(|field| (field.origin, field.value.as_str()))
-                .unwrap_or_else(|| panic!("missing {path}"))
+            fields.iter().find(|field| field.path == path).map_or_else(
+                || panic!("missing {path}"),
+                |field| (field.origin, field.value.as_str()),
+            )
         };
         for (path, origin, value) in [
             ("nexus.lane_count", NodeConfig, "8"),

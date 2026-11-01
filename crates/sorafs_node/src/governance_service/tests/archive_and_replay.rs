@@ -1062,6 +1062,33 @@ fn bounded_file_read_rejects_oversize() {
     assert!(read_unrooted_regular_file(&path, 8, false).is_err());
 }
 #[test]
+fn bounded_file_read_uses_native_private_custody_and_single_link_identity() {
+    let dir = secure_temp_dir();
+    let private = iroha_fs::PrivateDirectory::open_or_create(dir.path().join("private")).unwrap();
+    private
+        .write_atomic("secret", b"private bytes", iroha_fs::PublishMode::CreateNew)
+        .unwrap();
+    let path = private.path().join("secret");
+    assert_eq!(
+        read_unrooted_regular_file(&path, 13, true).unwrap(),
+        b"private bytes"
+    );
+    assert!(read_unrooted_regular_file(&path, 12, true).is_err());
+    fs::hard_link(&path, private.path().join("alias")).unwrap();
+    assert!(read_unrooted_regular_file(&path, 13, true).is_err());
+    assert!(read_unrooted_regular_file(&path, 13, false).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn bounded_file_read_rejects_inherited_windows_secret_permissions() {
+    let dir = secure_temp_dir();
+    let path = dir.path().join("inherited-secret");
+    fs::write(&path, b"private bytes").unwrap();
+    assert!(read_unrooted_regular_file(&path, 13, true).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"private bytes");
+}
+#[test]
 fn rooted_source_binding_rejects_equal_byte_substitution() {
     let dir = secure_temp_dir();
     let path = dir.path().join("source.to");

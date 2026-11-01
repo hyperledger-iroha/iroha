@@ -912,6 +912,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Unix timestamps stay in whole seconds"
+    )]
     fn base64_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(17);
         let digest_key = ProofTokenDigestKey::new([11; 32]);

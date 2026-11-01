@@ -4,6 +4,8 @@
 //! network genesis at every phase. Local Unix-millisecond inputs are explicit
 //! estimates, not clocks or a source of chain authority. No phase updates the
 //! original statement, substitutes a CRL, or extends its signed deadline.
+//! Trusted chain timestamps cannot regress between phases; equality permits a
+//! quiet chain but does not establish that its snapshot is still current.
 
 use super::{ZkX509EngineErrorV1, ZkX509WitnessV1};
 use crate::{
@@ -147,6 +149,19 @@ fn require_forward_local_time(
     Ok(())
 }
 
+fn require_forward_chain_time(
+    previous: u64,
+    current: u64,
+) -> Result<(), ZkX509HolderAttemptErrorV1> {
+    if current < previous {
+        return Err(ZkX509EngineErrorV1::InvalidAuthoritativeState(
+            "X.509 holder trusted block timestamp moved backwards".to_owned(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// One immutable statement and owned witness after real native preflight.
 ///
 /// Preparation checks all six budget terms. Proving consumes this attempt and
@@ -154,6 +169,8 @@ fn require_forward_local_time(
 /// The caller must supply newly authenticated current State at each phase;
 /// this local owner cannot determine whether a caller has reused an old snapshot.
 /// A failed or revoked State lookup must stop the caller before proving/release.
+/// The retained trusted timestamp rejects an observable chain-time regression;
+/// equal timestamps remain valid on a quiet chain and are not freshness evidence.
 /// Idle-chain wall-clock freshness, State acquisition and transport are external.
 pub struct ZkX509HolderAttemptV1 {
     original: IrohaZkX509StarkP256StatementV1,
@@ -161,6 +178,7 @@ pub struct ZkX509HolderAttemptV1 {
     times: Zeroizing<SignedTimes>,
     budget: PrivacyZkX509HolderBudgetV1,
     local_start_unix_ms: u64,
+    trusted_block_timestamp_ms: u64,
 }
 
 impl fmt::Debug for ZkX509HolderAttemptV1 {
@@ -210,6 +228,7 @@ impl ZkX509HolderAttemptV1 {
             times,
             budget,
             local_start_unix_ms,
+            trusted_block_timestamp_ms,
         })
     }
 
@@ -229,7 +248,8 @@ impl ZkX509HolderAttemptV1 {
     /// # Errors
     ///
     /// Rejects stale, revoked or expired selection, a wrong network, backwards
-    /// local time, an exhausted remaining budget or any native prover failure.
+    /// local or trusted chain time, an exhausted remaining budget or any native
+    /// prover failure.
     #[allow(clippy::too_many_arguments)]
     pub fn prove_with_rng<R: TryCryptoRng>(
         self,
@@ -241,6 +261,7 @@ impl ZkX509HolderAttemptV1 {
         rng: &mut R,
     ) -> Result<ZkX509PendingCredentialProofV1, ZkX509HolderAttemptErrorV1> {
         require_forward_local_time(self.local_start_unix_ms, local_proving_start_unix_ms)?;
+        require_forward_chain_time(self.trusted_block_timestamp_ms, trusted_block_timestamp_ms)?;
         validate_current_phase(
             &self.original,
             current_state,
@@ -268,6 +289,7 @@ impl ZkX509HolderAttemptV1 {
             times: self.times,
             budget: remaining,
             local_proving_start_unix_ms,
+            trusted_block_timestamp_ms,
         })
     }
 }
@@ -284,6 +306,7 @@ pub struct ZkX509PendingCredentialProofV1 {
     times: Zeroizing<SignedTimes>,
     budget: PrivacyZkX509HolderBudgetV1,
     local_proving_start_unix_ms: u64,
+    trusted_block_timestamp_ms: u64,
 }
 
 impl fmt::Debug for ZkX509PendingCredentialProofV1 {
@@ -309,7 +332,8 @@ impl ZkX509PendingCredentialProofV1 {
     /// # Errors
     ///
     /// Rejects stale or expired State, changed network/genesis, backwards local
-    /// time or a remaining estimate that exceeds the original signed deadline.
+    /// or trusted chain time, or a remaining estimate that exceeds the original
+    /// signed deadline.
     #[allow(clippy::too_many_arguments)]
     pub fn release(
         self,
@@ -320,6 +344,7 @@ impl ZkX509PendingCredentialProofV1 {
         local_release_unix_ms: u64,
     ) -> Result<(IrohaZkX509StarkP256StatementV1, Vec<u8>), ZkX509HolderAttemptErrorV1> {
         require_forward_local_time(self.local_proving_start_unix_ms, local_release_unix_ms)?;
+        require_forward_chain_time(self.trusted_block_timestamp_ms, trusted_block_timestamp_ms)?;
         validate_current_phase(
             &self.original,
             current_state,
@@ -432,6 +457,9 @@ mod tests {
         let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         let mut roots = Storage::<PrivacyRootKeyV1, PrivacyRootProvenanceV1>::new();
         let mut root_heads = Storage::<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>::new();
+        // A successor CA root is appended to its namespace's retained window, so the
+        // head commits the attained history cardinality rather than a fresh bootstrap.
+        let mut retained = std::collections::BTreeMap::<_, u32>::new();
         for anchor in anchors {
             commitments.insert(
                 PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
@@ -472,10 +500,18 @@ mod tests {
             )
             .expect("CA governance provenance");
             roots.insert(key, provenance.clone());
+            let retained_root_count = retained.entry(namespace).or_insert(0);
+            *retained_root_count += 1;
             root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, role).expect("CA head key"),
-                PrivacyRootHeadRecordV1::new(key.epoch(), key.root(), provenance, None, 1)
-                    .expect("CA head"),
+                PrivacyRootHeadRecordV1::new(
+                    key.epoch(),
+                    key.root(),
+                    provenance,
+                    None,
+                    *retained_root_count,
+                )
+                .expect("CA head"),
             );
         }
         for policy in policies {
@@ -648,6 +684,7 @@ mod tests {
             times: attempt.times,
             budget: remaining,
             local_proving_start_unix_ms: attempt.local_start_unix_ms,
+            trusted_block_timestamp_ms: attempt.trusted_block_timestamp_ms,
         }
     }
 
@@ -831,17 +868,96 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_chain_time_accepts_equal_and_forward_observations() {
+        // Equality is necessary when no new block is produced during an attempt.
+        // This arithmetic check alone does not establish snapshot freshness.
+        for (previous, current) in [(0, 0), (42, 42), (42, 43), (u64::MAX, u64::MAX)] {
+            require_forward_chain_time(previous, current).unwrap();
+        }
+        assert_eq!(
+            require_forward_chain_time(u64::MAX, u64::MAX - 1),
+            Err(ZkX509HolderAttemptErrorV1::Engine(
+                ZkX509EngineErrorV1::InvalidAuthoritativeState(
+                    "X.509 holder trusted block timestamp moved backwards".to_owned()
+                )
+            ))
+        );
+    }
+
+    #[test]
+    fn lifecycle_rejects_chain_time_rollback_before_entropy_and_release() {
+        let fixture = build_zk_x509_reference_fixture_v1().unwrap();
+        let genesis = *fixture.statement.context.network_id.as_bytes();
+        let current_chain_time = start(&fixture) + 1_000;
+        let old_chain_time = current_chain_time - 1;
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        // Both observations independently satisfy the public window and exact
+        // governance records. Only the retained prior observation detects this
+        // rollback, while local time continues forward normally.
+        for chain_time in [old_chain_time, current_chain_time] {
+            validate_current_phase(
+                &fixture.statement,
+                &fixture.authoritative_state,
+                chain_time,
+                &limits,
+                genesis,
+            )
+            .unwrap();
+        }
+        let attempt = || {
+            ZkX509HolderAttemptV1::prepare(
+                fixture.statement.clone(),
+                fixture.witness.clone(),
+                &fixture.authoritative_state,
+                current_chain_time,
+                &limits,
+                genesis,
+                budget(),
+                start(&fixture),
+            )
+            .unwrap()
+        };
+        let expected =
+            ZkX509HolderAttemptErrorV1::Engine(ZkX509EngineErrorV1::InvalidAuthoritativeState(
+                "X.509 holder trusted block timestamp moved backwards".to_owned(),
+            ));
+        let mut rng = NoEntropy::default();
+        let error = attempt()
+            .prove_with_rng(
+                &fixture.authoritative_state,
+                old_chain_time,
+                &limits,
+                genesis,
+                start(&fixture) + 1,
+                &mut rng,
+            )
+            .expect_err("a regressed chain observation cannot start proving");
+        assert_eq!(error, expected);
+        assert_eq!(rng.requests, 0);
+        let error = pending_for_rejection(attempt())
+            .release(
+                &fixture.authoritative_state,
+                old_chain_time,
+                &limits,
+                genesis,
+                start(&fixture) + 2,
+            )
+            .expect_err("a regressed chain observation cannot release proof bytes");
+        assert_eq!(error, expected);
+    }
+
+    #[test]
     fn lifecycle_merged_governance_supersedes_original_and_revocation_blocks_acquisition() {
         let fixture = build_zk_x509_reference_fixture_v1().unwrap();
         let anchor = fixture.authoritative_state.trust_anchor();
         let policy = fixture.authoritative_state.certificate_policy().clone();
         let crl = fixture.authoritative_state.crl_record();
         assert_eq!(
-            joined_state(&[anchor], &[policy.clone()], crl).unwrap(),
+            joined_state(&[anchor], std::slice::from_ref(&policy), crl).unwrap(),
             fixture.authoritative_state
         );
         let successor = build_zk_x509_network_release_successor_fixture_v1(
-            fixture.statement.context.clone(),
+            fixture.statement.context,
             start(&fixture) + 1_000,
             fixture.statement.wallet_account.clone(),
             crl,
@@ -850,7 +966,12 @@ mod tests {
         prepare(&successor, budget()).expect("successor has its own authentic native preflight");
         let changed_states = [
             joined_state(&[anchor], &[policy.clone(), successor_policy(&policy)], crl).unwrap(),
-            joined_state(&[anchor, successor_anchor(anchor)], &[policy.clone()], crl).unwrap(),
+            joined_state(
+                &[anchor, successor_anchor(anchor)],
+                std::slice::from_ref(&policy),
+                crl,
+            )
+            .unwrap(),
             successor.authoritative_state,
         ];
         for current in &changed_states {

@@ -179,6 +179,37 @@ pub struct TransparentStarkWorkSecurityV1 {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GoldilocksFieldV1(pub(crate) u64);
+
+/// Borrow field storage as words without copying or changing its allocation.
+/// Canonicality remains the caller's arithmetic validation responsibility.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_words_v1(values: &[GoldilocksFieldV1]) -> &[u64] {
+    // SAFETY: repr(transparent) gives exactly u64 size/alignment and every u64
+    // bit pattern is valid storage for this newtype. The returned slice retains
+    // the input's extent and shared lifetime; no Vec header is reinterpreted.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
+
+/// Exclusively borrow existing field storage for already validated word writes.
+/// This does not validate residues; transactional writers must do so before publication.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_words_mut_v1(values: &mut [GoldilocksFieldV1]) -> &mut [u64] {
+    // SAFETY: repr(transparent) has u64 layout and accepts every storage bit
+    // pattern. The exclusive borrow covers the complete returned slice for its
+    // lifetime; the original allocation, Vec header and ownership never change.
+    unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len()) }
+}
+
+/// Borrow word storage as fields without changing lifetime, allocation or ownership.
+/// The caller must establish canonicality before arithmetic or publication.
+#[allow(unsafe_code)]
+pub(crate) fn goldilocks_fields_v1(values: &[u64]) -> &[GoldilocksFieldV1] {
+    // SAFETY: repr(transparent) has u64 layout and every storage bit pattern is
+    // valid for this newtype. Shared extent/lifetime are unchanged; no Vec or
+    // allocation-layout conversion occurs.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
+
 impl zeroize::Zeroize for GoldilocksFieldV1 {
     fn zeroize(&mut self) {
         self.zeroize_v1();
@@ -344,6 +375,20 @@ pub trait PolynomialAirFieldV1: Copy {
     fn mul(self, rhs: Self) -> Self;
     /// Multiply by a base-field constant without changing the evaluation field.
     fn mul_base(self, rhs: GoldilocksFieldV1) -> Self;
+    /// Sum canonical product differences in increasing public index order.
+    /// Each tuple contributes `a*b - c*d`; the default preserves scalar/Fp4
+    /// arithmetic, while base-field implementations may use exact wider sums.
+    fn sum_product_differences_v1(
+        length: usize,
+        mut terms: impl FnMut(usize) -> (Self, Self, Self, Self),
+    ) -> Self {
+        let mut result = Self::ZERO;
+        for index in 0..length {
+            let (a, b, c, d) = terms(index);
+            result = result.add(a.mul(b)).sub(c.mul(d));
+        }
+        result
+    }
 }
 impl PolynomialAirFieldV1 for GoldilocksFieldV1 {
     const ZERO: Self = Self::ZERO;
@@ -365,6 +410,12 @@ impl PolynomialAirFieldV1 for GoldilocksFieldV1 {
     }
     fn mul_base(self, rhs: GoldilocksFieldV1) -> Self {
         Self::mul(self, rhs)
+    }
+    fn sum_product_differences_v1(
+        length: usize,
+        terms: impl FnMut(usize) -> (Self, Self, Self, Self),
+    ) -> Self {
+        product_difference::sum_v1(length, terms)
     }
 }
 impl PolynomialAirFieldV1 for GoldilocksFp4V1 {
@@ -435,12 +486,8 @@ impl GoldilocksFp4V1 {
     /// Decode the canonical fixed-width big-endian wire encoding.
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
-        for (index, chunk) in bytes.chunks_exact(8).enumerate() {
-            values[index] = u64::from_be_bytes(
-                chunk
-                    .try_into()
-                    .expect("a 32-byte array has four exact 8-byte chunks"),
-            );
+        for (index, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
+            values[index] = u64::from_be_bytes(*chunk);
         }
         Self::canonical(values)
     }
@@ -789,6 +836,28 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
     powers: Option<&[GoldilocksFieldV1]>,
     butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
 ) {
+    goldilocks_fft_stage_with_grain_v1::<T, PARALLEL_INNER, FFT_BUTTERFLIES_PER_TASK_V1>(
+        values, width, step, powers, butterfly,
+    );
+}
+
+/// Share the exact stage arithmetic with controlled, private task-grain tests.
+/// Production always enters through the fixed 1024-butterfly wrapper above.
+fn goldilocks_fft_stage_with_grain_v1<
+    T: Send,
+    const PARALLEL_INNER: bool,
+    const BUTTERFLIES_PER_TASK: usize,
+>(
+    values: &mut [T],
+    width: usize,
+    step: GoldilocksFieldV1,
+    powers: Option<&[GoldilocksFieldV1]>,
+    butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
+) {
+    const {
+        assert!(BUTTERFLIES_PER_TASK.is_power_of_two());
+        assert!(BUTTERFLIES_PER_TASK <= usize::MAX / 2);
+    }
     let stride = values.len() / width;
     let window = |left: &mut [T], right: &mut [T], first: usize| {
         if let Some(powers) = powers {
@@ -816,36 +885,36 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
         // The caller already distributes bounded columns across workers. Keep
         // exactly the same public windows and starting powers without nesting
         // Rayon tasks inside each column or allocating another field buffer.
-        if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
-            for block in values.chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1) {
+        if width <= 2 * BUTTERFLIES_PER_TASK {
+            for block in values.chunks_mut(2 * BUTTERFLIES_PER_TASK) {
                 serial_block(block);
             }
         } else {
             for chunk in values.chunks_exact_mut(width) {
                 let (left, right) = chunk.split_at_mut(width / 2);
                 for (index, (left, right)) in left
-                    .chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
-                    .zip(right.chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+                    .chunks_mut(BUTTERFLIES_PER_TASK)
+                    .zip(right.chunks_mut(BUTTERFLIES_PER_TASK))
                     .enumerate()
                 {
-                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    let first = index * BUTTERFLIES_PER_TASK;
                     window(left, right, first);
                 }
             }
         }
-    } else if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
+    } else if width <= 2 * BUTTERFLIES_PER_TASK {
         // Both widths are powers of two, so no group straddles a task boundary.
         values
-            .par_chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1)
+            .par_chunks_mut(2 * BUTTERFLIES_PER_TASK)
             .for_each(serial_block);
     } else {
         values.par_chunks_exact_mut(width).for_each(|chunk| {
             let (left, right) = chunk.split_at_mut(width / 2);
-            left.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
-                .zip(right.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+            left.par_chunks_mut(BUTTERFLIES_PER_TASK)
+                .zip(right.par_chunks_mut(BUTTERFLIES_PER_TASK))
                 .enumerate()
                 .for_each(|(index, (left, right))| {
-                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    let first = index * BUTTERFLIES_PER_TASK;
                     window(left, right, first);
                 });
         });
@@ -977,6 +1046,34 @@ fn goldilocks_fft_with_powers_v1<const PARALLEL_INNER: bool>(
     root: GoldilocksFieldV1,
     powers: Option<&GoldilocksFftPowersV1>,
 ) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_stage_v1(values, root, powers, |values, width, step, powers| {
+        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(
+            values,
+            width,
+            step,
+            powers,
+            |even, odd, twiddle| {
+                let scaled_odd = (*odd).mul(twiddle);
+                let original_even = *even;
+                *even = original_even.add(scaled_odd);
+                *odd = original_even.sub(scaled_odd);
+            },
+        );
+    })
+}
+
+/// Keep domain validation, canonicality and bit reversal shared with task-grain tests.
+fn goldilocks_fft_with_stage_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    powers: Option<&GoldilocksFftPowersV1>,
+    mut stage: impl FnMut(
+        &mut [GoldilocksFieldV1],
+        usize,
+        GoldilocksFieldV1,
+        Option<&[GoldilocksFieldV1]>,
+    ),
+) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
         || !size.is_power_of_two()
@@ -1007,17 +1104,11 @@ fn goldilocks_fft_with_powers_v1<const PARALLEL_INNER: bool>(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(
+        stage(
             values,
             width,
             step,
             powers.map(|powers| powers.values.as_slice()),
-            |even, odd, twiddle| {
-                let scaled_odd = (*odd).mul(twiddle);
-                let original_even = *even;
-                *even = original_even.add(scaled_odd);
-                *odd = original_even.sub(scaled_odd);
-            },
         );
         width <<= 1;
     }
@@ -1182,6 +1273,121 @@ fn goldilocks_fft_prefix_dif_v1<const PARALLEL_INNER: bool>(
 #[path = "transparent_stark_prefix_fft_tests.rs"]
 mod prefix_fft_tests;
 
+// Native arithmetic is production-gated; x86 test controls can still import the
+// single primitive owner in feature-off builds without enabling its dispatch.
+#[cfg(all(target_arch = "x86_64", any(feature = "simd", test)))]
+#[path = "transparent_stark_goldilocks_avx2.rs"]
+pub(crate) mod goldilocks_avx2;
+
+/// Compile-time result policy for the shared DIF arithmetic and recursion.
+///
+/// Unobserved calls return unit in every build. Explicit test controls retain
+/// public counts; no production observation state or runtime choice is added.
+pub(crate) mod dif_output {
+    #[cfg(test)]
+    use super::dif_test_counts::Counts;
+
+    mod sealed {
+        /// Limit output policies to unit and the explicit test-only counters.
+        pub trait Sealed {}
+
+        impl Sealed for () {}
+
+        #[cfg(test)]
+        impl Sealed for super::Counts {}
+    }
+
+    /// Static result type; test-only methods never enter production arithmetic.
+    pub(crate) trait DifOutputV1: sealed::Sealed + Copy + Default + Send + Sync {
+        /// Whether an explicit test requested actual loop observation.
+        #[cfg(test)]
+        const OBSERVED: bool;
+        /// Preserve the actual native window result in an observed traversal.
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        fn from_counts(counts: Counts) -> Self;
+        /// Record one completed four-field native iteration.
+        #[cfg(all(test, target_arch = "x86_64"))]
+        fn record_vector(&mut self);
+        /// Record one completed scalar pair on the admitted native route.
+        #[cfg(test)]
+        fn record_scalar(&mut self);
+        /// Combine disjoint public counts at existing scheduling joins.
+        #[cfg(test)]
+        fn plus(self, other: Self) -> Self;
+    }
+
+    impl DifOutputV1 for () {
+        #[cfg(test)]
+        const OBSERVED: bool = false;
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        #[inline]
+        fn from_counts(_: Counts) -> Self {}
+        #[cfg(all(test, target_arch = "x86_64"))]
+        #[inline]
+        fn record_vector(&mut self) {}
+        #[cfg(test)]
+        #[inline]
+        fn record_scalar(&mut self) {}
+        #[cfg(test)]
+        #[inline]
+        fn plus(self, _: Self) -> Self {}
+    }
+
+    #[cfg(test)]
+    impl DifOutputV1 for Counts {
+        const OBSERVED: bool = true;
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        #[inline]
+        fn from_counts(counts: Counts) -> Self {
+            counts
+        }
+        #[cfg(all(test, target_arch = "x86_64"))]
+        #[inline]
+        fn record_vector(&mut self) {
+            self.vector_blocks += 1;
+        }
+        #[inline]
+        fn record_scalar(&mut self) {
+            self.scalar_pairs += 1;
+        }
+        #[inline]
+        fn plus(self, other: Self) -> Self {
+            Counts::plus(self, other)
+        }
+    }
+}
+
+/// Invocation-local public loop counts used only by explicit native controls.
+#[cfg(test)]
+pub(crate) mod dif_test_counts {
+    /// Actual native iterations in an explicitly observed test invocation.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Counts {
+        /// Four-field AVX2 loop iterations.
+        pub(crate) vector_blocks: usize,
+        /// Scalar pairs in native tiny windows or incomplete suffixes.
+        pub(crate) scalar_pairs: usize,
+    }
+
+    impl Counts {
+        /// Combine disjoint public work, without reducing private field values.
+        pub(crate) fn plus(self, other: Self) -> Self {
+            Self {
+                vector_blocks: self.vector_blocks + other.vector_blocks,
+                scalar_pairs: self.scalar_pairs + other.scalar_pairs,
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "transparent_stark_avx2_test_kernel.rs"]
+pub(crate) mod avx2_test_kernel;
+
+#[cfg(test)]
+#[path = "transparent_stark_fft_grain_tests.rs"]
+mod fft_grain_tests;
+
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are
@@ -1189,6 +1395,22 @@ mod prefix_fft_tests;
 pub fn goldilocks_fp4_fft_v1(
     values: &mut [GoldilocksFp4V1],
     root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fp4_fft_with_stage_v1(values, root, |values, width, step| {
+        goldilocks_fft_stage_v1::<_, true>(values, width, step, None, |even, odd, twiddle| {
+            let scaled_odd = (*odd).mul_base(twiddle);
+            let original_even = *even;
+            *even = original_even.add(scaled_odd);
+            *odd = original_even.sub(scaled_odd);
+        });
+    })
+}
+
+/// Preserve the extension transform's exact admission and permutation for all grains.
+fn goldilocks_fp4_fft_with_stage_v1(
+    values: &mut [GoldilocksFp4V1],
+    root: GoldilocksFieldV1,
+    mut stage: impl FnMut(&mut [GoldilocksFp4V1], usize, GoldilocksFieldV1),
 ) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
@@ -1217,12 +1439,7 @@ pub fn goldilocks_fp4_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, true>(values, width, step, None, |even, odd, twiddle| {
-            let scaled_odd = (*odd).mul_base(twiddle);
-            let original_even = *even;
-            *even = original_even.add(scaled_odd);
-            *odd = original_even.sub(scaled_odd);
-        });
+        stage(values, width, step);
         width <<= 1;
     }
     Ok(())
@@ -2730,9 +2947,8 @@ mod tests {
             Ok(u64::MAX)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0xff);
-            })
+            destination.fill(0xff);
+            Ok(())
         }
     }
     struct ZeroRng;
@@ -2745,9 +2961,8 @@ mod tests {
             Ok(0)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0);
-            })
+            destination.fill(0);
+            Ok(())
         }
     }
     #[test]
@@ -3044,7 +3259,7 @@ mod tests {
     }
     fn digest_from_words(words: [u64; 6]) -> PrivacyOuterDigestV1 {
         let mut bytes = [0; 48];
-        for (chunk, word) in bytes.chunks_exact_mut(8).zip(words) {
+        for (chunk, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(words) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         PrivacyOuterDigestV1::from_bytes(bytes)
@@ -3626,7 +3841,9 @@ mod tests {
             let parent_level = u64::try_from(reference_levels.len()).expect("small tree depth");
             let previous = reference_levels.last().expect("reference Merkle level");
             let next = previous
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .map(|(index, pair)| {
                     privacy_outer_merkle_node_v1(
@@ -4161,3 +4378,11 @@ mod merkle_payload_tests {
 #[cfg(test)]
 #[path = "outer_hash_experiment.rs"]
 mod outer_hash_experiment;
+
+#[cfg(test)]
+#[path = "transparent_stark_word_views_tests.rs"]
+mod word_views_tests;
+
+#[path = "transparent_stark_product_difference.rs"]
+mod product_difference;
+pub(crate) use product_difference::GOLDILOCKS_PRODUCT_DIFFERENCE_SCRATCH_BYTES_V1;

@@ -283,14 +283,11 @@ fn acvp_mldsa65_vectors_reach_the_typed_iroha_and_ivm_verifier() {
             empty += 1;
             result.expect("official empty-context signature verifies through consumer API");
             message[0] ^= 1;
-            assert!(matches!(
-                crate::verify_mldsa65_detached(&signature, &message, &public),
-                Err(_)
-            ));
+            assert!(crate::verify_mldsa65_detached(&signature, &message, &public).is_err());
         } else {
             nonempty += 1;
             assert!(
-                matches!(result, Err(_)),
+                result.is_err(),
                 "borrowed empty-context API must not discard signed context"
             );
         }

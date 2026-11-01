@@ -174,7 +174,7 @@ fn unbond_of_never_registered_validator_keeps_the_retained_custody_rejection_fir
     let block = new_block_with_height_and_time(2, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    let (validator, _, _escrow, asset_definition) = prepare_accounts(&mut stx);
+    let (validator, _, _, asset_definition) = prepare_accounts(&mut stx);
     set_test_npos_penalty_windows(&mut stx, 1, 1);
     let lane_id = LaneId::SINGLE;
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -240,7 +240,7 @@ fn sccp_liable_zero_custody_registration_survives_pruning_and_replacement() {
     let block = new_block_with_height_and_time(2, 0);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    let (validator, _, _escrow, asset_definition) = prepare_accounts(&mut stx);
+    let (validator, _, _, asset_definition) = prepare_accounts(&mut stx);
     let lane_id = LaneId::SINGLE;
     let record = PublicLaneValidatorRecord {
         lane_id,

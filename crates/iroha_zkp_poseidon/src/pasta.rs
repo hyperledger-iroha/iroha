@@ -110,10 +110,9 @@ fn parameters<F: PrimeField>(encoded: &[u8; PARAMETER_LENGTH]) -> Parameters<F> 
         .iter_mut()
         .chain(result.mds.iter_mut())
         .flatten()
-        .zip(encoded.chunks_exact(32))
+        .zip(encoded.as_chunks::<32>().0)
     {
-        *value = decode(bytes.try_into().expect("fixed parameter width"))
-            .expect("pinned canonical public parameter");
+        *value = decode(bytes).expect("pinned canonical public parameter");
     }
     result
 }

@@ -219,6 +219,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
         let nexus = self.nexus;
         let runtime = self.runtime;
         let autoscale = &nexus.autoscale;
+        let atomic_private_settlement =
+            iroha_config::parameters::actual::NexusConsensusAtomicPrivateSettlementV1::frozen_v1();
         let preimage = record!(
             1_u8,
             Raw(&self.configured_lane_catalog_hash),
@@ -263,26 +265,7 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.axt.proof_cache_ttl_slots.get(),
                 nexus.axt.replay_retention_slots.get()
             ),
-            // Keep the frozen signed V1 slots in the same position and types as
-            // NexusConsensusAtomicPrivateSettlementV1 in iroha_config. Local
-            // sidecar capacities and mutable defaults are not this authority.
-            record!(
-                1_u16,
-                255_u16,
-                7_200_u64,
-                1_200_u64,
-                1_200_u64,
-                1_200_u64,
-                Seq([4_096_u32, 16_384, 65_536, 262_144].into_iter()),
-                8_388_608_u64,
-                1_048_576_u64,
-                4_194_304_u64,
-                1_000_000_u64,
-                256_u32,
-                3_221_225_472_u64,
-                1_u16,
-                Seq([1_u16].into_iter())
-            ),
+            norito::core::PayloadRef(&atomic_private_settlement),
             record!(
                 Ref(&nexus.governance.default_module),
                 Seq(nexus

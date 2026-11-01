@@ -224,7 +224,7 @@ macro_rules! record_json {
                         match text {
                             $(stringify!($field) => {
                                 if $field.is_some() { return Err(norito::json::Error::duplicate_field(stringify!($field)).into()); }
-                                $field = Some(<$type>::decode_field(parser, destination)?);
+                                $field = Some(<$type as $crate::zk_validity_policy::json_admission::Field<D>>::decode_field(parser, destination)?);
                             },)+
                             _ => return Err(norito::json::Error::unknown_field(text).into()),
                         }

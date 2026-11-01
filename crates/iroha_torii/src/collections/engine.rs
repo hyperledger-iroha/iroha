@@ -1110,10 +1110,7 @@ fn decode_position(
 /// contradiction. Disjunctions and negations never narrow it, so every row
 /// the complete filter matches stays inside the range and a height-ordered
 /// walk may start at its top and stop below its bottom.
-pub(crate) fn conjunctive_height_range(
-    filter: Option<&FilterExpr>,
-    height_field: &str,
-) -> (u64, u64) {
+pub fn conjunctive_height_range(filter: Option<&FilterExpr>, height_field: &str) -> (u64, u64) {
     let mut range = (0, u64::MAX);
     if let Some(filter) = filter {
         narrow_height_range(height_field, filter, &mut range);

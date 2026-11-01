@@ -521,11 +521,8 @@ fn documentary_evidence_validation_is_separate_from_runtime_capability() {
     missing_evidence.release_signatures.clear();
     assert!(missing_evidence.validate().is_err());
     let mut hostile = release;
-    hostile.release_signatures[0].signature = Signature::from_bytes(&vec![
-        1;
-        PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1
-            + 1
-    ]);
+    hostile.release_signatures[0].signature =
+        Signature::from_bytes(&[1; PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 + 1]);
     assert!(hostile.validate().is_err());
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),

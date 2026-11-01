@@ -39,10 +39,15 @@ pub use opening::{NativePrivateSettlementOriginals, NativePrivateSettlementStore
 
 // Selected execution plus its signed input and two Merkle paths fit within these original
 // native framing ceilings. Receipt/progress are separately retained, not replacement authority.
+const _: () = assert!(MAX_EXECUTED_BLOCK_WIRE_BYTES <= usize::MAX as u64);
 /// Canonical retained-value allowance reserved for a terminal Run or Recover result before admission.
 ///
 /// This includes the native executed block, signed block framing, public receipt and bounded
 /// workflow progress. It is not an RSS bound or a serializer for verified receipt authority.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the executed-block ceiling is compile-time bounded to usize above"
+)]
 pub const NATIVE_PRIVATE_SETTLEMENT_TERMINAL_ALLOWANCE: usize = MAX_EXECUTED_BLOCK_WIRE_BYTES
     as usize
     + MAX_FINALITY_BLOCK_BYTES
@@ -63,6 +68,10 @@ fn next_id() -> Result<u64, NativePrivateSettlementSessionError> {
 /// result objects belong to their callers; in-flight export buffers retain this host's lease.
 /// They do not claim process RSS or accounting for arbitrary custom provider/error allocations.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every field is a maximum, and the names match the host bindings' limit options"
+)]
 pub struct NativePrivateSettlementLimits {
     /// Maximum admitted sessions, including unopened tokens, pending commands and closing owners.
     pub maximum_sessions: NonZeroU16,
@@ -225,7 +234,7 @@ pub enum NativePrivateSettlementOutcome {
     /// Independently verified original terminal outcome and exact optional carrier progress.
     Verified {
         /// Original native settlement or successful Abort capability.
-        outcome: VerifiedPrivateSettlementOutcome,
+        outcome: Box<VerifiedPrivateSettlementOutcome>,
         /// Exact progress from Run or Recover.
         progress: Option<WorkflowProgressV1>,
     },
@@ -401,7 +410,9 @@ impl NativePrivateSettlementHost {
             admission: Arc::new(Semaphore::new(usize::from(limits.maximum_sessions.get()))),
             limits,
         });
-        let _supervisor = runtime.spawn(supervisor::run(shared.clone(), receiver, runtime.clone()));
+        // The supervisor owns the caller's handle; a clone spawns it.
+        let spawner = runtime.clone();
+        let _supervisor = spawner.spawn(supervisor::run(shared.clone(), receiver, runtime));
         Ok(Self { shared, sender })
     }
     /// Reserve capacity before native boundary decoding/copying or original construction.
@@ -502,8 +513,8 @@ impl NativePrivateSettlementHost {
             return Err(NativePrivateSettlementSessionError::Busy);
         }
         let slot = self.sender.try_reserve().map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-            mpsc::error::TrySendError::Closed(_) => {
+            mpsc::error::TrySendError::Full(()) => NativePrivateSettlementSessionError::Capacity,
+            mpsc::error::TrySendError::Closed(()) => {
                 NativePrivateSettlementSessionError::Unavailable
             }
         })?;
@@ -560,8 +571,8 @@ impl NativePrivateSettlementHost {
             .ok_or(NativePrivateSettlementSessionError::StagingUnavailable)?;
         let source = files::FileInput::capture(descriptor, remaining)?;
         let slot = self.sender.try_reserve().map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-            mpsc::error::TrySendError::Closed(_) => {
+            mpsc::error::TrySendError::Full(()) => NativePrivateSettlementSessionError::Capacity,
+            mpsc::error::TrySendError::Closed(()) => {
                 NativePrivateSettlementSessionError::Unavailable
             }
         })?;
@@ -647,6 +658,8 @@ impl NativePrivateSettlementHost {
     ///
     /// Dropping this returned future keeps the supervisor draining. Close discards an unclaimed
     /// result; a payment may already be settled, so reopen its original durable operation to recover.
+    /// # Errors
+    /// Unknown/stale handle, or a failed supervisor that cannot certify the close.
     pub fn close(
         &self,
         id: NativePrivateSettlementSessionId,
@@ -679,6 +692,8 @@ impl NativePrivateSettlementHost {
     ///
     /// Dropping the waiter does not stop draining. Unopened tokens are invalidated; they cannot
     /// subsequently hand off a newly constructed operation. A failed shutdown is not Closed.
+    /// # Errors
+    /// A failed supervisor that cannot certify the drain.
     pub fn shutdown(
         &self,
     ) -> impl Future<Output = Result<(), NativePrivateSettlementSessionError>> + Send + 'static
@@ -843,8 +858,10 @@ impl NativePrivateSettlementAdmission {
             .sender
             .try_reserve()
             .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-                mpsc::error::TrySendError::Closed(_) => {
+                mpsc::error::TrySendError::Full(()) => {
+                    NativePrivateSettlementSessionError::Capacity
+                }
+                mpsc::error::TrySendError::Closed(()) => {
                     NativePrivateSettlementSessionError::Unavailable
                 }
             })?;

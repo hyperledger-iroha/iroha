@@ -172,6 +172,8 @@ workflow likewise does not claim reference-host latency qualification. See
 - `iroha_deploy` owns environment/context state, genesis/config rendering, local
   supervision and dataspace provisioning. Move the useful Kagami and Mochi
   implementations into this owner; it must not depend on either frontend.
+- `iroha_managed_ipc` owns the owner-authenticated local transport and the handoff of bound
+  listeners. A validator adopts its sockets through it and links no deployment or wallet crate.
 - Musubi exposes the canonical typed compiler/deployment adapter. It accepts an
   immutable SDK configuration and alias scope, and calls `iroha_contract_deploy`.
   It does not depend on the environment engine.

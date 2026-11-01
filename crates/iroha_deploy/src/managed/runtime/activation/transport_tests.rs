@@ -472,7 +472,7 @@ fn native_carrier_pool(parallel: bool) {
             })
             .collect();
         expected.sort();
-        for cohort in requests.chunks_exact(4) {
+        for cohort in requests.as_chunks::<4>().0 {
             let mut actual = cohort.to_vec();
             actual.sort();
             assert_eq!(actual, expected);

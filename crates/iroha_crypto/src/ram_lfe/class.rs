@@ -379,7 +379,9 @@ impl RamLfeClassReportV1 {
     /// Iterate over the canonical refresh schedule in execution order.
     pub fn refresh_points(&self) -> impl ExactSizeIterator<Item = RamLfeRefreshPointV1> + '_ {
         self.refresh_points
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| RamLfeRefreshPointV1 {
                 instruction: pair[0],
                 register: pair[1],

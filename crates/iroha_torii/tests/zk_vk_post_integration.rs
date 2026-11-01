@@ -4,12 +4,7 @@
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World},
-};
+use iroha_core::{queue::Queue, state::World};
 use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
 use iroha_primitives::nonzero;
 use iroha_torii::NoritoJson;
@@ -31,11 +26,12 @@ fn vk_post_authority_fixture_uses_checked_ed25519_key_generation() {
 }
 #[tokio::test]
 async fn vk_register_update_return_unsigned_local_signing_drafts() {
-    // Minimal state and queue
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura.clone(), query);
-    let state = Arc::new(state);
+    // A signed genesis authenticates the crypto policy that drafts are checked against.
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1),
+    )
+    .expect("original VK draft genesis");
+    let state = chain.state().clone();
     let queue_cfg = iroha_config::parameters::actual::Queue {
         capacity: nonzero!(8usize),
         capacity_per_user: nonzero!(8usize),

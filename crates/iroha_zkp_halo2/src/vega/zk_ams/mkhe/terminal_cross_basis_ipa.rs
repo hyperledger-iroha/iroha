@@ -464,7 +464,13 @@ fn aggregate_rows_v2(
         .try_reserve_exact(BRIDGE_ROWS_V2)
         .map_err(|_| BridgeErrorV2::Arithmetic)?;
     let mut weight = Scalar::one();
-    for (ordinal, opening_row) in rows.openings.chunks_exact(BRIDGE_BASIS_VIEW_V2).enumerate() {
+    for (ordinal, opening_row) in rows
+        .openings
+        .as_chunks::<BRIDGE_BASIS_VIEW_V2>()
+        .0
+        .iter()
+        .enumerate()
+    {
         for (aggregate, value) in opening
             .as_mut_slice()
             .iter_mut()

@@ -229,7 +229,7 @@ macro_rules! append_world_field {
         )?;
     };
     ($world:ident, $builder:ident, triggers) => {
-        $world.triggers.append_world_projection(&mut $builder)?;
+        $world.triggers.append_world_projection($builder)?;
     };
     ($world:ident, $builder:ident, musubi_archive_availability) => {
         $builder.append_musubi_archive_availability(&$world.musubi_archive_availability)?;
@@ -243,7 +243,7 @@ macro_rules! append_world_field {
     ($world:ident, $builder:ident, $field:ident) => {
         $world
             .$field
-            .append_world_field(stringify!($field), &mut $builder)?;
+            .append_world_field(stringify!($field), $builder)?;
     };
 }
 
@@ -304,7 +304,7 @@ impl WorldBlock<'_> {
         Ok(identities)
     }
 
-    fn project_world<P: WorldProjection>(&self, mut builder: &mut P) -> Result<(), P::Error> {
+    fn project_world<P: WorldProjection>(&self, builder: &mut P) -> Result<(), P::Error> {
         with_world_overlay_fields!(append_world_fields, self, builder);
         Ok(())
     }

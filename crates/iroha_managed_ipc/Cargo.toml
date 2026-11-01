@@ -1,0 +1,37 @@
+[package]
+name = "iroha_managed_ipc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Owner-authenticated local control transport and bound listener handoff for managed Iroha processes"
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_fs = { workspace = true }
+iroha_primitives = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+
+blake3 = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+rand = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["process", "net", "event"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+socket2 = "0.6.3"
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_Networking_WinSock"] }
+
+[dev-dependencies]
+socket2 = "0.6.3"
+tempfile = { workspace = true }

@@ -2540,7 +2540,7 @@ pub mod isi {
         let encoded_bytes = context.with(|| {
             norito::canonical_frame_len(&manifest.signature_payload())
                 .map_err(BoundedEncodeError::from)
-                .map_err(&encode_error)
+                .map_err(encode_error)
         })?;
         let _frame = budget
             .try_reserve_bytes(encoded_bytes)
@@ -2548,7 +2548,7 @@ pub mod isi {
         let payload = context.with(|| {
             manifest
                 .signature_payload_bytes(&context, max_frame_bytes)
-                .map_err(&encode_error)
+                .map_err(encode_error)
         })?;
         verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
             |_| {
@@ -3287,79 +3287,100 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let required_permission: Permission = CanProposeRuntimeChangeSet.into();
-            if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            propose_runtime_upgrade(self.action, None, authority, state_transaction)
+        }
+    }
+    impl Execute for gov::ProposeEndorsedRuntimeUpgradeProposal {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            propose_runtime_upgrade(
+                self.action,
+                Some(&self.provenance),
+                authority,
+                state_transaction,
+            )
+        }
+    }
+    /// Submit a runtime-upgrade proposal to SORA Parliament. `provenance` is the endorsements
+    /// of the release addition's endorsed proposal; the baseline proposal carries none and
+    /// skips the provenance check ([`crate::runtime::change_set::admit_proposal`]).
+    fn propose_runtime_upgrade(
+        action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
+        provenance: Option<&[iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1]>,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required_permission: Permission = CanProposeRuntimeChangeSet.into();
+        if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanProposeRuntimeChangeSet required".into(),
+            ));
+        }
+        let (notice, proposed_ms) =
+            crate::runtime::change_set::admit_proposal(&action, provenance, state_transaction)?;
+        let h_now = state_transaction._curr_block.height().get();
+        if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(change_set) =
+            &action
+        {
+            let id = change_set
+                .id()
+                .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
+            crate::runtime::containment::record_review(
+                &mut state_transaction.world,
+                id,
+                change_set,
+                h_now,
+            );
+        }
+        let payload = RuntimeUpgradeProposal {
+            proposal_operator: authority.clone(),
+            action: action.clone(),
+            notice,
+            proposed_ms,
+        };
+        let kind = ProposalKind::RuntimeUpgrade(payload.clone());
+        let id = kind.fingerprint();
+        if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+            let Some(existing_payload) = existing.as_runtime_upgrade() else {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanProposeRuntimeChangeSet required".into(),
+                    "governance proposal id collision".into(),
+                ));
+            };
+            if existing_payload.proposal_operator != payload.proposal_operator
+                || existing_payload.action != payload.action
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal id collision".into(),
                 ));
             }
-            let (notice, proposed_ms) = crate::runtime::change_set::admit_proposal(
-                &self.action,
-                &self.provenance,
-                state_transaction,
-            )?;
-            let h_now = state_transaction._curr_block.height().get();
-            if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(
-                change_set,
-            ) = &self.action
-            {
-                let id = change_set
-                    .id()
-                    .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
-                crate::runtime::containment::record_review(
-                    &mut state_transaction.world,
-                    id,
-                    change_set,
-                    h_now,
-                );
-            }
-            let payload = RuntimeUpgradeProposal {
-                proposal_operator: authority.clone(),
-                action: self.action.clone(),
-                notice,
-                proposed_ms,
-            };
-            let kind = ProposalKind::RuntimeUpgrade(payload.clone());
-            let id = kind.fingerprint();
-            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                let Some(existing_payload) = existing.as_runtime_upgrade() else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                };
-                if existing_payload.proposal_operator != payload.proposal_operator
-                    || existing_payload.action != payload.action
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
-                    ));
-                }
-                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
-                return Ok(());
-            }
-            let created_height = h_now;
-            let record = crate::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height,
-                status: crate::state::GovernanceProposalStatus::Proposed,
-            };
-            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
-            state_transaction
-                .world
-                .put_governance_proposal(id, record)
-                .map_err(governance_proposal_storage_error)?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
-                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
-                        id,
-                        proposer: authority.clone(),
-                        contract_address: None,
-                    },
-                ),
-            ));
-            Ok(())
+            ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+            return Ok(());
         }
+        let created_height = h_now;
+        let record = crate::state::GovernanceProposalRecord {
+            proposer: authority.clone(),
+            kind,
+            created_height,
+            status: crate::state::GovernanceProposalStatus::Proposed,
+        };
+        ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+        state_transaction
+            .world
+            .put_governance_proposal(id, record)
+            .map_err(governance_proposal_storage_error)?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                    id,
+                    proposer: authority.clone(),
+                    contract_address: None,
+                },
+            ),
+        ));
+        Ok(())
     }
     impl Execute for gov::ProposeSccpRouteGovernance {
         fn execute(
@@ -7286,19 +7307,16 @@ pub mod isi {
             .collect::<BTreeSet<_>>();
             if protected.contains("*")
                 || protected.contains(contract_address.as_str())
-                || contract_address
-                    .dataspace_id()
-                    .ok()
-                    .is_some_and(|dataspace_id| {
-                        protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
-                            || protected.iter().any(|namespace| {
-                                state_transaction
-                                    .nexus
-                                    .dataspace_catalog
-                                    .by_alias(namespace)
-                                    .is_some_and(|entry| entry.id == dataspace_id)
-                            })
-                    })
+                || contract_address.dataspace_id().is_ok_and(|dataspace_id| {
+                    protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
+                        || protected.iter().any(|namespace| {
+                            state_transaction
+                                .nexus
+                                .dataspace_catalog
+                                .by_alias(namespace)
+                                .is_some_and(|entry| entry.id == dataspace_id)
+                        })
+                })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "protected contract namespaces require Parliament deployment".into(),
@@ -12606,7 +12624,7 @@ pub mod isi {
                 id: IdBox::Permission(Permission::new(
                     "Proof".into(),
                     iroha_primitives::json::Json::from(
-                        format!("{}:{:x?}", &pid.backend, &pid.proof_hash[..4]).as_str(),
+                        format!("{}:{:x?}", pid.backend, &pid.proof_hash[..4]).as_str(),
                     ),
                 )),
             }
@@ -15444,7 +15462,7 @@ pub mod isi {
                     );
                 }
                 InstructionExecutionError::InvariantViolation(
-                    format!("verified fee sponsor vault FASTPQ verification failed: {err}",).into(),
+                    format!("verified fee sponsor vault FASTPQ verification failed: {err}").into(),
                 )
             })?;
             let record = VerifiedFeeSponsorVaultAllocation::new(
@@ -17877,7 +17895,7 @@ pub mod isi {
                                 .get(),
                             metadata.block_cadence_ms.get(),
                         )
-                        .map_err(|error| invalid_smart_contract_parameter(&error.to_string()))?;
+                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
                     }
                     genesis_cadence = Some(metadata.block_cadence_ms);
                 }
@@ -22916,7 +22934,7 @@ AccountEvent::PermissionRemoved(change))
             }
             .into();
             let error = Executor::Initial
-                .execute_instruction(&mut stx, &ALICE_ID, instruction)
+                .execute_instruction(&mut stx, &ALICE_ID, &instruction)
                 .expect_err("header-shaped genesis cannot grant native instruction authority");
             let ValidationFail::NotPermitted(message) = error else {
                 panic!("header-only genesis must fail at its source authority boundary");
@@ -22969,7 +22987,7 @@ AccountEvent::PermissionRemoved(change))
                     .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &register)
                     .expect("authenticate the exact original verifier registration");
                 Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, register.clone())
+                    .execute_instruction(&mut transaction, &ALICE_ID, &register)
                     .expect("the original signed genesis admits verifier registration");
                 assert_eq!(transaction.world.verifying_keys.get(&id), Some(&record));
                 assert_eq!(
@@ -23040,7 +23058,7 @@ AccountEvent::PermissionRemoved(change))
                 .into(),
             ] {
                 let error = Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, instruction)
+                    .execute_instruction(&mut transaction, &ALICE_ID, &instruction)
                     .expect_err("a manager grant cannot create a post-genesis governed lifecycle");
                 assert!(matches!(error, ValidationFail::NotPermitted(message)
                     if message == "administrative instruction requires an explicit governed lifecycle"));
@@ -24283,7 +24301,7 @@ AccountEvent::PermissionRemoved(change))
                 let encoded = format!(
                     r#"{{"root_hint":"BlAkE2B32:0X{}","owner":"{}","amount":"{}","duration_blocks":{duration_blocks},"direction":"Abstain","nullifier":"0x{}"}}"#,
                     "aa".repeat(32),
-                    &*ALICE_ID,
+                    *ALICE_ID,
                     u128::MAX,
                     "bb".repeat(32),
                 );
@@ -24299,7 +24317,7 @@ AccountEvent::PermissionRemoved(change))
             for amount in ["1.25", "0.0000000000000000000000000001"] {
                 let encoded = format!(
                     r#"{{"owner":"{}","amount":"{amount}","duration_blocks":1}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                 );
                 let parsed = super::parse_governance_zk_public_inputs_v1(&encoded)
                     .expect("fractional canonical Quantity must remain admissible");
@@ -24454,7 +24472,6 @@ AccountEvent::PermissionRemoved(change))
                     network_id,
                     effective_height,
                 ),
-                provenance: Vec::new(),
             };
             let unrelated_contract =
                 ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
@@ -24856,7 +24873,7 @@ AccountEvent::PermissionRemoved(change))
                 proof_b64: "AA==".to_owned(),
                 public_inputs_json: format!(
                     r#"{{"owner":"{}","amount":"0","duration_blocks":1}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                 ),
             }
             .expect_execute_err(
@@ -24930,7 +24947,7 @@ AccountEvent::PermissionRemoved(change))
                 proof_b64: "AA==".to_owned(),
                 public_inputs_json: format!(
                     r#"{{"owner":"{}","amount":"0","duration_blocks":{}}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                     u64::MAX,
                 ),
             }
@@ -26784,14 +26801,14 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
 
         #[test]
         fn manifest_verification_preserves_original_state_capacity_for_counter_and_frame() {
-            // Keep retired fixture State generations from reopening this original pool.
-            // Only the tested admission and synchronous owner refunds may change capacity.
-            let _constructor_retirement = crossbeam_epoch::pin();
             use std::{
                 future::Future as _,
                 pin::pin,
                 task::{Context, Poll, Waker},
             };
+            // Keep retired fixture State generations from reopening this original pool.
+            // Only the tested admission and synchronous owner refunds may change capacity.
+            let _constructor_retirement = crossbeam_epoch::pin();
 
             let signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
             let (_, manifest) = minimal_contract_artifact();
@@ -32543,7 +32560,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 }
                 .into();
                 let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), bad_instr)
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), &bad_instr)
                     .expect_err("lead time guard must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "lead-time", "expected lead-time rejection, got {msg}");
@@ -32560,7 +32577,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record: ok_record.clone(),
                 }
                 .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), ok_instr)
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &ok_instr)
                     .expect("register consensus key");
                 let stored = stx
                     .world
@@ -32602,7 +32619,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             }
             .into();
             let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect_err("disallowed algorithm must be rejected");
             let msg = smart_contract_error_message(err);
             assert_eq!(
@@ -32637,7 +32654,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect("register consensus key");
             assert_eq!(
                 stx.world.consensus_keys.get(&id).map(|entry| &entry.id),
@@ -32685,7 +32702,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     record,
                 }
                 .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                     .expect("BLS consensus key should be accepted");
             }
             // Ed25519 is filtered out by the config allowlist.
@@ -32711,7 +32728,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 }
                 .into();
                 let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                     .expect_err("disallowed algorithm must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert_eq!(
@@ -32763,7 +32780,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             };
             let instr: InstructionBox = consensus_keys::RegisterConsensusKey { id, record }.into();
             let err = Executor::default()
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), &instr)
                 .expect_err("empty algorithm allowlist must reject");
             assert_eq!(
                 smart_contract_error_message(err),
@@ -32797,7 +32814,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: record_a,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &instr_a)
                 .expect("register initial key");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -32821,7 +32838,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 record: record_b.clone(),
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), rotate_instr)
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), &rotate_instr)
                 .expect("rotate consensus key");
             let prev = stx
                 .world
@@ -34328,7 +34345,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing circuit index should reject proof");
             match err {
                 ValidationFail::InstructionFailed(
@@ -34362,7 +34379,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope", "unexpected msg: {msg}");
@@ -34386,7 +34403,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("protocol name must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
                 let expected_message = if backend == "groth16/bls12-377" {
@@ -34412,7 +34429,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err(
                         "production-claim proof backend must reject before registry lookup",
                     );
@@ -34458,7 +34475,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("non-admitted verifier record tag must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "verifying key backend mismatch", "unexpected msg for {}: {msg}", backend_tag.canonical_label());
@@ -34492,7 +34509,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing verifying key should reject generic VerifyProof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "registered verifying key reference", "unexpected msg: {msg}");
@@ -34540,7 +34557,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing verifying key bytes should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key bytes missing", "unexpected msg: {msg}");
@@ -34587,7 +34604,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect("an invalid proof must run backend verification and record rejection");
             let record = stx_verify
                 .world
@@ -34638,7 +34655,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("wrong envelope backend tag should reject");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope backend tag mismatch", "unexpected msg: {msg}");
@@ -34735,7 +34752,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("metadata mismatch must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34789,7 +34806,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("duplicate proof record must reject");
             assert!(
                 matches!(
@@ -34861,7 +34878,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+                let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                     .expect_err("registry invariant must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -34909,7 +34926,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, verify)
+            let err = crate::executor::Executor::Initial.execute_instruction(&mut stx_verify, &ALICE_ID, &verify)
                 .expect_err("missing gas schedule should reject proof");
             match err {
                 ValidationFail::InstructionFailed(

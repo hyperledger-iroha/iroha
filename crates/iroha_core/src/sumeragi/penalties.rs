@@ -745,9 +745,7 @@ impl<'a> PenaltyApplier<'a> {
                 snapshot.stake_index,
             ));
         }
-        pending
-            .as_mut_slice()
-            .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
+        pending.as_mut_slice().sort_unstable_by_key(|left| left.0.0);
         let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self.state.consensus_effects_probe_block(*block_header)?;
         let mut actions =
@@ -870,7 +868,6 @@ impl<'a> PenaltyApplier<'a> {
                             (lane_id, validator),
                             slash_id,
                             amount.get(),
-                            block_header.creation_time_ms,
                             &liability,
                             share_keys,
                         )
@@ -1169,7 +1166,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         (action.lane_id, &action.validator),
                         action.slash_id,
                         &action.amount,
-                        now_ms,
                         &liability,
                         share_keys,
                     )?,
@@ -1180,7 +1176,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                             (action.lane_id, &action.validator),
                             action.slash_id,
                             &action.amount,
-                            now_ms,
                             &liability,
                             share_keys,
                         )?;
@@ -1269,7 +1264,7 @@ fn penalty_staking_fixture_header() -> BlockHeader {
 
 /// Complete author input for the penalty fixture's selected currency and custody.
 #[cfg(test)]
-pub(crate) fn penalty_staking_fixture_policy()
+pub fn penalty_staking_fixture_policy()
 -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     let (asset, escrow, sink) = penalty_staking_fixture_ids();
     let mut policy = crate::sumeragi::test_chain::staking_fixture_policy(asset);
@@ -3674,7 +3669,6 @@ mod tests {
                 &validator,
                 key,
                 &Quantity::from(10_000_u64),
-                2_000,
             )
             .expect("the canonical penalty fixture must admit its derived slash");
         }

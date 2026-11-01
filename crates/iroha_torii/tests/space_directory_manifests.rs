@@ -1,5 +1,6 @@
 //! Torii Space Directory manifest endpoint tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{Router, http::Request, response::IntoResponse as _, routing::post};
 use base64::Engine as _;
 use hex::ToHex;
@@ -12,7 +13,8 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
-    account::AccountId,
+    Registrable as _,
+    account::{AccountId, NewAccount},
     asset::AssetDefinitionId,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
@@ -28,8 +30,23 @@ use norito::codec::Decode;
 use norito::json::{self, Value};
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
+/// A world whose one account owns `uaid`; Core derives the UAID's bindings from that owner.
+fn world_with_uaid_owner(owner: &AccountId, uaid: UniversalAccountId) -> World {
+    World::with(
+        [],
+        [NewAccount::new(owner.clone())
+            .with_uaid(Some(uaid))
+            .build(owner)],
+        [],
+    )
+}
+/// The manifest collection with one text filter and its filtered total.
+fn filtered_manifests_uri(uaid: &UniversalAccountId, filter: &str) -> String {
+    format!(
+        "/v1/space-directory/uaids/{uaid}/manifests?filter={}&include_total=true",
+        iroha_torii::test_utils::percent_encode(filter)
+    )
+}
 fn checked_space_directory_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked space directory Ed25519 fixture keypair")
@@ -63,10 +80,7 @@ fn cbdc_manifest_entry(
             max_amount: Some(Quantity::from(max_amount)),
             window: AllowanceWindow::PerDay,
         }),
-        notes: match notes {
-            Some(notes) => Some(notes.into()),
-            None => None,
-        },
+        notes: notes.map(std::convert::Into::into),
     }
 }
 async fn decode_unsigned_transaction_draft(
@@ -294,17 +308,13 @@ fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn space_directory_manifest_endpoint_returns_records() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::space_directory"));
     let account_key = checked_space_directory_ed25519_key_fixture();
     let account_id = AccountId::new(account_key.public_key().clone());
-    let mut world = World::default();
-    let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
-    bindings.bind_account(dataspace, account_id.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
+    let mut world = world_with_uaid_owner(&account_id, uaid);
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -343,15 +353,17 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let state = chain.state().clone();
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
     let app = torii.router();
-    let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}/manifests"))
-        .await
-        .expect("response");
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?include_total=true"),
+    )
+    .await
+    .expect("response");
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let doc: Value = json::from_slice(&body).expect("manifest payload");
-    assert_eq!(doc["uaid"], Value::from(uaid.to_string()));
     assert_eq!(doc["total"], Value::from(1));
-    let entries = doc["manifests"].as_array().expect("array of manifests");
+    let entries = doc["items"].as_array().expect("array of manifests");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["dataspace_alias"], Value::from("cbdc"));
     assert_eq!(
@@ -391,10 +403,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     // Dataspace filter excludes unknown ids.
     let resp = fixtures::request_get(
         &app,
-        &format!(
-            "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
-            dataspace.as_u64() + 1
-        ),
+        &filtered_manifests_uri(&uaid, &format!("dataspace_id = {}", dataspace.as_u64() + 1)),
     )
     .await
     .expect("response");
@@ -403,17 +412,14 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let filtered_doc: Value = json::from_slice(&filtered).expect("filter payload");
     assert_eq!(filtered_doc["total"], Value::from(0));
     assert_eq!(
-        filtered_doc["manifests"].as_array().unwrap().len(),
+        filtered_doc["items"].as_array().unwrap().len(),
         0,
         "filter removes non-matching dataspaces"
     );
     // Configured dataspace with no explicit lane route still falls back to fanout filtering.
     let resp = fixtures::request_get(
         &app,
-        &format!(
-            "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
-            dataspace.as_u64()
-        ),
+        &filtered_manifests_uri(&uaid, &format!("dataspace_id = {}", dataspace.as_u64())),
     )
     .await
     .expect("response");
@@ -423,12 +429,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
         json::from_slice(&filtered_existing).expect("configured dataspace payload");
     assert_eq!(filtered_existing_doc["total"], Value::from(1));
     assert_eq!(
-        filtered_existing_doc["manifests"].as_array().unwrap().len(),
+        filtered_existing_doc["items"].as_array().unwrap().len(),
         1,
         "configured dataspace filter preserves the matching manifest"
     );
     assert_eq!(
-        filtered_existing_doc["manifests"][0]["manifest_hash"],
+        filtered_existing_doc["items"][0]["manifest_hash"],
         Value::from(expected_hash.as_str())
     );
     let resp = fixtures::request_get(
@@ -439,10 +445,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
     .expect("raw-hex manifests response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     fixtures::response_body(resp, "raw manifests UAID response").await;
-    // Status filter (active) yields the entry, limit/offset paginate.
+    // Status filter (active) yields the entry.
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1"),
+        &format!(
+            "{}&limit=1",
+            filtered_manifests_uri(&uaid, r#"status = "Active""#)
+        ),
     )
     .await
     .expect("response");
@@ -451,11 +460,11 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let active_doc: Value = json::from_slice(&active).expect("active payload");
     assert_eq!(active_doc["total"], Value::from(1));
     assert_eq!(
-        active_doc["manifests"].as_array().unwrap().len(),
+        active_doc["items"].as_array().unwrap().len(),
         1,
-        "status=active returns bindings"
+        "the active filter returns bindings"
     );
-    // Invalid status values are rejected by the manifest query parser.
+    // The retired `status` shorthand is refused; a filter expression carries the status.
     let resp = fixtures::request_get(
         &app,
         &format!("/v1/space-directory/uaids/{uaid}/manifests?status=DefinitelyNotAStatus"),
@@ -466,14 +475,8 @@ async fn space_directory_manifest_endpoint_returns_records() {
     fixtures::response_body(resp, "invalid manifest status response").await;
     // Build a revoked + second manifest world to test inactive/pagination.
     let mut cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let mut world_revoked = World::default();
-    let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
+    let mut world_revoked = world_with_uaid_owner(&account_id, uaid);
     let dataspace_two = DataSpaceId::new(13);
-    bindings.bind_account(dataspace, account_id.clone());
-    bindings.bind_account(dataspace_two, account_id.clone());
-    world_revoked
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
     let mut record_revoked = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -539,32 +542,32 @@ async fn space_directory_manifest_endpoint_returns_records() {
         tokio::sync::broadcast::channel(1).0,
         iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
-    // Inactive filter returns revoked manifest.
+    // Revoked filter returns the revoked manifest.
     app.shutdown().await;
     let app = torii_rev.router();
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=inactive"),
+        &filtered_manifests_uri(&uaid, r#"status = "Revoked""#),
     )
     .await
-    .expect("inactive response");
+    .expect("revoked response");
     assert_eq!(resp.status(), StatusCode::OK);
-    let inactive = resp.into_body().collect().await.unwrap().to_bytes();
-    let inactive_doc: Value = json::from_slice(&inactive).expect("inactive payload");
-    assert_eq!(inactive_doc["total"], Value::from(1));
+    let revoked = resp.into_body().collect().await.unwrap().to_bytes();
+    let revoked_doc: Value = json::from_slice(&revoked).expect("revoked payload");
+    assert_eq!(revoked_doc["total"], Value::from(1));
     assert_eq!(
-        inactive_doc["manifests"].as_array().unwrap().len(),
+        revoked_doc["items"].as_array().unwrap().len(),
         1,
-        "inactive filter returns one entry"
+        "revoked filter returns one entry"
     );
-    assert_eq!(
-        inactive_doc["manifests"][0]["status"],
-        Value::from("Revoked")
-    );
+    assert_eq!(revoked_doc["items"][0]["status"], Value::from("Revoked"));
     // Active filter + pagination.
     let resp = fixtures::request_get(
         &app,
-        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1&offset=0"),
+        &format!(
+            "{}&limit=1",
+            filtered_manifests_uri(&uaid, r#"status = "Active""#)
+        ),
     )
     .await
     .expect("active response");
@@ -573,7 +576,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let active_doc: Value = json::from_slice(&active).expect("active payload");
     assert_eq!(active_doc["total"], Value::from(1));
     assert_eq!(
-        active_doc["manifests"].as_array().unwrap().len(),
+        active_doc["items"].as_array().unwrap().len(),
         1,
         "pagination limits to 1 entry"
     );
@@ -589,6 +592,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
 }
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let world = World::default();
     let (chain, local_key) = manifest_fixture_chain(world, None);
@@ -611,21 +615,13 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
 }
 #[tokio::test]
 async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-bindings-multi"));
     let primary_dataspace = DataSpaceId::new(31);
     let secondary_dataspace = DataSpaceId::new(33);
-    let primary_account = checked_space_directory_account_fixture();
-    let secondary_account = checked_space_directory_account_fixture();
-    let tertiary_account = checked_space_directory_account_fixture();
-    let mut world = World::default();
-    let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
-    bindings.bind_account(primary_dataspace, secondary_account.clone());
-    bindings.bind_account(primary_dataspace, primary_account.clone());
-    bindings.bind_account(secondary_dataspace, tertiary_account.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
+    let owner = checked_space_directory_account_fixture();
+    let mut world = world_with_uaid_owner(&owner, uaid);
     let mut primary_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -660,6 +656,12 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
             description: Some("Retail lane".into()),
             fault_tolerance: 1,
         },
+        DataSpaceMetadata {
+            id: secondary_dataspace,
+            alias: "wholesale".into(),
+            description: None,
+            fault_tolerance: 1,
+        },
     ])
     .expect("dataspace catalog");
     let (chain, local_key) = manifest_fixture_chain(world, Some(catalog));
@@ -670,9 +672,9 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     let app = torii.router();
     let resp = app
         .router()
-        .oneshot(fixtures::get_request(
-            &(format!("/v1/space-directory/uaids/{uaid}")),
-        ))
+        .oneshot(fixtures::get_request(&format!(
+            "/v1/space-directory/uaids/{uaid}"
+        )))
         .await
         .expect("bindings response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -681,41 +683,30 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     assert_eq!(doc["uaid"], Value::from(uaid.to_string()));
     let dataspaces = doc["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 2);
-    let primary = dataspaces
-        .iter()
-        .find(|entry| entry["dataspace_id"] == Value::from(primary_dataspace.as_u64()))
-        .expect("primary dataspace entry");
-    assert_eq!(primary["dataspace_alias"], Value::from("retail"));
-    let mut actual_primary_accounts: Vec<_> = primary["accounts"]
-        .as_array()
-        .expect("primary accounts array")
-        .iter()
-        .map(|value| value.as_str().expect("primary account literal").to_owned())
-        .collect();
-    let mut expected_primary_accounts =
-        vec![primary_account.to_string(), secondary_account.to_string()];
-    actual_primary_accounts.sort_unstable();
-    expected_primary_accounts.sort_unstable();
-    assert_eq!(actual_primary_accounts, expected_primary_accounts);
-    let secondary = dataspaces
-        .iter()
-        .find(|entry| entry["dataspace_id"] == Value::from(secondary_dataspace.as_u64()))
-        .expect("secondary dataspace entry");
-    assert!(
-        secondary["dataspace_alias"].is_null(),
-        "missing catalog alias should stay null in the public route payload",
-    );
-    assert_eq!(
-        secondary["accounts"][0],
-        Value::from(tertiary_account.to_string())
-    );
+    // A UAID has one canonical account owner, bound in every data space with an active manifest.
+    for (dataspace, alias) in [
+        (primary_dataspace, "retail"),
+        (secondary_dataspace, "wholesale"),
+    ] {
+        let entry = dataspaces
+            .iter()
+            .find(|entry| entry["dataspace_id"] == Value::from(dataspace.as_u64()))
+            .expect("dataspace entry");
+        assert_eq!(entry["dataspace_alias"], Value::from(alias));
+        assert_eq!(
+            entry["accounts"],
+            Value::Array(vec![Value::from(owner.to_string())])
+        );
+    }
     app.shutdown().await;
 }
 #[tokio::test]
-async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_page_is_empty() {
+async fn space_directory_manifest_endpoint_reports_filtered_total_across_pages() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-empty-page"));
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-filtered-total"));
     let active_dataspace = DataSpaceId::new(41);
+    let second_active_dataspace = DataSpaceId::new(43);
     let revoked_dataspace = DataSpaceId::new(42);
     let mut world = World::default();
     let mut active_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
@@ -728,6 +719,16 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
         entries: Vec::new(),
     });
     active_record.lifecycle.mark_activated(4_096);
+    let mut second_active_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
+        version: ManifestVersion::V1,
+        uaid,
+        dataspace: second_active_dataspace,
+        issued_ms: 1_762_723_200_050,
+        activation_epoch: 4_096,
+        expiry_epoch: Some(8_192),
+        entries: Vec::new(),
+    });
+    second_active_record.lifecycle.mark_activated(4_096);
     let mut revoked_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -741,6 +742,7 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
     revoked_record.lifecycle.mark_revoked(4_200, None);
     let mut set = SpaceDirectoryManifestSet::default();
     set.upsert(active_record);
+    set.upsert(second_active_record);
     set.upsert(revoked_record);
     world
         .space_directory_manifests_mut_for_testing()
@@ -750,6 +752,12 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
         DataSpaceMetadata {
             id: active_dataspace,
             alias: "active".into(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        DataSpaceMetadata {
+            id: second_active_dataspace,
+            alias: "active-two".into(),
             description: None,
             fault_tolerance: 1,
         },
@@ -767,37 +775,49 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
     let state = chain.state().clone();
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
     let app = torii.router();
+    let first_page_uri = format!(
+        "{}&limit=1",
+        filtered_manifests_uri(&uaid, r#"status = "Active""#)
+    );
     let resp = app
         .router()
-        .oneshot(fixtures::get_request(
-            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1&offset=1")),
-        ))
+        .oneshot(fixtures::get_request(&first_page_uri))
         .await
-        .expect("manifests response");
+        .expect("first page response");
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let doc: Value = json::from_slice(&body).expect("manifests payload");
-    assert_eq!(doc["uaid"], Value::from(uaid.to_string()));
-    assert_eq!(doc["total"], Value::from(1));
+    let doc: Value = json::from_slice(&body).expect("first page payload");
     assert_eq!(
-        doc["manifests"].as_array().expect("manifests array").len(),
-        0,
-        "total should count status-filtered rows even when pagination clears the page",
+        doc["total"],
+        Value::from(2),
+        "total counts every filtered row, not the page or the revoked manifest"
     );
+    assert_eq!(doc["items"].as_array().expect("items").len(), 1);
+    let cursor = doc["next_cursor"].as_str().expect("second page cursor");
+    let resp = app
+        .router()
+        .oneshot(fixtures::get_request(&format!(
+            "{first_page_uri}&cursor={}",
+            iroha_torii::test_utils::percent_encode(cursor)
+        )))
+        .await
+        .expect("second page response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let doc: Value = json::from_slice(&body).expect("second page payload");
+    assert_eq!(doc["total"], Value::from(2));
+    assert_eq!(doc["items"].as_array().expect("items").len(), 1);
+    assert!(doc["next_cursor"].is_null());
     app.shutdown().await;
 }
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let dataspace = DataSpaceId::new(21);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-null-reason"));
     let account = checked_space_directory_account_fixture();
-    let mut world = World::default();
-    let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
-    bindings.bind_account(dataspace, account.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
+    let mut world = world_with_uaid_owner(&account, uaid);
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -833,26 +853,25 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     let app = torii.router();
     let resp = app
         .router()
-        .oneshot(fixtures::get_request(
-            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=inactive")),
-        ))
+        .oneshot(fixtures::get_request(&filtered_manifests_uri(
+            &uaid,
+            r#"status = "Revoked""#,
+        )))
         .await
-        .expect("inactive response");
+        .expect("revoked response");
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let doc: Value = json::from_slice(&body).expect("inactive payload");
+    let doc: Value = json::from_slice(&body).expect("revoked payload");
     assert_eq!(doc["total"], Value::from(1));
-    assert_eq!(doc["manifests"][0]["status"], Value::from("Revoked"));
+    assert_eq!(doc["items"][0]["status"], Value::from("Revoked"));
+    assert_eq!(doc["items"][0]["dataspace_alias"], Value::from("archived"));
     assert_eq!(
-        doc["manifests"][0]["dataspace_alias"],
-        Value::from("archived")
-    );
-    assert_eq!(
-        doc["manifests"][0]["accounts"][0],
-        Value::from(account.to_string())
+        doc["items"][0]["accounts"],
+        Value::Array(Vec::new()),
+        "only an active manifest binds its UAID owner"
     );
     assert!(
-        doc["manifests"][0]["lifecycle"]["revocation"]["reason"].is_null(),
+        doc["items"][0]["lifecycle"]["revocation"]["reason"].is_null(),
         "reasonless revocations should stay explicit nulls in route payloads",
     );
     app.shutdown().await;
@@ -1118,6 +1137,7 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
 }
 #[tokio::test]
 async fn api_router_registers_space_directory_manifest_mutation_routes() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let authority = manifest_authority();

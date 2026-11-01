@@ -110,9 +110,9 @@ fn divsteps_62_var(mut eta: i64, f0: u64, g0: u64) -> (i64, Trans2x2) {
             break;
         }
         debug_assert!(f & 1 == 1 && g & 1 == 1);
-        let w: u64;
+
         let m: u64;
-        if eta < 0 {
+        let w: u64 = if eta < 0 {
             // Negate eta and replace (f, g) with (g, -f).
             eta = -eta;
             let tmp = f;
@@ -127,21 +127,20 @@ fn divsteps_62_var(mut eta: i64, f0: u64, g0: u64) -> (i64, Trans2x2) {
             // Cancel up to 6 bits of g, bounded by the remaining steps and eta + 1.
             let limit = core::cmp::min(eta + 1, i64::from(i)) as u32;
             m = (u64::MAX >> (64 - limit)) & 63;
-            w = f
-                .wrapping_mul(g)
+            f.wrapping_mul(g)
                 .wrapping_mul(f.wrapping_mul(f).wrapping_sub(2))
-                & m;
+                & m
         } else {
             // Cancel up to 4 bits of g.
             let limit = core::cmp::min(eta + 1, i64::from(i)) as u32;
             m = (u64::MAX >> (64 - limit)) & 15;
             let w0 = f.wrapping_add((f.wrapping_add(1) & 4) << 1);
-            w = w0.wrapping_neg().wrapping_mul(g) & m;
-        }
+            w0.wrapping_neg().wrapping_mul(g) & m
+        };
         g = g.wrapping_add(f.wrapping_mul(w));
         q = q.wrapping_add(u.wrapping_mul(w));
         r = r.wrapping_add(v.wrapping_mul(w));
-        debug_assert!(g & m == 0);
+        debug_assert_eq!(g & m, 0);
     }
     (
         eta,

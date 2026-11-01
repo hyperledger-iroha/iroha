@@ -13,6 +13,147 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
     (temporary, store)
 }
 
+fn grant_fixture_public_read(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = if path.is_dir() { 0o755 } else { 0o644 };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let result = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "owned fixture ACL grant failed");
+    }
+}
+
+#[test]
+fn project_private_destination_keeps_readable_parent_and_private_replacement() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    grant_fixture_public_read(&path);
+    let parent = OwnerDirectory::open(&path).unwrap();
+    let parent_identity = parent.identity().unwrap();
+    parent
+        .write_private_atomic("cache", b"first", PublishMode::CreateNew)
+        .unwrap();
+    let first = RetainedFile::open_private(path.join("cache")).unwrap();
+    let first_identity = first.identity().unwrap();
+    drop(first);
+    parent
+        .write_private_atomic("cache", b"replacement", PublishMode::Replace)
+        .unwrap();
+    let replacement = RetainedFile::open_private(path.join("cache")).unwrap();
+    assert_ne!(replacement.identity().unwrap(), first_identity);
+    assert_eq!(parent.identity().unwrap(), parent_identity);
+    assert_eq!(
+        read_private(path.join("cache"), 11).unwrap().as_slice(),
+        b"replacement"
+    );
+    assert!(
+        PrivateDirectory::open(&path).is_err(),
+        "parent was not repaired"
+    );
+    assert!(
+        parent
+            .write_private_atomic("cache", b"clobber", PublishMode::CreateNew)
+            .is_err()
+    );
+    assert_eq!(fs::read(path.join("cache")).unwrap(), b"replacement");
+}
+
+#[test]
+fn project_private_destination_refuses_public_and_multilink_originals_without_repair() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    let parent = OwnerDirectory::open(&path).unwrap();
+    parent
+        .write_private_atomic("public", b"public original", PublishMode::CreateNew)
+        .unwrap();
+    grant_fixture_public_read(&path.join("public"));
+    let before = RetainedFile::open_regular(path.join("public"))
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert!(
+        parent
+            .write_private_atomic("public", b"replacement", PublishMode::Replace)
+            .is_err()
+    );
+    assert_eq!(
+        RetainedFile::open_regular(path.join("public"))
+            .unwrap()
+            .snapshot()
+            .unwrap(),
+        before
+    );
+    assert!(RetainedFile::open_private(path.join("public")).is_err());
+    assert_eq!(fs::read(path.join("public")).unwrap(), b"public original");
+    parent
+        .write_private_atomic("linked", b"linked original", PublishMode::CreateNew)
+        .unwrap();
+    fs::hard_link(path.join("linked"), path.join("alias")).unwrap();
+    assert!(
+        parent
+            .write_private_atomic("linked", b"replacement", PublishMode::Replace)
+            .is_err()
+    );
+    assert_eq!(fs::read(path.join("linked")).unwrap(), b"linked original");
+    assert_eq!(fs::read(path.join("alias")).unwrap(), b"linked original");
+    assert!(
+        parent
+            .write_private_atomic("../outside", b"escape", PublishMode::CreateNew)
+            .is_err()
+    );
+}
+
+#[test]
+fn project_private_destination_preserves_publication_uncertainty() {
+    for fail_at in [AtomicWriteStep::Publish, AtomicWriteStep::Published] {
+        let (_temporary, private) = store();
+        let path = private.path().to_path_buf();
+        drop(private);
+        let parent = OwnerDirectory::open(&path).unwrap();
+        parent
+            .write_private_atomic("cache", b"original", PublishMode::CreateNew)
+            .unwrap();
+        let mut observed = false;
+        let result = parent.inner.write_atomic_observed(
+            OsStr::new("cache"),
+            b"complete replacement",
+            PublishMode::Replace,
+            true,
+            1,
+            &mut |step, _| {
+                if step == fail_at {
+                    observed = true;
+                    Err(io::Error::other("exact publication boundary refusal"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(observed);
+        assert!(result.is_err());
+        let expected: &[u8] = if fail_at == AtomicWriteStep::Publish {
+            b"original"
+        } else {
+            b"complete replacement"
+        };
+        assert_eq!(
+            read_private(path.join("cache"), 64).unwrap().as_slice(),
+            expected
+        );
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+    }
+}
+
 #[test]
 fn atomic_staging_names_accept_only_the_native_writer_grammar() {
     assert!(is_atomic_staging_name(OsStr::new(&temporary_name())));
@@ -304,7 +445,7 @@ fn exact_lock_creation_and_open_never_change_missing_or_existing_custody() {
         store.open_existing_lock("journal.lock").unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
     let mut first = store.create_lock("journal.lock").unwrap();
     first.write_all(b"retained").unwrap();
     first.sync_all().unwrap();
@@ -312,6 +453,14 @@ fn exact_lock_creation_and_open_never_change_missing_or_existing_custody() {
     first.try_lock().unwrap();
     let second = store.open_existing_lock("journal.lock").unwrap();
     assert!(second.try_lock().is_err());
+    // Windows byte-range locks exclude reads through other handles. Verify the original
+    // locked handle retained its complete bytes before independently reopening the file.
+    first.rewind().unwrap();
+    let mut bytes = Vec::new();
+    first.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"retained");
+    drop(first);
+    drop(second);
     assert_eq!(
         store.read("journal.lock", 8).unwrap().as_slice(),
         b"retained"
@@ -333,13 +482,13 @@ fn consuming_empty_directory_removal_preserves_parent_and_refuses_descendants() 
     pending.remove_empty().unwrap();
     assert!(store.open_child("pending").is_err());
     parent.revalidate().unwrap();
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
 }
 
 #[test]
 fn retained_directory_listing_is_bounded_and_does_not_follow_children() {
     let (_temporary, store) = store();
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
     store
         .write_atomic("zeta", b"one", PublishMode::CreateNew)
         .unwrap();
@@ -369,7 +518,10 @@ fn project_directory_listing_preserves_reader_access_and_enforces_entry_bound() 
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let project = OwnerDirectory::open(&path).unwrap();
-    assert!(project.entries(0).unwrap().is_empty());
+    assert_eq!(
+        project.entries(0).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
     project
         .write_atomic("zeta.ko", b"source", PublishMode::CreateNew)
         .unwrap();
@@ -778,9 +930,8 @@ fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
     first.sync_all().unwrap();
     let mut second = store.open_lock("owner.lock").unwrap();
     assert!(second.try_lock().is_err());
-    let mut bytes = Vec::new();
-    second.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"owner");
+    #[cfg(windows)]
+    assert!(second.read(&mut [0; 5]).is_err());
     drop(first);
     // Another parallel test may be between fork/posix_spawn and exec. CLOEXEC keeps this
     // descriptor out of the executed child, but the inherited open-file description can
@@ -795,6 +946,9 @@ fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
             Err(error) => panic!("released lock remained unavailable: {error}"),
         }
     }
+    let mut bytes = Vec::new();
+    second.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"owner");
 }
 
 #[test]
@@ -1274,7 +1428,7 @@ fn selected_regular_file_keeps_native_identity_bounds_and_independent_read_offse
     fs::write(&empty, []).unwrap();
     let empty = SelectedRegularFile::capture(&empty).unwrap();
     assert!(empty.is_empty().unwrap());
-    assert!(empty.read(0).unwrap().is_empty());
+    assert_eq!(empty.read(0).unwrap(), Vec::<u8>::new());
 }
 
 #[cfg(unix)]
@@ -1461,7 +1615,10 @@ fn retained_private_publication_refuses_replaced_parent_and_restores_original_re
     let replacement = PrivateDirectory::open_or_create(parent.path()).unwrap();
     let refused = parent.publish_private_child("new", &[("record", b"new bytes")]);
     assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::Other));
-    assert!(replacement.entries(0).unwrap().is_empty());
+    assert_eq!(
+        replacement.entries(0).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
     drop(replacement);
     fs::remove_dir(parent.path()).unwrap();
     fs::rename(displaced, parent.path()).unwrap();
@@ -1716,7 +1873,7 @@ fn separate_staging_publication_preserves_original_bytes_and_syncs_both_namespac
 
 #[test]
 fn separate_staging_native_failures_preserve_exact_publication_and_cleanup_boundaries() {
-    for failure in [0, 1, 2, 3, 4, 5, 6] {
+    for failure in 0..8 {
         let (_temporary, parent) = store();
         let destination = parent.create_child("destination").unwrap();
         let staging = parent.create_child("staging").unwrap();
@@ -1746,8 +1903,11 @@ fn separate_staging_native_failures_preserve_exact_publication_and_cleanup_bound
         assert_eq!(observed, failure + 1);
         let expected: &[u8] = if failure < 5 { b"before" } else { b"after" };
         assert_eq!(destination.read("record", 6).unwrap().as_slice(), expected);
-        // Both sync refusals occur after the one original temp has become the destination.
-        assert!(staging.entries(0).unwrap().is_empty());
+        // Publication observation and both sync refusals occur after the original temp has become the destination.
+        assert_eq!(
+            staging.entries(0).unwrap(),
+            Vec::<std::ffi::OsString>::new()
+        );
     }
 }
 
@@ -1801,7 +1961,10 @@ fn separate_staging_refuses_either_original_directory_substitution_before_public
         fs::rename(&displaced, selected.path()).unwrap();
         destination.revalidate().unwrap();
         staging.revalidate().unwrap();
-        assert!(staging.entries(0).unwrap().is_empty());
+        assert_eq!(
+            staging.entries(0).unwrap(),
+            Vec::<std::ffi::OsString>::new()
+        );
         let lock = staging.create_lock("lock").unwrap();
         lock.try_lock().unwrap();
         assert_eq!(

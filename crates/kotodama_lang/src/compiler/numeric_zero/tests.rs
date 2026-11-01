@@ -158,9 +158,11 @@ fn syscalls(output: &CompileOutput) -> Vec<u32> {
         .unwrap()
         .code_offset;
     output.artifact[offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter_map(|bytes| {
-            let word = u32::from_le_bytes(bytes.try_into().unwrap());
+            let word = u32::from_le_bytes(*bytes);
             match instruction::wide::opcode(word) {
                 instruction::wide::system::SCALL => Some(word & 0xff),
                 instruction::wide::system::SYSTEM => Some(word & 0x00ff_ffff),
@@ -232,8 +234,10 @@ fn indexed_pending_relocations_keep_all_new_writes_after_many_prior_literal_fixu
     let first = code.len();
     block.emit_trap_inputs(&mut code, &fixups).unwrap();
     let words = code[first..]
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
         .collect::<Vec<_>>();
     assert_eq!(
         words,

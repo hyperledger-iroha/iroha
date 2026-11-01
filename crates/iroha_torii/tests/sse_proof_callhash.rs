@@ -1,8 +1,7 @@
 //! Assert that SSE event JSON for Proof events includes `call_hash`.
 #![cfg(feature = "app_api")]
 #![allow(clippy::items_after_statements)]
-#[path = "common/proof_events.rs"]
-mod proof_events;
+use crate::proof_events;
 use axum::{Router, routing::get};
 use proof_events::ProofEventFixture;
 // use http_body_util::BodyExt as _; // not needed, we stream SSE

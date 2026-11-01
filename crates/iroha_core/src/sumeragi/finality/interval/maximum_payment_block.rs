@@ -207,7 +207,7 @@ fn check_settled(chain: &CertifiedTestChain, originals: &[SignedTransaction; 2])
         assert_eq!(input, &TransactionEntrypoint::External(original.clone()));
         let output = &committed
             .block()
-            .network_output_at(index as u32)
+            .network_output_at(u32::try_from(index).unwrap())
             .unwrap()
             .1
             .result;
@@ -301,10 +301,10 @@ fn check_independent_selected_receipts(
             .verify(&super::super::super::super::build_proof(&view, prefix_height).unwrap())
             .unwrap();
     }
-    let verified = verifier.verify(proof).unwrap();
+    let finalized = verifier.verify(proof).unwrap();
     for (index, original) in originals.iter().enumerate() {
-        let evidence = selected(verified.block(), index as u32);
-        verified
+        let evidence = selected(finalized.block(), u32::try_from(index).unwrap());
+        finalized
             .verify_committed_transaction(&chain.network_id(), &evidence)
             .unwrap();
         assert_eq!(
@@ -314,7 +314,7 @@ fn check_independent_selected_receipts(
         let projected = project_atomic_payment_receipt_unverified(
             chain.network_id(),
             intent(original),
-            &verified.header(),
+            &finalized.header(),
             evidence.entrypoint(),
             evidence.result(),
         )
@@ -330,7 +330,7 @@ fn check_independent_selected_receipts(
             project_atomic_payment_receipt_unverified(
                 chain.network_id(),
                 intent(&originals[1 - index]),
-                &verified.header(),
+                &finalized.header(),
                 evidence.entrypoint(),
                 evidence.result()
             )

@@ -393,10 +393,13 @@ def test_harness_extraction_requires_its_exact_unique_source_owner() -> None:
 
 def test_shell_owned_inert_child_excludes_installed_distributions(tmp_path: Path) -> None:
     """The exact shell invocation isolates fixtures from a real venv's installed owners."""
+    # This test-only import is intentionally outside the isolated byte-owner CLI.
+    from native_bash_fixture import bash_executable
+
     environment_root = tmp_path / "ambient-venv"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment_root)],
                    capture_output=True, text=True, check=True)
-    python = environment_root / "bin/python"
+    python = environment_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     site = Path(subprocess.check_output(
         [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
         text=True,
@@ -425,9 +428,13 @@ def test_shell_owned_inert_child_excludes_installed_distributions(tmp_path: Path
         header = _HARNESS_HEADER if no_site else _HARNESS_HEADER.replace(" -S", "", 1)
         program = prelude + header + body + "\nprint('INERT_CHILD_FLAGS=' + json.dumps(" \
             "{'isolated': sys.flags.isolated, 'no_site': sys.flags.no_site}))\nPY\n"
+        # The unchanged fixture heredoc exceeds CreateProcess's command-line
+        # ceiling. Execute its exact bytes from this disposable script on all hosts.
+        script = test_root / "inert-child.sh"
+        script.write_text(program, encoding="utf-8", newline="\n")
         result = subprocess.run(
-            ["/bin/bash", "-c", program, "wheel-child-isolation", str(python),
-             str(ROOT), str(test_root)], capture_output=True, text=True, timeout=120,
+            [bash_executable(), script.as_posix(), python.as_posix(),
+             ROOT.as_posix(), test_root.as_posix()], capture_output=True, text=True, timeout=120,
         )
         (test_root / "controls.log").write_text(result.stdout + result.stderr)
         if no_site:

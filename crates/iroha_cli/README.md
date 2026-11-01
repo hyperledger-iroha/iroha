@@ -29,6 +29,13 @@ cargo build -p iroha_cli --bin iroha
 The binary is written to `target/debug/iroha` (`target/debug/iroha.exe` on
 Windows).
 
+Transaction-load journals and traces retain their original file and ancestor handles
+on Windows NTFS as well as supported Unix hosts. Windows traces use bounded private
+writers, owner-read-only sealing and by-handle no-replace publication. Failed output
+leaves its partial evidence for inspection; completed receipts recheck their original
+bytes and namespace. Run `cargo test -p iroha_cli_lib --lib transaction_load::output::`
+on each native host to exercise these custody contracts.
+
 See [Install Iroha 3](https://docs.iroha.tech/get-started/install-iroha.html) for
 the current installation instructions.
 
@@ -66,7 +73,9 @@ Validator summaries retain complete activation heights and tenure bounds.
 Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 (`MAX_JSON_VALUE_NESTING_DEPTH`, currently 33 including the root value).
 Local contract durable-state fixtures require exact NFC path spelling and
-reject duplicate decoded JSON keys.
+reject duplicate decoded JSON keys. `contract debug-call` and
+`contract debug-view` print their whole report on stdout and exit 1 when the
+run fails.
 
 `iroha offline registration-package` verifies and packages a successful Global
 KAGEMUSHA token registration without submitting or signing a transaction. Supply
@@ -588,6 +597,11 @@ developer localnet enables private calls out of the box, and its client may host
 `universal.universal`. Any other network must
 install both verifying keys in genesis and select them in its `zk_validity_policy_v1`: the
 default executor refuses post-genesis key registration, even with `CanManageVerifyingKeys`.
+A private action proves against the call's current roster, so if the call changes first the
+CLI proves again. A proof that goes stale before it is submitted costs nothing. A submission
+the ledger rejects as stale is still charged its full fee, and the CLI stops after three and
+says so. The action has then not taken effect, and running the same command tries it again.
+
 See `scripts/kaigi_demo.sh` for a complete call against a disposable local network.
 
 ### ZK vote tally (app API convenience)

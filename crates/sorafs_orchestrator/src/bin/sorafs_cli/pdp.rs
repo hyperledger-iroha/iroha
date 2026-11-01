@@ -5,6 +5,7 @@ use base64::{
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::NetworkId;
+use iroha_fs::FileMetadata;
 use norito::{
     json::{Map, Value, from_slice, to_string_pretty, to_vec},
     to_bytes,
@@ -100,12 +101,6 @@ struct ValidatedStatus {
     target_os = "macos"
 ))]
 type OutputFileIdentity = (u64, u64);
-#[cfg(unix)]
-type InputFileIdentity = (u64, u64);
-#[cfg(windows)]
-type InputFileIdentity = (u32, u64);
-#[cfg(not(any(unix, windows)))]
-type InputFileIdentity = ();
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -538,14 +533,13 @@ fn load_proof(path: &Path) -> Result<(PdpProofV1, Vec<u8>), String> {
     Ok((value, bytes))
 }
 fn read_input_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
-    let before = fs::symlink_metadata(path)
+    let before = FileMetadata::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
     validate_input_metadata(&before, maximum, label, path)?;
     let expected_len =
         usize::try_from(before.len()).map_err(|_| format!("{label} length does not fit usize"))?;
     let mut file = open_input_file(path, label)?;
-    let opened = file
-        .metadata()
+    let opened = FileMetadata::of(&file)
         .map_err(|error| format!("failed to inspect opened {label}: {error}"))?;
     validate_input_metadata(&opened, maximum, label, path)?;
     if !input_metadata_unchanged(&before, &opened) {
@@ -571,10 +565,9 @@ fn read_input_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec
     {
         return Err(format!("{label} changed length while being read"));
     }
-    let after_file = file
-        .metadata()
+    let after_file = FileMetadata::of(&file)
         .map_err(|error| format!("failed to re-inspect opened {label}: {error}"))?;
-    let after_path = fs::symlink_metadata(path)
+    let after_path = FileMetadata::symlink_metadata(path)
         .map_err(|error| format!("failed to re-inspect {label}: {error}"))?;
     validate_input_metadata(&after_file, maximum, label, path)?;
     validate_input_metadata(&after_path, maximum, label, path)?;
@@ -587,15 +580,12 @@ fn read_input_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec
     Ok(bytes)
 }
 fn validate_input_metadata(
-    metadata: &fs::Metadata,
+    metadata: &FileMetadata,
     maximum: u64,
     label: &str,
     path: &Path,
 ) -> Result<(), String> {
-    if input_file_is_indirect(metadata)
-        || !metadata.file_type().is_file()
-        || input_file_identity(metadata).is_none()
-    {
+    if input_file_is_indirect(metadata) || !metadata.file_type().is_file() {
         return Err(format!(
             "{label} `{}` must be a regular non-symlink file with a stable identity",
             path.display()
@@ -622,18 +612,6 @@ fn validate_input_metadata(
     }
     Ok(())
 }
-#[cfg(unix)]
-fn input_file_identity(metadata: &fs::Metadata) -> Option<InputFileIdentity> {
-    Some((metadata.dev(), metadata.ino()))
-}
-#[cfg(windows)]
-fn input_file_identity(metadata: &fs::Metadata) -> Option<InputFileIdentity> {
-    Some((metadata.volume_serial_number()?, metadata.file_index()?))
-}
-#[cfg(not(any(unix, windows)))]
-fn input_file_identity(_metadata: &fs::Metadata) -> Option<InputFileIdentity> {
-    None
-}
 #[cfg(windows)]
 fn input_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -646,21 +624,12 @@ fn input_file_is_reparse_point(_metadata: &fs::Metadata) -> bool {
 fn input_file_is_indirect(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || input_file_is_reparse_point(metadata)
 }
-#[cfg(unix)]
-fn input_file_is_single_link(metadata: &fs::Metadata) -> bool {
-    metadata.nlink() == 1
-}
-#[cfg(windows)]
-fn input_file_is_single_link(metadata: &fs::Metadata) -> bool {
-    metadata.number_of_links() == Some(1)
-}
-#[cfg(not(any(unix, windows)))]
-fn input_file_is_single_link(_metadata: &fs::Metadata) -> bool {
-    false
+fn input_file_is_single_link(metadata: &FileMetadata) -> bool {
+    metadata.links() == 1
 }
 #[cfg(unix)]
-fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    input_file_identity(left) == input_file_identity(right)
+fn input_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
         && left.nlink() == 1
         && right.nlink() == 1
         && left.len() == right.len()
@@ -673,18 +642,17 @@ fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.gid() == right.gid()
 }
 #[cfg(windows)]
-fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    input_file_identity(left).is_some()
-        && input_file_identity(left) == input_file_identity(right)
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
+fn input_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
+        && left.links() == 1
+        && right.links() == 1
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
 #[cfg(not(any(unix, windows)))]
-fn input_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn input_metadata_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
 #[cfg(unix)]
@@ -1849,4 +1817,47 @@ fn emit_json(value: &Value) -> Result<(), String> {
         .map_err(|_| "failed to render validated PDP response JSON".to_owned())?;
     println!("{rendered}");
     Ok(())
+}
+
+#[cfg(test)]
+mod native_metadata_tests {
+    //! Native input identities preserve bounded reads and hard-link refusal.
+
+    use super::*;
+
+    #[test]
+    fn input_native_identity_rejects_equal_byte_substitution_and_hardlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.norito");
+        let second = directory.path().join("second.norito");
+        let alias = directory.path().join("alias.norito");
+        fs::write(&first, b"public-fixture").unwrap();
+        fs::write(&second, b"public-fixture").unwrap();
+        let before = FileMetadata::symlink_metadata(&first).unwrap();
+        let opened = FileMetadata::of(&open_input_file(&first, "fixture").unwrap()).unwrap();
+        assert!(input_metadata_unchanged(&before, &opened));
+        assert!(!input_metadata_unchanged(
+            &before,
+            &FileMetadata::symlink_metadata(&second).unwrap(),
+        ));
+        assert_eq!(
+            read_input_file_bounded(&first, 32, "fixture").unwrap(),
+            b"public-fixture",
+        );
+        fs::hard_link(&first, &alias).unwrap();
+        let aliased = FileMetadata::symlink_metadata(&alias).unwrap();
+        assert_eq!(before.identity(), aliased.identity());
+        assert!(!input_file_is_single_link(&aliased));
+        assert!(
+            read_input_file_bounded(&first, 32, "fixture")
+                .unwrap_err()
+                .contains("exactly one hard link")
+        );
+        fs::remove_file(&alias).unwrap();
+        fs::write(&first, b"changed-public-fixture").unwrap();
+        assert!(!input_metadata_unchanged(
+            &opened,
+            &FileMetadata::symlink_metadata(&first).unwrap(),
+        ));
+    }
 }

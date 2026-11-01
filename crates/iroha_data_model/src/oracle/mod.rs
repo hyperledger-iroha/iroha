@@ -2085,7 +2085,7 @@ pub fn derive_committee(
     });
     scored.dedup_by(|left, right| left.0 == right.0);
     // Re-sort by score to pick the top committee_size providers.
-    scored.sort_by(|left, right| left.1.cmp(&right.1));
+    scored.sort_by_key(|left| left.1);
     let members: Vec<OracleId> = scored
         .into_iter()
         .map(|(oracle_id, _)| oracle_id)

@@ -1203,7 +1203,7 @@ fn sample_ternary_vector<const N: usize>(
     domain: &[u8],
 ) -> Result<SecretPolynomialVectorV1<N>, PresentationProofErrorV1> {
     let mut output = SecretPolynomialVectorV1::zero();
-    for polynomial in output.polynomials.iter_mut() {
+    for polynomial in &mut output.polynomials {
         *polynomial = randomness
             .ternary_polynomial(domain)
             .map_err(PresentationProofErrorV1::Sampling)?;
@@ -1220,7 +1220,7 @@ fn sample_gaussian_vector<const N: usize>(
         ));
     }
     let mut output = SecretPolynomialVectorV1::zero();
-    for polynomial in output.polynomials.iter_mut() {
+    for polynomial in &mut output.polynomials {
         *polynomial = randomness
             .gaussian_polynomial(profile)
             .map_err(PresentationProofErrorV1::Sampling)?;
@@ -3680,7 +3680,7 @@ mod tests {
         );
         assert_eq!(format!("{exercised:?}"), format!("{untouched:?}"));
         assert_eq!(
-            format!("{:?}", &exercised.rejections),
+            format!("{:?}", exercised.rejections),
             "ProofRejectionStatsV1(<redacted>)"
         );
         assert_eq!(

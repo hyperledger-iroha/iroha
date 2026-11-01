@@ -341,10 +341,10 @@ fn measured(
     // Profile and encoding.
     let phase = session.enter("profile");
     let profile = BgvProfile::new(parameters)?;
-    let encoding = SlotEncoding::new(&profile)?;
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext())?;
     let model = CostModel::new(&profile);
     let top = profile.top_level();
-    let modulus = profile.plaintext_modulus();
+    let modulus = profile.master_plaintext_modulus();
     let broadcast = encoding.broadcast_elements();
     session.record_work("ring_degree", words(profile.degree()));
     session.record_work("main_primes", words(top + 1));
@@ -464,7 +464,7 @@ fn measured(
     evaluator.report(session);
     step.complete();
     let step = session.enter("embedded_one_multiplication");
-    let one = Plaintext::constant(&profile, 1)?;
+    let one = Plaintext::constant(&profile, profile.master_plaintext(), 1)?;
     let embedded_one = Ciphertext::trivial(&profile, &one, powered.level())?;
     let powered = evaluator.multiply_then_switch(&powered, &embedded_one)?;
     evaluator.report(session);
@@ -473,7 +473,11 @@ fn measured(
     let indicator = profile.add_plain(&profile.negate(&powered)?, &one)?;
     step.complete();
     let step = session.enter("select_multiplication");
-    let nonzero = Plaintext::constant(&profile, NONZERO_BRANCH % modulus)?;
+    let nonzero = Plaintext::constant(
+        &profile,
+        profile.master_plaintext(),
+        NONZERO_BRANCH % modulus,
+    )?;
     let difference = profile.sub_plain(&zero_branch, &nonzero)?;
     let selected = evaluator.multiply_then_switch(&indicator, &difference)?;
     let selected = profile.add_plain(&selected, &nonzero)?;
@@ -712,12 +716,12 @@ fn check_record(record: &MeasurementRecord, required_phases: &[&str]) {
 
 /// A small F257 ring: 128 scalar slots at stride two.
 fn small_sparse_parameters() -> BgvParameters {
-    BgvParameters::derive(8, 257, (40, 13), (41, 3), 2).expect("parameters")
+    BgvParameters::derive(8, 257, 1, (40, 13), (41, 3), 2).expect("parameters")
 }
 
 /// A small fully splitting ring: 7681 = 1 mod 512.
 fn small_batching_parameters() -> BgvParameters {
-    BgvParameters::derive(8, 7681, (40, 18), (41, 3), 2).expect("parameters")
+    BgvParameters::derive(8, 7681, 1, (40, 18), (41, 3), 2).expect("parameters")
 }
 
 #[test]
@@ -768,7 +772,7 @@ fn equal_workload_selects_both_branches_over_a_fully_splitting_modulus() {
 fn a_chain_too_short_for_the_workload_is_refused_and_recorded_as_a_failure() {
     // Six 40-bit primes cannot hold eight squarings: the noise budget runs out, the workload
     // returns the refusal and the record keeps the failure.
-    let parameters = BgvParameters::derive(8, 257, (40, 6), (41, 3), 2).expect("parameters");
+    let parameters = BgvParameters::derive(8, 257, 1, (40, 6), (41, 3), 2).expect("parameters");
     let result = run_workload(
         parameters,
         Configuration {
@@ -786,7 +790,7 @@ fn a_chain_too_short_for_the_workload_is_refused_and_recorded_as_a_failure() {
 #[test]
 fn the_admission_predicate_rejects_malformed_inputs() {
     let profile = BgvProfile::new(small_sparse_parameters()).expect("profile");
-    let encoding = SlotEncoding::new(&profile).expect("encoding");
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
     let admit = |slots: &[u64]| {
         admit_input(
             &encoding,
@@ -811,7 +815,8 @@ fn the_admission_predicate_rejects_malformed_inputs() {
     // A plaintext outside the scalar subalgebra is rejected before any range check.
     let mut coefficients = vec![0_u64; 256];
     coefficients[1] = 1;
-    let outside = Plaintext::new(&profile, coefficients).expect("plaintext");
+    let outside =
+        Plaintext::new(&profile, profile.master_plaintext(), coefficients).expect("plaintext");
     assert_eq!(
         admit_input(&encoding, &outside),
         Err(BgvError::OutsideScalarSubalgebra { index: 1 })
@@ -909,7 +914,7 @@ fn measured_tape(
 ) -> Result<(Vec<u64>, Vec<u64>), BgvError> {
     let phase = session.enter("profile");
     let profile = BgvProfile::new(parameters)?;
-    let encoding = SlotEncoding::new(&profile)?;
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext())?;
     let model = CostModel::new(&profile);
     let top = profile.top_level();
     let broadcast = encoding.broadcast_elements();
@@ -931,7 +936,7 @@ fn measured_tape(
     phase.complete();
 
     let phase = session.enter("client_input");
-    let slots = input_slots(false, profile.plaintext_modulus());
+    let slots = input_slots(false, profile.master_plaintext_modulus());
     let input = encoding.encode(&profile, &slots)?;
     let encrypted = public.encrypt(&profile, &input)?;
     session.record_bytes(
@@ -1060,7 +1065,7 @@ fn tape_instruction_profile_runs_every_opcode_and_records_one_phase_each() {
         (families::instruction_profile_affine(), 4),
     ] {
         let parameters =
-            BgvParameters::derive(8, 257, (40, primes), (41, 3), 2).expect("parameters");
+            BgvParameters::derive(8, 257, 1, (40, primes), (41, 3), 2).expect("parameters");
         let outcome = run_tape_profile(
             parameters,
             "bgv.tape_instruction_profile.small",
@@ -1074,7 +1079,7 @@ fn tape_instruction_profile_runs_every_opcode_and_records_one_phase_each() {
         assert!(outcome.outputs[2..].iter().all(|&slot| slot == 0));
     }
     // A chain too short for the select is refused and the record keeps the failure.
-    let parameters = BgvParameters::derive(8, 257, (40, 5), (41, 3), 2).expect("parameters");
+    let parameters = BgvParameters::derive(8, 257, 1, (40, 5), (41, 3), 2).expect("parameters");
     let result = run_tape_profile(
         parameters,
         "bgv.tape_instruction_profile.too_short",
@@ -1155,7 +1160,7 @@ fn measure_tape_instruction_profile_affine_candidate() {
 #[ignore = "full-size measurement: run under scripts/zk_resource_harness.py in a release build"]
 fn measure_batching_fully_split_n16() {
     run_full_size(
-        BgvParameters::derive(16, 786_433, (60, 25), (60, 3), 2).expect("parameters"),
+        BgvParameters::derive(16, 786_433, 1, (60, 25), (60, 3), 2).expect("parameters"),
         "bgv.equal_workload.batching_t786433.n16",
         "bgv-equal-workload-batching-t786433-n16",
         true,
@@ -1168,7 +1173,7 @@ fn measure_batching_fully_split_n16() {
 #[ignore = "full-size measurement: run under scripts/zk_resource_harness.py in a release build"]
 fn measure_f257_sparse_n14_cost_probe() {
     run_full_size(
-        BgvParameters::derive(14, 257, (50, 13), (60, 2), 2).expect("parameters"),
+        BgvParameters::derive(14, 257, 1, (50, 13), (60, 2), 2).expect("parameters"),
         "bgv.equal_workload.f257_sparse.n14_probe",
         "bgv-equal-workload-f257-sparse-n14-probe",
         true,

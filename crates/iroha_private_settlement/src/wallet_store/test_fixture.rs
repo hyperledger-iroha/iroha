@@ -28,7 +28,7 @@ use iroha_data_model::{
 };
 use std::{collections::BTreeMap, time::Duration};
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub intent: PrivateSettlementProofIntentV1,
     pub terms: Vec<PrivateSettlementBusinessTerms>,
     pub openings: Vec<PrivateSettlementRestrictedOpening>,
@@ -56,16 +56,16 @@ fn phase(
     manifest: &AtomicPrivateSettlementV1,
     authority: &PrivateSettlementCommitteeAuthorityV1,
     keys: &[KeyPair],
-    ordinal: usize,
+    ordinal: u8,
     kind: PrivateSettlementPhaseV1,
     prepared: Hash,
 ) -> PrivateSettlementPhaseCertificateV1 {
-    let leg = &manifest.legs[ordinal];
+    let leg = &manifest.legs[usize::from(ordinal)];
     let body = PrivateSettlementPhaseBodyV1 {
         network_id: manifest.network_id,
         bundle_id: manifest.bundle_id,
         manifest_digest: manifest.manifest_digest().unwrap(),
-        leg_ordinal: ordinal as u8,
+        leg_ordinal: ordinal,
         route: leg.route,
         delta_digest: leg.delta_digest,
         authority_digest: authority.digest().unwrap(),
@@ -75,14 +75,14 @@ fn phase(
         expiry_height: manifest.expiry_height,
     };
     PrivateSettlementPhaseCertificateV1 {
-        authority_catalog_index: ordinal as u8,
+        authority_catalog_index: ordinal,
         signers_bitmap: 0b0111,
         aggregate_signature: aggregate(keys, &body.signature_preimage().unwrap()),
         body,
     }
 }
 
-pub(crate) fn complete() -> Fixture {
+pub fn complete() -> Fixture {
     complete_for("private-wallet-all-leg-cleanup")
 }
 
@@ -106,14 +106,15 @@ pub(super) fn complete_for(label: &str) -> Fixture {
     manifest.authority_context_height = 1;
     manifest.reimbursement_leg_ordinal = 0;
     manifest.fee_intent_digest = manifest.computed_fee_intent_digest().unwrap();
-    for (index, original) in originals.iter_mut().enumerate() {
+    for (index, original) in (0_u8..).zip(originals.iter_mut()) {
+        let position = usize::from(index);
         let mut policy = original.sidecar.policy.body.clone();
         policy.activation_height = 1;
         original.sidecar.policy = PrivateSettlementAuditPolicyV1::new(policy).unwrap();
         let governance = &original.pool_governance.body;
         original.pool_governance = PrivateSettlementPoolGovernanceV1::from_restricted_mapping(
             governance.route,
-            PrivacyPoolIdV1::new([0x27 + index as u8; 32]),
+            PrivacyPoolIdV1::new([0x27 + index; 32]),
             governance.asset_definition_id.clone(),
             governance.asset_binding_salt,
             &original.sidecar.policy,
@@ -130,8 +131,8 @@ pub(super) fn complete_for(label: &str) -> Fixture {
         plaintext.policy_references = vec![original.pool_governance.governance_digest];
         // Every output has its own one-time view key across the whole bundle,
         // including the inactive cover output. Re-sign these exact keys below.
-        for (slot, output) in plaintext.outputs.iter_mut().enumerate() {
-            let view_secret = Zeroizing::new([0xA1 + (index * 3 + slot) as u8; 32]);
+        for (slot, output) in (0_u8..).zip(plaintext.outputs.iter_mut()) {
+            let view_secret = Zeroizing::new([0xA1 + (index * 3 + slot); 32]);
             output.recipient_view_key = ivm_private_recipient_public_key_v1(&view_secret).unwrap();
         }
         if index == 1 {
@@ -144,11 +145,11 @@ pub(super) fn complete_for(label: &str) -> Fixture {
             plaintext.outputs[2].note.dummy_domain =
                 Some(Hash::new(b"wallet fixture inactive sponsor"));
         }
-        let mut leg = original.sidecar.manifest.legs[index];
+        let mut leg = original.sidecar.manifest.legs[position];
         leg.pool_id = plaintext.pool_id;
         leg.asset_binding_commitment = plaintext.asset_binding_commitment().unwrap();
         leg.audit_policy_digest = original.sidecar.policy.policy_digest;
-        manifest.legs[index] = leg;
+        manifest.legs[position] = leg;
     }
     manifest.reimbursement_terms_commitment = originals[0]
         .plaintext
@@ -161,12 +162,13 @@ pub(super) fn complete_for(label: &str) -> Fixture {
     let mut authorized = Vec::new();
     let mut payloads = Vec::new();
     for (index, original) in originals.iter_mut().enumerate() {
+        let ordinal = u8::try_from(index).unwrap();
         let plaintext = &mut original.plaintext;
         plaintext.bundle_id = manifest.bundle_id;
         let spending = Zeroizing::new([[0x81; 32], [0x82; 32]]);
         let nullifiers = native::prepare_atomic_private_settlement_authorization_inputs_v1(
             &intent,
-            index as u8,
+            ordinal,
             &mut plaintext.inputs,
             &spending,
         )
@@ -180,14 +182,14 @@ pub(super) fn complete_for(label: &str) -> Fixture {
         let inputs = core::array::from_fn(|slot| {
             AtomicPrivateSettlementInputSecretV1::new(
                 spending[slot],
-                slot as u32,
-                &core::array::from_fn(|level| [0x40 + level as u8; 32]),
+                u32::try_from(slot).unwrap(),
+                &core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
             )
             .unwrap()
         });
         let owner = AtomicPrivateSettlementAuthorizedWalletLegV1::new(plaintext.clone(), inputs);
         let (_, inspected) =
-            native::encode_atomic_private_settlement_reservation_v1(&intent, index as u8, &owner)
+            native::encode_atomic_private_settlement_reservation_v1(&intent, ordinal, &owner)
                 .unwrap();
         terms.push(PrivateSettlementBusinessTerms {
             asset: plaintext.asset_definition_id.clone(),
@@ -216,7 +218,7 @@ pub(super) fn complete_for(label: &str) -> Fixture {
         statement.nullifiers = nullifiers.to_vec();
         statement.audit_plaintext_commitment = inspected.audit_plaintext_commitment;
         statement.audit_input_commitment = inspected.audit_input_commitment;
-        let mut rng = iroha_crypto::rng_from_seed_slice(&[0x50 + index as u8; 32]);
+        let mut rng = iroha_crypto::rng_from_seed_slice(&[0x50 + ordinal; 32]);
         statement.encrypted_outputs = native::prepare_atomic_private_settlement_outputs_v1(
             &mut rng,
             &manifest,
@@ -239,7 +241,7 @@ pub(super) fn complete_for(label: &str) -> Fixture {
             PrivateSettlementAuditAadV1 {
                 network_id: manifest.network_id,
                 bundle_id: manifest.bundle_id,
-                leg_ordinal: index as u8,
+                leg_ordinal: ordinal,
                 route: statement.route,
                 authority_digest: original.sidecar.authority.digest().unwrap(),
                 authority_context_height: manifest.authority_context_height,
@@ -329,9 +331,8 @@ pub(super) fn complete_for(label: &str) -> Fixture {
         .iter()
         .map(|original| original.sidecar.authority.clone())
         .collect::<Vec<_>>();
-    let prepares = originals
-        .iter()
-        .enumerate()
+    let prepare_certificates = (0_u8..)
+        .zip(&originals)
         .map(|(index, original)| {
             phase(
                 &manifest,
@@ -347,15 +348,14 @@ pub(super) fn complete_for(label: &str) -> Fixture {
         manifest.clone(),
         &authorities,
         payloads.iter().map(|p| p.delta.clone()).collect(),
-        prepares.clone(),
+        prepare_certificates.clone(),
     )
     .unwrap();
-    let legs = originals
-        .iter()
-        .enumerate()
+    let legs = (0_u8..)
+        .zip(&originals)
         .map(|(index, original)| PrivateSettlementLegReceiptV1 {
-            delta: payloads[index].delta.clone(),
-            prepare: prepares[index].clone(),
+            delta: payloads[usize::from(index)].delta.clone(),
+            prepare: prepare_certificates[usize::from(index)].clone(),
             commit: phase(
                 &manifest,
                 &original.sidecar.authority,
@@ -430,7 +430,7 @@ pub(super) fn complete_for(label: &str) -> Fixture {
     }
 }
 
-pub(crate) fn verified_abort(fixture: &Fixture, label: &str) -> VerifiedPrivateSettlementAbort {
+pub fn verified_abort(fixture: &Fixture, label: &str) -> VerifiedPrivateSettlementAbort {
     // Alternative fixture branch at the same independently pinned genesis, not an Abort
     // after a successful settlement. The synthetic outputs do not claim World execution.
     let mut chain = NativeFinalityFixture::start_with_genesis_extension(

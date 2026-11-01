@@ -514,12 +514,11 @@ where
         let take = remaining.min(buffer.len());
         seekable_provider_read_exact(provider, expected_state, &mut buffer[..take])?;
         hasher.update(&buffer[..take]);
-        for encoded in buffer[..take].chunks_exact(core::mem::size_of::<u64>()) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..take]
+            .as_chunks::<{ core::mem::size_of::<u64>() }>()
+            .0
+        {
+            let residue = u64::from_be_bytes(*encoded);
             if residue >= profile.moduli[limb_index] {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
             }

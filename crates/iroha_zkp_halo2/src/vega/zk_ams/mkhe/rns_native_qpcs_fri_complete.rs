@@ -1116,7 +1116,7 @@ impl RnsNativeClaimedNumericBindingAxesV1 {
         }
         let mut tails = [0_u8; RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1];
         let mut count = 0_usize;
-        let mut entries = tails.chunks_exact_mut(24);
+        let mut entries = tails.as_chunks_mut::<24>().0.iter_mut();
         for (a, product, opening_quotient) in numeric_tails {
             let entry = entries
                 .next()
@@ -1822,7 +1822,12 @@ fn schedule_digest_v1(
 ) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
     const ENTRY_BYTES: usize = 1 + 2 * DIGEST_BYTES_V1;
     let mut ordered_layers = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize * ENTRY_BYTES];
-    for (layer, entry) in ordered_layers.chunks_exact_mut(ENTRY_BYTES).enumerate() {
+    for (layer, entry) in ordered_layers
+        .as_chunks_mut::<ENTRY_BYTES>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         entry[0] =
             u8::try_from(layer).map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?;
         entry[1..1 + DIGEST_BYTES_V1].copy_from_slice(context.roots[layer].as_bytes());

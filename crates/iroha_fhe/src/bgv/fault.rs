@@ -28,6 +28,10 @@ pub enum FaultPoint {
     ThresholdBeforeShareRelease,
     /// Local subset conversion, after the first secret limb was weighted in place.
     ThresholdAfterFirstSubsetLimb,
+    /// Local opening, while the first ciphertext-share product and all inputs are live.
+    ThresholdOpeningAfterFirstProduct,
+    /// Local opening, after the complete coefficient-form inner product was formed.
+    ThresholdOpeningAfterInnerProduct,
 }
 
 #[cfg(any(test, feature = "bgv-test-fixtures"))]

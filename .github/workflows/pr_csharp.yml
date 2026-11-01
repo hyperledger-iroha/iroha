@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/pr_csharp.yml"
       - "ci/check_csharp_sdk_package_consumer.sh"
+      - "ci/check_privacy_csharp_sdk.sh"
+      - "ci/check_sorafs_pin_register_csharp_sdk.sh"
       - "csharp/**"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
@@ -32,6 +34,7 @@ on:
       - "scripts/package_csharp_native_artifacts.py"
       - "scripts/tests/check_native_sdk_artifact_test.py"
       - "scripts/tests/csharp_linux_arm_cross_handoff_test.py"
+      - "scripts/tests/csharp_test_runner_test.py"
       - "scripts/tests/package_csharp_native_artifacts_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -537,6 +540,10 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python3 -I scripts/tests/package_csharp_native_artifacts_test.py
 
+      - name: Verify pinned C# test runner dispatch
+        working-directory: ${{ github.workspace }}
+        run: python3 -I scripts/tests/csharp_test_runner_test.py
+
       - name: Assemble deterministic five-RID native package tree
         working-directory: ${{ github.workspace }}
         run: >-
@@ -552,7 +559,7 @@ jobs:
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
 
       - name: Test
-        run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
+        run: dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack
         run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages

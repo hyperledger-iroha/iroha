@@ -372,7 +372,9 @@ class Profile:
         return -(-self.capacity(self.top).bit_length() // 64)
 
     def ciphertext_bytes(self, level: int, components: int = 2) -> int:
-        return 36 + 8 * self.noise_bound_words() + 8 * components * (level + 1) * self.degree
+        """Current sole ciphertext frame: public prime-width packed residue limbs."""
+        packed = sum((self.degree * q.bit_length() + 7) // 8 for q in self.main[:level + 1])
+        return 36 + 8 * self.noise_bound_words() + components * packed
 
     def public_key_bytes(self) -> int:
         return 32 + 8 * 2 * (self.top + 1) * self.degree
@@ -1760,9 +1762,10 @@ EVALUATION_PHASES = (
 TAPE_SETUP_PHASES = ("profile", "key_generation", "client_input", "machine_setup", "open", "release")
 
 
-def read_run(run_dir: Path, manifest_sha256: str) -> tuple[dict, dict]:
+def read_run(run_dir: Path, manifest_sha256: str, *, expected_observation_contract, expected_delivery=None) -> tuple[dict, dict]:
     """Return measured block and host from one pinned, verified byte snapshot."""
-    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256)
+    verified = HARNESS.read_pinned_run(run_dir, manifest_sha256,
+        expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery)
     report = verified["report"]
     records = [entry["json"]["path"] for entry in report["records"]
                if Path(entry["json"]["path"]).name.startswith("bgv-")]
@@ -2533,6 +2536,10 @@ def summary_frame(runs: list, host: dict, root: Path = ROOT) -> dict:
         },
         "host": host,
         "measurement_notes": [
+            "The sixteen pinned October5 harness manifests listed in ARCHIVED_WORD_FRAME_RUNS recorded"
+            " the retired u64-residue byte layout. Their runs[*].sizes and measured encoding comparison"
+            " remain historical values tied to the recorded source/artifact; current candidate and"
+            " measured-profile size projections use the sole prime-width packed ciphertext layout.",
             "Single-threaded scalar reference path; no accelerated kernel exists for 50 to 60-bit moduli.",
             "Raw harness runs stay under the ignored dist/zk-resource-harness/; only this summary is tracked.",
             "The host ran other builds during the runs; the recorded system load is part of each run. Each"
@@ -2564,7 +2571,8 @@ def summary_frame(runs: list, host: dict, root: Path = ROOT) -> dict:
     }
 
 
-def build_summary(run_dirs: list, *, manifest_sha256: list[str]) -> dict:
+def build_summary(run_dirs: list, *, manifest_sha256: list[str],
+                  expected_observation_contract, expected_delivery=None) -> dict:
     """Build only from unique external pins and their verified run documents."""
     if not run_dirs or len(run_dirs) != len(manifest_sha256):
         raise ValueError("exactly one external manifest SHA-256 is required per run directory")
@@ -2576,7 +2584,8 @@ def build_summary(run_dirs: list, *, manifest_sha256: list[str]) -> dict:
     runs = []
     hosts = []
     for run_dir, pin in zip(run_dirs, manifest_sha256):
-        block, host = read_run(run_dir, pin)
+        block, host = read_run(run_dir, pin, expected_observation_contract=expected_observation_contract,
+                               expected_delivery=expected_delivery)
         runs.append(block)
         hosts.append(host)
     runs.sort(key=lambda run: (run["config"], run["run"]["run_directory"]))
@@ -2813,7 +2822,7 @@ def comparison_table(summary: dict) -> str:
     )
     for label, key in (
         ("Evaluation keys (canonical frames)", "evaluation_keys_frame_bytes"),
-        ("Input ciphertext (canonical frame)", "input_ciphertext_frame_bytes"),
+        ("Input ciphertext (recorded historical frame)", "input_ciphertext_frame_bytes"),
         ("Process peak resident memory", "peak_rss_bytes"),
     ):
         a, b = comparison[key]["f257_sparse"]["value"], comparison[key]["batching"]["value"]
@@ -3259,6 +3268,90 @@ def unclassified_numbers(value: Any, path: str = "") -> list:
     return problems
 
 
+# Historical harness evidence, not a supported production encoding. These exact
+# externally pinned run manifests precede ciphertext bitpacking. Preserve their
+# measured bytes unchanged and validate them only against the recorded source
+# and artifact identity. All current planning uses Profile.ciphertext_bytes.
+ARCHIVED_WORD_FRAME_RUNS = {'027d66e6bf8b70878e5152e23cab2350f0e08ed2c9fd30139ab2b1df4a211230': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'd900be62822b26ab3380de3c148f667fd01aeaee5f02dbd50b307deb327ad78d'},
+ '31686d16e395c53ae6e8499b7a62bfcd9009298569a6f90db9b16d86f69e6523': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '0519efd3805ec07120fe6fe1045c215d14204dd407895c57eddf7a2ab506bc22'},
+ '357596e4b6519f5f78156a2b81cb329f30a4635dd956ce4043b8873900a48505': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'eaf012d5473ff58fd664c9a2971034d198e3870e415cf145ab6ca839ae5d608d'},
+ '3bbbd4aff1339e4b3784caf14d4d3b29ea959c4ec69d5552e16f7dd553c770a8': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '13b6ad9733b1bdc125dbe87103757e309b4619ffa4b178d11dc0f6e6e6f336e7'},
+ '452a16fd5a36c7663f91ffeda9a9c1dee643513ade60b079808b15852e4bbf83': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'd900be62822b26ab3380de3c148f667fd01aeaee5f02dbd50b307deb327ad78d'},
+ '4b6b4a6c1993bdf8de2df59100b67aef6da5680c2676b19adc44bad4d7ea7cd7': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '432251e1b95570ebcd80621e2060c8cdfe7af5aa6bbf7b0585afa26259ce6364'},
+ '7294fceab556fdc0ed03ad8fb571dce12add1fabdfc8c95df769a0167ab451d1': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '13b6ad9733b1bdc125dbe87103757e309b4619ffa4b178d11dc0f6e6e6f336e7'},
+ '9105f31a3c668f42058ce63bd34678dcaf884615994eca35a522929b1de6295f': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'd900be62822b26ab3380de3c148f667fd01aeaee5f02dbd50b307deb327ad78d'},
+ '92fd9ebc3092a367b3ec57a277ae988854c5e9ae244c19551edf5495bf966bc6': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'a4cb07d09c1d2fda42d31cd1179d9fa42abfc76d7d6bf2d6fd984bf0f3d768aa'},
+ 'ab256acf247322759bbab4faf8155a1397f924526615ba536daeaae818911814': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'dc6e30cc84d5c243434d33157b81844f151f85f9effb435f00b1d4b93c87a65e'},
+ 'beac17ade3257c18dc35b68e25fe612b55b2b1a0c928128f8a8ad4a4fcf648be': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '0750ce506ff3a8927814c050e0bc46ee0083deb6403302ab6808c78366d3817f'},
+ 'ce7b8e5a973faf016ce9ec1b2256b3662df03789d1389035c9273c1405c40522': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'eaf012d5473ff58fd664c9a2971034d198e3870e415cf145ab6ca839ae5d608d'},
+ 'd2e570783591769c9a44601162e6d272eb1415b2f2fd72a2c683eed5414e2824': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'eaf012d5473ff58fd664c9a2971034d198e3870e415cf145ab6ca839ae5d608d'},
+ 'dd890ef22ebb1b7d0ccbe5fc260a03e02c8dc619e4368b77970f4aaf351d13f0': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': 'dcf0e484fc87359e4d53ef1ca5bc1f5221cebcddb88d5a76d1cb65f0424e7b33'},
+ 'f7b4c05107e197c97b4763763c79ec525eb6d50d826e78a3b25b469990955f76': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '13b6ad9733b1bdc125dbe87103757e309b4619ffa4b178d11dc0f6e6e6f336e7'},
+ 'fcfcece38d44e1a318070ad4fff9b5669ee973544fa7ab43bf9d278c524ef771': {'artifact': 'sha256:1beda899b346886e537453d1c927022f066883d114689724650a17ab07ade999',
+                                                                      'source_commit': 'd651d51715fd16881b34d75384c4b9ea95cbd229',
+                                                                      'source_dirty': True,
+                                                                      'source_dirty_digest': '9444ec5ffc460cd647c765c6a4f62de0d1956cfa3929addc75d19c9145c5826a'}}
+
+
+def recorded_ciphertext_bytes(run: dict, p: Profile, level: int) -> int:
+    """Validate a recorded frame size at its pinned historical/current format."""
+    identity = run["run"]
+    manifest = identity.get("manifest_sha256")
+    archived = ARCHIVED_WORD_FRAME_RUNS.get(manifest)
+    if archived is not None:
+        if any(identity.get(key) != expected for key, expected in archived.items()):
+            raise ValueError("archived frame source/artifact provenance differs")
+        return 36 + 8 * p.noise_bound_words() + 8 * 2 * (level + 1) * p.degree
+    if identity.get("artifact") in {item["artifact"] for item in ARCHIVED_WORD_FRAME_RUNS.values()}:
+        raise ValueError("unlisted archived word-frame manifest")
+    return p.ciphertext_bytes(level)
+
+
 def equal_workload_run_problems(run: dict, p: Profile) -> list:
     """Reported geometry, sizes, model values and operation counts of one equal-workload run."""
     problems = []
@@ -3280,12 +3373,17 @@ def equal_workload_run_problems(run: dict, p: Profile) -> list:
         problems.append(f"{config}: reported geometry differs from the model")
     sizes = {key: item["value"] for key, item in run["sizes"].items()}
     plan = plan_equal_workload(p)
+    try:
+        input_bytes = recorded_ciphertext_bytes(run, p, p.top)
+        output_bytes = recorded_ciphertext_bytes(run, p, plan.steps[-1]["level"])
+    except ValueError as error:
+        return problems + [f"{config}: {error}"]
     expected_sizes = {
         "public_key_frame": p.public_key_bytes(),
         "switching_key_frame": p.switching_key_bytes(),
         "evaluation_keys_frame": p.evaluation_key_bytes(p.broadcast_steps()),
-        "input_ciphertext_frame": p.ciphertext_bytes(p.top),
-        "output_ciphertext_frame": p.ciphertext_bytes(plan.steps[-1]["level"]),
+        "input_ciphertext_frame": input_bytes,
+        "output_ciphertext_frame": output_bytes,
     }
     if sizes != expected_sizes:
         problems.append(f"{config}: reported sizes differ from the model")
@@ -3377,10 +3475,15 @@ def tape_run_problems(run: dict, name: str, shape: tuple) -> list:
     if declared != expected_declared:
         problems.append(f"{config}: declared model values differ from the shape run")
     sizes = {key: item["value"] for key, item in run["sizes"].items()}
+    try:
+        input_bytes = recorded_ciphertext_bytes(run, p, p.top)
+        output_bytes = recorded_ciphertext_bytes(run, p, plan["level"])
+    except ValueError as error:
+        return problems + [f"{config}: {error}"]
     expected_sizes = {
         "evaluation_keys_frame": p.evaluation_key_bytes(p.broadcast_steps()),
-        "input_ciphertext_frame": p.ciphertext_bytes(p.top),
-        "output_ciphertext_frame": p.ciphertext_bytes(plan["level"]),
+        "input_ciphertext_frame": input_bytes,
+        "output_ciphertext_frame": output_bytes,
     }
     if sizes != expected_sizes:
         problems.append(f"{config}: reported sizes differ from the model")
@@ -3526,6 +3629,7 @@ def main(argv: list) -> int:
     parser.add_argument("--plan", action="store_true", help="print noise plans, tape plans and sanity numbers")
     parser.add_argument("--tables", action="store_true", help="print the Markdown tables the specifications embed")
     parser.add_argument("--summary", default=str(ROOT / SUMMARY_PATH), help="summary file to check")
+    HARNESS.observation_contract.add_consumer_arguments(parser,required=False)
     arguments = parser.parse_args(argv)
     if bool(arguments.build) != bool(arguments.manifest_sha256):
         parser.error("--build requires --manifest-sha256; pins are only valid with --build")
@@ -3541,8 +3645,10 @@ def main(argv: list) -> int:
     if arguments.build or arguments.rederive:
         if arguments.build:
             try:
+                expected_contract,expected_delivery=HARNESS.observation_contract.arguments(arguments)
                 summary = build_summary([Path(item) for item in arguments.build],
-                                        manifest_sha256=arguments.manifest_sha256)
+                                        manifest_sha256=arguments.manifest_sha256,
+                                        expected_observation_contract=expected_contract, expected_delivery=expected_delivery)
             except (HARNESS.HarnessRefusal, ValueError) as error:
                 print(str(error), file=sys.stderr)
                 return 1

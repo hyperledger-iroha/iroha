@@ -41,7 +41,7 @@ use iroha_data_model::{
 /// Native relation input supplied by the trusted runtime owner, never the guest.
 /// The enclosing signed invocation owns authority; this borrowed record only binds native semantics.
 #[derive(Clone, Copy)]
-pub(crate) struct BootstrapContext<'a> {
+pub struct BootstrapContext<'a> {
     /// The actual runtime network identity.
     pub(crate) network_id: &'a NetworkId,
     /// The actual committed genesis hash.
@@ -52,7 +52,7 @@ pub(crate) struct BootstrapContext<'a> {
 
 /// Original typed causes of this bounded consumer; none is a State verdict.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BootstrapError {
+pub enum BootstrapError {
     /// Invocation, signature or signed-declaration refusal.
     #[error(transparent)]
     Custody(#[from] CustodyError),
@@ -95,11 +95,11 @@ pub(crate) enum BootstrapError {
 }
 
 /// Reuse the canonical bootstrap digest as this operation's proof-free inputs.
-/// The enclosing ActionStatement separately binds operation, authority and path.
+/// The enclosing `ActionStatement` separately binds operation, authority and path.
 ///
 /// # Errors
 /// Returns the original table-validation or canonical-encoding failure.
-pub(crate) fn public_inputs_digest(
+pub fn public_inputs_digest(
     bootstrap: &PrivacyPgcAccountBootstrapV1,
 ) -> Result<ActionPublicInputsDigestV1, BootstrapError> {
     bootstrap.validate()?;

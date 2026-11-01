@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nexus import resource_process as native
 from nexus import resource_process_exit as terminal
 import private_settlement_process_observer as observer
@@ -23,6 +24,23 @@ import zk_resource_harness as harness
 
 
 class TerminalFixture:
+
+    def setUp(self):
+        super().setUp()
+        if hasattr(select, 'kqueue'):
+            return
+        # These are symbolic interface controls, not Darwin syscall evidence.
+        # Actual Darwin tests below retain their native platform requirement.
+        interface = SimpleNamespace(
+            KQ_FILTER_PROC=-1, KQ_EV_ADD=1, KQ_EV_ENABLE=2,
+            KQ_EV_CLEAR=4, KQ_EV_ERROR=8, KQ_NOTE_EXEC=16, KQ_NOTE_EXIT=32,
+            kqueue=mock.Mock(side_effect=AssertionError('fixture must supply its own queue')),
+            kevent=lambda ident, **fields: SimpleNamespace(ident=ident, **fields),
+        )
+        for patcher in (mock.patch(__name__ + '.select', interface),
+                        mock.patch.object(terminal, 'select', interface)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def fixture(self):
         identity={'pid':424242,'ppid':os.getpid(),'pgid':os.getpgrp(),'uid':os.geteuid(),
@@ -362,16 +380,24 @@ class HarnessTransitionTests(TerminalFixture, unittest.TestCase):
         usage=SimpleNamespace(ru_utime=1.0,ru_stime=0.0,ru_maxrss=1024)
         child=SimpleNamespace(pid=424242,returncode=None)
         reaps=[None,None] if timeout else [None,(reap_status,usage)]
+        clock=SimpleNamespace(now=1)
+        original_authenticate=monitor.authenticate
+        def authenticate_exit(error):
+            # Model a terminal fact captured before the deadline followed by a
+            # delayed original reap. Clock-call counts are not the contract.
+            result=original_authenticate(error)
+            if timeout:clock.now=20_000_000
+            return result
         with mock.patch.object(harness.observer,'native_reader',return_value=reader), \
              mock.patch.object(harness,'_owned_child_monitor',return_value=monitor), \
              mock.patch.object(harness.observer,'ProcessScope',return_value=scope), \
              mock.patch.object(harness.observer,'ResourceObservationJournal',return_value=journal), \
              mock.patch.object(harness.os,'getpgid',return_value=os.getpgrp()), \
              mock.patch.object(harness.time,'sleep'), \
-             mock.patch.object(harness.time,'monotonic_ns',side_effect=[1,2,20_000_000,21_000_000] if timeout else lambda:1), \
+             mock.patch.object(harness.time,'monotonic_ns',side_effect=lambda:clock.now), \
              mock.patch.object(harness,'_try_reap',side_effect=reaps), \
              mock.patch.object(harness,'_kill_own_child',return_value=(9,usage)) as deadline, \
-             mock.patch.object(monitor,'authenticate',wraps=monitor.authenticate) as authenticate:
+             mock.patch.object(monitor,'authenticate',side_effect=authenticate_exit) as authenticate:
             result=harness.observe_child(child,mock.Mock(),records,100,10 if timeout else 10000)
         return result,authenticate.call_count,deadline.call_count,records
 
@@ -421,7 +447,11 @@ class RegistrationFailureTests(unittest.TestCase):
                         result=harness.observe_child(child,mock.Mock(),mock.Mock(),100,10000)
                     scope.assert_not_called()
                     self.assertEqual(result['sampled'],{'state':'failed','reason':'native_monitor_registration_failed',
-                        'monitor_failure':{'operation':'owned_child_monitor_registration','errno':error_number}})
+                        'monitor_failure':{'operation':'owned_child_monitor_registration','errno':error_number},
+                        'observation_exceptions':[{'stage':'monitor_registration',
+                            'type':{errno.EACCES:'builtins.PermissionError',errno.EMFILE:'builtins.OSError',
+                                    errno.ESRCH:'builtins.ProcessLookupError'}[error_number],
+                            'errno':error_number}]})
                     self.assertEqual(result['exit'],{'kind':'exited','code':0})
                     reader.close.assert_called_once()
                     snapshot=SimpleNamespace(bindings={},raw={})

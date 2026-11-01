@@ -120,7 +120,7 @@ pub fn fake_sig(key: &PublicKey, msg: &[u8]) -> Signature {
     let mut out = [0u8; SIGNATURE_LEN];
     let mut kb = Vec::new();
     preimage::put_kb(&mut kb, key);
-    for (limb, chunk) in out.chunks_exact_mut(32).enumerate() {
+    for (limb, chunk) in out.as_chunks_mut::<32>().0.iter_mut().enumerate() {
         let limb = [u8::try_from(limb).unwrap_or(u8::MAX)];
         // Keep the canonical key encoding and hash the same stream without a limb buffer.
         chunk.copy_from_slice(&sha256_chunks(&[TAG_FAKE_SIG, &limb, &kb, msg]));
@@ -797,7 +797,7 @@ mod tests {
                     .map(|i| u8::try_from((i * 37) % 256).unwrap())
                     .collect();
                 let mut expected = [0_u8; SIGNATURE_LEN];
-                for (limb, chunk) in expected.chunks_exact_mut(32).enumerate() {
+                for (limb, chunk) in expected.as_chunks_mut::<32>().0.iter_mut().enumerate() {
                     // The original concatenated stream is the byte oracle, not a second verifier.
                     let mut input = b"sumeragi/fake-sig".to_vec();
                     input.push(u8::try_from(limb).unwrap());

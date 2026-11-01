@@ -822,7 +822,40 @@
       "acceptance": [
         "Test full-size proofs with small guest handles across input/heap/literal paths, ownership cleanup on all faults, duplicate and oversized attachments, later-action rollback and recoverable pending outcomes. Local timeout or memory shortage never becomes a different certified transaction result."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 17c3a4046549b76cd4e36d08c217a70a86f11578 plus the recorded uncommitted candidate changes. Adopted output-measurement ownership distinguishes an actual counting-sink byte overflow from local allocation, encoding and unwind refusals; sticky refusals prevent artifact export across rollback. The captured i4-combined-03 command passed all 52 intended tests exactly once, with zero failures or ignored tests: seven new output-measurement controls, two original host boundary/layout controls, 41 trigger DTO controls, the predecessor key-layout roundtrip and the scheduler regression. Test time was 14.66 seconds (147.831496 seconds including Cargo). All 11,412 captured source inputs and Git controls held. The fresh maintained compiler-input audit covers all 5,405 canonical inputs in that capture, 5,930 external reported inputs and zero omissions; five canonical generated outputs were independently rehashed. Exact names, source identity, reviewed test-only repair transition and input coverage are independently checked by dist/zk-delivery-handoff/candidates/i4-core-native-independent-audit-2026-11-01/combined03-exact52-and-input-audit.json (SHA-256 2f251b6d1ea46e835113d2b66e5dbb3abd4ff12e700025e8d1ca61f3f3758872). The original eleven-error compile failure and subsequent 51-pass/one-failure run remain preserved by that audit; only the independently corrected predecessor key-layout test oracle changed between the latter run and this pass. Production codec and hash behavior were unchanged. This advances a bounded I.4 component only. Complete signed-byte/acquisition/decode/verification/retained-queue/storage/gas charging, original input-custody full-size behavior, later-action rollback and finalized PendingAction results remain unfinished local implementation and validation work. No native result for staged source-pricing or final-result successors is claimed, and these obligations are not platform-only TODOs.",
+        "paths": [
+          "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "crates/iroha_core/src/smartcontracts/ivm/host/output_measurement_tests.rs",
+          "crates/iroha_core/src/smartcontracts/ivm/host/core_codec_and_contract_tests.rs",
+          "crates/ivm/docs/syscalls.md",
+          "crates/iroha_core/src/state/upgrade_checkpoint/adoption/tests.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_core --lib --message-format=json-render-diagnostics -- --test-threads=1 smartcontracts::ivm::host::output_measurement_tests:: smartcontracts::ivm::host::tests::committed_output_budget_accepts_the_exact_limit_and_refuses_one_over smartcontracts::ivm::host::tests::host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout smartcontracts::isi::triggers::set::dto_tests:: state::upgrade_checkpoint::adoption::tests::records_roundtrip_through_their_predecessor_encoding sumeragi::driver::tests::sched::repeated_commit_failures_preserve_backoff_and_reset_after_success",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Charge signed bytes, attachment acquisition, decode/verification scratch, retained queue memory, storage and gas under one deterministic budget; correlate each PendingAction with its actual finalized result.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/smartcontracts/ivm/host.rs now retains original local measurement refusals and admits only actual counting-sink overflow as a deterministic limit. Complete source-bound charging across signed bytes/acquisition/retained queue/storage/gas and final PendingAction result correlation remain unfinished; no finalized receipt is added by this slice."
+          },
+          {
+            "clause": "Test full-size proofs with small guest handles across input/heap/literal paths, ownership cleanup on all faults, duplicate and oversized attachments, later-action rollback and recoverable pending outcomes.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/smartcontracts/ivm/host/output_measurement_tests.rs passes all seven focused refusal, rollback, unwind and exact-cap controls; crates/iroha_core/src/smartcontracts/ivm/host/core_codec_and_contract_tests.rs retains the passing original exact-boundary and ambient-layout controls. Full-size input/heap/literal custody, duplicate/oversized attachment coverage and later-action/finalized-result recovery are not completed by these checks."
+          },
+          {
+            "clause": "Local timeout or memory shortage never becomes a different certified transaction result.",
+            "state": "partial",
+            "proof": "crates/iroha_core/src/smartcontracts/ivm/host/output_measurement_tests.rs checks that allocation/encoder/unwind refusals cannot be relabeled as certified output overflow and cannot export artifacts; these controls pass in the captured successful Core run. The complete end-to-end timeout/memory, charging and finalized-result obligations remain open."
+          }
+        ]
+      }
     },
     {
       "id": "I.5",
@@ -930,7 +963,7 @@
       ],
       "status": "implemented",
       "evidence": {
-        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification.",
+        "source": "6043d97c4003da4bbb3fc772d9a0548b3f456b16 plus the current narrow Norito feature classification/test repair and value-identical FHE inventory canonical-format repair. All cited commands ran on this arm64 Mac on 2026-10-11; C2 Rust owners were unchanged. Current report and retained logs/fingerprints: dist/zk-delivery-handoff/reports/C.2-reassessment-2026-10-11.md and review-c2/. Source fingerprint recheck confirms all57 non-inventory pinned files unchanged; the inventory was reconciled and the current Python3.12 guard passes787 files/23primitives. This is component implementation evidence, not a full rebuilt-workspace qualification. Hardware closure on 2026-10-22: HEAD 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the current required-AVX2 test, under Intel i7-11800H WSL2; the 50-file arithmetic source inventory and exact execution scope are recorded in docs/validation/intel_avx2.md. Prior consumer and ownership checks retain their historical source scope.",
         "paths": [
           "crates/iroha_fhe/Cargo.toml",
           "crates/iroha_fhe/src/lib.rs",
@@ -948,7 +981,8 @@
           "specs/fhe_ownership_inventory.json",
           "scripts/check_cargo_feature_hygiene.py",
           "pytests/scripts/check_cargo_feature_hygiene_test.py",
-          "Cargo.lock"
+          "Cargo.lock",
+          "docs/validation/intel_avx2.md"
         ],
         "commands": [
           {
@@ -1008,17 +1042,16 @@
             "outcome": "passed"
           },
           {
-            "command": "bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log'",
-            "outcome": "not_run",
-            "platform_todo": {
-              "platform": "physical_x86_64",
-              "reason": "Required physical AVX2 instruction execution is unavailable on this arm64 development Mac. Existing direct kernel and CPU/lane-model comparison tests are runnable; the exact command requires an x86-64 checkout and rejects the informative AVX2-unavailable skip. Lane-model/QEMU evidence is not physical execution.",
-              "todo_site": {
-                "path": "crates/iroha_fhe/src/accel/avx2.rs",
-                "marker": "TODO: record a run of these kernels on a physical x86-64 CPU."
-              },
-              "owner": "V.4"
-            }
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors",
+            "outcome": "passed"
           },
           {
             "command": "/opt/homebrew/bin/python3.12 -I -S scripts/check_fhe_ownership_map.py",
@@ -1038,8 +1071,8 @@
           },
           {
             "clause": "Scalar, Metal, NEON/SIMD and CUDA paths used by supported targets match canonical vectors; provide deterministic fallback and retain independent mathematical test oracles.",
-            "state": "partial",
-            "proof": "Local checks are complete: CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 163 unit+9 canonical-vector+7 clearing+4 wide-RNS-vector tests. crates/iroha_fhe/tests/canonical_vectors.rs independently re-derives pinned results with num-bigint, crates/iroha_fhe/tests/clearing.rs observes success/error/unwind erasure, and crates/iroha_fhe/tests/rns_chain_vectors.rs exercises 50-62-bit exact arithmetic. crates/iroha_fhe/src/accel.rs asserts NEON on this host and dispatches ineligible inputs to scalar. The entire remaining gap is the physical_x86_64 platform TODO command bash -o pipefail -c 'cd \"$(git rev-parse --show-toplevel)\" && test \"$(uname -m)\" = x86_64 && mkdir -p dist/zk-delivery-handoff/review-c2 && CARGO_TARGET_DIR=target/zk-c2-physical-avx2 CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib accel:: -- --nocapture 2>&1 | tee dist/zk-delivery-handoff/review-c2/physical-avx2.log && ! rg -q \"AVX2 is not available on this CPU\" dist/zk-delivery-handoff/review-c2/physical-avx2.log' at crates/iroha_fhe/src/accel/avx2.rs; it is not_run and owned by V.4, not passed or hardware qualification. crates/iroha_fhe/src/ntt.rs records that no word-modulus Metal/CUDA kernel exists or is selected; the earlier general C2 ruling does not require nonexistent paths, and new accelerator paths must reopen evidence."
+            "state": "met",
+            "proof": "The earlier arm64 scalar/NEON results and independent references remain recorded in crates/iroha_fhe/tests/canonical_vectors.rs, crates/iroha_fhe/tests/clearing.rs, crates/iroha_fhe/tests/rns_chain_vectors.rs and crates/iroha_fhe/src/accel.rs. The deferred AVX2 command is superseded by scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture (1 passed): it requires native x86-64 and selected AVX2 before running every direct instruction kernel comparison, so lane-model or scalar-only success cannot qualify. scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and scripts/cargo_fast.sh --target-slot intel-platform --stable-local-metadata --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors each pass 164 unit, 9 canonical-vector, 7 clearing and 4 RNS-chain tests on the Intel i7-11800H. docs/validation/intel_avx2.md pins the source inventory, native instruction coverage, WSL2 virtualization and the scalar-only negative control. This closes the actual AVX2 instruction-execution gap, not bare-metal OS, named Xeon performance, whole-node or release qualification. crates/iroha_fhe/src/accel/avx2.rs links the actual execution evidence; crates/iroha_fhe/src/ntt.rs still records no word-modulus Metal/CUDA kernel exists or is selected. New accelerator paths must reopen evidence. Historical arm64 commands were CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors and CARGO_TARGET_DIR=target/zk-resume-review CARGO_INCREMENTAL=0 cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors."
           }
         ]
       }
@@ -1062,7 +1095,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "3cec95295cd863a4cd278dc5114bcd9243bee2b4 plus the external integration working tree, assessed 2026-10-12. Independent current C.3 Python suite 40 passed; strict E.1 pinned consumer reconstructed all 16 original historical runs and produced the byte-identical tracked summary. No fresh estimator, BGV Rust suite or performance campaign. Exact scope and hashes are in reports/C.3-pinned-consumer-independent-review-2026-10-12.json. Candidate profiles remain unqualified; proved normalizing lowering, physical maximum-shape noise/work and full erasure qualification are substantive unfinished work, not physical-platform TODOs.",
+        "source": "b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus independently reviewed 2026-10-29 components. One canonical packed BSGS/Horner routing owner reuses transformed residue allocations, skips only diagonals and branches absent from immutable public class support, and derives a separate exact shape for every output and bounded state bank. Supported private zeros retain the same schedule. All sixteen layers still execute twenty A*B+C products. Prepared coefficients occupy18,923,392 bytes, shared public layout372,704 bytes on this64-bit host, and the private preparation row10,756 bytes. Public shape objects and variable Natural capacities, compiler state, keys, backend scratch and allocator overhead are outside those payload scopes. Native routing18, RAM-LFE241, full FHE301, two maximum N16384/q6 affine tapes, complete N128/q26 bounded tape, and non-test FHE/crypto checks pass with source/index/HEAD held. The bounded fixture independently checks all outputs, actual centered-CRT noise and exact counts:17 routes,11844 Galois,1100922 plaintext products, 1101240 ciphertext additions,1 plaintext addition,320 ciphertext products and1425 modulus switches. The small ring is an unqualified arithmetic fixture. An independently reproduced public search for actual N65536/q22 reaches14 layers and no fifteenth transition within the existing support/transfer/switch-boundary family; this is not an impossibility result for other algorithms or tighter justified bounds. No production parameters are selected. Client/key/committed execution proofs, circuit privacy, genuine refresh, whole resources and operation-v1 delivery remain local implementation work. Exact evidence and retained failures: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-11-native-result.json; search: dist/zk-delivery-handoff/candidates/fhe-algorithm-resume-2026-10-29/bounded-current-public-search/manifest.json.",
         "paths": [
           "crates/iroha_fhe/src/bgv/mod.rs",
           "crates/iroha_fhe/src/bgv/profile.rs",
@@ -1092,7 +1125,20 @@
           "specs/ram_lfe_encryption_replacement.md",
           "specs/ram_lfe_plaintext_packing.md",
           "specs/ram_lfe_execution_proof.md",
-          "scripts/zk_resource_harness.py"
+          "scripts/zk_resource_harness.py",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine_maximum_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/normal_form.rs",
+          "crates/iroha_crypto/src/ram_lfe/specification_tests.rs",
+          "crates/iroha_crypto/src/lib_tests.rs",
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_fhe/src/bgv/routing.rs",
+          "crates/iroha_fhe/src/ntt.rs",
+          "crates/iroha_fhe/README.md",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
+          "crates/iroha_fhe/src/bgv/routing/layout.rs"
         ],
         "commands": [
           {
@@ -1130,6 +1176,94 @@
           {
             "command": "python3.12 dist/zk-delivery-handoff/scripts/reproduce_c3_pinned_consumer_2026_10_12.py",
             "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe --no-default-features --test bgv_threshold --test bgv_threshold_opening --test bgv_clearing -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --exact --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -B scripts/check_fhe_ownership_map.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -m unittest discover -s scripts/tests -p check_fhe_ownership_map_test.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe --lib bgv::routing::tests -- --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_ -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::routing:: -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
           }
         ],
         "acceptance": [
@@ -1151,7 +1285,7 @@
           {
             "clause": "Use independent arithmetic/decryption vectors.",
             "state": "met",
-            "proof": "crates/iroha_fhe/tests/bgv_vectors.rs consumes independently written Python known-answer vectors and a separate Rust big-integer oracle, including arithmetic/decryption and key/ciphertext codecs. python3 -I -S crates/iroha_fhe/tests/vectors/bgv_reference.py --check passes on the current vector fixture. Restored October5 Rust/vector runs remain historical evidence; no fresh full Rust integration run or third-party BGV-library parity is claimed."
+            "proof": "crates/iroha_fhe/tests/bgv_vectors.rs consumes independently written Python known-answer vectors and a separate Rust big-integer oracle. The 2026-10-29 full default FHE suite passes all seven BGV vector tests, nine canonical vectors and four RNS chain vector tests; all182 scalar library tests also pass. New crates/iroha_fhe/src/bgv/routing.rs checks genuine encrypted dense/zero/adversarial maps and all16384 source/destination placements, with exact public operation/noise counts. No third-party BGV-library parity is claimed."
           },
           {
             "clause": "No depth-16/+10 heuristic, exact-lift BFV, plaintext fallback or unmeasured flooding constants establish security.",
@@ -1161,12 +1295,12 @@
           {
             "clause": "Verify secret erasure on success, error and unwind.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/tests/bgv_clearing.rs has heap-release observations for success, entropy/error returns, custody encoding and unwind. Restored C.3 confirmation reports killed heap-owner mutations but surviving R23 when the rns_chain stack-digit Zeroizing wrapper was removed. Current crates/iroha_fhe/src/rns_chain.rs retains that wrapper and the current heap-only test still does not observe it. Fresh Rust erasure tests/mutations were not rerun for this reassessment, and full stack/transient erasure remains unproved."
+            "proof": "crates/iroha_fhe/tests/bgv_clearing.rs passes15 current heap-owner clearing tests; tests/clearing.rs passes7 shared-arithmetic clearing controls. New routing owner tests cover drop/error/unwind and redacted formatting. The current complete FHE suite passes. Historical reports found the rns_chain stack-digit Zeroizing mutation was not observed by the heap probe; that wrapper remains, but a fresh mutation campaign and complete stack/register/transient erasure audit remain unfinished."
           },
           {
             "clause": "Derive and measure physical noise/work bounds for the proved normalizing lowering under one fixed public schedule per class profile padded to the class maximum; logical rank bounds ciphertext multiplication depth, not physical noise, and instruction-by-instruction evaluation of the existing candidates does not hold the maximum shape.",
-            "state": "unmet",
-            "proof": "specs/ram_lfe_encryption_replacement.md explicitly requires the proved normalizing lowering and fixed padded public schedule; current tests/support machine is an instruction-by-instruction diagnostic plus cleartext normalization, not the encrypted normalized construction. specs/fhe_bgv_cost_summary.json still projects38 main primes against affine6 and52 against bounded22 for counterexample families. Neither physical maximum-shape noise/work, encrypted equivalence, circuit privacy/sanitization, genuine refresh nor their complete proofs are supplied. Existing bounded.selects uses unloaded zero registers and affine.state_and_registers omits MulPlain, so those fixtures cannot establish exhaustive encrypted worst-case coverage. Increasing chains or recasting logical rank as physical noise would not close the clause."
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs now implements the complete fixed64-row affine arithmetic schedule with exact public transfer planning, including key switches and masks. crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs verifies encrypted equivalence and closed noise recurrence, including the long-MulPlain counterexample. specs/ram_lfe_encryption_replacement.md preserves the historical instruction-by-instruction counterexamples and unqualified estimates. crates/iroha_crypto/src/ram_lfe/bgv_affine_maximum_tests.rs passes two actualN16384/q6 maximum-length fixtures and exact physical-noise checks. Complete maximum-work/resource bounds, normalization/input/execution proof, circuit-privacy sanitization and nonlinear/refresh construction remain unfinished; logical rank is not a physical-noise bound."
           }
         ]
       }
@@ -1187,7 +1321,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus the adopted reviewed seven-file C.4 subset-additive implementation and the later two-line ownership-inventory tooling classification. Current native results are recorded in dist/zk-delivery-handoff/reports/current-c4-warm-native-root-2026-10-25/result.json: both exact Cargo commands exited 0; the 62-file scoped before/after source maps are identical (iroha_fhe, measurement sources, manifests, Cargo.lock and ownership inventory), not a whole-workspace capture. All seven tested providers match reviewed manifest ece6c07bbeba0d83709de419beaf4c19e439db510a8b2ad9a46ce70b808e1378. The later inventory edit only describes and classifies .oss-scanner/Dockerfile as tooling; the first checker run failed on that unlisted comment and the exact rerun passed 1040 files/23 primitives. No complete threshold service, malicious-security, C.3 parameter or release qualification is claimed.",
+        "source": "b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus reviewed local-opening candidate and source-surface repair, assessed 2026-10-29. Sealed candidate manifest 972f45a7c1bac8fb53043e9e38270223df3cc8df110530bf6e659cfa2daa8cd8; independent review 824130e5abd17876a33e964697bfa82320c5a683afe7ae9a768b452922b6adc6. Current scoped native evidence lives in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29: full default suite263 unit/integration and5 compile-fail docs passed with6 explicit measurement ignores; scalar threshold/opening/clearing32 passed. First run failed2 flat-directory source checks; recursive scanning and a new opening API allowlist repair them, final7 surface tests passed. Source maps remained equal during each run. This is local trusted-dealer arithmetic, not distributed malicious-secure opening or release qualification. Combined FHE ownership reconciliation preserves prior owners/scan scope, passes1088-file/23-primitive checker and retains117 passing checker-regression tests; vendor drift was separately classified.",
         "paths": [
           "crates/iroha_fhe/src/bgv/fault.rs",
           "crates/iroha_fhe/src/bgv/fixtures.rs",
@@ -1195,7 +1329,11 @@
           "crates/iroha_fhe/tests/bgv_clearing.rs",
           "crates/iroha_fhe/tests/bgv_surface.rs",
           "crates/iroha_fhe/tests/bgv_threshold.rs",
-          "specs/fhe_ownership_inventory.json"
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_fhe/src/bgv/threshold/opening.rs",
+          "crates/iroha_fhe/src/bgv/cipher.rs",
+          "crates/iroha_fhe/tests/bgv_threshold_opening.rs",
+          "crates/iroha_fhe/README.md"
         ],
         "commands": [
           {
@@ -1213,23 +1351,47 @@
           {
             "command": "cd /Users/takemiyamakoto/devstuff/iroha && /opt/homebrew/bin/python3.12 -B scripts/check_fhe_ownership_map.py",
             "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe --no-default-features --test bgv_threshold --test bgv_threshold_opening --test bgv_clearing -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_fhe --test bgv_surface -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -B scripts/check_fhe_ownership_map.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -m unittest discover -s scripts/tests -p check_fhe_ownership_map_test.py",
+            "outcome": "passed"
           }
         ],
         "acceptance": [
           {
             "clause": "Implement explicit participant threshold, key generation, epoch custody and verifiable decryption shares.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/src/bgv/threshold.rs implements an explicit participant threshold/context, offline trusted-dealer key sharing, canonical borrowed subsets and consuming in-place additive conversion. Current default and scalar tests pass with the scoped source held. Caller-supplied profile/key-context/epoch metadata is not authenticated key registration or epoch authority. Actual key delivery and authenticated durable custody ownership, malicious-secure VSS/DKG, qualified public/evaluation-key relations, masked ciphertext-bound verifiable decryption shares and application integration remain unimplemented and can be developed on this Mac. C.3 candidate profiles/noise/security remain unqualified."
+            "proof": "crates/iroha_fhe/src/bgv/threshold.rs retains explicit thresholds, trusted-dealer sharing and consuming subset conversion; crates/iroha_fhe/src/bgv/threshold/opening.rs now consumes the exact ordered weighted subset and computes c0+sum(c1*lambda_i*s_i), reusing existing NTT and the centered decode factored in crates/iroha_fhe/src/bgv/cipher.rs. It never reconstructs or exports a full key or partial decryption. Public context metadata is not authenticated key/epoch authority. Distributed masked contributions, ciphertext-bound proofs, VSS/DKG, authenticated custody, authorization and durable replay remain implementation work on this Mac; C.3 parameters remain unqualified."
           },
           {
             "clause": "Reject malformed, replayed, wrong-epoch and wrong-ciphertext shares; insufficient participation fails and the declared threshold succeeds.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/tests/bgv_threshold.rs passes all 13 tests in each current default/scalar run: malformed, duplicate, unordered, unknown, insufficient and wrong-context/profile/epoch/instance metadata reject before mutation, admitted subsets agree with an independent main/special-limb field oracle, and refusal returns the unchanged original owner for corrected-metadata retry. These are local selection/interpolation controls, not threshold ciphertext decryption or proof of a malicious share. Ciphertext/request/purpose binding, authenticated epoch transitions, durable replay/disclosure/retry state, genuine declared-threshold decryption success and wrong-ciphertext rejection remain ordinary implementation work on this Mac."
+            "proof": "crates/iroha_fhe/tests/bgv_threshold_opening.rs passes genuine encrypted opening for every threshold1..5, admitted subset/superset and all three levels, plus relinearized products, against direct decryption and independent scalar convolution/centered CRT. Wrong profile, context, instance, selection, ordering, multiplicity, count, component/word geometry and budget refuse before allocation, returning unchanged owners. These are local preflight checks, not proof of malicious contributions: registered-key/ciphertext/request/purpose binding, durable replay and authoritative epoch transitions remain open."
           },
           {
             "clause": "Verify secret lifecycle and malicious-party cases without borrowing consensus quorum rules.",
             "state": "partial",
-            "proof": "crates/iroha_fhe/tests/bgv_clearing.rs passes 14 tests in each current default/scalar run; crates/iroha_fhe/tests/bgv_surface.rs passes 5 tests. The complete current default iroha_fhe run passes 255 unit/integration tests plus 5 compile-fail docs, with 6 measurement tests ignored; the scalar threshold/clearing run passes 27 tests. Controls cover non-Clone opacity, zero additional allocation with an allocator counterfactual, exact buffer custody, original-owner recovery, clearing on success/refusal/drop and injected mid-conversion unwind. specs/fhe_ownership_inventory.json passes the repaired 1040-file/23-primitive census; the initial failure and exact successful rerun are both recorded. The forged-share control expressly shows metadata checks are not algebraic proofs. Malicious contributions/complaints, custody across restarts, reusable retry-secure opening, original-pool physical funding and broader secret stack/register/side-channel review remain open; available implementation/security work is not a platform exception. Thresholds are explicit and never derived from consensus quorums."
+            "proof": "crates/iroha_fhe/tests/bgv_clearing.rs passes15 controls with default and scalar kernels, including exact allocation counts, success, owning refusal and two opening unwind stages. crates/iroha_fhe/tests/bgv_surface.rs checks all nested source modules and the restricted opening API. The budget covers retained full shares plus3 current-level polynomial buffers, not whole-process/stack/register memory. Malicious-party security, physical custody, complete erasure and network recovery remain open; explicit thresholds never borrow consensus quorums."
           }
         ]
       }
@@ -1252,7 +1414,94 @@
       "acceptance": [
         "Genuine full-size eight-party replay, malicious collective keys/shares, full source/proof pairs and resource controls satisfy operation-v1. Preserve independent test-only oracles and distinguish them from production. Choose a PCS within unchanged whole-proof bounds; fixture proofs and arbitrary key uploads cannot substitute."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus reviewed seven-file routing/native40 source union, assessed2026-10-29. C5 seal4c9b7a9bf302a475a261a36557f7a65666092319ae684bfe08d4df844ebce332 and independent review879b85ee8ae5cfed858f4e504bfa66061293023aba28f06924b4caad50c6f4c3 are retained under dist/zk-delivery-handoff. All9 focused adapter tests and one full40-modulus N131072 diagnostic pass with source/Git controls held; full-degree test46.62 seconds in debug under concurrent load, not performance qualification. No native source/proof authority or security qualification is supplied. The reviewed Core resource-owner continuation (manifest8c2984a306117787b63e4c3e6ddc76e9f994b8884624732160dcb2a992fb73bb) adds a consuming production constructor retaining canonical proof-workspace/storage ledgers through writes, seal, repeatable reads and returned chunks. Ten new resource and16existing budget controls pass. Core minimal-feature lifecycle12 and actual 316239888-byte source roundtrip1 pass, and its non-test library configuration compiles. Both minimal and default Core lifecycle suites pass 12 tests, and both non-test library configurations compile. The initial default build failed on the external Fastpq non-GPU transform owner; its owner repaired the type and the retry passes. The actual 316239888-byte write/seal/read test also passes. The component report preserves the failed attempt and successful retry. Starting resources authenticates no key/source/Phase23 correspondence and cannot retrospectively account for prior work; no OriginalBudgetedSource implementation or proof availability is introduced.",
+        "paths": [
+          "crates/iroha_fhe/src/ntt.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials_tests.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_tree.rs",
+          "specs/crypto/zk_ams_rns_native_wire_v1.md",
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_core_zk/src/rns_native_source_v1.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources.rs",
+          "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources_tests.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe --no-default-features --lib -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_zkp_halo2 --lib vega::zk_ams::mkhe::rns_native_relation_polynomials::tests:: -- --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_zkp_halo2 --lib vega::zk_ams::mkhe::rns_native_relation_polynomials::tests::maximum_native40_geometry_matches_independent_sparse_convolution -- --exact --ignored --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_zkp_halo2 --lib vega::zk_ams::mkhe::rns_native_source_resources::tests:: -- --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_zkp_halo2 --lib resource_budget -- --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_core_zk --no-default-features --lib rns_native_source_v1::tests:: -- --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_core_zk --no-default-features --lib rns_native_source_v1::tests::canonical_source_round_trip_uses_real_consuming_begin_and_seal -- --exact --ignored --test-threads=1 --nocapture",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_core_zk --no-default-features --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_core_zk --lib rns_native_source_v1::tests:: -- --test-threads=1 --nocapture",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_core_zk --lib rns_native_source_v1 -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_core_zk --lib",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Migrate shared production RNS/NTT/key-switch arithmetic while retaining distinct BGV/MKHE wire and collective semantics; complete native40 source correspondence, bounded qPCS, production composite verifier, phases II/III and account provisioning.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/src/ntt.rs adds allocation-free cyclic product composition over the canonical transform and FixedModulus arithmetic. The native40 adapter in crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials.rs constructs the ordinary product and masked quotient under the original cumulative resource ledger, with independent test-only reference checks. It remains cfg(test): actual K/R/E/M/C and original S source integration, production source correspondence, bounded qPCS, composite authority, phases II/III and provisioning are unfinished. These are implementation/security work, not platform-only TODOs."
+          },
+          {
+            "clause": "Genuine full-size eight-party replay, malicious collective keys/shares, full source/proof pairs and resource controls satisfy operation-v1.",
+            "state": "partial",
+            "proof": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_relation_polynomials_tests.rs passes9 focused tests plus an explicit full-degree test across all40 moduli at N131072 (one repetition coordinate), matching independent integer convolution and quotient evaluations. Original-ledger exact/one-under limits, cumulative work, substitutions and clearing refusals pass. This is component arithmetic; genuine eight-party collective/source/proof operation-v1 and full resource qualification remain unimplemented. crates/iroha_core_zk/src/rns_native_source_v1.rs adds actual encrypted source storage under one consuming resource session, with cross-session chunk rejection, pair fail-stop handling and actual full-layout roundtrip. crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_source_resources_tests.rs verifies earlier work/I/O preservation and original ledger identity. These storage controls do not establish cryptographic source correspondence or complete proof-session continuity."
+          },
+          {
+            "clause": "Preserve independent test-only oracles and distinguish them from production.",
+            "state": "met",
+            "proof": "specs/fhe_ownership_inventory.json preserves original test-only MKHE transforms and classifies the new adapter as test-only while retaining shared production arithmetic solely in iroha_fhe. The full ownership checker passes1091 files/23 primitives. crates/iroha_fhe/src/ntt.rs and the native40 adapter tests compare against independent schoolbook/integer convolution; no oracle is promoted to protocol authority."
+          },
+          {
+            "clause": "Choose a PCS within unchanged whole-proof bounds; fixture proofs and arbitrary key uploads cannot substitute.",
+            "state": "partial",
+            "proof": "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_qpcs_tree.rs retains the unchanged whole-proof work refusal: its initial-tree dense-hash work exceeds the cap even before source production. No PCS has been newly selected or qualified. The new arithmetic adapter neither accepts a fixture proof as authority nor enables arbitrary key uploads; source-binding and production verifier refusals remain unchanged."
+          }
+        ]
+      }
     },
     {
       "id": "C.6",
@@ -1396,7 +1645,123 @@
       "acceptance": [
         "No ciphertext multiplication/refresh enters this class. One fixed public schedule per class profile padded to the class maximum conceals the committed program within the specified leakage bound. Test class/policy/key/context substitutions, private-witness mutations and actual equality-free affine workloads; a binding-only receipt is not execution. Verify maximum-shape normalization, semantic equivalence and physical noise bounds independently of logical rank."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "b2baae5187d320b92a66f902fa861d2f9a6bc8bb plus independently reviewed 2026-10-29 component changes. Canonical affine normal forms execute through the sole shared BSGS/Horner routing owner with per-request input, lanes and constant one. Exact public input/output masks use l1=4494 without changing hidden-count mask behavior. Nine affine controls and both actual 256-instruction N16384/q6 fixtures pass, with independent scalar outputs and centered-CRT physical-noise checks. This is complete generic affine arithmetic, not proved or authorized operation-v1 delivery. Exact source pins, commands, failures and independent reviews are retained in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-4-result.json, wave-5-result.json, wave-6-result.json and wave-7-native-result.json. These are component checks, not cryptographic or complete delivery qualification.",
+        "paths": [
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine_maximum_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/normal_form.rs",
+          "crates/iroha_crypto/src/ram_lfe/specification_tests.rs",
+          "specs/ram_lfe_execution_proof.md",
+          "specs/ram_lfe_encryption_replacement.md",
+          "crates/iroha_crypto/src/lib_tests.rs",
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_fhe/src/bgv/routing.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
+          "crates/iroha_fhe/src/bgv/encoding.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::specification_tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --exact --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "failed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 8 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -B scripts/check_fhe_ownership_map.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "python3 -m unittest discover -s scripts/tests -p check_fhe_ownership_map_test.py",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --no-default-features --features rand --lib ram_lfe::bgv_affine::tests -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_ -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement affine.v1 with LoadInput, LoadState, StoreState, LoadConst, Add, AddPlain, SubPlain, MulPlain and Output; prove hidden tape, initialization, all transitions, encodings, bounds and ordered outputs under the full authoritative policy.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs consumes canonical reduced affine forms through the sole shared packed-routing owner, with 64 padded output slots. Hidden tape/policy, initialization, transitions and encodings still require an execution proof."
+          },
+          {
+            "clause": "Implement and prove the normalizing lowering preserves these semantics.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs checks normalized encrypted evaluation against the reference, including256-instruction multiplication chains, dense64 inputs, initialized lanes, state aliasing and ordered output snapshots. A cryptographic proof binding normalization to the committed tape remains unfinished."
+          },
+          {
+            "clause": "No ciphertext multiplication/refresh enters this class.",
+            "state": "met",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs rejects non-affine forms and evaluates only plaintext products, Galois transforms and additions; it contains no ciphertext multiplication or refresh. The class refusal and encrypted reference controls pass."
+          },
+          {
+            "clause": "One fixed public schedule per class profile padded to the class maximum conceals the committed program within the specified leakage bound.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs uses public BSGS/Horner routing independent of private coefficients and output count, including padded zero rows. Tested profiles perform 22 Galois applications and 130 plaintext products. Per-request original inputs are masked before adding current initialized lanes and one. This establishes neither circuit privacy nor the full timing/access leakage bound; sanitizer and proofs remain open."
+          },
+          {
+            "clause": "Test class/policy/key/context substitutions, private-witness mutations and actual equality-free affine workloads; a binding-only receipt is not execution.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs checks wrong class/profile/input shape/missing keys and genuine equality-free affine workloads. Authoritative policy/context/key relations, private execution-witness mutation proofs and operation delivery remain unfinished; production refusal remains."
+          },
+          {
+            "clause": "Verify maximum-shape normalization, semantic equivalence and physical noise bounds independently of logical rank.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_affine_tests.rs independently checks the complete public recurrence including exact public mask norms. crates/iroha_crypto/src/ram_lfe/bgv_affine_maximum_tests.rs passes both 256-instruction N16384/q6 fixtures, all 128 decoded slots and independent centered-CRT physical noise. Hidden-program normalization proof, sanitizer, selected security profile and complete resources remain unqualified."
+          }
+        ]
+      }
     },
     {
       "id": "R.4",
@@ -2578,7 +2943,7 @@
           {
             "clause": "Test interruption before submission, after ambiguous submission and after irreversible progress; resume checks committed outcome before retrying and never fabricates cross-transaction atomicity.",
             "state": "partial",
-            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs retains Linux/Windows file-store and Windows ACL execution TODOs. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
+            "proof": "The historical python3 dist/zk-delivery-handoff/scripts/run_sdk_original_decode_review.py passed 63 actual SDK tests at its source-pinned checkpoint, including interruption/status recovery, ambiguous admission, irreversible progress, cancellation races and six original-reader/writer regressions. Its zero/tight budgets preserved original kind after retirement and an unrelated equal-budget scope, unchanged stored/signed custody and successful same-byte retry; malformed data still yielded corruption/rejection and signed preflight refusal sent no HTTP. The earlier lower version 11 and model wire 10 tests passed at their recorded checkpoints, including bare-decode versus late checked-writer controls. None is promoted to the changed current dependency candidate, which still needs actual SDK/consumer qualification. Prior scratch CAS/refund mutants and 39 workflow guard tests are historical evidence. Non-Rust families and external multisignature signing remain open. crates/iroha/src/workflow/storage.rs now asserts actual native private custody for every journal, CAS lock and runner lease; its Linux storage suite passes. Full Windows SDK storage/engine execution remains pending separately from the native filesystem controls; specs/windows_intel_completion_goals.md tracks that outcome. Wider CoreZK/IVM/governance proof-reader error erasure and remaining wallet-original paths are separate F.2/F.4/product dependencies; neither a wallet component result nor this historical Rust workflow result qualifies them."
           }
         ]
       }
@@ -2903,7 +3268,50 @@
       "acceptance": [
         "Resolve fold/rate omissions; test transcript and relation/constraint mutations, honest/adversarial corpora, bounded allocation, device-failure cleanup and actual maximum shapes. CPU/ARM/Metal/CUDA semantic proof/root parity uses fixed randomness where defined; algebraic sums alone do not establish Fiat-Shamir or hiding."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 17c3a4046549b76cd4e36d08c217a70a86f11578 plus the recorded uncommitted candidate changes. The adopted semantic-context slice replaces duplicate FixedAir readers in inner/outer DEEP context binding with the existing sealed semantic view, preserving framing, transcript suffix, all previous guards and q77 relation code. The source candidate is dist/zk-delivery-handoff/candidates/b2-context-semantic-view-v2-2026-11-01/manifest.json (SHA-256 e83eacfbac845a4f0803db3c162a7f227bca927f8f38ff4325b5e437a1bca0d9). Its new tagged identity/statement-drift and malformed-schema controls pass in the captured c8-extended-unit-01 run (265 passed, four ignored), audited by dist/zk-delivery-handoff/candidates/c8-extended-native-independent-audit-2026-11-01/unit01.json (SHA-256 183a73f47259941f244b42109e90f99de1b6bd456aa32e5a2bfe14beccf193be). The ignored genuine committed-q77 test is not covered by that pass. That run precedes two later borrowed-kernel edits and the test-only transpose repair; separate current strict all-target validation passes in c8-extended-clippy-03, with source/Git captures held. Generic polynomial/prepared evaluation, engine-wide ownership, fold/rate/security accounting, commitment error, hiding, and full hardware proof/root parity remain unfinished local implementation and qualification work. Unadopted prepared-polynomial work is not claimed here. A separate genuine committed q77 release proof and independent verification now pass, with changed identity, statement context and corrupted proof-byte rejections: dist/zk-delivery-handoff/candidates/c8-extended-native-independent-audit-2026-11-01/b2-committed-q77-release01.json (SHA-256 f209b4bc59d951867a2a33cc25a05880429137727da04a73c55c92dae85e6ee8). The exact test passed once with no ignored tests; 161.18 seconds is observed test duration, not an application proving-time cap. Source/Git captures hold for all 4,729 inputs. A fresh release compiler-input audit records all 1,599 canonical inputs in that capture with zero omissions, independently checked by dist/zk-delivery-handoff/candidates/c8-extended-native-independent-audit-2026-11-01/b2-release-compiler-audit01.json (SHA-256 55fd05537984e84ba279b2a0f44f392b3260448de46b1f428398093a9ae81a13). This proof uses the sealed existing q77 relation; it is not a complete committed proof for the new C.8 RNS/key-switch/bootstrap relation, a performance/RSS qualification, or a soundness/hiding reduction.",
+        "paths": [
+          "crates/fastpq_prover/src/backend/deep_binding.rs",
+          "crates/fastpq_prover/src/backend/deep_binding/tests.rs",
+          "crates/fastpq_prover/src/backend/deep_prover.rs",
+          "crates/fastpq_prover/src/backend/air/q77.rs",
+          "crates/fastpq_prover/src/backend/deep_relation.rs",
+          "specs/fastpq_deep_protocol_contract.md",
+          "crates/fastpq_prover/src/backend/air/q77_tests.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p fastpq_prover --lib --message-format=json-render-diagnostics -- gadgets::rns_chain_air:: q77 deep_coefficient_commitment deep_striped_merkle field::tests compact_sha3::retirement_tests deep_binding::tests deep_node_cache::tests merkle_multiproof::tests public_transfer_statement:: state_commitment_prototypes:: goldilocks_transform:: keccak_batch::paired_permutation_tests:: --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- clippy --locked -p fastpq_prover --all-targets --keep-going --message-format=json-render-diagnostics -- -D warnings",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked --release -p fastpq_prover --lib backend::air::q77::tests::complete_q77_proof_under_interface_limits_with_observed_bounded_verification --message-format=json-render-diagnostics -- --exact --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Generalize actual field/AIR/composition-DEEP/masking/commitment-multiproof/FRI/transcript-grinding/allocation/acceleration code into one owner; unify checked work-security and FRI theorem accounting including commitment error.",
+            "state": "partial",
+            "proof": "crates/fastpq_prover/src/backend/deep_binding.rs now consumes the existing sealed semantic view in both transcript contexts, retaining original admission and framing. specs/fastpq_deep_protocol_contract.md records this bounded migration; complete common engine ownership and checked security/FRI/commitment-error accounting remain local unfinished work."
+          },
+          {
+            "clause": "Resolve fold/rate omissions; test transcript and relation/constraint mutations, honest/adversarial corpora, bounded allocation, device-failure cleanup and actual maximum shapes.",
+            "state": "partial",
+            "proof": "crates/fastpq_prover/src/backend/deep_binding/tests.rs adds actual tagged identity/statement-drift and malformed-schema controls; the recorded c8-extended-unit-01 command passes them. Complete fold/rate, adversarial corpus, allocation/device cleanup and maximum-shape qualification are not established. crates/fastpq_prover/src/backend/air/q77_tests.rs separately passes its genuine committed q77 proof with bounded independent verification and identity, statement-context and corrupted-byte controls. It does not establish all adversarial/maximum-shape obligations or any complete new RNS committed proof."
+          },
+          {
+            "clause": "CPU/ARM/Metal/CUDA semantic proof/root parity uses fixed randomness where defined; algebraic sums alone do not establish Fiat-Shamir or hiding.",
+            "state": "partial",
+            "proof": "specs/fastpq_deep_protocol_contract.md retains unresolved generic engine and security obligations. Current CPU component checks do not establish complete CPU/ARM/Metal/CUDA proof/root parity, Fiat-Shamir security or hiding."
+          }
+        ]
+      }
     },
     {
       "id": "B.3",
@@ -3347,7 +3755,157 @@
       "acceptance": [
         "Prove class membership, all tape/slot/register/memory/depth/output limits, integer/RNS carries/quotients/rounding/key switching, malformed private transitions and class substitution. Extend operation-v1 immediately, including opening and any available threshold mode; refresh remains independent later work. Demonstrate maximum-shape correctness and physical noise/work bounds; logical rank bounds ciphertext multiplication depth, not physical noise."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. One class-bound compiler and generic stored-bank/product-bank/scatter kernel executes bounded 21-to-60 geometry and Refresh 4-to-3 geometry. Closed packed-input/scalar ownership, exact-plan identity, stage/target tags and ordered state owners precede private arithmetic. Original packed input is retained by move; initialization/projection omit only justified masks. Every exact bootstrap source is readmitted against one actual shared preparation under separate stage, aggregate work, payload and typed-metadata caps. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. Bounded numeric controls remain 357 bootstraps, 320 products, 17 routes, 3667 drops, arithmetic/word totals 16638609472/2059780864, final bound 1094861248 and supplied preparation payload 36238176 retained/36838178 peak bytes. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Full-size encrypted application execution, construction-specific circular/KDM security, external input/key/committed execution proofs, circuit privacy, the complete authenticated input envelope under the original 1 MiB cap, original application resource limits, authenticated distributed opening and operation-v1 delivery remain unfinished work that can continue on this Mac. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt.",
+        "paths": [
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs",
+          "crates/iroha_fhe/src/bgv/routing.rs",
+          "crates/iroha_crypto/src/ram_lfe/clearing.rs",
+          "crates/iroha_crypto/src/ram_lfe/normal_form.rs",
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs",
+          "crates/iroha_fhe/src/bgv/encoding.rs",
+          "crates/iroha_fhe/src/bgv/routing/layout.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_affine.rs",
+          "crates/iroha_fhe/src/bgv/bootstrap.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_bounded_refresh_tests.rs",
+          "crates/iroha_fhe/src/bgv/metadata.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_ -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::routing:: -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib local_arithmetic_delegates_preserve_exact_context_words_and_constructibility -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::specification_tests:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_input::tests::full_size_q23_honest_level_zero_input_fits_raw_frame_and_preserves_packing -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement bounded.v1 with all eleven tape instructions including Mul and complete SelectEqZero lowering, actual operand depth/equality exponentiation/select multiplication and a derived leveled noise/work plan.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs and bgv_nonlinear_compiler.rs retain all eleven instructions and fixed 16-layer bounded geometry with 320 products/17 routes. One generic scatter kernel also executes Refresh target-bank geometry without a parallel evaluator. Closed scalar ownership, exact source/class/plan/stage/key admission precede request-memory/private-row reads. Refreshed bounded evaluation uses 357 physical bootstraps and 21 exact descriptors under one shared core. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. External input/key/committed execution proofs, circuit privacy, selected security and operation-v1 qualification remain unfinished."
+          },
+          {
+            "clause": "Prove the normalizing lowering preserves bounded semantics under one fixed public schedule per class profile padded to the class maximum.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs checks canonical tape execution, every gate and Select intermediate, all 257 conditions and original rank limits. bgv_nonlinear_tests.rs additionally executes a complete256-instruction encrypted fixture under the fixed 16-layer schedule and compares independent scalar/reference outputs. Cryptographic binding to the committed tape remains unfinished."
+          },
+          {
+            "clause": "Prove class membership, all tape/slot/register/memory/depth/output limits, integer/RNS carries/quotients/rounding/key switching, malformed private transitions and class substitution.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler_tests.rs tests original rank17 rejection even after cancellation, class/budget/profile refusals and fixed maximum shape. Private integer/RNS/execution proof relations and class-substitution proof controls remain unfinished."
+          },
+          {
+            "clause": "Extend operation-v1 immediately, including opening and any available threshold mode; refresh remains independent later work.",
+            "state": "unmet",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs supplies generic encrypted arithmetic; authenticated client/key/execution relations, authorized opening and native/SDK operation-v1 delivery remain unimplemented. No existing production refusal was removed."
+          },
+          {
+            "clause": "Demonstrate maximum-shape correctness and physical noise/work bounds; logical rank bounds ciphertext multiplication depth, not physical noise.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_tests.rs and bgv_nonlinear_bounded_refresh_tests.rs retain the maximum 256-instruction/rank 16 no-refresh and two refreshed fixtures, with all 64 outputs and independent full-coefficient phases. The refreshed controls remain 357 bootstraps, 17 routes, 3667 drops,arithmetic/word totals 16638609472/2059780864 and final bound 1094861248; 21 exact sources share preparation payload 36238176 retained/36838178 compiler-row peak bytes, with typed metadata separate. The three complete no-refresh/refreshed/independent bounded encrypted fixtures passed in target-bank-bounded-unrefreshed-01, target-bank-bounded-refreshed-01 and target-bank-bounded-independent-01 JSON/logs under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; these are captured wave29 pre-test-cleanup results. Small-ring arithmetic does not qualify full-size encrypted execution, selected security, complete imported authentication, application resources or delivery."
+          }
+        ]
+      }
     },
     {
       "id": "R.9",
@@ -3363,7 +3921,89 @@
       "acceptance": [
         "Demonstrate repeated refresh and correct output/noise on maximum supported workloads with opening, class-substitution and malformed-witness controls. Adding encrypted zero is not bootstrap. Failed cost projections trigger construction work; refresh stays mandatory and supported-class threshold tests extend with this slice. Prove physical noise bounds and fixed public refresh scheduling without exposing the private logical refresh schedule; logical rank bounds ciphertext multiplication depth, not physical noise."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. All 319 mixed ordinals execute a fixed 2,871-step schedule: Initial, seven Square repetitions and Final. One product updates its target bank; untouched state/base ciphertext owners move unchanged. Three honest routing-level zero banks and one initial base bootstrap replace four initial refreshes. Closed zero-future/embedded-one invariants remove Unit without changing canonical rank ten, class membership or descriptor hash. The diagnostic schedule has 2,872 bootstraps/routes, 2,871 products and 28,714 drops. N128 retains 640 exact descriptors, arithmetic/word totals 73234637760/5767183744, final bound 1094861248 and supplied preparation payload 24003088 retained/24855250 peak; N256 uses two exact descriptors and final bound 2181235200. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Full-size encrypted application execution, construction-specific circular/KDM security, external input/key/committed execution proofs, circuit privacy, the complete authenticated input envelope under the original 1 MiB cap, original application resource limits, authenticated distributed opening and operation-v1 delivery remain unfinished work that can continue on this Mac. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt.",
+        "paths": [
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_r9_tests.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs",
+          "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh_tests.rs",
+          "crates/iroha_fhe/src/bgv/bootstrap.rs",
+          "specs/ram_lfe_execution_proof.md"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement refresh.v1 with genuine noise-reducing refresh plus its complete hidden-program proof, limits between refreshes and total refresh count; extend the same native/SDK path.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs and bgv_nonlinear.rs implement all 319 mixed boundaries with 2,871 physical steps and 2,872 genuine bootstraps. Logical Refresh remains a semantic copy; physical refresh targets the one updated bank. Canonical rank ten, class admission and original limits are unchanged. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Hidden-program proof, authenticated opening, threshold/application integration and native/SDK operation-v1 delivery remain unfinished."
+          },
+          {
+            "clause": "Prove the normalizing lowering preserves refresh semantics under one fixed public schedule per class profile padded to the class maximum.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh_tests.rs compares all 257 Select values, mixed kinds, aliases, saved lanes, snapshots, dead gates and maximum boundaries. Its independent closed-domain tests justify Unit removal and provide invalid future/base-one counterexamples. The generic evaluator has no arbitrary-state constructor or runtime plaintext inspection. Cryptographic binding to the committed private tape remains unfinished; clear arithmetic equivalence is not that proof."
+          },
+          {
+            "clause": "Demonstrate repeated refresh and correct output/noise on maximum supported workloads with opening, class-substitution and malformed-witness controls.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_r9_tests.rs retains the complete N128 maximum319, nonzero-cross-banks and 64-distinct-snapshots tapes. Independent full-ring phases observe all banks at gates 127/128/255/256/318 plus final ordered output. The N128/N256 first-gate drivers test conditions 256 and 0 with unequal 17/99 branches, 10 bootstraps and 36 all-bank phase checks per case. An additional N256 full cross-bank fixture covers scalar stride, targets one/two and projection through canonical evaluate. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Full-size selected-security/output-noise qualification, opening and malformed cryptographic-witness/class-substitution proof controls remain unfinished."
+          },
+          {
+            "clause": "Adding encrypted zero is not bootstrap.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs calls the same genuine dense encrypted-secret bootstrap as bounded evaluation, through closed scalar owners and one selected-bank executor. Honest public zero state construction does not replace any scheduled bootstrap. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Construction-specific KDM/circular security remains unqualified."
+          },
+          {
+            "clause": "Failed cost projections trigger construction work; refresh stays mandatory and supported-class threshold tests extend with this slice.",
+            "state": "partial",
+            "proof": "specs/ram_lfe_execution_proof.md preserves mandatory Refresh, canonical rank ten and original security/resource obligations. Target-only updates and uniform Unit removal reduce the fixed schedule to 2,872 bootstrap calls and 2,871 products. N128 uses 640 exact descriptors under one core and derivesarithmetic/word totals 73234637760/5767183744; its original final bound 1094861248 remains. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Public planning does not establish full-size encrypted execution or application qualification. Threshold/application integration and original resource qualification remain unmet."
+          },
+          {
+            "clause": "Prove physical noise bounds and fixed public refresh scheduling without exposing the private logical refresh schedule; logical rank bounds ciphertext multiplication depth, not physical noise.",
+            "state": "partial",
+            "proof": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs schedules only by public class/gate/stage geometry. Untouched state/base owners move unchanged; exact mixed source shapes and physical bounds are propagated without widening, and repeated Square maps require complete source-array equality. The complete N128 maximum319, nonzero-cross-banks and stored-alias64snapshots tapes passed in target-bank-full-r9-01.json/log; the complete N256 cross-bank tape passed separately in target-bank-full-r9-d2-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Both N128/N256 first-gate drivers also passed conditions 256 and zero with unequal branches 17/99, ten bootstraps and 36 independent all-bank phase checks per case. These are captured wave29 pre-test-cleanup results. Canonical rank remains the conservative class weight rather than a physical noise guarantee. Hidden-tape/execution proof, selected full-size security and complete resources remain open."
+          }
+        ]
+      }
     },
     {
       "id": "R.10",
@@ -3399,7 +4039,239 @@
       "acceptance": [
         "Actual repeated-refresh decryption/noise vectors and maximum proof/work/custody tests validate one shared owner. Consumers keep distinct program/job statements; this task has no RAM-LFE application or threshold dependency."
       ],
-      "status": "planned"
+      "status": "in_progress",
+      "evidence": {
+        "source": "Observed checkout: optimizations HEAD 07329b3080e605a21dc8882b0b7568ee4bb04bdc plus the recorded uncommitted candidate changes. Current source and native evidence: captured optimizations wave29 component results in dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/wave-29-native-summary.json (SHA-256 f8f5ace9c16ca10071d80b8652343583d69b3154c3e6576d541b5d254bf3a5cc), independently audited by dist/zk-delivery-handoff/candidates/wave29-native-independent-audit-2026-10-31/manifest.json (SHA-256 ed6ec2a17230c6114c828f49f32a248756131fd9ed7358f9b854cbcbedefaa31). Every result retains its exact source/Git capture and JSON/log hashes. These are the test bytes before subsequent test-only lint cleanup; later test changes require separate validation and the two strict lint failures remain preserved. The canonical bootstrap requires an explicit Ring or ScalarSlots message space. Closed scalar owners originate only from checked plaintext seeds and remain typed through ordinary arithmetic, routing and refresh; no general-local/frame promotion exists. ScalarSlots selects coefficient bank zero while retaining full dense encrypted-secret homomorphic decryption, strict carry, upper-digit DAG and inverse reconstruction. General refresh rejects scalar-only plans before private reads. Exact-source admission shares one immutable core; every descriptor and physical call remains charged. Captured ordinary FHE tests passed 375 with 14 ignored, and RAM-LFE passed 275 with ten ignored (target-bank-fhe-01.json/log and target-bank-ram-lfe-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/). The three bounded runs, two first-gate drivers, complete N128 three-tape and N256 cross-bank runs, current public640 planner and production compilation also passed in their separate captured wave29 receipts. Later test-only lint cleanup is not validated by these older test bytes. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext. Historical Ring evidence retains its original pins. C.8 has no RAM-LFE application or threshold dependency; consumers keep separate program/job statements. The separate unselected N65536 bootstrap/repeat diagnostic now passes under the C.8 test scope; complete encrypted application qualification remains open. No production profile is qualified. Construction-specific circular/KDM security, external source/key/RNS/rounding/key-switch/committed execution proofs, circuit privacy and complete shared-owner proof/work/custody qualification remain unfinished local work. Authenticated distributed opening, complete imported input envelopes and operation-v1 delivery remain separate consumer obligations. Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt. The separate genuine N65536/F257/E3 q23 ScalarSlots diagnostic passes honest key generation, encryption, two bootstraps and one intervening square/repeated-refresh cycle: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.json (SHA-256 45b835d463ae60d117f83d99f7774242b4f715eddfa7d5a33bbc176c921e059d) and matching .log (SHA-256 2cb0b64265396b877b3bec74f4b2023dcee6ff51ef3e5b852d75dc4ff84834a7), independently audited by dist/zk-delivery-handoff/candidates/fullsize-scalar-native-independent-audit-2026-11-01/review.json (SHA-256 3794556f0f43914f5a6ecc84df937575ca2b9493030b1064b9cd8a8a6732eff2). Source/Git captures hold on this aarch64 macOS run. Seven checkpoints verify every 65,536-coefficient message/phase bound using production inner-product words and independent BigInt CRT against independent inverse-Vandermonde messages. Direct secret convolution checks only 135 fixed coordinates per actual limb, including all 128 scalar-stride locations and seven off-stride/boundary probes. Exact finite setup caps and each one-under refusal execute before genuine key generation. The fixture intentionally opens phases; BigInt buffers are not guaranteed cleared. This is neither complete N65536 RAM-LFE application execution nor selected security, proof, production custody, original application resource or cross-platform qualification. Observed checkout: optimizations HEAD 17c3a4046549b76cd4e36d08c217a70a86f11578 plus the recorded uncommitted candidate changes. The canonical fastpq_prover rns_chain_air module now shares one integer gate engine, strict-half comparator, geometry and clearing witness owner between arbitrary-chain congruent scale-down and centered hybrid-RNS extension. It reuses ordinary iroha_fhe parameter admission and native output owners; endpoint binding remains a public diagnostic wrapper, separate from the private row arithmetic. The renamed predecessor paths are retired without aliases. Current component validation passes 14 library and 15 integration tests in c8-extended-unit-02 and c8-extended-integration-02, plus dependency-inclusive strict all-target c8-extended-clippy-03. The current union compiler-input audit verifies all 1,602 canonical inputs are in both 4,729-file source captures with zero omissions; these separate receipts and their exact hashes are recorded under dist/zk-delivery-handoff/candidates/c8-extended-native-independent-audit-2026-11-01/ (unit02.json, integration02.json, clippy03.json and current-union-compiler-audit02.json). Every native invocation retains source/Git controls; failed earlier compile/lint attempts remain preserved. Controls exercise full-u64 reduction, exact high-carry constraints, strict-half boundaries, arbitrary ordered bases, repeated/composite targets, statement substitutions, finite caps, clearing on error/unwind and actual BGV digit-source parity. This is a component relation and diagnostic-reference scope: complete key-switch NTT/product/key authentication, bootstrap composition, committed execution, circuit privacy and construction-specific security remain unfinished local work. No application or release qualification follows from these tests.",
+        "paths": [
+          "crates/iroha_fhe/src/bgv/relative_trace.rs",
+          "crates/iroha_fhe/src/bgv/mod.rs",
+          "crates/iroha_fhe/README.md",
+          "specs/fhe_ownership_inventory.json",
+          "crates/iroha_fhe/src/prime_power.rs",
+          "crates/iroha_fhe/src/bgv/profile.rs",
+          "crates/iroha_fhe/src/bgv/encoding.rs",
+          "crates/iroha_fhe/tests/bgv_prime_precision.rs",
+          "crates/iroha_fhe/src/bgv/coefficient_slots.rs",
+          "crates/iroha_fhe/src/bgv/upper_digits.rs",
+          "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs",
+          "crates/iroha_fhe/src/bgv/upper_digits/planning.rs",
+          "crates/iroha_fhe/src/bgv/bootstrap.rs",
+          "crates/iroha_fhe/tests/bgv_local_bootstrap.rs",
+          "crates/iroha_fhe/tests/bgv_f257_bootstrap_plan.rs",
+          "crates/iroha_fhe/src/bgv/cipher.rs",
+          "crates/iroha_fhe/src/bgv/cost.rs",
+          "crates/iroha_fhe/tests/bgv_ciphertext_packing.rs",
+          "scripts/fhe_bgv_cost_model.py",
+          "crates/iroha_fhe/tests/bgv_streaming_bootstrap.rs",
+          "crates/iroha_fhe/tests/bgv_f257_q23_bootstrap_plan.rs",
+          "crates/iroha_fhe/src/accel.rs",
+          "crates/iroha_fhe/src/bgv/eval.rs",
+          "crates/iroha_fhe/src/bgv/plan.rs",
+          "crates/iroha_fhe/src/bgv/poly.rs",
+          "crates/iroha_fhe/tests/bgv_f257_local_bootstrap.rs",
+          "crates/iroha_fhe/src/bgv/metadata.rs",
+          "crates/iroha_fhe/src/natural.rs",
+          "crates/iroha_fhe/tests/bgv_f257_scalar_local_bootstrap.rs",
+          "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+          "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+          "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+          "crates/fastpq_prover/tests/rns_chain_air.rs",
+          "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs",
+          "crates/fastpq_prover/tests/rns_chain_air/bgv_digit_cases.rs",
+          "crates/iroha_fhe/src/rns.rs"
+        ],
+        "commands": [
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::relative_trace::tests -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::relative_trace::tests::n14_q6_full_geometry_roundtrip_with_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib prime_power::tests -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib prime_power::tests::exhaustive_f257_squared_upper_digit_extraction -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_fhe --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_prime_precision -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_affine::maximum_tests::current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::coefficient_slots::tests -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::upper_digits::tests -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv::bootstrap::tests -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_local_bootstrap -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_bootstrap_plan -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib bgv:: -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_ciphertext_packing -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_streaming_bootstrap -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_q23_bootstrap_plan -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --lib public_scalar -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --no-default-features --lib public_scalar -- --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_local_bootstrap -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib current_n14_q6_maximum_affine_tapes_match_scalar_reference_and_physical_noise -- --ignored --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_bootstrap_plan -- --ignored --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_q23_bootstrap_plan -- --ignored --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_bounded::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::specification_tests:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::prepared_program_binds_original_class_and_exact_plan_before_input_or_memory_reads -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe:: -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_surface seeded_and_explicit_coin_entry_points_are_not_public_outside_the_fixtures -- --exact --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_complete_sixteen_layers_match_reference_and_physical_noise -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::tests::unqualified_n128_master_e3_full_refreshed_maximum_tape_matches_reference -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::independent_refresh_tests::refreshed_bounded_preserves_64_distinct_ordered_outputs_and_independent_full_ring_phase -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_crypto --lib ram_lfe::bgv_nonlinear::r9_tests::refresh_class_first_gate_matches_select_and_independent_full_ring_phases -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true check --locked -p iroha_fhe -p iroha_crypto --lib",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- --config profile.test.package.iroha_fhe.opt-level=3 --config profile.test.package.iroha_fhe.debug-assertions=true --config profile.test.package.iroha_fhe.overflow-checks=true test --locked -p iroha_fhe --test bgv_f257_scalar_local_bootstrap scalar_q23_fullsize_honest_bootstrap_and_repeat_preserve_all_messages_and_phase_bounds -- --ignored --exact --nocapture --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p fastpq_prover --lib gadgets::rns_chain_air:: --message-format=json-render-diagnostics -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test --locked -p fastpq_prover --test rns_chain_air --message-format=json-render-diagnostics -- --test-threads=1",
+            "outcome": "passed"
+          },
+          {
+            "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- clippy --locked -p fastpq_prover --all-targets --keep-going --message-format=json-render-diagnostics -- -D warnings",
+            "outcome": "passed"
+          }
+        ],
+        "acceptance": [
+          {
+            "clause": "Implement published genuine noise-refresh arithmetic with complete RNS/rounding/key-switch relation below RAM-LFE and SoraCloud applications.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/src/bgv/bootstrap.rs provides one scaled homomorphic-decryption/streaming coefficient/upper-digit/inverse pipeline with explicit Ring or ScalarSlots selection. A closed scalar owner admits only effective-precision scalar messages; the selected branch keeps full dense H and strict carry, genuine trace/recomposition identity products and one canonical executor. Exact source descriptors are readmitted against one shared core with all per-call budgets checked and core/descriptor metadata charged separately. The nonlinear consumer preserves scalar provenance through every operation and demotes only its public output. External source/key/RNS/rounding/execution proofs, circuit privacy and construction-specific security remain unfinished. crates/fastpq_prover/src/gadgets/rns_chain_air.rs and centered_extension.rs now constrain congruent scale-down and centered extension using one shared integer engine and existing native FHE owners. Complete authenticated key-switch and bootstrap proof composition remains unfinished."
+          },
+          {
+            "clause": "Actual repeated-refresh decryption/noise vectors and maximum proof/work/custody tests validate one shared owner.",
+            "state": "partial",
+            "proof": "crates/iroha_fhe/tests/bgv_local_bootstrap.rs and bgv_streaming_bootstrap.rs retain repeated refresh, full-ring phases, ordinary-kernel word equality and cleanup controls. Captured ordinary FHE tests passed 375 with 14 ignored, and RAM-LFE passed 275 with ten ignored (target-bank-fhe-01.json/log and target-bank-ram-lfe-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/). The three bounded runs, two first-gate drivers, complete N128 three-tape and N256 cross-bank runs, current public640 planner and production compilation also passed in their separate captured wave29 receipts. Later test-only lint cleanup is not validated by these older test bytes. Target-bank application fixtures exercise the same shared executor and exact-source accounting; N128 three-tape and N256 cross-bank evidence must be cited separately. Historical wave20/wave26 q23/q24 public planners and raw-frame evidence retain their source pins and are not current complete imported proof-bearing envelopes or full-size encrypted execution. Maximum cryptographic proof/work/custody controls, construction-specific security and original application qualification remain open. C.8 has no application/threshold dependency. The current N65536/q23 ScalarSlots public planner passed all 640 exact source descriptors and exact/one-under resource checks in target-bank-public-q23-01.json/log under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/; it generates no key or ciphertext.   Separate post-cleanup validation is pinned by dist/zk-delivery-handoff/candidates/wave29-post-test-cleanup-native-audit-2026-11-01/focused-current-complete.json (SHA-256 43a897352051ddd8fec960078afb9a07ade5366502bf416721b0e07c06be0a6c): target-bank-clippy-05 passes focused all-target strict lint, target-bank-fhe-02 passes 376 ordinary tests with 15 ignored, and target-bank-ram-lfe-02 passes 275 with ten ignored; their exact JSON/log pairs are under dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/. Source/Git captures hold for each invocation. These checks do not rerun or repin the earlier complete maximum tapes, and the separate N65536 bootstrap result retains its own receipt. The separate genuine N65536/F257/E3 q23 ScalarSlots diagnostic passes honest key generation, encryption, two bootstraps and one intervening square/repeated-refresh cycle: dist/zk-delivery-handoff/reports/algorithm-resume-root-2026-10-29/scalar-fullsize-bootstrap-01.json (SHA-256 45b835d463ae60d117f83d99f7774242b4f715eddfa7d5a33bbc176c921e059d) and matching .log (SHA-256 2cb0b64265396b877b3bec74f4b2023dcee6ff51ef3e5b852d75dc4ff84834a7), independently audited by dist/zk-delivery-handoff/candidates/fullsize-scalar-native-independent-audit-2026-11-01/review.json (SHA-256 3794556f0f43914f5a6ecc84df937575ca2b9493030b1064b9cd8a8a6732eff2). Source/Git captures hold on this aarch64 macOS run. Seven checkpoints verify every 65,536-coefficient message/phase bound using production inner-product words and independent BigInt CRT against independent inverse-Vandermonde messages. Direct secret convolution checks only 135 fixed coordinates per actual limb, including all 128 scalar-stride locations and seven off-stride/boundary probes. Exact finite setup caps and each one-under refusal execute before genuine key generation. The fixture intentionally opens phases; BigInt buffers are not guaranteed cleared. This is neither complete N65536 RAM-LFE application execution nor selected security, proof, production custody, original application resource or cross-platform qualification. The separately captured current 29 RNS component tests and strict all-target lint pass, with exact per-invocation source and compiler-input audits. They do not replace the earlier maximum encrypted-bootstrap diagnostics or establish complete proof/work/custody qualification."
+          },
+          {
+            "clause": "Consumers keep distinct program/job statements; this task has no RAM-LFE application or threshold dependency.",
+            "state": "partial",
+            "proof": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs exposes statement-bound component diagnostics below consumers without introducing an application or threshold dependency. Complete authenticated consumer program/job statement composition remains unfinished and is not inferred from diagnostic endpoint binding."
+          }
+        ]
+      }
     },
     {
       "id": "C.9",
@@ -3786,7 +4658,7 @@
       ],
       "status": "in_progress",
       "evidence": {
-        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work.",
+        "source": "bf7defad2bac0079209de1802351ec4a0d343ff4 plus current adopted local implementation. The source-pinned dist/zk-delivery-handoff/reports/current-x509-full-credential-retry1-root-2026-10-25/result.json completed three genuine complete credential proofs with separate replay using the same native verifier implementation and negative controls. Ordinary and maximum each encode 9,412,944 bytes and take 1060.961117s / 1053.277860s; RSS is 9,393,373,184 / 9,468,788,736 bytes. Both fail the unchanged 300-second and 1% unattributed-phase gates (19,511 / 19,832 ppm). The holder proof verifies but release correctly refuses its expired deadline. These are non-isolated local measurements: Swift and later GPU validation overlapped. They predate the subsequently adopted fixed-schedule/fixed-matrix and macOS feature-forwarding changes, so they do not qualify current performance. Darwin does not establish Linux 32 GiB RLIMIT_AS enforcement; no network submission occurred. Earlier commands below keep their recorded source scopes; prepared I.3 packets are not adopted work. Linux harness controls at 61bc20da4add8362651bf0f8dfbd2ce62388fb42 plus the exit-during-sleep observation repair retain their scope; docs/validation/linux_resource_harness.md records RLIMIT_AS checks separately from complete prover qualification.",
         "paths": [
           "crates/iroha_measurement/src/schema.rs",
           "crates/iroha_measurement/src/recorder.rs",
@@ -3803,7 +4675,8 @@
           "crates/iroha/Cargo.toml",
           "Cargo.lock",
           "crates/iroha_measurement/fixtures/consumers.json",
-          "crates/iroha_measurement/README.md"
+          "crates/iroha_measurement/README.md",
+          "docs/validation/linux_resource_harness.md"
         ],
         "commands": [
           {
@@ -3831,8 +4704,8 @@
             "outcome": "failed"
           },
           {
-            "command": "python3 scripts/zk_resource_harness.py run --address-space-limit-bytes 34359738368 (on a Linux host, where RLIMIT_AS can be applied)",
-            "outcome": "not_run"
+            "command": "python3 -m unittest -v scripts/tests/zk_resource_harness_test.py",
+            "outcome": "passed"
           },
           {
             "command": "python3 scripts/zk_resource_harness.py run --require-thermal-state (on a physical iOS or Android device through an SDK emitter)",
@@ -3855,7 +4728,7 @@
           {
             "clause": "Provide one complete phase tree for proof/verification/native/SDK flows with inclusive/exclusive wall and CPU times, worker count/load, allocations/live buffers, ciphertext/key/proof bytes, peak RSS and enforced address-space observations.",
             "state": "partial",
-            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Enforced Linux address-space and physical iOS/Android thermal measurements remain not run on this Mac, as documented in crates/iroha_measurement/README.md and platform.rs."
+            "proof": "crates/iroha_measurement/src/schema.rs and crates/iroha_measurement/src/recorder.rs implement the shared phase tree; crates/iroha_measurement/tests/layering.rs checks dependency separation. crates/iroha/tests/sdk_phase_tree_measurement.rs now measures actual AccountClient preparation/signing/canonical frame encoding and exact roundtrip/signature checks, with frame Vec capacity counters, public-call phases and typed failed/unwound records. /opt/homebrew/bin/python3.12 dist/zk-delivery-handoff/scripts/run_e1_live_sdk_retry_2026_10_12.py passed current11 guards,4 SDK controls and original2accepted/2expectedrejected runs; independent Core replay is retained under dist/zk-delivery-handoff/reports/E.1-rust-sdk-live-adopted-independent-core-review-2026-10-12.json. Historical actual FASTPQ and X509 adapter evidence remains scoped to its recorded source. This does not complete every native/SDK emitter, every allocation family or six SDK deliveries; those are ordinary implementation gaps. Current python3 -m unittest -v scripts/tests/zk_resource_harness_test.py passes 56 controls, including real Linux 8 GiB enforcement and a mismatched record refusal; a separate real-child run verifies both 32 GiB kernel limits. docs/validation/linux_resource_harness.md records the observed exit-during-sleep race, deterministic regression and unchanged rejection of actual observation failures. Complete native prover measurement and physical iOS/Android thermal measurements remain open; synthetic native tee records do not qualify them."
           },
           {
             "clause": "Unattributed proving time is at most 1%; record cache/warm-cold policy, named reference hardware, source/artifact/profile/config identity and raw failures.",

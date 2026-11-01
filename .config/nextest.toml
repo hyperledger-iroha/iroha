@@ -47,6 +47,7 @@ default-filter = '''
     | package(iroha_schema_gen)
     | package(iroha_sumeragi)
     | package(iroha_deploy)
+    | package(iroha_managed_ipc)
     | package(iroha_config)
     | package(iroha_torii_shared)
     | package(iroha_wallet)

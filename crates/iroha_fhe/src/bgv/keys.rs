@@ -489,7 +489,7 @@ fn masked_error(
 ) -> Result<RnsPoly, BgvError> {
     // The scratch holds `t*e` and then `-a*s + t*e`, both secret-dependent until returned.
     let mut output = small_to_evaluation(profile, error, limbs)?;
-    let plaintext = profile.plaintext_modulus();
+    let plaintext = profile.master_plaintext_modulus();
     for limb in 0..limbs {
         let fixed: FixedModulus = profile.full_plan(limb).fixed();
         let scale = plaintext % fixed.modulus;
@@ -1070,7 +1070,7 @@ mod tests {
     use crate::modular;
 
     fn profile() -> BgvProfile {
-        BgvProfile::new(BgvParameters::derive(4, 257, (30, 3), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 257, 1, (30, 3), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
         }
         assert_eq!(secret.check_profile(&profile), Ok(()));
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(secret.check_profile(&other), Err(BgvError::ProfileMismatch));
@@ -1398,7 +1398,7 @@ mod tests {
     fn keys_of_another_profile_are_refused() {
         let profile = profile();
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         let secret = SecretKey::generate_with(&profile, &mut entropy(1)).expect("secret");
@@ -1486,7 +1486,7 @@ mod tests {
             Some(BgvError::NonCanonical { index: 0 })
         );
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(
@@ -1638,7 +1638,7 @@ mod tests {
             wrong
         );
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(
@@ -1770,7 +1770,7 @@ mod tests {
             Some(BgvError::ProfileMismatch)
         );
         let other = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 2), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 2), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         assert_eq!(
@@ -1783,7 +1783,7 @@ mod tests {
     fn keys_rebuilt_from_frames_encrypt_evaluate_and_decrypt() {
         // Five primes leave room for one multiplication.
         let profile = BgvProfile::new(
-            BgvParameters::derive(4, 257, (30, 5), (31, 2), 2).expect("parameters"),
+            BgvParameters::derive(4, 257, 1, (30, 5), (31, 2), 2).expect("parameters"),
         )
         .expect("profile");
         let (secret_frame, public_frame, evaluation_frame) = {
@@ -1798,8 +1798,10 @@ mod tests {
         let secret = SecretKey::from_custody_bytes(&profile, secret_frame).expect("secret");
         let public = PublicKey::from_bytes(&profile, &public_frame).expect("public");
         let evaluation = EvaluationKeys::from_bytes(&profile, &evaluation_frame).expect("keys");
-        let three = crate::bgv::Plaintext::constant(&profile, 3).expect("plaintext");
-        let seven = crate::bgv::Plaintext::constant(&profile, 7).expect("plaintext");
+        let three = crate::bgv::Plaintext::constant(&profile, profile.master_plaintext(), 3)
+            .expect("plaintext");
+        let seven = crate::bgv::Plaintext::constant(&profile, profile.master_plaintext(), 7)
+            .expect("plaintext");
         let lhs = public.encrypt(&profile, &three).expect("ciphertext");
         let rhs = public.encrypt(&profile, &seven).expect("ciphertext");
         let product = profile

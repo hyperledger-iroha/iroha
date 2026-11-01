@@ -3520,7 +3520,9 @@ account is the host or has a retained participation, so a first join takes the h
 from the invitation. A proof binds the exact roster root, so an action that loses a
 race with another roster change is rejected. The public status route carries no
 rejection reason, so after a `Rejected` status read the standing again: if
-`roster_root_hex` moved, prove again. `streamKaigiCallEvents` also reports `relay_manifest_updated`, after which
+`roster_root_hex` moved, prove again. A rejected attempt is still charged its full fee,
+so read the standing once more after proving and submit only if the root has not moved,
+and wait a random moment before retrying after a loss. `streamKaigiCallEvents` also reports `relay_manifest_updated`, after which
 participants should re-read the manifest from `getKaigiCall`, and `usage_updated`.
 
 ## ISO 20022 Bridge

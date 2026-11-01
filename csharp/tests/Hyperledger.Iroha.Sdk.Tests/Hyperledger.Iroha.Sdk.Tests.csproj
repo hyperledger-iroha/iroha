@@ -5,7 +5,6 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
   <ItemGroup>
@@ -45,6 +44,8 @@
     <None Include="../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json" Link="Fixtures/prepared_transaction_signature_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/privacy/exact12_v1.tsv" Link="Fixtures/privacy/exact12_v1.tsv" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64" Link="Fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/privacy/exact12_capability_manifest_v1.norito.b64" Link="Fixtures/privacy/exact12_capability_manifest_v1.norito.b64" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64" Link="Fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/orderbook/**/*.to" Link="Fixtures/sorafs_manifest/orderbook/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/orderbook/**/*validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/orderbook/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/pdp/**/*.to" Link="Fixtures/sorafs_manifest/pdp/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

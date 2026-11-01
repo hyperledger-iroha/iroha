@@ -175,14 +175,13 @@ fn permute(state: &mut [u64; STATE_WIDTH]) {
 /// +1 padding (a single `1` element appended after the payload).
 pub fn hash_field_elements(elements: &[u64]) -> u64 {
     let mut state = [0u64; STATE_WIDTH];
-    let mut chunks = elements.chunks_exact(RATE);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = elements.as_chunks::<RATE>();
+    for chunk in chunks {
         for (idx, &value) in chunk.iter().enumerate() {
             state[idx] = add(state[idx], value);
         }
         permute(&mut state);
     }
-    let remainder = chunks.remainder();
     let mut block = [0u64; RATE];
     block[..remainder.len()].copy_from_slice(remainder);
     block[remainder.len()] = 1;
@@ -310,14 +309,13 @@ mod tests {
 
     fn insecure_pow5_hash_reference(elements: &[u64]) -> u64 {
         let mut state = [0u64; STATE_WIDTH];
-        let mut chunks = elements.chunks_exact(RATE);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = elements.as_chunks::<RATE>();
+        for chunk in chunks {
             for (idx, &value) in chunk.iter().enumerate() {
                 state[idx] = add(state[idx], value);
             }
             insecure_pow5_permute_reference(&mut state);
         }
-        let remainder = chunks.remainder();
         let mut block = [0u64; RATE];
         block[..remainder.len()].copy_from_slice(remainder);
         block[remainder.len()] = 1;

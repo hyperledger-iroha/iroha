@@ -7946,6 +7946,40 @@ fn validate_da_pin_persistence(world: &World) -> Result<(), json::Error> {
 #[path = "deserialize_world_da_pin_tests.rs"]
 mod da_pin_persistence_tests;
 
+/// Validate bounded game-partition custody at one persisted state cut.
+fn validate_game_partition_persistence_cut(
+    partitions: &impl mv::storage::StorageReadOnly<Hash, GamePartitionStateV1>,
+    cut: &'static str,
+) -> Result<(), json::Error> {
+    let invalid = |reason: &str| json::Error::InvalidField {
+        field: "world.game_partitions".to_owned(),
+        message: format!("invalid {cut} game partition projection: {reason}"),
+    };
+    let mut count = 0_usize;
+    for (world_id, partition) in partitions.iter() {
+        count += 1;
+        if count > iroha_data_model::game_partition::GAME_PARTITION_MAX_WORLDS {
+            return Err(invalid("game partition world retention bound"));
+        }
+        if *world_id != partition.world_id {
+            return Err(invalid("key differs from the authenticated world identifier"));
+        }
+        partition.validate().map_err(|reason| invalid(&reason))?;
+    }
+    Ok(())
+}
+
+fn validate_game_partition_persistence(world: &World) -> Result<(), json::Error> {
+    validate_game_partition_persistence_cut(&world.game_partitions.view(), "current")?;
+    // Observing the real MV predecessor never commits or consumes its undo map.
+    let predecessor = world.game_partitions.block_and_revert();
+    validate_game_partition_persistence_cut(&predecessor, "predecessor")
+}
+
+#[cfg(test)]
+#[path = "deserialize_world_game_partition_tests.rs"]
+mod game_partition_persistence_tests;
+
 fn validate_domain_endorsement_index_cut(
     endorsements: &impl StorageReadOnly<HashOf<DomainEndorsement>, DomainEndorsementRecord>,
     by_domain: &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>,
@@ -8962,6 +8996,8 @@ fn decode_world_fields(
     let execution_proof_verifications =
         take_optional(&mut map, "execution_proof_verifications")?.unwrap_or_default();
     let game_sessions = take_optional(&mut map, "game_sessions")?.unwrap_or_default();
+    let game_partitions: Storage<Hash, iroha_data_model::game_partition::GamePartitionStateV1> =
+        take_required(&mut map, "game_partitions")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9054,6 +9090,7 @@ fn decode_world_fields(
         execution_proof_profiles,
         execution_proof_verifications,
         game_sessions,
+        game_partitions,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),
@@ -9336,6 +9373,7 @@ fn parse_world(
         })?;
     validate_domain_endorsement_index(&world)?;
     validate_da_pin_persistence(&world)?;
+    validate_game_partition_persistence(&world)?;
     validator_committee::validate_persisted_progress(&world.view()).map_err(|message| {
         json::Error::InvalidField {
             field: "world.validator_committee".to_owned(),
@@ -12229,14 +12267,6 @@ mod decode_tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(key.clone(), original.clone());
-        let expectation_key = format!(
-            "multisig/proposal-expectation/{}/{proposal_id}",
-            iroha_crypto::HashOf::new(&account),
-        ).parse().unwrap();
-        world.smart_contract_state_mut_for_testing().insert(
-            expectation_key,
-            norito::to_bytes(&iroha_crypto::Hash::new(b"original approved execution closure")).unwrap(),
-        );
         let encoded = json::to_json(&world).unwrap();
         let ivm = IVM::new(0);
         let seed = IvmSeed {

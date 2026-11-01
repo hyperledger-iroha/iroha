@@ -308,8 +308,11 @@ fn supplied_node_files_match_native_inputs_and_never_fall_back_to_existing_files
     let supplied = user(table.clone(), &path)
         .parse_with_file_source(&files)
         .unwrap();
-    assert!(native.common.key_pair == supplied.common.key_pair);
-    assert!(native.common.soranet_transport_key_pair == supplied.common.soranet_transport_key_pair);
+    assert_eq!(native.common.key_pair, supplied.common.key_pair);
+    assert_eq!(
+        native.common.soranet_transport_key_pair,
+        supplied.common.soranet_transport_key_pair
+    );
     assert_eq!(native.genesis.expected_hash, supplied.genesis.expected_hash);
     assert_eq!(
         native.streaming.codec.rans_tables_path,
@@ -541,7 +544,10 @@ fn vpn_operator_key_reference_uses_supplied_bytes_and_native_defaults_without_fa
     let supplied = user(table.clone(), &path)
         .parse_with_file_source(&files)
         .expect("supplied VPN key must parse without any disk files");
-    assert!(supplied.network.soranet_vpn.operator_key_pair.as_ref() == Some(&operator));
+    assert_eq!(
+        supplied.network.soranet_vpn.operator_key_pair.as_ref(),
+        Some(&operator)
+    );
     assert!(files.reads.borrow().contains(&operator_path));
     assert!(!operator_path.exists());
     for (input, (_, bytes)) in &files.values {
@@ -550,9 +556,9 @@ fn vpn_operator_key_reference_uses_supplied_bytes_and_native_defaults_without_fa
     let native = user(table.clone(), &path)
         .parse()
         .expect("valid native VPN key");
-    assert!(
-        native.network.soranet_vpn.operator_key_pair
-            == supplied.network.soranet_vpn.operator_key_pair
+    assert_eq!(
+        native.network.soranet_vpn.operator_key_pair,
+        supplied.network.soranet_vpn.operator_key_pair
     );
     user(table.clone(), &path)
         .parse_with_file_source(&files)

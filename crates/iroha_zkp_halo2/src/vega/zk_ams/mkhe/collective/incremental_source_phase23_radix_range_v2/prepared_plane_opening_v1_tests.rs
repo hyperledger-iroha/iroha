@@ -19,7 +19,7 @@ fn emit_values_v1(opening: &mut PreparedPlaneOpeningV1) {
     for expected in 0..32 {
         let chunk = opening.emit_next_value_chunk_v1(expected).unwrap();
         assert_eq!(chunk.len_v1(), 16_384);
-        for (local, encoded) in chunk.as_slice_v1().chunks_exact(32).enumerate() {
+        for (local, encoded) in chunk.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
             assert_eq!(&encoded[..30], &[0; 30]);
             assert_eq!(
                 u16::from_be_bytes(encoded[30..].try_into().unwrap()),

@@ -1232,6 +1232,17 @@ impl EagerAdmissionStateAccess<'_, '_> {
         self
     }
 }
+// Shared native progress is independent of installing SCCP. Its scheduled-time
+// exemption still needs the exact committed parent, never the fee horizon or wall time.
+fn exemption_needs_committed_time(
+    world: &impl WorldReadOnly,
+    payload: &TransactionPayload,
+) -> bool {
+    crate::smartcontracts::isi::sccp::keepalive::is_standalone(&payload.instructions)
+        || (crate::smartcontracts::isi::sccp::store::parameters::get(world).is_some()
+            && crate::smartcontracts::isi::sccp::admission::exempt_shape(payload).is_some())
+}
+
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.view.execution_budget()
@@ -1284,7 +1295,9 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         // they are not fee-exempt. Ordinary inputs acquire no SCCP history.
         let pause_needs_time = matches!(transaction.instructions(), Executable::Instructions(instructions)
             if instructions.iter().any(|instruction| instruction.as_any().is::<iroha_data_model::isi::sccp::EndorseSccpFastPauseV1>()));
-        let pause_time = if pause_needs_time {
+        let pause_time = if pause_needs_time
+            || crate::smartcontracts::isi::sccp::keepalive::count(transaction.instructions()) != 0
+        {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
                 |error| Error::AdmissionInvariant {
                     reason: error.to_string(),
@@ -1306,6 +1319,7 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         let keepalive = crate::smartcontracts::isi::sccp::keepalive::admit(
             self.view.world(),
             transaction.payload(),
+            pause_time,
             self.next_block_height,
             u64::try_from(queue.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
         )
@@ -1375,12 +1389,10 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<Option<FeeAdmissionReservation>, Error> {
-        // Only SCCP exemption candidates consume original committed time. Every
-        // ordinary signed input still reaches the exact Nexus fee quote below.
+        // Shared progress and SCCP exemption candidates consume original committed
+        // time. Ordinary signed inputs still reach the exact Nexus fee quote below.
         let needs_sccp_time = tx.external().is_some_and(|transaction| {
-            crate::smartcontracts::isi::sccp::store::parameters::get(self.view.world()).is_some()
-                && crate::smartcontracts::isi::sccp::admission::exempt_shape(transaction.payload())
-                    .is_some()
+            exemption_needs_committed_time(self.view.world(), transaction.payload())
         });
         let sccp_committed_time_ms = if needs_sccp_time {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
@@ -1432,7 +1444,8 @@ impl Queue {
     /// Retain a fresh, still-due Keepalive or retire this authority's obsolete pending source.
     /// The normal removal owner releases its pending index, routing and fee reservations.
     /// # Errors
-    /// Preserves unavailable due-work observations; no missing Parliament result is false.
+    /// Preserves unavailable clock policy. A carrier with unestablished due eligibility
+    /// is locally retired so it cannot block a fresh, independently eligible signature.
     pub fn has_fresh_pending_keepalive(
         &self,
         view: &StateView<'_>,
@@ -1462,7 +1475,14 @@ impl Queue {
         let clock =
             keepalive::clock_parameters(view.world()).map_err(|_| keepalive::DueWorkUnavailable)?;
         let stale = keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms);
-        let retain = !stale && keepalive::due(view.world(), next_height, candidate)?;
+        let retain = !stale
+            && keepalive::due(
+                view.world(),
+                view.native_execution_tip()
+                    .map(|tip| tip.creation_time_ms()),
+                next_height,
+                candidate,
+            ) == Ok(true);
         drop(queued);
         if !retain {
             self.remove_pending_hash_locked(hash, None);
@@ -1496,7 +1516,13 @@ impl Queue {
             };
             signed.payload().creation_time_ms <= wall_ms
                 && !keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms)
-                && keepalive::due(view.world(), height, candidate) == Ok(true)
+                && keepalive::due(
+                    view.world(),
+                    view.native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
+                    height,
+                    candidate,
+                ) == Ok(true)
         })
     }
 
@@ -2176,7 +2202,6 @@ impl Queue {
     }
     /// Reconstruct refreshed manifests from the static baseline and committed additions.
     fn refreshed_lane_manifest_registry(
-        &self,
         registry_cfg: &LaneRegistry,
         state: &State,
     ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
@@ -2198,7 +2223,7 @@ impl Queue {
         registry_cfg: LaneRegistry,
         state: Arc<State>,
     ) {
-        let initial = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+        let initial = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
             Ok(registry) => registry,
             Err(err) => {
                 iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
@@ -2207,10 +2232,8 @@ impl Queue {
         };
         let initial_applied =
             self.install_lane_manifests_with_state_if_consensus_compatible(&initial, &state);
-        if initial_applied {
-            if let Some(telemetry_handle) = telemetry.as_ref() {
-                telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
-            }
+        if initial_applied && let Some(telemetry_handle) = telemetry.as_ref() {
+            telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
         }
         if registry_cfg.poll_interval.is_zero() {
             return;
@@ -2219,7 +2242,7 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let registry = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+            let registry = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
                 Ok(registry) => registry,
                 Err(err) => {
                     iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");
@@ -2312,6 +2335,10 @@ impl Queue {
                 || instruction
                     .as_any()
                     .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -3434,8 +3461,6 @@ impl Queue {
         }
         let (window, more) = self.pending_order.lock().next_window(max_scan.get());
         let mut sccp_budget = SccpExemptBlockBudgetV1::new(state_view.world());
-        let sccp_exists =
-            crate::smartcontracts::isi::sccp::store::parameters::get(state_view.world()).is_some();
         let mut sccp_committed_time_ms = None;
         let mut pending = Vec::with_capacity(window.len());
         for (incarnation, hash) in window {
@@ -3451,13 +3476,10 @@ impl Queue {
             // Ordinary work and sealed commitments cannot claim this exemption.
             // Acquire its exact original time only when a live candidate can;
             // failure retains the whole original window for the same-source retry.
-            let needs_sccp_time = sccp_exists
-                && Self::sccp_signed_transaction(tx.as_accepted().entrypoint()).is_some_and(
-                    |signed| {
-                        crate::smartcontracts::isi::sccp::admission::exempt_shape(signed.payload())
-                            .is_some()
-                    },
-                );
+            let needs_sccp_time = Self::sccp_signed_transaction(tx.as_accepted().entrypoint())
+                .is_some_and(|signed| {
+                    exemption_needs_committed_time(state_view.world(), signed.payload())
+                });
             let class = if cfg!(all(test, sumeragi_core_mutation = "HC346")) || needs_sccp_time {
                 let committed_time_ms = if let Some(original) = sccp_committed_time_ms {
                     original
@@ -8124,7 +8146,6 @@ pub mod tests {
     }
     #[test]
     fn manifest_hot_reload_rejects_semantic_drift_atomically() {
-        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         fn registry(path: &str, validator: AccountId, quorum: u32) -> LaneManifestRegistryHandle {
             let rules = GovernanceRules {
                 validators: vec![validator],
@@ -8147,6 +8168,7 @@ pub mod tests {
                 status,
             )])))
         }
+        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (alice, _) = gen_account_in("wonderland");
@@ -8301,12 +8323,12 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &queue_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*queue.lane_privacy_registry.read(),
+            &queue.lane_privacy_registry.read(),
             &queue_privacy_before
         ));
 
@@ -8334,7 +8356,7 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &source_backed));

@@ -81,7 +81,10 @@ The 8192-byte attribute buffer and at most 128 native ACL entries fit the existi
 remain unchanged.
 Windows's seven per-entry calls (iteration, open, four snapshot calls, strict
 ACL read) determine the portable eight-probe entry allowance. Sixteen fixed
-probes cover opening/closing out the enumeration and the directory snapshots.
+probes cover opening/closing out the enumeration, the directory snapshots and
+the single latched native change notification (creation, zero-time wait and close).
+The notification rejects direct-child mutations even when timestamps and final
+names are unchanged; it performs no per-entry polling.
 The scan performs no file-body reads or per-entry ancestry walks.
 
 ## Retained memory and handles
@@ -104,8 +107,8 @@ space for a directory buffer, temporary path/name conversions and native
 security descriptor/SID allocations (a native ACL alone can approach 64 KiB).
 Pending-ID collections and body-read buffers are additional explicit caller
 charges. One scan/inspection uses at most four transient native handles beyond
-retained directory/file/lock handles, covering the iterator, metadata probe and
-Windows access-token lookups. Retained ancestor handles are shared, never
+retained directory/file/lock handles, covering the iterator, metadata probe,
+Windows change notification and access-token lookup. Retained ancestor handles are shared, never
 reopened as a second lineage for each receipt.
 
 ## Journal composition

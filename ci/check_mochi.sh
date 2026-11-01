@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 cargo test --locked -p iroha_fs --lib
+cargo test --locked -p iroha_managed_ipc --lib
 cargo test --locked -p iroha_deploy --lib managed
 cargo test --locked -p mochi-core
 cargo test --locked -p mochi-integration

@@ -85,6 +85,10 @@ pub struct SccpClientEndpointsUser {
 /// and gas come from one public endpoint, so a wallet refuses a quote above these caps before
 /// signing or journaling anything. Every cap is nonzero.
 #[derive(Debug, Clone, Copy, ReadConfig)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names are the `[sccp.fee_caps]` configuration keys, whose suffix states the unit"
+)]
 pub struct SccpClientFeeCapsUser {
     /// Highest Ethereum `maxFeePerGas`.
     #[config(default = "defaults::ETHEREUM_MAX_FEE_PER_GAS_WEI")]

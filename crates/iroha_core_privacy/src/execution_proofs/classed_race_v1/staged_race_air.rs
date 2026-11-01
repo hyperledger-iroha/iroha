@@ -1024,7 +1024,7 @@ mod tests {
                     car.speed_mm_per_tick = 3_300;
                     car.lateral_velocity_mm_per_tick = if slot % 2 == 0 { -320 } else { 320 };
                 }
-                check_isolated_tick(&state, vec![33 | 16 | 4; 8]);
+                check_isolated_tick(&state, vec![32 | 16 | 4 | 1; 8]);
             }
             for cell in 0..12 {
                 for offset in [-9_001, -9_000, -1, 0, 9_000, 9_001] {
@@ -1070,7 +1070,7 @@ mod tests {
         state.cars[0].speed_mm_per_tick = 3_300;
         state.cars[0].lateral_velocity_mm_per_tick = 100;
         let mut data = replay(state.track, 2, state.tick + 1);
-        data.frames[state.tick as usize].controls = vec![33 | 8, 0];
+        data.frames[state.tick as usize].controls = vec![32 | 8 | 1, 0];
         let mut expected = state.clone();
         step_classed_race_v1(&mut expected, &data.frames[state.tick as usize]).unwrap();
         let graph = StagedClassedRaceAirV1::compile(&data, &expected, None).unwrap();

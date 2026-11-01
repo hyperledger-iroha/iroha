@@ -252,14 +252,12 @@ fn pending_monetary_policy_cannot_change_registration_bond_unbond_or_slash() {
         )
         .unwrap()
     );
-    let now_ms = transaction.block_unix_timestamp_ms();
     apply_slash_to_validator_without_observability(
         &mut transaction,
         lane,
         &validator,
         Hash::new("original-policy-slash"),
         &Quantity::from(100_u64),
-        now_ms,
     )
     .expect("original slash ratio and receiver govern the transfer");
     assert_eq!(

@@ -1,7 +1,6 @@
 //! Metrics registry hygiene tests (telemetry feature only).
 #![cfg(feature = "telemetry")]
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 #[test]
 fn shared_metrics_reset_clears_counters() {
     // Start fresh registry.

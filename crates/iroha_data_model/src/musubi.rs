@@ -3730,7 +3730,7 @@ fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
         return false;
     }
     let mut encoded_account = Vec::with_capacity(account.len() / 2);
-    for pair in account.as_bytes().chunks_exact(2) {
+    for pair in account.as_bytes().as_chunks::<2>().0 {
         let nibble = |byte: u8| match byte {
             b'0'..=b'9' => byte - b'0',
             b'a'..=b'f' => byte - b'a' + 10,

@@ -593,9 +593,7 @@ impl StructuralBuilderV1 {
         let row = u64::try_from(row).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
         if let Some(zone) = &mut self.repeat_zone
             && segment == zone.segment
-            && usize::try_from(row)
-                .ok()
-                .is_some_and(|row| (zone.start..zone.end).contains(&row))
+            && usize::try_from(row).is_ok_and(|row| (zone.start..zone.end).contains(&row))
             && zone.columns[local_column]
         {
             let row_usize =
@@ -3192,7 +3190,9 @@ mod tests {
             .expect("count-only structural SHA compilation");
             let segment_atoms: Vec<usize> = accounting
                 .atoms_by_column
-                .chunks_exact(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1)
+                .as_chunks::<ZK_X509_SHA_BATCH_FIXED_WIDTH_V1>()
+                .0
+                .iter()
                 .map(|columns| columns.iter().sum())
                 .collect();
             let local_column_atoms: Vec<(usize, usize)> = (0..ZK_X509_SHA_BATCH_FIXED_WIDTH_V1)
@@ -4123,13 +4123,15 @@ mod tests {
     }
     #[test]
     fn composite_children_are_pinned_and_reject_order_width_and_substitution_attacks() {
-        for disclosed_attributes in 0..=4 {
+        for (disclosed_attributes, expected_atom_counts) in
+            SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1.iter().enumerate()
+        {
             let schedule = schedule(disclosed_attributes);
             assert_eq!(
                 core::array::from_fn(|segment| {
                     schedule.children_v1()[segment].atoms_v1().len()
                 }),
-                SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[disclosed_attributes],
+                *expected_atom_counts,
             );
             assert!(
                 schedule.children_v1().iter().all(|child| {

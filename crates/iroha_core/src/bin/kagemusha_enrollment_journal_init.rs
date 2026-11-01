@@ -76,7 +76,7 @@ fn parse(arguments: &[OsString]) -> Result<Command, Failure> {
         return Err(Failure::Arguments);
     }
     let (mut parent, mut name, mut selected_scope) = (None, None, None);
-    for pair in arguments.chunks_exact(2) {
+    for pair in arguments.as_chunks::<2>().0 {
         match pair[0].to_str() {
             Some("--parent") if parent.is_none() => parent = Some(pair[1].clone()),
             Some("--name") if name.is_none() => name = Some(pair[1].clone()),

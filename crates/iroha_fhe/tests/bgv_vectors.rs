@@ -43,7 +43,7 @@ fn oracle_of(profile: &BgvProfile) -> Oracle {
     Oracle {
         log_degree: parameters.log_degree,
         degree: parameters.degree(),
-        t: parameters.plaintext_modulus,
+        t: profile.master_plaintext_modulus(),
         main: parameters.main_primes.clone(),
         main_roots: parameters.main_roots.clone(),
         special: parameters.special_primes.clone(),
@@ -205,9 +205,15 @@ fn check_section(name: &str, shape: (u32, u64, (u32, usize), (u32, usize), usize
     assert_eq!(u64::from(log_degree), section.number("log_degree"));
     assert_eq!(plaintext_modulus, section.number("plaintext_modulus"));
     assert_eq!(digit_primes as u64, section.number("digit_primes"));
-    let parameters =
-        BgvParameters::derive(log_degree, plaintext_modulus, main, special, digit_primes)
-            .expect("parameters");
+    let parameters = BgvParameters::derive(
+        log_degree,
+        plaintext_modulus,
+        1,
+        main,
+        special,
+        digit_primes,
+    )
+    .expect("parameters");
     // Primes, roots and the identity are those of the Python reference.
     assert_eq!(parameters.main_primes, section.numbers("main_primes"));
     assert_eq!(parameters.main_roots, section.numbers("main_roots"));
@@ -273,8 +279,8 @@ fn check_section(name: &str, shape: (u32, u64, (u32, usize), (u32, usize), usize
     };
     let message1 = section.numbers("message1");
     let message2 = section.numbers("message2");
-    let plain1 = Plaintext::new(&profile, message1).expect("plaintext");
-    let plain2 = Plaintext::new(&profile, message2).expect("plaintext");
+    let plain1 = Plaintext::new(&profile, profile.master_plaintext(), message1).expect("plaintext");
+    let plain2 = Plaintext::new(&profile, profile.master_plaintext(), message2).expect("plaintext");
     let ct1 = fixtures::encrypt(&profile, &keys.public, &plain1, &mut entropy).expect("ct1");
     let ct2 = fixtures::encrypt(&profile, &keys.public, &plain2, &mut entropy).expect("ct2");
     assert_eq!(u64::from(entropy.draws()), section.number("draws"));
@@ -396,7 +402,7 @@ fn check_against_oracle(profile: &BgvProfile, master: [u8; 64], elements: &[u32]
         galois.push((element, key));
     }
     let degree = profile.degree();
-    let t = profile.plaintext_modulus();
+    let t = profile.master_plaintext_modulus();
     let message = |tag: u64| -> Vec<u64> {
         (0..degree as u64)
             .map(|index| (index * index * 7 + index * tag + tag * 13 + 1) % t)
@@ -404,8 +410,10 @@ fn check_against_oracle(profile: &BgvProfile, master: [u8; 64], elements: &[u32]
     };
     let first_encryption = 3 + u32::try_from(seen.len()).expect("draw");
     let (message1, message2) = (message(3), message(8));
-    let plain1 = Plaintext::new(profile, message1.clone()).expect("plaintext");
-    let plain2 = Plaintext::new(profile, message2.clone()).expect("plaintext");
+    let plain1 =
+        Plaintext::new(profile, profile.master_plaintext(), message1.clone()).expect("plaintext");
+    let plain2 =
+        Plaintext::new(profile, profile.master_plaintext(), message2.clone()).expect("plaintext");
     let ct1 = fixtures::encrypt(profile, &keys.public, &plain1, &mut entropy).expect("ct1");
     let ct2 = fixtures::encrypt(profile, &keys.public, &plain2, &mut entropy).expect("ct2");
     let expected1 = oracle.encrypt(&fixture_seed(&master, first_encryption), &public, &message1);
@@ -429,7 +437,7 @@ fn check_against_oracle(profile: &BgvProfile, master: [u8; 64], elements: &[u32]
         &profile.sub(&ct1, &ct2).expect("difference"),
         &oracle.sub(&expected1, &expected2),
     );
-    let worst = Plaintext::worst_case_bound(profile);
+    let worst = Plaintext::worst_case_bound(profile, profile.master_plaintext());
     check(
         "plain sum",
         &profile.add_plain(&ct1, &plain2).expect("plain sum"),
@@ -529,9 +537,15 @@ fn seeded_pipelines_match_the_oracle_on_several_chain_shapes() {
     for (index, (log_degree, plaintext_modulus, main, special, digit_primes)) in
         shapes.into_iter().enumerate()
     {
-        let parameters =
-            BgvParameters::derive(log_degree, plaintext_modulus, main, special, digit_primes)
-                .expect("parameters");
+        let parameters = BgvParameters::derive(
+            log_degree,
+            plaintext_modulus,
+            1,
+            main,
+            special,
+            digit_primes,
+        )
+        .expect("parameters");
         let profile = BgvProfile::new(parameters).expect("profile");
         let order = 2_u32 << log_degree;
         for seed_tag in 0..2_u8 {
@@ -547,7 +561,7 @@ fn seeded_pipelines_match_the_oracle_on_several_chain_shapes() {
 #[test]
 fn explicit_coins_match_the_oracle_equations() {
     let profile =
-        BgvProfile::new(BgvParameters::derive(3, 257, (50, 4), (60, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(3, 257, 1, (50, 4), (60, 2), 2).expect("parameters"))
             .expect("profile");
     let oracle = oracle_of(&profile);
     let degree = profile.degree();
@@ -628,7 +642,8 @@ fn explicit_coins_match_the_oracle_equations() {
     let message: Vec<u64> = (0..degree as u64)
         .map(|index| (index * 100 + 200) % 257)
         .collect();
-    let plaintext = Plaintext::new(&profile, message.clone()).expect("plaintext");
+    let plaintext =
+        Plaintext::new(&profile, profile.master_plaintext(), message.clone()).expect("plaintext");
     let mask: Vec<i64> = (0..signed_degree).map(|index| index % 3 - 1).collect();
     let ciphertext =
         fixtures::encrypt_from_coins(&profile, &public, &plaintext, &mask, &error(7), &error(9))
@@ -651,15 +666,15 @@ fn explicit_coins_match_the_oracle_equations() {
 const CANDIDATE_IDENTITIES: [(BgvCandidate, &str); 3] = [
     (
         BgvCandidate::AffineF257,
-        "3ab33fd9d135717b5fb830fd7a5515c8a378e09496d9ea4c9560c4d3961bf1b0",
+        "4cf0499f36a25168946861e6b79c12899cea0b95d5c43c310b3b70fa88e2d19e",
     ),
     (
         BgvCandidate::BoundedF257,
-        "a218a403aa48ae5b17e8a22e2f0bb68698e549ca58cdadc3c40352f198f7b20e",
+        "f3f7fbc6865c0458a5a61564646b4466f5e81073dd3af03d0933e4ff3ac17d86",
     ),
     (
         BgvCandidate::RefreshF257,
-        "87ee13ea7b82f543bf9bdf1b2b90d4180b64338fb76878d3c49fb5d6ae3c4a7e",
+        "63b39a10ee05c7344cb7fe3d136c83811c0821d6613ee8cae4e00c475c48b798",
     ),
 ];
 
@@ -708,7 +723,8 @@ fn affine_candidate_encrypts_evaluates_and_decrypts_at_full_size() {
     let message: Vec<u64> = (0..degree as u64)
         .map(|index| (index * 31 + 7) % 257)
         .collect();
-    let plaintext = Plaintext::new(&profile, message.clone()).expect("plaintext");
+    let plaintext =
+        Plaintext::new(&profile, profile.master_plaintext(), message.clone()).expect("plaintext");
     let ciphertext = fixtures::encrypt(&profile, &public, &plaintext, &mut entropy).expect("ct");
     let expected = oracle.encrypt(&fixture_seed(&master, 2), &oracle_public, &message);
     assert_eq!(
@@ -751,6 +767,7 @@ fn affine_candidate_encrypts_evaluates_and_decrypts_at_full_size() {
     // A claimed bound is carried through the canonical words.
     let rebuilt = Ciphertext::from_canonical_words(
         &profile,
+        profile.master_plaintext(),
         0,
         2,
         &lowest.canonical_words(),

@@ -42,6 +42,17 @@ fn admit_taira_inrou_source(mut source: UnpublishedDeploymentBundleV1) -> SoraDe
 fn canonical_taira_inrou_bundle_fixture() -> SoraDeploymentBundleV1 {
     admit_taira_inrou_source(canonical_taira_inrou_source_fixture())
 }
+#[cfg(windows)]
+include!("taira_portable_windows.rs");
+
+#[cfg(windows)]
+fn taira_test_tempdir(prefix: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("native local Taira fixture directory")
+}
+#[cfg(not(windows))]
 fn taira_test_tempdir(prefix: &str) -> tempfile::TempDir {
     let target_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
     let target_dir = fs::canonicalize(target_dir).expect("canonical workspace target directory");
@@ -2267,6 +2278,10 @@ fn test_inrou_preseed_receipt_output(root: &Path, label: &str) -> PathBuf {
         .expect("canonical test Inrou qualification directory")
         .join("qualification.json")
 }
+#[cfg(windows)]
+include!("inrou_qualification_windows.rs");
+
+#[cfg(not(windows))]
 fn qualify_test_inrou_service(
     root: &Path,
     bundle_file: &Path,

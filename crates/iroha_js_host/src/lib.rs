@@ -2067,7 +2067,7 @@ fn sign_js_transaction(
 ) -> napi::Result<SignedTransaction> {
     builder
         .try_sign(private_key)
-        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}",)))
+        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}")))
 }
 fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCachePolicy> {
     let mut positive = SORAFS_ALIAS_POSITIVE_TTL_SECS;

@@ -55,7 +55,7 @@ pub(crate) fn validate_public_key(bytes: &[u8]) -> Result<(), KeyRejection> {
 }
 
 /// Check the public key before the signature, preserving ordinary API precedence.
-/// RustCrypto's contexts and polynomial buffers are inline; no retained heap-backed key is made.
+/// `RustCrypto`'s contexts and polynomial buffers are inline; no retained heap-backed key is made.
 pub(crate) fn verify(key: &[u8], signature: &[u8], message: &[u8]) -> Result<(), Rejection> {
     validate_public_key(key).map_err(Rejection::Key)?;
     #[cfg(feature = "pqc")]

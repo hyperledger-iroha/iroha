@@ -355,19 +355,6 @@ fn multisig_proposal_state_key(
     ))
     .expect("constant string must be a valid state path")
 }
-/// Kernel-owned commitment to the semantics approved for one proposal occurrence.
-fn multisig_proposal_expectation_key(
-    account: &AccountId,
-    proposal_id: &MultisigProposalId,
-) -> StatePath {
-    format!(
-        "multisig/proposal-expectation/{}/{proposal_id}",
-        HashOf::new(account)
-    )
-    .parse()
-    .expect("multisig expectation path must be valid")
-}
-
 fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_STATE}{DELIMITER}{}{DELIMITER}",
@@ -430,7 +417,7 @@ fn multisig_role_for(
     let suffix = account_role_suffix(account);
     let literal = home_domain.map_or_else(
         || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}"),
-        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",),
+        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}"),
     );
     literal.parse().expect("multisig role name must be valid")
 }
@@ -1887,7 +1874,6 @@ fn execute_approve(
             MultisigApprovalOutcomeStatusV1::NotExecuted,
         );
     }
-    check_proposal_expectation(state_transaction, &proposal)?;
     upsert_subject_approval(&mut proposal.approvals, authority.clone());
     if approved_weight_by_subject(&spec, &proposal.approvals) < u32::from(spec.quorum.get()) {
         store_multisig_proposal_state(state_transaction, &proposal)?;
@@ -1920,7 +1906,7 @@ fn execute_approve(
             &instruction.account,
         )?;
         prune_down(state_transaction, &account, &instruction.proposal_id);
-        for inner in proposal.instructions {
+        for inner in &proposal.instructions {
             executor.execute_instruction(state_transaction, &account, inner)?;
         }
         store_multisig_approval_outcome(
@@ -2109,10 +2095,6 @@ fn prune_down(
         .world
         .smart_contract_state
         .remove(multisig_proposal_state_key(account, proposal_id));
-    state_transaction
-        .world
-        .smart_contract_state
-        .remove(multisig_proposal_expectation_key(account, proposal_id));
 }
 fn validate_registration(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2589,47 +2571,6 @@ fn store_multisig_proposal_state(
         &proposal_state.multisig_account_id,
         &proposal_state.proposal_id,
     );
-    let expectation_key = multisig_proposal_expectation_key(
-        &proposal_state.multisig_account_id,
-        &proposal_state.proposal_id,
-    );
-    let new_expectation = if state_transaction
-        .world
-        .smart_contract_state
-        .get(&key)
-        .is_none()
-    {
-        if state_transaction
-            .world
-            .smart_contract_state
-            .get(&expectation_key)
-            .is_some()
-        {
-            return Err(invalid_proposal_binding());
-        }
-        let expectation = crate::runtime::expectation::capture_instructions(
-            &proposal_state.instructions,
-            &state_transaction.world,
-        )
-        .map_err(ValidationFail::InstructionFailed)?;
-        crate::runtime::expectation::check(
-            &expectation,
-            &state_transaction.world,
-            state_transaction.block_height(),
-        )
-        .map_err(ValidationFail::InstructionFailed)?;
-        let digest =
-            crate::runtime::expectation::digest_owned(&expectation, &state_transaction.world)
-                .map_err(ValidationFail::InstructionFailed)?;
-        Some(norito::to_bytes(&digest).map_err(|error| {
-            retain_multisig_read_attempt(
-                state_transaction,
-                norito_decode_attempt_error(error, |error| multisig_state_encode_error(&error)),
-            )
-        })?)
-    } else {
-        None
-    };
     if let Some(previous) = state_transaction.world.smart_contract_state.get(&key) {
         let previous = decode_proposal_state_at_key(&key, previous)
             .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
@@ -2641,58 +2582,12 @@ fn store_multisig_proposal_state(
     }
     let bytes =
         norito::to_bytes(proposal_state).map_err(|value| multisig_state_encode_error(&value))?;
-    if let Some(expectation) = new_expectation {
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(expectation_key, expectation);
-    }
     state_transaction
         .world
         .smart_contract_state
         .insert(key, bytes);
     Ok(())
 }
-/// Original approvals never authorize the same instruction bytes under changed semantics.
-/// Renewed consent uses a new caller occurrence, leaving this one cancellable or expirable.
-fn check_proposal_expectation(
-    state_transaction: &StateTransaction<'_, '_>,
-    proposal: &MultisigProposalState,
-) -> Result<(), ValidationFail> {
-    use crate::runtime::expectation;
-    use iroha_data_model::runtime::lifecycle::RuntimeRejectionV1;
-    let mismatch = || {
-        ValidationFail::InstructionFailed(
-            RuntimeRejectionV1::ExpectationMismatch { wire_id: None }.into(),
-        )
-    };
-    let key =
-        multisig_proposal_expectation_key(&proposal.multisig_account_id, &proposal.proposal_id);
-    let bytes = state_transaction
-        .world
-        .smart_contract_state
-        .get(&key)
-        .ok_or_else(mismatch)?;
-    let expected: Hash = norito::core::classify_decode_attempt(|| norito::decode_from_bytes(bytes))
-        .map_err(multisig_decode_attempt)
-        .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
-    let current =
-        expectation::capture_instructions(&proposal.instructions, &state_transaction.world)
-            .map_err(ValidationFail::InstructionFailed)?;
-    if expectation::digest_owned(&current, &state_transaction.world)
-        .map_err(ValidationFail::InstructionFailed)?
-        != expected
-    {
-        return Err(mismatch());
-    }
-    expectation::check(
-        &current,
-        &state_transaction.world,
-        state_transaction.block_height(),
-    )
-    .map_err(ValidationFail::InstructionFailed)
-}
-
 fn store_multisig_proposal_terminal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     terminal_state: &MultisigProposalTerminalState,
@@ -2963,14 +2858,6 @@ pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
         if expected_network.is_some_and(|network| *network != proposal.network_id) {
             return Err(invalid_proposal_binding().into());
         }
-        let expectation_key =
-            multisig_proposal_expectation_key(&proposal.multisig_account_id, &proposal.proposal_id);
-        let expectation = world
-            .smart_contract_state()
-            .get(&expectation_key)
-            .ok_or_else(|| Attempt::Rejected(invalid_proposal_binding()))?;
-        norito::core::classify_decode_attempt(|| norito::decode_from_bytes::<Hash>(expectation))
-            .map_err(multisig_decode_attempt)?;
     }
     let prefix: StatePath = "multisig/proposal-terminal/"
         .parse()
@@ -3182,7 +3069,6 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 mod tests {
     mod cancellation;
     mod proposal_attempt;
-    mod runtime_expectation;
     mod sccp_record;
     use super::*;
     use crate::{
@@ -6245,7 +6131,7 @@ mod tests {
         let register =
             MultisigRegister::with_account(multisig_id.clone(), domain_id.clone(), spec.clone());
         Executor::Initial
-            .execute_instruction(&mut tx, &signer1_id, InstructionBox::from(register))
+            .execute_instruction(&mut tx, &signer1_id, &InstructionBox::from(register))
             .expect("multisig register");
         let policy = multisig_policy_from_spec(&spec).expect("policy");
         let expected_id = AccountId::new_multisig(policy);
@@ -6260,7 +6146,7 @@ mod tests {
         let result = Executor::Initial.execute_instruction(
             &mut tx,
             &signer1_id,
-            InstructionBox::from(propose),
+            &InstructionBox::from(propose),
         );
         match result {
             Err(ValidationFail::NotPermitted(msg)) => {
@@ -6582,7 +6468,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &multisig_id,
-                Grant::account_permission(
+                &Grant::account_permission(
                     iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                         account: multisig_id.clone(),
                     },
@@ -6922,7 +6808,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&active_instructions)),
                     active_instructions,
@@ -6939,7 +6825,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&expired_instructions)),
                     expired_instructions,
@@ -6977,7 +6863,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&policy_change_instructions)),
                     policy_change_instructions,
@@ -6997,7 +6883,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer2_id,
-                InstructionBox::from(MultisigApprove::new(
+                &InstructionBox::from(MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &policy_change_hash),
                     policy_change_hash,
@@ -7543,7 +7429,7 @@ seiyaku TriggerDispatch { permission Admin;
         let parent_id = new_account_id(&parent_key);
         let register = MultisigRegister::with_account(parent_id, domain_id.clone(), parent_spec);
         let err = Executor::Initial
-            .execute_instruction(&mut tx, &owner_id, InstructionBox::from(register))
+            .execute_instruction(&mut tx, &owner_id, &InstructionBox::from(register))
             .expect_err("multisig signatory must be single");
         match err {
             ValidationFail::NotPermitted(msg) => {
@@ -7605,7 +7491,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&valid_instructions)),
                     valid_instructions,
@@ -7618,7 +7504,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigApprove::new(
+                &MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &valid_hash),
                     valid_hash,
@@ -7646,7 +7532,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&privileged_instructions)),
                     privileged_instructions,
@@ -7659,7 +7545,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigApprove::new(
+                &MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &privileged_hash),
                     privileged_hash,
@@ -7683,15 +7569,11 @@ seiyaku TriggerDispatch { permission Admin;
             "deferred instruction must reach the active executor".to_owned(),
         ))];
         let denied_hash = HashOf::new(&denied_instructions);
-        // Capture consent with the same installed executor that must later
-        // reject the deferred instruction, so this exercises executor reentry.
-        *tx.world.executor.get_mut() =
-            crate::executor::denying_executor_for_testing("deferred instruction denied");
         Executor::Initial
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&denied_instructions)),
                     denied_instructions,
@@ -7699,7 +7581,9 @@ seiyaku TriggerDispatch { permission Admin;
                 )
                 .into(),
             )
-            .expect("propose instruction with the denying executor captured");
+            .expect("propose instruction before executor replacement");
+        *tx.world.executor.get_mut() =
+            crate::executor::denying_executor_for_testing("deferred instruction denied");
         let denied_error = execute_approve(
             &mut tx,
             &signer_id,
@@ -7944,7 +7828,7 @@ seiyaku TriggerDispatch { permission Admin;
             None,
         );
         Executor::Initial
-            .execute_instruction(&mut tx, &proposer, InstructionBox::from(proposal))
+            .execute_instruction(&mut tx, &proposer, &InstructionBox::from(proposal))
             .expect("multisig propose");
         let mut seeded_value = proposal_value(
             &tx,
@@ -7980,7 +7864,7 @@ seiyaku TriggerDispatch { permission Admin;
             instructions_hash,
         );
         Executor::Initial
-            .execute_instruction(&mut tx, &approver, InstructionBox::from(approve))
+            .execute_instruction(&mut tx, &approver, &InstructionBox::from(approve))
             .expect("multisig approve");
         assert!(
             proposal_value(

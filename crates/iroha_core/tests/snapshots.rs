@@ -60,36 +60,29 @@ fn write_if_update_requested(path: &Path, content: &str) -> bool {
 pub fn assert_events(name: &str, events: &[EventBox]) {
     let actual = events_json_filtered(events);
     let path = fixture_path(name);
-    match fs::read_to_string(&path) {
-        Ok(expected) => {
-            if expected != actual {
-                if write_if_update_requested(&path, &actual) {
-                    panic!(
-                        "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
-                        path.display()
-                    );
-                } else {
-                    panic!(
-                        "event snapshot mismatch for {}. Run with UPDATE_FIXTURES=1 to update.\nPath: {}",
-                        name,
-                        path.display()
-                    );
-                }
-            }
+    if let Ok(expected) = fs::read_to_string(&path) {
+        if expected != actual {
+            assert!(
+                !write_if_update_requested(&path, &actual),
+                "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
+                path.display()
+            );
+            panic!(
+                "event snapshot mismatch for {}. Run with UPDATE_FIXTURES=1 to update.\nPath: {}",
+                name,
+                path.display()
+            );
         }
-        Err(_) => {
-            if write_if_update_requested(&path, &actual) {
-                panic!(
-                    "fixture created: {}. Re-run tests without UPDATE_FIXTURES to verify.",
-                    path.display()
-                );
-            } else {
-                panic!(
-                    "missing fixture for {}. Run with UPDATE_FIXTURES=1 to create.\nPath: {}",
-                    name,
-                    path.display()
-                );
-            }
-        }
+    } else {
+        assert!(
+            !write_if_update_requested(&path, &actual),
+            "fixture created: {}. Re-run tests without UPDATE_FIXTURES to verify.",
+            path.display()
+        );
+        panic!(
+            "missing fixture for {}. Run with UPDATE_FIXTURES=1 to create.\nPath: {}",
+            name,
+            path.display()
+        );
     }
 }

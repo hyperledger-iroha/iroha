@@ -147,14 +147,14 @@ impl RelayRewardEngine {
         let compliance_bps = config.compliance_penalty_basis_points.min(10_000);
         let remaining_total = 10_000u16.saturating_sub(compliance_bps);
         let total_raw = u32::from(availability_raw) + u32::from(bandwidth_raw);
-        let (availability_bps, bandwidth_bps) = if total_raw == 0 {
-            (0, remaining_total)
-        } else {
-            let avail = ((u32::from(availability_raw) * u32::from(remaining_total)) / total_raw)
-                .min(u32::from(remaining_total)) as u16;
+        let (availability_bps, bandwidth_bps) = (u32::from(availability_raw)
+            * u32::from(remaining_total))
+        .checked_div(total_raw)
+        .map_or((0, remaining_total), |share| {
+            let avail = share.min(u32::from(remaining_total)) as u16;
             let bandwidth = remaining_total.saturating_sub(avail);
             (avail, bandwidth)
-        };
+        });
         let weights = RewardWeights {
             availability_bps,
             bandwidth_bps,

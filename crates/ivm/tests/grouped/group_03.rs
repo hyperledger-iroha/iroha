@@ -16,6 +16,8 @@ mod field_dispatch;
 mod field_ops;
 #[path = "../gas.rs"]
 mod gas;
+#[path = "../gas_bench_policy.rs"]
+mod gas_bench_policy;
 #[path = "../gas_conformance.rs"]
 mod gas_conformance;
 #[path = "../gas_golden.rs"]

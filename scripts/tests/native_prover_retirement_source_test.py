@@ -118,10 +118,10 @@ class NativeProverRetirementSourceTest(unittest.TestCase):
         source_dir = ROOT / "crates/iroha_plonk/src"
         sources = sorted(source_dir.rglob("*.rs"))
         self.assertTrue(sources)
-        # The native source-identity build owner is required; it must not delegate
-        # to a retired engine through either its entry or a helper.
+        # A build script, should one return, must not delegate to a retired engine
+        # through either its entry or a helper.
         native_root = source_dir.parent
-        sources.append(native_root / "build.rs")
+        sources.extend(native_root.glob("build.rs"))
         sources.extend(sorted((native_root / "build_support").rglob("*.rs")))
         for path in sources:
             source = path.read_text(encoding="utf-8")

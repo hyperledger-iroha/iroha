@@ -28,6 +28,7 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction, TransactionPayload},
 };
+use iroha_fs::{FileIdentity, FileMetadata};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(unix)]
 use std::os::unix::fs::{
@@ -1665,19 +1666,16 @@ impl fmt::Debug for ProviderIngestOutbox {
             .finish()
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct ProviderIngestDirectoryIdentity {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-}
 struct ProviderIngestWriterLock {
     _process_guard: ProviderIngestProcessLock,
     _file: File,
     lock_path: PathBuf,
     parent_path: PathBuf,
-    parent_identity: ProviderIngestDirectoryIdentity,
+    parent_identity: FileIdentity,
+    #[cfg(windows)]
+    directory: iroha_fs::PrivateDirectory,
+    #[cfg(windows)]
+    lock_snapshot: iroha_fs::FileSnapshot,
 }
 impl ProviderIngestWriterLock {
     fn acquire(checkpoint_path: &Path) -> Result<Self, ProviderIngestOutboxError> {
@@ -1688,12 +1686,15 @@ impl ProviderIngestWriterLock {
         })?;
         let parent_path = fs::canonicalize(parent)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+        #[cfg(windows)]
+        let directory = iroha_fs::PrivateDirectory::open(parent)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         let parent_identity = provider_ingest_directory_identity(&parent_path)?;
         let lock_path = provider_ingest_lock_path(checkpoint_path)?;
         crate::reject_unsafe_checkpoint_ancestors(&lock_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         let process_guard = ProviderIngestProcessLock::acquire(&lock_path)?;
-        let before_open = match fs::symlink_metadata(&lock_path) {
+        let before_open = match FileMetadata::symlink_metadata(&lock_path) {
             Ok(metadata) => {
                 validate_provider_ingest_lock_metadata(&lock_path, &metadata)?;
                 Some(metadata)
@@ -1703,16 +1704,27 @@ impl ProviderIngestWriterLock {
                 return Err(ProviderIngestOutboxError::Checkpoint(error.to_string()));
             }
         };
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true);
-        crate::fs_flags::set_no_follow_flag(&mut options);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let file = options
-            .open(&lock_path)
+        #[cfg(windows)]
+        let file = directory
+            .open_lock(lock_path.file_name().ok_or_else(|| {
+                ProviderIngestOutboxError::Checkpoint("provider-ingest lock has no name".to_owned())
+            })?)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
-        let opened = file
-            .metadata()
+        #[cfg(not(windows))]
+        let file = {
+            let mut options = fs::OpenOptions::new();
+            options.read(true).write(true).create(true);
+            crate::fs_flags::set_no_follow_flag(&mut options);
+            #[cfg(unix)]
+            options.mode(0o600);
+            options
+                .open(&lock_path)
+                .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+        };
+        #[cfg(windows)]
+        let lock_snapshot = iroha_fs::FileSnapshot::of(&file, true)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+        let opened = FileMetadata::of(&file)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         validate_provider_ingest_lock_metadata(&lock_path, &opened)?;
         if before_open
@@ -1723,7 +1735,7 @@ impl ProviderIngestWriterLock {
                 "provider-ingest writer lock changed while opening".to_owned(),
             ));
         }
-        let linked = fs::symlink_metadata(&lock_path)
+        let linked = FileMetadata::symlink_metadata(&lock_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         validate_provider_ingest_lock_metadata(&lock_path, &linked)?;
         if !crate::same_local_file_identity(&opened, &linked) {
@@ -1742,7 +1754,7 @@ impl ProviderIngestWriterLock {
                 return Err(ProviderIngestOutboxError::Checkpoint(error.to_string()));
             }
         }
-        let locked = fs::symlink_metadata(&lock_path)
+        let locked = FileMetadata::symlink_metadata(&lock_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         validate_provider_ingest_lock_metadata(&lock_path, &locked)?;
         if !crate::same_local_file_identity(&opened, &locked) {
@@ -1758,11 +1770,40 @@ impl ProviderIngestWriterLock {
             lock_path,
             parent_path,
             parent_identity,
+            #[cfg(windows)]
+            directory,
+            #[cfg(windows)]
+            lock_snapshot,
         };
         writer_lock.validate_live(checkpoint_path)?;
         Ok(writer_lock)
     }
     fn validate_live(&self, checkpoint_path: &Path) -> Result<(), ProviderIngestOutboxError> {
+        #[cfg(windows)]
+        {
+            self.directory
+                .revalidate()
+                .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+            iroha_fs::OwnerDirectory::open(self.directory.path())
+                .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+                .require_same_lock(
+                    self.lock_path.file_name().ok_or_else(|| {
+                        ProviderIngestOutboxError::Checkpoint(
+                            "provider-ingest lock has no name".to_owned(),
+                        )
+                    })?,
+                    &self._file,
+                )
+                .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+            if iroha_fs::FileSnapshot::of(&self._file, true)
+                .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+                != self.lock_snapshot
+            {
+                return Err(ProviderIngestOutboxError::Checkpoint(
+                    "provider-ingest lock custody changed".to_owned(),
+                ));
+            }
+        }
         crate::reject_unsafe_checkpoint_ancestors(checkpoint_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         let parent = checkpoint_path.parent().ok_or_else(|| {
@@ -1784,12 +1825,10 @@ impl ProviderIngestWriterLock {
                 "provider-ingest writer lock path changed".to_owned(),
             ));
         }
-        let opened = self
-            ._file
-            .metadata()
+        let opened = FileMetadata::of(&self._file)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         validate_provider_ingest_lock_metadata(&self.lock_path, &opened)?;
-        let linked = fs::symlink_metadata(&self.lock_path)
+        let linked = FileMetadata::symlink_metadata(&self.lock_path)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
         validate_provider_ingest_lock_metadata(&self.lock_path, &linked)?;
         if !crate::same_local_file_identity(&opened, &linked) {
@@ -1847,6 +1886,10 @@ fn prepare_provider_ingest_checkpoint_path(
             "provider-ingest checkpoint has no parent directory".to_owned(),
         )
     })?;
+    #[cfg(windows)]
+    iroha_fs::PrivateDirectory::open_or_create(parent)
+        .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+    #[cfg(not(windows))]
     match fs::symlink_metadata(parent) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             return Err(ProviderIngestOutboxError::Checkpoint(
@@ -1885,8 +1928,8 @@ fn provider_ingest_lock_path(checkpoint_path: &Path) -> Result<PathBuf, Provider
 }
 fn provider_ingest_directory_identity(
     path: &Path,
-) -> Result<ProviderIngestDirectoryIdentity, ProviderIngestOutboxError> {
-    let metadata = fs::symlink_metadata(path)
+) -> Result<FileIdentity, ProviderIngestOutboxError> {
+    let metadata = FileMetadata::symlink_metadata(path)
         .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(ProviderIngestOutboxError::Checkpoint(format!(
@@ -1894,18 +1937,30 @@ fn provider_ingest_directory_identity(
             path.display()
         )));
     }
-    Ok(ProviderIngestDirectoryIdentity {
-        #[cfg(unix)]
-        device: metadata.dev(),
-        #[cfg(unix)]
-        inode: metadata.ino(),
-    })
+    #[cfg(windows)]
+    {
+        let directory = iroha_fs::PrivateDirectory::open(path)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+        if directory
+            .identity()
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+            != metadata.identity()
+        {
+            return Err(ProviderIngestOutboxError::Checkpoint(
+                "provider-ingest checkpoint parent changed while inspecting".to_owned(),
+            ));
+        }
+        directory
+            .revalidate()
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+    }
+    Ok(metadata.identity())
 }
 fn validate_provider_ingest_lock_metadata(
     path: &Path,
-    metadata: &fs::Metadata,
+    metadata: &FileMetadata,
 ) -> Result<(), ProviderIngestOutboxError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.links() != 1 {
         return Err(ProviderIngestOutboxError::Checkpoint(format!(
             "provider-ingest writer lock `{}` must be a non-symlink regular file",
             path.display()
@@ -2188,6 +2243,7 @@ impl ProviderIngestOutbox {
             None => ProviderIngestOutboxCheckpointV1::default(),
         };
         let aggregate_counts = checkpoint_counts(&checkpoint);
+        writer_lock.validate_live(&path)?;
         Ok(Self {
             path: Some(Arc::new(path)),
             writer_lock: Some(writer_lock),
@@ -2298,6 +2354,7 @@ impl ProviderIngestOutbox {
         writer_lock.validate_live(&path)?;
         authority.assert_identity()?;
         let aggregate_counts = checkpoint_counts(&checkpoint);
+        writer_lock.validate_live(&path)?;
         Ok(Self {
             path: Some(Arc::new(path)),
             writer_lock: Some(writer_lock),
@@ -6459,7 +6516,16 @@ mod tests {
         );
     }
     fn checkpoint_path(directory: &TempDir) -> PathBuf {
-        fs::canonicalize(directory.path())
+        #[cfg(windows)]
+        let root = {
+            let private = directory.path().join("private");
+            iroha_fs::PrivateDirectory::open_or_create(&private)
+                .expect("private checkpoint fixture");
+            private
+        };
+        #[cfg(not(windows))]
+        let root = directory.path().to_owned();
+        fs::canonicalize(root)
             .expect("canonical tempdir")
             .join(PROVIDER_INGEST_OUTBOX_FILE_V1)
     }
@@ -7994,6 +8060,105 @@ mod tests {
                 Err(ProviderIngestOutboxError::Checkpoint(_))
             ));
         }
+    }
+    #[cfg(windows)]
+    fn change_everyone_read(path: &Path, grant: bool) {
+        assert!(
+            std::process::Command::new("icacls")
+                .arg(path)
+                .arg(if grant { "/grant" } else { "/remove:g" })
+                .arg(if grant { "*S-1-1-0:R" } else { "*S-1-1-0" })
+                .status()
+                .expect("change native ACL")
+                .success()
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_ingest_writer_rejects_inherited_and_changed_private_custody() {
+        let temporary = tempdir().unwrap();
+        let inherited = temporary.path().join(PROVIDER_INGEST_OUTBOX_FILE_V1);
+        assert!(matches!(
+            ProviderIngestOutbox::open(&inherited, policy()),
+            Err(ProviderIngestOutboxError::Checkpoint(_))
+        ));
+        let path = checkpoint_path(&temporary);
+        let lock_path = provider_ingest_lock_path(&path).unwrap();
+        for changed in [&lock_path, path.parent().unwrap()] {
+            let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
+            let writer = outbox.writer_lock.as_ref().unwrap();
+            writer.validate_live(&path).unwrap();
+            change_everyone_read(changed, true);
+            assert!(matches!(
+                writer.validate_live(&path),
+                Err(ProviderIngestOutboxError::Checkpoint(_))
+            ));
+            drop(outbox);
+            assert!(matches!(
+                ProviderIngestOutbox::open(&path, policy()),
+                Err(ProviderIngestOutboxError::Checkpoint(_))
+            ));
+            change_everyone_read(changed, false);
+            drop(ProviderIngestOutbox::open(&path, policy()).unwrap());
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_ingest_writer_retains_parent_and_detects_lock_link_and_content_changes() {
+        use std::io::Write as _;
+
+        let temporary = tempdir().unwrap();
+        let path = checkpoint_path(&temporary);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let writer = outbox.writer_lock.as_ref().unwrap();
+        let parent = path.parent().unwrap();
+        assert!(fs::rename(parent, temporary.path().join("displaced")).is_err());
+        writer.validate_live(&path).unwrap();
+        let alias = parent.join("lock-alias");
+        fs::hard_link(&writer.lock_path, &alias).unwrap();
+        assert!(matches!(
+            writer.validate_live(&path),
+            Err(ProviderIngestOutboxError::Checkpoint(_))
+        ));
+        fs::remove_file(alias).unwrap();
+        drop(outbox);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).unwrap();
+        let writer = outbox.writer_lock.as_ref().unwrap();
+        let mut competing = fs::OpenOptions::new()
+            .write(true)
+            .open(&writer.lock_path)
+            .unwrap();
+        assert_eq!(
+            competing
+                .write_all(b"competing write")
+                .unwrap_err()
+                .raw_os_error(),
+            Some(33),
+            "the native byte-range lease excludes a competing writer"
+        );
+        drop(competing);
+        writer.validate_live(&path).unwrap();
+        // The lease-owning original can write its own range. Inject content drift
+        // through that exact handle to exercise the separate snapshot check.
+        (&writer._file).write_all(b"changed lock contents").unwrap();
+        writer._file.sync_all().unwrap();
+        assert!(matches!(
+            writer.validate_live(&path),
+            Err(ProviderIngestOutboxError::Checkpoint(_))
+        ));
+    }
+    #[test]
+    fn provider_ingest_parent_identity_distinguishes_equal_directory_shapes() {
+        let temporary = tempdir().unwrap();
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        for root in [&first, &second] {
+            iroha_fs::PrivateDirectory::open_or_create(root).unwrap();
+        }
+        assert_ne!(
+            provider_ingest_directory_identity(&first).unwrap(),
+            provider_ingest_directory_identity(&second).unwrap()
+        );
     }
     #[test]
     fn completion_ambiguity_absence_rejection_and_duplicates_are_safe() {

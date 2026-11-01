@@ -19,7 +19,9 @@ fn captured_trigger_set_identity_and_persistence_frame() {
         assert_eq!(SetDto::frame_name(), text("root_hint"));
         let hash: Vec<u8> = text("schema_hash")
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect();
         assert_eq!(

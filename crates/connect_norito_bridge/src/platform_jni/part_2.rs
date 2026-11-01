@@ -38,14 +38,8 @@ pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
     if archive.is_null() {
         return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::NullPointer.code();
     }
-    let archive_len = match env.get_array_length(&archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => {
-                return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::ArchiveTooLarge
-                    .code();
-            }
-        },
+    let archive_len = match archive.len(env) {
+        Ok(value) => value,
         Err(_) => {
             return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::MalformedArchive.code();
         }
@@ -66,13 +60,8 @@ pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     if archive.is_null() {
         return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
     }
-    let archive_len = match env.get_array_length(&archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => {
-                return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
-            }
-        },
+    let archive_len = match archive.len(env) {
+        Ok(value) => value,
         Err(_) => return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
     };
     if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
@@ -102,7 +91,7 @@ fn java_privacy_expected_network(
     env: &mut jni::Env<'_>,
     network: &jni::objects::JByteArray<'_>,
 ) -> Option<[u8; 32]> {
-    if network.is_null() || env.get_array_length(network).ok()? != 32 {
+    if network.is_null() || network.len(env).ok()? != 32 {
         return None;
     }
     let bytes: [u8; 32] = env.convert_byte_array(network).ok()?.try_into().ok()?;
@@ -137,12 +126,8 @@ pub(super) fn java_native_privacy_require_exact12_capability_tuple(
     if archive.is_null() {
         return JNI_FALSE;
     }
-    let archive_len = match env.get_array_length(&archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => return JNI_FALSE,
-        },
-        Err(_) => return JNI_FALSE,
+    let Ok(archive_len) = archive.len(env) else {
+        return JNI_FALSE;
     };
     if archive_len == 0 || archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         return JNI_FALSE;
@@ -184,19 +169,11 @@ pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
     if manifest_archive.is_null() || instruction_archive.is_null() {
         return JNI_FALSE;
     }
-    let manifest_len = match env.get_array_length(&manifest_archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => return JNI_FALSE,
-        },
-        Err(_) => return JNI_FALSE,
+    let Ok(manifest_len) = manifest_archive.len(env) else {
+        return JNI_FALSE;
     };
-    let instruction_len = match env.get_array_length(&instruction_archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => return JNI_FALSE,
-        },
-        Err(_) => return JNI_FALSE,
+    let Ok(instruction_len) = instruction_archive.len(env) else {
+        return JNI_FALSE;
     };
     if manifest_len == 0
         || manifest_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
@@ -273,11 +250,7 @@ pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
         return std::ptr::null_mut();
     }
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let archive_len = env
-            .get_array_length(&archive)
-            .map_err(|error| error.to_string())?;
-        let archive_len = usize::try_from(archive_len)
-            .map_err(|_| "exact-12 capability manifest length is invalid".to_owned())?;
+        let archive_len = archive.len(env).map_err(|error| error.to_string())?;
         if archive_len == 0 || archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
             return Err("exact-12 capability manifest length is outside its bound".to_owned());
         }
@@ -328,13 +301,8 @@ pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
     if archive.is_null() {
         return java_privacy_validate_exact12_fixture_bundle_bytes(None);
     }
-    let archive_len = match env.get_array_length(&archive) {
-        Ok(value) => match usize::try_from(value) {
-            Ok(value) => value,
-            Err(_) => {
-                return PrivacyExact12FixtureBundleValidationStatusV1::ArchiveTooLarge.code();
-            }
-        },
+    let archive_len = match archive.len(env) {
+        Ok(value) => value,
         Err(_) => return PrivacyExact12FixtureBundleValidationStatusV1::MalformedArchive.code(),
     };
     if archive_len > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {

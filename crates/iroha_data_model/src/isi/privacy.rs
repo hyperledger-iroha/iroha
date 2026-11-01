@@ -795,6 +795,17 @@ impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
 pub(super) fn current_zk_x509_request_fixture_v1() -> SubmitPrivacyZkX509CertificateV1 {
     tests::x509_reference_request()
 }
+/// Reuse the chain-wide limit schedule fixture for its current typed record capture.
+#[cfg(test)]
+pub(super) fn current_consensus_policy_update_fixture_v1() -> SchedulePrivacyConsensusPolicyUpdateV1
+{
+    tests::consensus_policy_update_request()
+}
+/// Reuse the protocol limit schedule fixture for its current typed record capture.
+#[cfg(test)]
+pub(super) fn current_protocol_limits_update_fixture_v1() -> SchedulePrivacyProtocolLimitsUpdateV1 {
+    tests::protocol_limits_update_request()
+}
 /// Reuse the populated privacy proof fixture for current typed record capture.
 #[cfg(test)]
 pub(super) fn current_submit_proof_fixture_v1() -> SubmitPrivacyProofV1 {
@@ -1264,24 +1275,31 @@ mod tests {
         )
         .expect("canonical terminal X.509 signed-CRL record")
     }
+    pub(super) fn consensus_policy_update_request() -> SchedulePrivacyConsensusPolicyUpdateV1 {
+        let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
+        next_limits.max_actions_per_block = 1;
+        SchedulePrivacyConsensusPolicyUpdateV1::new(700, next_limits)
+    }
+    pub(super) fn protocol_limits_update_request() -> SchedulePrivacyProtocolLimitsUpdateV1 {
+        let profile = profile();
+        let mut next_limits = profile.protocol_limits;
+        let PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(ref mut limits) = next_limits
+        else {
+            unreachable!("Jindo fixture")
+        };
+        limits.max_polynomial_count -= 1;
+        SchedulePrivacyProtocolLimitsUpdateV1::new(profile.protocol_id, 700, next_limits)
+    }
     macro_rules! for_each_privacy_isi_fixture {
         ($check:ident) => {
-            $check!(SchedulePrivacyConsensusPolicyUpdateV1::WIRE_ID, {
-                let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
-                next_limits.max_actions_per_block = 1;
-                SchedulePrivacyConsensusPolicyUpdateV1::new(700, next_limits)
-            });
-            $check!(SchedulePrivacyProtocolLimitsUpdateV1::WIRE_ID, {
-                let profile = profile();
-                let mut next_limits = profile.protocol_limits;
-                let PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(ref mut limits) =
-                    next_limits
-                else {
-                    unreachable!("Jindo fixture")
-                };
-                limits.max_polynomial_count -= 1;
-                SchedulePrivacyProtocolLimitsUpdateV1::new(profile.protocol_id, 700, next_limits)
-            });
+            $check!(
+                SchedulePrivacyConsensusPolicyUpdateV1::WIRE_ID,
+                consensus_policy_update_request()
+            );
+            $check!(
+                SchedulePrivacyProtocolLimitsUpdateV1::WIRE_ID,
+                protocol_limits_update_request()
+            );
             $check!(
                 PublishPrivacyRootV1::WIRE_ID,
                 PublishPrivacyRootV1::new(publication())

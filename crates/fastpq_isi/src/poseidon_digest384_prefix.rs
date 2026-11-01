@@ -490,13 +490,12 @@ impl CachedLane {
         debug_assert!(bytes.len() <= MAX_FRAMED_FIELD_BYTES_V1);
         self.absorb(tag);
         self.absorb(u64::try_from(bytes.len()).expect("bounded field length fits u64"));
-        let mut chunks = bytes.chunks_exact(7);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = bytes.as_chunks::<7>();
+        for chunk in chunks {
             let mut word = Zeroizing::new([0; 8]);
             word[..7].copy_from_slice(chunk);
             self.absorb(u64::from_le_bytes(*word));
         }
-        let remainder = chunks.remainder();
         let mut terminal = Zeroizing::new([0; 8]);
         terminal[..remainder.len()].copy_from_slice(remainder);
         terminal[remainder.len()] = 1;
@@ -1212,7 +1211,9 @@ mod tests {
             assert!(encoded.len().is_multiple_of(2));
             encoded
                 .as_bytes()
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
                 .collect()
         }

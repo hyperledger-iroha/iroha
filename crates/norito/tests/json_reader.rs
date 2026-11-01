@@ -97,7 +97,7 @@ fn reader_tokens_vs_serde_count() {
                 }
                 Value::Object(m) => {
                     *c += 1;
-                    for (_, val) in m.iter() {
+                    for val in m.values() {
                         *c += 1;
                         walk(val, c)
                     }

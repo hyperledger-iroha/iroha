@@ -27935,7 +27935,7 @@ fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 8] {
     let mut limbs = [0_u64; 8];
     // Each 32-bit word fits Goldilocks without reduction. Reducing four u64
     // words modulo the field aliases distinct 32-byte statement hashes.
-    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let mut word = [0_u8; 4];
         word.copy_from_slice(chunk);
         limbs[index] = u64::from(u32::from_le_bytes(word));
@@ -38720,13 +38720,12 @@ mod first_release_hard_cut_tests {
     fn reference_absorb_byte_field(stream: &mut Vec<u64>, tag: u64, bytes: &[u8]) {
         stream.push(tag);
         stream.push(u64::try_from(bytes.len()).expect("test field length fits u64"));
-        let mut chunks = bytes.chunks_exact(7);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = bytes.as_chunks::<7>();
+        for chunk in chunks {
             let mut word = [0_u8; 8];
             word[..7].copy_from_slice(chunk);
             stream.push(u64::from_le_bytes(word));
         }
-        let remainder = chunks.remainder();
         let mut terminal = [0_u8; 8];
         terminal[..remainder.len()].copy_from_slice(remainder);
         terminal[remainder.len()] = 1;

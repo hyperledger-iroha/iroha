@@ -172,7 +172,7 @@ impl Destination for AdmittedDestination<'_> {
                     json::Error::Message(format!("unknown algorithm '{}'", text.as_ref())).into()
                 })
             },
-            |output, algorithm| output.push_reserved(algorithm),
+            iroha_allocation::ChargedBuffer::push_reserved,
         )
     }
     #[allow(unsafe_code)]

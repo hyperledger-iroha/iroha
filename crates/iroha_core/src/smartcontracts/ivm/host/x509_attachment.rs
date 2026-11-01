@@ -91,7 +91,7 @@ impl DecodedRequest {
 }
 
 /// One private queued request and its exact original proof identity/backing.
-pub(crate) struct OwnedX509Action {
+pub struct OwnedX509Action {
     binding: X509Binding,
     proof: ChargedBuffer<u8>,
     request: DecodedRequest,
@@ -149,7 +149,7 @@ impl std::fmt::Debug for ExecutedHostInstructions {
         f.debug_struct("ExecutedHostInstructions")
             .field("instructions", &self.instructions)
             .field("retained_requests", &self.retained)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl std::ops::Deref for ExecutedHostInstructions {
@@ -373,9 +373,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             .map_err(x509_vm_error)?;
         self.queued.push(QueuedEffect {
             payload: QueuedEffectPayload::AttachedX509(OwnedX509Action {
-                request,
                 binding,
                 proof,
+                request,
             }),
             authority: self.effect_authority(),
             contract_runtime_context: self.current_contract_runtime_context.clone(),
@@ -410,10 +410,13 @@ mod allocation_tests {
         assert_eq!(budget.reserved_bytes(), 0);
         budget.set_limit_bytes(64 * 1024 * 1024);
         host.reserve_x509_queue_backing(&budget).unwrap();
-        assert!(host.queued.capacity() >= host.instruction_queue_limits.max_items as usize);
+        assert!(
+            host.queued.capacity()
+                >= usize::try_from(host.instruction_queue_limits.max_items).unwrap()
+        );
         let retained = budget.reserved_bytes();
         assert!(retained >= host.queued.capacity() * std::mem::size_of::<QueuedEffect>());
-        host.queued.truncate(0);
+        host.queued.clear();
         assert_eq!(
             budget.reserved_bytes(),
             retained,

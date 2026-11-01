@@ -893,7 +893,7 @@ fn not_acceptable(message: impl Into<String>) -> Response {
     )
 }
 fn parse_accept_qvalue(raw: &str) -> Option<u16> {
-    let (whole, fraction) = raw.split_once('.').map_or((raw, ""), |parts| parts);
+    let (whole, fraction) = raw.split_once('.').unwrap_or((raw, ""));
     if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -1848,7 +1848,7 @@ pub mod extractors {
         json::from_value::<T>(content.clone()).map_err(|error| {
             if let json::Error::UnsupportedFeature(algorithm) = &error
                 && let Some(response) = transaction_crypto_decode_deferral::<T>(
-                    &norito::Error::UnsupportedFeature(*algorithm),
+                    &norito::Error::UnsupportedFeature(algorithm),
                 )
             {
                 return response;
@@ -2388,25 +2388,15 @@ pub mod extractors {
         T: JsonDeserializeOwned + Send,
     {
         type Rejection = Response;
+        #[expect(
+            clippy::unused_async_trait_impl,
+            reason = "Rejections read the task-local response format, so decoding must run when the extractor future is polled."
+        )]
         async fn from_request_parts(
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query();
-            if query == Some("") {
-                return Err(query_rejection(QueryDecodeError::Invalid(
-                    "A present query string must contain at least one key=value pair.",
-                )));
-            }
-            if let Some(decoded) =
-                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), true)
-            {
-                return decoded.map(NoritoQuery);
-            }
-            match decode_query::<T>(query) {
-                Ok(value) => Ok(NoritoQuery(value)),
-                Err(error) => Err(query_rejection(error)),
-            }
+            decode_request_query::<T>(parts.uri.query(), true).map(NoritoQuery)
         }
     }
     /// Extractor for canonical form-encoded URL queries decoded into
@@ -2419,26 +2409,40 @@ pub mod extractors {
         T: JsonDeserializeOwned + Send,
     {
         type Rejection = Response;
+        #[expect(
+            clippy::unused_async_trait_impl,
+            reason = "Rejections read the task-local response format, so decoding must run when the extractor future is polled."
+        )]
         async fn from_request_parts(
             parts: &mut axum::http::request::Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let query = parts.uri.query();
-            if query == Some("") {
-                return Err(query_rejection(QueryDecodeError::Invalid(
-                    "A present query string must contain at least one key=value pair.",
-                )));
-            }
-            if let Some(decoded) =
-                crate::decode_current_app_routed_read_query::<T>(query.unwrap_or_default(), false)
-            {
-                return decoded.map(NoritoStringQuery);
-            }
-            match decode_string_query::<T>(query) {
-                Ok(value) => Ok(NoritoStringQuery(value)),
-                Err(error) => Err(query_rejection(error)),
-            }
+            decode_request_query::<T>(parts.uri.query(), false).map(NoritoStringQuery)
         }
+    }
+    /// Decode a request URL query for [`NoritoQuery`] (`coerce_scalars`) or
+    /// [`NoritoStringQuery`] (string values only).
+    fn decode_request_query<T: JsonDeserializeOwned>(
+        query: Option<&str>,
+        coerce_scalars: bool,
+    ) -> Result<T, Response> {
+        if query == Some("") {
+            return Err(query_rejection(QueryDecodeError::Invalid(
+                "A present query string must contain at least one key=value pair.",
+            )));
+        }
+        if let Some(decoded) = crate::decode_current_app_routed_read_query::<T>(
+            query.unwrap_or_default(),
+            coerce_scalars,
+        ) {
+            return decoded;
+        }
+        let decoded = if coerce_scalars {
+            decode_query::<T>(query)
+        } else {
+            decode_string_query::<T>(query)
+        };
+        decoded.map_err(query_rejection)
     }
     fn decode_query<T: JsonDeserializeOwned>(query: Option<&str>) -> Result<T, QueryDecodeError> {
         let pairs = query_pairs(query)?;

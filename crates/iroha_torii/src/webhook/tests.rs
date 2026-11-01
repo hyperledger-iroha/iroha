@@ -109,7 +109,7 @@ fn proof_verified_event(backend: &str, call_hash: Option<[u8; 32]>) -> EventBox 
         })),
     ))
 }
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 #[test]
 fn webhook_persistence_fails_closed_without_private_storage_support() {
     let _env = TestDataDirGuard::new();

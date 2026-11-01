@@ -629,8 +629,10 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
         .expect("parse program")
         .code_offset;
     let instruction_gas = program[code_offset..]
-        .chunks_exact(4)
-        .map(|word| ivm::gas::cost_of(u32::from_le_bytes(word.try_into().unwrap())).unwrap())
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| ivm::gas::cost_of(u32::from_le_bytes(*word)).unwrap())
         .sum::<u64>();
     // The authenticated fixture returns one Unit table slot. Its schema node and
     // word validation are charged separately from the emitted JALR instruction.

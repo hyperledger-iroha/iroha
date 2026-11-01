@@ -307,6 +307,10 @@ where
                 MusubiProviderAttestationApprovalErrorV1::SignerRejected
             }
         })?;
+    // A ready inner future can win over an already-expired Tokio timeout.
+    if tokio::time::Instant::now() >= signer_deadline {
+        return Err(MusubiProviderAttestationApprovalErrorV1::SignerTimedOut);
+    }
     let handle_after = signer.runtime_handle();
     if handle_after != handle_before || !is_production_runtime_handle(handle_after) {
         return Err(MusubiProviderAttestationApprovalErrorV1::EligibilityChanged);
@@ -1978,7 +1982,7 @@ fn validate_stored_state(
                 }
                 MusubiProviderAttestationDeadLetterReasonV1::HandoffRetryExhausted
                 | MusubiProviderAttestationDeadLetterReasonV1::HandoffRejected => {
-                    attestation.as_deref().is_some_and(&valid_attestation)
+                    attestation.as_deref().is_some_and(valid_attestation)
                 }
             };
             entry.generation != 0
@@ -2241,11 +2245,20 @@ impl MusubiProviderAttestationJournalV1 {
             .ok_or(MusubiProviderAttestationJournalErrorV1::ArithmeticOverflow)?;
         tokio::time::timeout_at(monotonic_deadline, async {
             let runtime_before = qualified_inventory_runtime_snapshot(inventory).await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             let readback = inventory
                 .get(&scope, requested_key)
                 .await
                 .map_err(map_inventory_error);
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             let runtime_after = qualified_inventory_runtime_snapshot(inventory).await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             if runtime_after != runtime_before {
                 return Err(MusubiProviderAttestationJournalErrorV1::InventoryRejected);
             }
@@ -2260,6 +2273,9 @@ impl MusubiProviderAttestationJournalV1 {
                 || &item.attestation().payload != request.payload()
             {
                 return Err(MusubiProviderAttestationJournalErrorV1::InventoryRejected);
+            }
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
             }
             Ok(MusubiProviderAttestationPreEnqueueProbeV1::InventoryExact)
         })
@@ -2697,7 +2713,11 @@ impl MusubiProviderAttestationJournalV1 {
             .ok_or(MusubiProviderAttestationJournalErrorV1::ArithmeticOverflow)?;
         let mut phase = ExternalCoordinationPhaseV1::Preflight;
         tokio::time::timeout_at(monotonic_deadline, async {
-            if self.preflight_approval_claim(claim, now_unix_ms).await? {
+            let existing = self.preflight_approval_claim(claim, now_unix_ms).await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::StoreUnavailable);
+            }
+            if existing {
                 return Ok(MusubiProviderAttestationApprovalStoreOutcomeV1::Existing);
             }
             phase = ExternalCoordinationPhaseV1::External;
@@ -2708,13 +2728,23 @@ impl MusubiProviderAttestationJournalV1 {
             )
             .await
             .map_err(map_approval_error)?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::SignerUnavailable);
+            }
             phase = ExternalCoordinationPhaseV1::SealTime;
             let completed_at_unix_ms = clock.now_unix_ms().await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::ClockUnavailable);
+            }
             if completed_at_unix_ms >= operation_deadline {
                 return Err(MusubiProviderAttestationJournalErrorV1::SignerUnavailable);
             }
             if completed_at_unix_ms >= claim.lease_expires_at_ms {
                 return Err(MusubiProviderAttestationJournalErrorV1::StaleClaim);
+            }
+            // This fences CAS admission, not completion of an already-started write.
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::StoreUnavailable);
             }
             phase = ExternalCoordinationPhaseV1::Persist;
             self.store_approved(claim, request, attestation, completed_at_unix_ms)
@@ -2989,16 +3019,26 @@ impl MusubiProviderAttestationJournalV1 {
             .ok_or(MusubiProviderAttestationJournalErrorV1::ArithmeticOverflow)?;
         let mut phase = ExternalCoordinationPhaseV1::Preflight;
         tokio::time::timeout_at(monotonic_deadline, async {
-            if self.preflight_handoff_claim(claim, now_unix_ms).await? {
+            let existing = self.preflight_handoff_claim(claim, now_unix_ms).await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::StoreUnavailable);
+            }
+            if existing {
                 return Ok(MusubiProviderAttestationDeliveryOutcomeV1::Existing);
             }
             phase = ExternalCoordinationPhaseV1::External;
             let runtime_before = qualified_inventory_runtime_snapshot(inventory).await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             let external_result = async {
                 let inventory_revision = inventory
                     .put(claim.item.clone())
                     .await
                     .map_err(map_inventory_error)?;
+                if tokio::time::Instant::now() >= monotonic_deadline {
+                    return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+                }
                 let readback = inventory
                     .get(claim.item.scope(), claim.item.key())
                     .await
@@ -3010,13 +3050,22 @@ impl MusubiProviderAttestationJournalV1 {
                 Ok(readback)
             }
             .await;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             let runtime_after = qualified_inventory_runtime_snapshot(inventory).await?;
             if runtime_after != runtime_before {
                 return Err(MusubiProviderAttestationJournalErrorV1::InventoryRejected);
             }
             let readback = external_result?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
+            }
             phase = ExternalCoordinationPhaseV1::SealTime;
             let completed_at_unix_ms = clock.now_unix_ms().await?;
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::ClockUnavailable);
+            }
             if completed_at_unix_ms >= operation_deadline {
                 return Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable);
             }
@@ -3028,6 +3077,10 @@ impl MusubiProviderAttestationJournalV1 {
                 readback.inventory_revision(),
             )
             .map_err(|_| MusubiProviderAttestationJournalErrorV1::InvalidInventoryReceipt)?;
+            // This fences CAS admission, not completion of an already-started write.
+            if tokio::time::Instant::now() >= monotonic_deadline {
+                return Err(MusubiProviderAttestationJournalErrorV1::StoreUnavailable);
+            }
             phase = ExternalCoordinationPhaseV1::Persist;
             self.mark_delivered(claim, receipt, completed_at_unix_ms)
                 .await

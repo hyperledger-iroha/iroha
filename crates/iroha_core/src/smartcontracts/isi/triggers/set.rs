@@ -24,8 +24,8 @@ mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
 #[cfg(test)]
-#[path = "set_time_source.rs"]
-mod time_source;
+#[path = "set_scheduled_progress.rs"]
+mod scheduled_progress_tests;
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use action_relation::{ActionTable, scheduled_work as action_source_work};
 pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
@@ -34,10 +34,6 @@ pub(crate) use contract_relation::{TriggerContractError, scheduled_work as contr
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
-};
-#[cfg(test)]
-pub(crate) use time_source::{
-    ApplyingTimeSourceError, ApplyingTimeSourceWork, CapturedApplyingTimeSource,
 };
 
 use crate::state::block_field::{AggregatePublication, BlockField, StorageField};
@@ -128,10 +124,6 @@ impl BorrowedTriggerFilter<'_> {
 /// The complete source remains the wire oracle and response identity.
 pub(crate) struct BorrowedTriggerSource<'a> {
     full: &'a dyn norito::core::SerializePayload,
-    #[cfg(test)]
-    persistent_action: &'a dyn norito::core::SerializePayload,
-    #[cfg(test)]
-    retry_state: Option<(u32, u64)>,
     id: &'a TriggerId,
     executable: &'a dyn norito::core::SerializePayload,
     executable_source: &'a ExecutableRef,
@@ -143,42 +135,6 @@ pub(crate) struct BorrowedTriggerSource<'a> {
     metadata: &'a Metadata,
 }
 impl BorrowedTriggerSource<'_> {
-    /// Prepare an unvalidated frame of this original persistent Action while
-    /// its borrowed store fields remain alive. Only the audited fixed-shape
-    /// Time subset is admitted; other shapes refuse before their serializers.
-    ///
-    /// Store traversal, original-contract lookup and lifecycle authentication
-    /// precede this method and still require their own bounded owner. This does
-    /// not journal a change, admit an instruction registry, or activate V2.
-    #[cfg(test)]
-    pub(crate) fn try_prepare_bounded_time_frame(
-        &self,
-        pool: &iroha_allocation::AllocationBudget,
-        limits: norito::core::EncodeWorkLimits,
-    ) -> Result<
-        iroha_data_model::block::execution_output::RetainedActionFrameBytesV1,
-        iroha_data_model::block::execution_output::ActionFrameProductionFailureV1,
-    > {
-        iroha_data_model::block::execution_output::RetainedActionFrameBytesV1::
-            try_encode_unvalidated_payload(&BoundedTimeActionPayload(self), pool, limits)
-    }
-
-    /// Borrow the complete original six-field persistent Action payload.
-    ///
-    /// This uses original IVM bytecode rather than its loaded hash/cache entry.
-    /// It allocates or retains nothing. A lifecycle journal must separately fund
-    /// ownership, normalization, hashing and encoding before retaining a copy.
-    /// This borrowed source alone is not an authenticated lifecycle statement.
-    #[cfg(test)]
-    pub(crate) fn persistent_action(&self) -> &dyn norito::core::SerializePayload {
-        self.persistent_action
-    }
-    /// Actual retry runtime tuple, kept separate from the legacy Action payload.
-    /// Absence stays absent; this accessor does not infer a zero or clear state.
-    #[cfg(test)]
-    pub(crate) fn retry_state(&self) -> Option<(u32, u64)> {
-        self.retry_state
-    }
     /// Original validated trigger name.
     pub(crate) fn id(&self) -> &TriggerId {
         self.id
@@ -227,174 +183,6 @@ impl BorrowedTriggerSource<'_> {
         self.metadata
     }
 }
-/// Private construction binds the serializer to the visitor's original six
-/// borrowed fields; no caller-supplied payload or hash can replace that source.
-#[cfg(test)]
-struct BoundedTimeActionPayload<'source, 'borrow>(&'source BorrowedTriggerSource<'borrow>);
-#[cfg(test)]
-impl norito::core::SerializePayload for BoundedTimeActionPayload<'_, '_> {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        use norito::core::{charge_encode_prewrite, refuse_encode_source};
-        // Charge before any branch inspection. A scope is mandatory here.
-        if !charge_encode_prewrite(0)? {
-            return Err(refuse_encode_source());
-        }
-        let source = self.0;
-        if !matches!(source.filter_source, BorrowedTriggerFilter::Time(_))
-            || source.authority.controller().single_signatory().is_none()
-        {
-            return Err(refuse_encode_source());
-        }
-        admit_bounded_time_executable(source.executable_source)?;
-        admit_bounded_registration_metadata(source.metadata)?;
-        // Every admitted value is still serialized from the original stored
-        // six-field view. In particular the Batch wrapper, arguments and exact
-        // registration numbers are neither removed nor rebuilt here.
-        source.persistent_action.serialize(writer)
-    }
-}
-/// Close the variable-shaped producer surface without invoking a registry,
-/// argument decoder, contract lookup or an owned replacement serializer.
-#[cfg(test)]
-fn admit_bounded_time_executable(source: &ExecutableRef) -> Result<(), norito::Error> {
-    use norito::core::{charge_encode_prewrite, refuse_encode_source};
-    if !charge_encode_prewrite(0)? {
-        return Err(refuse_encode_source());
-    }
-    let invocation = match source {
-        ExecutableRef::Instructions(items) if items.is_empty() => return Ok(()),
-        ExecutableRef::Batch(items) if items.is_empty() => return Ok(()),
-        ExecutableRef::Batch(items) if items.len() == 1 => match &items[0] {
-            ExecutableBatchItem::ContractCall(invocation) => invocation,
-            _ => return Err(refuse_encode_source()),
-        },
-        _ => return Err(refuse_encode_source()),
-    };
-    // These are the constructor's public entrypoint bounds, not a replacement
-    // for invocation or argument-schema authentication by the execution owner.
-    let entrypoint = invocation.entrypoint.as_str();
-    if entrypoint.is_empty() || entrypoint.len() > 255 {
-        return Err(refuse_encode_source());
-    }
-    // The original trim walks UTF-8 at both ends. Pay a conservative two full
-    // byte visits before either walk; no temporary String is constructed.
-    charge_encode_prewrite(entrypoint.len() * 2)?;
-    if entrypoint.trim() != entrypoint {
-        return Err(refuse_encode_source());
-    }
-    let Some(arguments) = invocation.arguments.as_ref() else {
-        return Err(refuse_encode_source());
-    };
-    if arguments.as_bytes().is_empty()
-        || arguments.as_bytes().len()
-            > iroha_data_model::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES
-    {
-        return Err(refuse_encode_source());
-    }
-    // ContractArgumentRecord retains its original raw Vec<u8> codec: constant
-    // time sizing and charged writer visits for measurement/checksum/output.
-    // Its inner EntrypointArgumentRecordV1 schema is not validated by this gate.
-    Ok(())
-}
-
-/// Normal Register injects two u64 JSON numbers and a fixed runtime-consent digest. Admit
-/// their original lexical bytes, including the digest's marker and checksum, without a JSON
-/// decoder or an owned replacement. The source-only path also supports empty metadata and
-/// fixtures carrying just the numeric pair or digest; this does not authenticate registration.
-#[cfg(test)]
-fn admit_bounded_registration_metadata(metadata: &Metadata) -> Result<(), norito::Error> {
-    use norito::core::{charge_encode_prewrite, refuse_encode_source};
-    if !charge_encode_prewrite(0)? {
-        return Err(refuse_encode_source());
-    }
-    let entries = metadata.iter();
-    if entries.len() == 0 {
-        return Ok(());
-    }
-    if entries.len() > 3 {
-        return Err(refuse_encode_source());
-    }
-    let mut numeric_fields = 0_u8;
-    for (name, json) in entries {
-        let actual: &str = name.as_ref();
-        charge_encode_prewrite(actual.len())?;
-        // Json::as_ref strips quotation marks; get() deliberately does not.
-        let raw = json.get().as_bytes();
-        match actual {
-            "__registered_at_ms" => numeric_fields |= 1,
-            "__registered_block_height" => numeric_fields |= 2,
-            super::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY => {
-                // Hash's canonical literal is `"hash:<64 uppercase hex>#<4 checksum hex>"`.
-                // The allocation-free key codec checks both the checksum and hash marker.
-                if raw.len() != 76 || raw[0] != b'"' || raw[75] != b'"' {
-                    return Err(refuse_encode_source());
-                }
-                // Charge conservative repeated visits before the fixed-size literal scanner,
-                // CRC check and hex decoding. No uncharged arbitrary metadata is traversed.
-                charge_encode_prewrite(raw.len() * 8)?;
-                if !canonical_runtime_capture(json) {
-                    return Err(refuse_encode_source());
-                }
-                continue;
-            }
-            _ => return Err(refuse_encode_source()),
-        }
-        if raw.is_empty() || raw.len() > 20 {
-            return Err(refuse_encode_source());
-        }
-        charge_encode_prewrite(raw.len())?;
-        let mut value = 0_u64;
-        for (index, &byte) in raw.iter().enumerate() {
-            if !byte.is_ascii_digit() || (index == 0 && byte == b'0' && raw.len() != 1) {
-                return Err(refuse_encode_source());
-            }
-            value = value
-                .checked_mul(10)
-                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
-                .ok_or_else(refuse_encode_source)?;
-        }
-    }
-    if numeric_fields != 0 && numeric_fields != 3 {
-        return Err(refuse_encode_source());
-    }
-    Ok(())
-}
-
-/// Validate a fixed runtime-consent literal without general JSON parsing or a decoder budget.
-/// Binary DTO restoration already owns canonical Json bytes and must not collapse a fresh
-/// decoder refusal into its String error API. The bounded writer charges visits before calling.
-fn canonical_runtime_capture(capture: &Json) -> bool {
-    let raw = capture.get().as_bytes();
-    if raw.len() != 76 || raw[0] != b'"' || raw[75] != b'"' {
-        return false;
-    }
-    core::str::from_utf8(&raw[1..75]).is_ok_and(|literal| {
-        <Hash as json::JsonObjectKeyOwned>::from_json_key_text(literal).is_ok()
-    })
-}
-
-/// Author consent explicitly for tests that construct a trigger below registration.
-/// The fixture uses the default founded World and its actual executor, never a restore fallback.
-#[cfg(test)]
-fn capture_fixture_runtime_consent<F>(action: &mut SpecializedAction<F>) {
-    let state = crate::state::State::new_for_testing(
-        crate::state::World::default(),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-    );
-    let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 0, 0);
-    let mut block = state.block(header);
-    let tx = block.transaction();
-    let expectation =
-        crate::runtime::expectation::capture_executable(&action.executable, &tx.world)
-            .expect("default fixture runtime closure");
-    let digest = crate::runtime::expectation::digest_owned(&expectation, &tx.world)
-        .expect("fixture execution-consent digest");
-    action.metadata.insert(
-        super::runtime_expectation::metadata_key().clone(),
-        Json::new(digest),
-    );
-}
 impl norito::core::SerializePayload for BorrowedTriggerSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.full.serialize(writer)
@@ -412,6 +200,8 @@ pub enum Error {
     InvalidDataScopeAuthorization,
     /// Data trigger capacity exceeded: maximum 4096
     DataTriggerCapacity,
+    /// Time trigger capacity exceeded: maximum 4096
+    TimeTriggerCapacity,
     /// Data trigger authority `{0}` capacity exceeded: maximum 64
     DataTriggerAuthorityCapacity(AccountId),
     /// Proof-backed IVM executables cannot be registered as triggers.
@@ -419,6 +209,56 @@ pub enum Error {
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+/// First-release bound on retained Time actions, including disabled and PreCommit actions.
+/// Registration rejects excess work before it can acquire an autonomous progress obligation.
+pub const MAX_TIME_TRIGGERS_TOTAL: usize = 4_096;
+
+/// Earliest candidate block time that includes an original scheduled invocation.
+/// Scheduled intervals are right-open; retries use their inclusive persisted deadline.
+/// A height of zero denotes a fee classification over an already captured parent.
+fn scheduled_progress_at_ms<'a>(
+    actions: impl Iterator<Item = &'a LoadedAction<TimeEventFilter>>,
+    since_ms: u64,
+    next_height: u64,
+) -> Option<u64> {
+    let registration_height = if next_height == 0 {
+        u64::MAX
+    } else {
+        next_height
+    };
+    actions
+        .filter_map(|action| {
+            let ExecutionTime::Schedule(schedule) = action.filter.0 else {
+                // PreCommit must never manufacture an idle block.
+                return None;
+            };
+            if !trigger_is_enabled(action.metadata())
+                || action.repeats.is_depleted()
+                || !trigger_was_registered_before_block(action.metadata(), registration_height)
+                || super::progress::remaining(action.metadata()) == 0
+            {
+                return None;
+            }
+            if let Some(retry) = action.retry_state {
+                return Some(retry.next_retry_at_ms);
+            }
+            let first = match schedule.period_ms {
+                Some(0) => return None,
+                Some(period) if since_ms > schedule.start_ms => {
+                    let periods = (since_ms - schedule.start_ms).div_ceil(period);
+                    schedule
+                        .start_ms
+                        .checked_add(periods.checked_mul(period)?)?
+                }
+                _ if schedule.start_ms >= since_ms => schedule.start_ms,
+                None => return None,
+                Some(_) => return None,
+            };
+            first.checked_add(1)
+        })
+        .min()
+}
 /// Revalidate a time-trigger action immediately before invocation.
 pub(crate) fn time_trigger_action_is_due(
     action: &LoadedAction<TimeEventFilter>,
@@ -1187,57 +1027,6 @@ impl Set {
     }
 }
 
-/// Validate the immutable runtime-consent digest in both authenticated action images.
-/// A missing capture cannot be reconstructed from the runtime doing the restore: that would
-/// silently approve new semantics for an already registered trigger.
-fn validate_runtime_expectation_history<F: mv::Value>(
-    field: &'static str,
-    triggers: &mut Storage<TriggerId, LoadedAction<F>>,
-) -> Result<(), json::Error> {
-    let history = triggers.history();
-    for (previous, id, action) in history
-        .current()
-        .iter()
-        .map(|(id, action)| (false, id, action))
-        .chain(
-            history
-                .iter_before_block()
-                .map(|(id, action)| (true, id, action)),
-        )
-    {
-        let invalid = || json::Error::InvalidField {
-            field: field.into(),
-            message: format!(
-                "trigger `{id}` has missing or malformed runtime expectation metadata in {} state",
-                if previous { "predecessor" } else { "current" },
-            ),
-        };
-        let capture = action
-            .metadata
-            .get(super::runtime_expectation::metadata_key())
-            .ok_or_else(invalid)?;
-        if !canonical_runtime_capture(capture) {
-            return Err(invalid());
-        }
-        norito::core::classify_decode_attempt(|| {
-            capture
-                .try_into_any_norito::<Hash>()
-                .map_err(|error| match error {
-                    norito::Error::Json(original) => original.into_core_error(),
-                    original => original,
-                })
-        })
-        .map_err(|error| {
-            if error.local_refusal().is_some() {
-                json::Error::from_decode_resource(error.into_error())
-            } else {
-                invalid()
-            }
-        })?;
-    }
-    Ok(())
-}
-
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -1289,6 +1078,31 @@ impl json::JsonDeserialize for Set {
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
         {
+            let history = time_triggers.history();
+            if history.current().len() > MAX_TIME_TRIGGERS_TOTAL
+                || history
+                    .iter_before_block()
+                    .take(MAX_TIME_TRIGGERS_TOTAL + 1)
+                    .count()
+                    > MAX_TIME_TRIGGERS_TOTAL
+            {
+                return Err(json::Error::InvalidField {
+                    field: "time_triggers".into(),
+                    message: format!(
+                        "incompatible first-release Time-trigger snapshot: maximum {MAX_TIME_TRIGGERS_TOTAL}; regenerate the snapshot"
+                    ),
+                });
+            }
+            for (_, action) in history.current().iter().chain(history.iter_before_block()) {
+                super::progress::validate_stored(action.metadata()).map_err(|message| {
+                    json::Error::InvalidField {
+                        field: "time_triggers".into(),
+                        message: message.into(),
+                    }
+                })?;
+            }
+        }
+        {
             let history = data_triggers.history();
             for previous in [false, true] {
                 let entries: Box<
@@ -1324,10 +1138,6 @@ impl json::JsonDeserialize for Set {
                 })?;
             }
         }
-        validate_runtime_expectation_history("data_triggers", &mut data_triggers)?;
-        validate_runtime_expectation_history("pipeline_triggers", &mut pipeline_triggers)?;
-        validate_runtime_expectation_history("time_triggers", &mut time_triggers)?;
-        validate_runtime_expectation_history("by_call_triggers", &mut by_call_triggers)?;
         let active_data_trigger_ids = Self::collect_active_ids(&mut data_triggers);
         let active_pipeline_trigger_ids = Self::collect_active_ids(&mut pipeline_triggers);
         let active_time_trigger_ids = Self::collect_active_ids(&mut time_triggers);
@@ -1975,6 +1785,15 @@ pub trait SetReadOnly {
     ) -> &impl StorageReadOnly<TriggerId, LoadedAction<PipelineEventFilterBox>>;
     /// Time triggers map.
     fn time_triggers(&self) -> &impl StorageReadOnly<TriggerId, LoadedAction<TimeEventFilter>>;
+    /// Earliest scheduled Time output using this exact committed trigger set and parent time.
+    /// The registration cap bounds this scan; no executable or metadata map is cloned.
+    fn next_scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers().iter().map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Execute-by-call triggers map.
     fn by_call_triggers(
         &self,
@@ -1998,6 +1817,14 @@ pub trait SetReadOnly {
     /// count overflow, missing originals, duplicate/missing/mistyped action indexes,
     /// or active-index rows that disagree with eligible actions.
     fn validate_world_contract_rows(&self) -> core::result::Result<(), String> {
+        if self.time_triggers().len() > MAX_TIME_TRIGGERS_TOTAL {
+            return Err(format!(
+                "Time trigger capacity exceeds {MAX_TIME_TRIGGERS_TOTAL}"
+            ));
+        }
+        for (_, action) in self.time_triggers().iter() {
+            super::progress::validate_stored(action.metadata()).map_err(str::to_owned)?;
+        }
         contract_relation::validate_current(self)
     }
     /// Get original [`IvmBytecode`] for [`TriggerId`]. Returns `None` if there's no [`Trigger`]
@@ -2468,12 +2295,6 @@ pub(crate) trait BorrowedTriggerSourceReadOnly: SetReadOnly {
             crate::smartcontracts::isi::query::BorrowedSingularStruct::<2>::new([id, &full_action]);
         visitor(Some(&BorrowedTriggerSource {
             full: &full_trigger,
-            #[cfg(test)]
-            persistent_action: &full_action,
-            #[cfg(test)]
-            retry_state: action
-                .retry_state
-                .map(|state| (state.retries_used, state.next_retry_at_ms)),
             id,
             executable: &executable,
             executable_source: &action.executable,
@@ -2642,6 +2463,20 @@ impl Set {
     }
 }
 impl SetBlock<'_> {
+    /// Scheduled deadline from the exact original parent, before this block's mutations.
+    pub(crate) fn scheduled_progress_before_block_ms(
+        &self,
+        since_ms: u64,
+        next_height: u64,
+    ) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers
+                .iter_before_block()
+                .map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_> {
         let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
@@ -2699,6 +2534,20 @@ impl TriggeringEventFilter for PipelineEventFilterBox {}
 impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
 impl<'block> SetTransaction<'block> {
+    /// Scheduled deadline from the original parent, including transaction preimages.
+    pub(crate) fn scheduled_progress_before_block_ms(
+        &self,
+        since_ms: u64,
+        next_height: u64,
+    ) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers
+                .iter_before_block()
+                .map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Current transaction-local registration generation for `id`.
     ///
     /// IDs inherited from the parent block have generation zero. Every
@@ -2990,12 +2839,18 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Rejects proof-backed IVM executables, whose proof cannot be a trigger attachment.
+    /// Rejects proof-backed IVM executables and new registrations beyond
+    /// [`MAX_TIME_TRIGGERS_TOTAL`], before changing any existing obligation.
     #[inline]
     pub fn add_time_trigger(
         &mut self,
         trigger: SpecializedTrigger<TimeEventFilter>,
     ) -> Result<bool> {
+        if self.time_triggers.len() >= MAX_TIME_TRIGGERS_TOTAL
+            && self.ids.get(&trigger.id).is_none()
+        {
+            return Err(Error::TimeTriggerCapacity);
+        }
         self.add_to(trigger, TriggeringEventType::Time, |me| {
             &mut me.time_triggers
         })
@@ -4359,25 +4214,6 @@ fn load_trigger_entries<F>(
     Ok(entries)
 }
 
-/// Require original consent for every retained action in a decoded binary trigger snapshot.
-fn validate_runtime_expectation_entries<F>(
-    field: &str,
-    entries: &[(TriggerId, LoadedAction<F>)],
-) -> Result<(), String> {
-    for (id, action) in entries {
-        if !action
-            .metadata
-            .get(super::runtime_expectation::metadata_key())
-            .is_some_and(canonical_runtime_capture)
-        {
-            return Err(format!(
-                "{field} trigger `{id}` has missing or malformed runtime expectation metadata"
-            ));
-        }
-    }
-    Ok(())
-}
-
 impl TryFrom<SetDto> for Set {
     type Error = String;
     #[allow(clippy::too_many_lines)]
@@ -4453,10 +4289,6 @@ impl TryFrom<SetDto> for Set {
             &mut duplicate_ids,
             &mut missing_contracts,
         )?;
-        validate_runtime_expectation_entries("data", &data)?;
-        validate_runtime_expectation_entries("pipeline", &pipeline)?;
-        validate_runtime_expectation_entries("time", &time)?;
-        validate_runtime_expectation_entries("by_call", &by_call)?;
         let mut orphaned_ids = 0usize;
         let mut mismatched_ids = 0usize;
         for (id, event_type) in ids_raw {
@@ -4726,7 +4558,6 @@ mod dto_tests {
             )
             .expect("test data-trigger action satisfies its authority invariant");
             action.metadata = global_data_trigger_scope_metadata_for_testing(&authority);
-            capture_fixture_runtime_consent(&mut action);
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
             // Pipeline trigger with BlockEventFilter variant
@@ -4744,14 +4575,13 @@ mod dto_tests {
                 dm::InstructionBox::from(log),
                 dm::InstructionBox::from(set_kv),
             ]));
-            let mut action2 = SpecializedAction::new(
+            let action2 = SpecializedAction::new(
                 exec2,
                 dm::Repeats::Exactly(3),
                 authority.clone(),
                 pipe_filter,
             )
             .expect("test pipeline-trigger action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut action2);
             let trig2 = SpecializedTrigger::new(pipe_id, action2);
             tx.add_pipeline_trigger(trig2)
                 .expect("add pipeline trigger");
@@ -4773,7 +4603,6 @@ mod dto_tests {
                 max_retries: std::num::NonZeroU32::new(2).expect("nonzero"),
                 retry_after_ms: std::num::NonZeroU64::new(750).expect("nonzero"),
             });
-            capture_fixture_runtime_consent(&mut action3);
             let trig3 = SpecializedTrigger::new(time_id, action3);
             tx.add_time_trigger(trig3).expect("add time trigger");
             // Execute-by-call trigger with IVM executable
@@ -4781,245 +4610,15 @@ mod dto_tests {
             let call_filter = dm::ExecuteTriggerEventFilter::new();
             let ivm_code = IvmBytecode::from_compiled(vec![0xAA, 0xBB]);
             let exec4 = dm::Executable::Ivm(ivm_code);
-            let mut action4 =
+            let action4 =
                 SpecializedAction::new(exec4, dm::Repeats::Exactly(1), authority, call_filter)
                     .expect("test by-call action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut action4);
             let trig4 = SpecializedTrigger::new(call_id, action4);
             tx.add_by_call_trigger(trig4).expect("add by-call trigger");
             tx.apply();
             block.commit();
         }
         set
-    }
-    include!("set_bounded_registered_time_tests.rs");
-    include!("set_applying_time_source_tests.rs");
-
-    fn bounded_frame_limits() -> norito::core::EncodeWorkLimits {
-        norito::core::EncodeWorkLimits {
-            max_frame_bytes: 65_536,
-            max_byte_visits: 10_000_000,
-            max_operations: 1_000_000,
-            max_depth: 128,
-        }
-    }
-    fn supported_time_set(batch: bool, scheduled: bool, retry: bool) -> Set {
-        let set = Set::default();
-        let mut block = set.block();
-        let mut tx = block.transaction();
-        let executable = if batch {
-            dm::Executable::Batch(ConstVec::new_empty())
-        } else {
-            dm::Executable::Instructions(ConstVec::new_empty())
-        };
-        let filter = dm::TimeEventFilter(if scheduled {
-            ExecutionTime::Schedule(Schedule::starting_at(std::time::Duration::from_secs(1)))
-        } else {
-            ExecutionTime::PreCommit
-        });
-        let mut action = SpecializedAction::new(
-            executable,
-            dm::Repeats::Exactly(3),
-            checked_account_id(),
-            filter,
-        )
-        .unwrap();
-        if retry {
-            action.retry_policy = Some(dm::TimeTriggerRetryPolicy {
-                max_retries: std::num::NonZeroU32::new(2).unwrap(),
-                retry_after_ms: NonZeroU64::new(750).unwrap(),
-            });
-        }
-        capture_fixture_runtime_consent(&mut action);
-        tx.add_time_trigger(SpecializedTrigger::new(
-            "bounded_time".parse().unwrap(),
-            action,
-        ))
-        .unwrap();
-        tx.apply();
-        block.commit();
-        set
-    }
-    // Authored only: no current canonical test execution is claimed.
-    #[test]
-    fn bounded_borrowed_time_frames_match_original_action_bytes_for_supported_shapes() {
-        for batch in [false, true] {
-            for (scheduled, retry) in [(false, false), (true, false), (true, true)] {
-                let set = supported_time_set(batch, scheduled, retry);
-                let view = set.view();
-                let original = view.triggers_iter().next().unwrap();
-                let expected = norito::encode_canonical(original.action()).unwrap();
-                let pool = iroha_allocation::AllocationBudget::new(65_536);
-                let mut seen = 0;
-                view.visit_borrowed_trigger_sources(|source| {
-                    let source = source.unwrap();
-                    let retry_before = source.retry_state();
-                    let frame = source
-                        .try_prepare_bounded_time_frame(&pool, bounded_frame_limits())
-                        .unwrap();
-                    assert_eq!(frame.as_bytes(), expected);
-                    assert_eq!(pool.reserved_bytes(), frame.backing_bytes());
-                    assert_eq!(source.retry_state(), retry_before);
-                    drop(frame);
-                    assert_eq!(pool.reserved_bytes(), 0);
-                    seen += 1;
-                    Ok(core::ops::ControlFlow::Continue(()))
-                })
-                .unwrap();
-                assert_eq!(seen, 1);
-            }
-        }
-    }
-    struct MustNotSerialize;
-    impl norito::core::SerializePayload for MustNotSerialize {
-        fn serialize(&self, _: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-            panic!("unsupported source reached persistent Action serializer")
-        }
-    }
-    fn source_with_probe<'a>(source: &'a BorrowedTriggerSource<'a>) -> BorrowedTriggerSource<'a> {
-        BorrowedTriggerSource {
-            full: source.full,
-            persistent_action: &MustNotSerialize,
-            retry_state: source.retry_state,
-            id: source.id,
-            executable: source.executable,
-            executable_source: source.executable_source,
-            repeats: source.repeats,
-            authority: source.authority,
-            filter: source.filter,
-            filter_source: source.filter_source,
-            retry_policy: source.retry_policy,
-            metadata: source.metadata,
-        }
-    }
-    fn assert_source_frame_refuses(source: &BorrowedTriggerSource<'_>) {
-        use iroha_data_model::block::execution_output::ActionFrameProductionFailureV1;
-        let pool = iroha_allocation::AllocationBudget::new(65_536);
-        let error = source
-            .try_prepare_bounded_time_frame(&pool, bounded_frame_limits())
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            ActionFrameProductionFailureV1::Codec(norito::core::BoundedEncodeWorkError::Refused(
-                norito::core::EncodeWorkRefusal::Source
-            ))
-        ));
-        assert_eq!(pool.peak_reserved_bytes(), 0);
-    }
-    #[test]
-    fn unsupported_original_store_rows_refuse_before_payload_or_backing() {
-        let set = sample_set();
-        let view = set.view();
-        let mut refused = 0;
-        view.visit_borrowed_trigger_sources(|source| {
-            let source = source.unwrap();
-            if !matches!(source.filter_source, BorrowedTriggerFilter::Time(_)) {
-                assert_source_frame_refuses(&source_with_probe(source));
-                refused += 1;
-            }
-            Ok(core::ops::ControlFlow::Continue(()))
-        })
-        .unwrap();
-        assert_eq!(refused, 3);
-    }
-    #[test]
-    fn nonempty_instruction_and_metadata_refuse_before_the_original_payload() {
-        let set = supported_time_set(false, true, false);
-        let view = set.view();
-        let instructions =
-            ExecutableRef::Instructions(ConstVec::from(vec![dm::InstructionBox::from(
-                dm::Log::new(dm::Level::INFO, "not admitted".to_string()),
-            )]));
-        let mut metadata = Metadata::default();
-        metadata.insert("nonempty".parse().unwrap(), dm::Json::new(1));
-        view.visit_borrowed_trigger_sources(|source| {
-            let source = source.unwrap();
-            let mut candidate = source_with_probe(source);
-            candidate.executable_source = &instructions;
-            assert_source_frame_refuses(&candidate);
-            let mut candidate = source_with_probe(source);
-            candidate.metadata = &metadata;
-            assert_source_frame_refuses(&candidate);
-            Ok(core::ops::ControlFlow::Continue(()))
-        })
-        .unwrap();
-    }
-    #[test]
-    fn batch_contract_ivm_and_multisig_refuse_without_invoking_payload() {
-        use iroha_data_model::account::{MultisigMember, MultisigPolicy};
-        let authority = checked_account_id();
-        let address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .unwrap(),
-            &authority,
-            7,
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-        )
-        .unwrap();
-        let candidates = [
-            ExecutableRef::Batch(ConstVec::from(vec![ExecutableBatchItem::Instruction(
-                dm::Log::new(dm::Level::INFO, "unadmitted".to_string()).into(),
-            )])),
-            ExecutableRef::ContractCall(ContractInvocation {
-                contract_address: address,
-                expected_code_hash: iroha_crypto::Hash::new(b"unadmitted"),
-                entrypoint: "main".to_string(),
-                arguments: None,
-            }),
-            ExecutableRef::Ivm(HashOf::new(&IvmBytecode::from_compiled(vec![0xAA, 0xBB]))),
-        ];
-        let multisig = dm::AccountId::new_multisig(
-            MultisigPolicy::new(
-                1,
-                vec![MultisigMember::new(checked_keypair().public_key().clone(), 1).unwrap()],
-            )
-            .unwrap(),
-        );
-        let set = supported_time_set(false, true, false);
-        let view = set.view();
-        view.visit_borrowed_trigger_sources(|source| {
-            let source = source.unwrap();
-            for executable in &candidates {
-                let mut candidate = source_with_probe(source);
-                candidate.executable_source = executable;
-                assert_source_frame_refuses(&candidate);
-            }
-            let mut candidate = source_with_probe(source);
-            candidate.authority = &multisig;
-            assert_source_frame_refuses(&candidate);
-            Ok(core::ops::ControlFlow::Continue(()))
-        })
-        .unwrap();
-    }
-    #[test]
-    fn borrowed_source_work_refusal_precedes_output_allocation() {
-        let set = supported_time_set(false, true, true);
-        let view = set.view();
-        let pool = iroha_allocation::AllocationBudget::new(65_536);
-        view.visit_borrowed_trigger_sources(|source| {
-            let error = source
-                .unwrap()
-                .try_prepare_bounded_time_frame(
-                    &pool,
-                    norito::core::EncodeWorkLimits {
-                        max_operations: 0,
-                        ..bounded_frame_limits()
-                    },
-                )
-                .unwrap_err();
-            assert!(matches!(
-                error,
-                iroha_data_model::block::execution_output::ActionFrameProductionFailureV1::Codec(
-                    norito::core::BoundedEncodeWorkError::Refused(
-                        norito::core::EncodeWorkRefusal::Operations
-                    )
-                )
-            ));
-            assert_eq!(pool.peak_reserved_bytes(), 0);
-            Ok(core::ops::ControlFlow::Continue(()))
-        })
-        .unwrap();
     }
     #[test]
     fn borrowed_trigger_inventory_matches_every_original_typed_action_frame() {
@@ -5226,7 +4825,6 @@ mod dto_tests {
         );
     }
     include!("set_snapshot_predecessor_tests.rs");
-    include!("set_runtime_expectation_tests.rs");
 
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {
@@ -5239,22 +4837,20 @@ mod dto_tests {
             let mut tx = block.transaction();
             let empty_exec =
                 dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new()));
-            let mut active_action = SpecializedAction::new(
+            let active_action = SpecializedAction::new(
                 empty_exec.clone(),
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 dm::ExecuteTriggerEventFilter::new(),
             )
             .expect("test by-call action satisfies its authority invariant");
-            let mut depleted_action = SpecializedAction::new(
+            let depleted_action = SpecializedAction::new(
                 empty_exec,
                 dm::Repeats::Exactly(0),
                 authority,
                 dm::TimeEventFilter(dm::ExecutionTime::PreCommit),
             )
             .expect("test time-trigger action satisfies its authority invariant");
-            capture_fixture_runtime_consent(&mut active_action);
-            capture_fixture_runtime_consent(&mut depleted_action);
             tx.add_by_call_trigger(SpecializedTrigger::new(active_id.clone(), active_action))
                 .expect("add active by-call trigger");
             tx.add_time_trigger(SpecializedTrigger::new(
@@ -5288,14 +4884,13 @@ mod dto_tests {
         let data_id: dm::TriggerId = "data_missing".parse().unwrap();
         let call_id: dm::TriggerId = "call_valid".parse().unwrap();
         let orphan_id: dm::TriggerId = "orphan".parse().unwrap();
-        let mut authorized_call = SpecializedAction::new(
+        let authorized_call = SpecializedAction::new(
             dm::Executable::Ivm(valid_code.clone()),
             dm::Repeats::Exactly(1),
             authority.clone(),
             dm::ExecuteTriggerEventFilter::new(),
         )
         .expect("the retained call is authored against the fixture runtime");
-        capture_fixture_runtime_consent(&mut authorized_call);
         let data_action = LoadedActionDto {
             executable: ExecutableRefDto::Ivm(missing_hash),
             repeats: dm::Repeats::Exactly(1),
@@ -5396,7 +4991,6 @@ mod dto_tests {
             )
             .expect("test scheduled trigger action satisfies its authority invariant");
             action.retry_policy = Some(retry_policy);
-            capture_fixture_runtime_consent(&mut action);
             tx.add_time_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
                 .expect("add time trigger");
             assert!(tx.set_time_trigger_retry_state(
@@ -5454,7 +5048,3 @@ mod dto_tests {
         assert!(error.contains("code hash"), "unexpected error: {error}");
     }
 }
-
-#[cfg(test)]
-#[path = "set_lifecycle_source_tests.rs"]
-mod lifecycle_source_tests;

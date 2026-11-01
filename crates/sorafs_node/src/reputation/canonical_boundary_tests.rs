@@ -140,7 +140,7 @@ fn page_and_batch_byte_limits_are_canonical_across_caller_layouts() {
 
 #[test]
 fn replicas_produce_identical_checkpoint_and_unsigned_material_bytes() {
-    let left_root = TempDir::new().expect("left root");
+    let left_root = private_state_tempdir().expect("left root");
     let left = ReputationIngestService::open(left_root.path(), policy()).expect("open left");
     let batch = all_sources_batch(provider(7));
     left.ingest_finalized_batch(batch.clone())
@@ -159,7 +159,7 @@ fn replicas_produce_identical_checkpoint_and_unsigned_material_bytes() {
     let mut saw_alternate_checkpoint = false;
     for flags in supported_layouts() {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
-        let right_root = TempDir::new().expect("right root");
+        let right_root = private_state_tempdir().expect("right root");
         let right = ReputationIngestService::open(right_root.path(), policy())
             .expect("open replica under caller layout");
         right

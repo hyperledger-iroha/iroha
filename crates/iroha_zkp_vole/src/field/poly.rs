@@ -154,7 +154,7 @@ pub fn poly_reduce(
 /// Degree of a non-zero polynomial given as an integer (bit `i` is the coefficient
 /// of `x^i`).
 fn degree_of(poly: u32) -> u32 {
-    31 - poly.leading_zeros()
+    poly.ilog2()
 }
 
 /// Remainder of `value` modulo the non-zero `modulus`, both as integers.
@@ -228,9 +228,9 @@ mod tests {
     }
 
     fn rem_u128(mut value: u128, modulus: u128) -> u128 {
-        let degree = 127 - modulus.leading_zeros();
-        while value != 0 && 127 - value.leading_zeros() >= degree {
-            value ^= modulus << (127 - value.leading_zeros() - degree);
+        let degree = modulus.ilog2();
+        while value != 0 && value.ilog2() >= degree {
+            value ^= modulus << (value.ilog2() - degree);
         }
         value
     }

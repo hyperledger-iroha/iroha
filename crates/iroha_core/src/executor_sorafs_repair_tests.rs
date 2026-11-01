@@ -124,7 +124,7 @@ mod sorafs_repair_admission {
     fn reject_unchanged(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         marker: &str,
     ) {
         let before = stored_state(transaction);
@@ -150,7 +150,7 @@ mod sorafs_repair_admission {
     fn replay_unchanged(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
     ) {
         let before = stored_state(transaction);
         Executor::Initial
@@ -173,41 +173,41 @@ mod sorafs_repair_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            submission(&BOB_ID),
+            &submission(&BOB_ID),
             "provider-scoped",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, submission(&ALICE_ID))
+            .execute_instruction(&mut transaction, &ALICE_ID, &submission(&ALICE_ID))
             .expect("provider worker submits through the native Initial executor");
-        replay_unchanged(&mut transaction, &ALICE_ID, submission(&ALICE_ID));
+        replay_unchanged(&mut transaction, &ALICE_ID, &submission(&ALICE_ID));
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            claim(1, "bob-claim"),
+            &claim(1, "bob-claim"),
             "provider-scoped",
         );
         let claimed = claim(1, "alice-claim");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, claimed.clone())
+            .execute_instruction(&mut transaction, &ALICE_ID, &claimed)
             .expect("authorized worker claims through the native Initial executor");
-        replay_unchanged(&mut transaction, &ALICE_ID, claimed.clone());
-        reject_unchanged(&mut transaction, &BOB_ID, claimed, "different action");
+        replay_unchanged(&mut transaction, &ALICE_ID, &claimed.clone());
+        reject_unchanged(&mut transaction, &BOB_ID, &claimed, "different action");
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            claim(2, "alice-claim"),
+            &claim(2, "alice-claim"),
             "different action",
         );
         let completion = complete(2, 1, "complete");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, completion.clone())
+            .execute_instruction(&mut transaction, &ALICE_ID, &completion)
             .expect("lease owner completes through the native Initial executor");
-        replay_unchanged(&mut transaction, &ALICE_ID, completion.clone());
-        reject_unchanged(&mut transaction, &BOB_ID, completion, "different action");
+        replay_unchanged(&mut transaction, &ALICE_ID, &completion.clone());
+        reject_unchanged(&mut transaction, &BOB_ID, &completion, "different action");
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            ApplySorafsRepairTaskAction::new(
+            &ApplySorafsRepairTaskAction::new(
                 TICKET.to_owned(),
                 3,
                 SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
@@ -252,47 +252,47 @@ mod sorafs_repair_admission {
         let mut transaction = block.transaction();
         for instruction in [submission(&ALICE_ID), claim(1, "alice-claim")] {
             Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction)
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction)
                 .expect("seed native lease");
         }
         Executor::Initial
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Revoke::account_permission(permission(PROVIDER), ALICE_ID.clone()).into(),
+                &Revoke::account_permission(permission(PROVIDER), ALICE_ID.clone()).into(),
             )
             .expect("exact holder self-revokes through native permission policy");
-        replay_unchanged(&mut transaction, &ALICE_ID, claim(1, "alice-claim"));
+        replay_unchanged(&mut transaction, &ALICE_ID, &claim(1, "alice-claim"));
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            complete(2, 1, "revoked-complete"),
+            &complete(2, 1, "revoked-complete"),
             "provider-scoped",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, claim(2, "bob-reclaim"))
+            .execute_instruction(&mut transaction, &BOB_ID, &claim(2, "bob-reclaim"))
             .expect("reclaim revoked owner's unexpired lease");
         Executor::Initial
             .execute_instruction(
                 &mut transaction,
                 &BOB_ID,
-                Grant::account_permission(permission(PROVIDER), ALICE_ID.clone()).into(),
+                &Grant::account_permission(permission(PROVIDER), ALICE_ID.clone()).into(),
             )
             .expect("remaining exact holder reauthorizes the old worker");
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            complete(3, 1, "stale-owner"),
+            &complete(3, 1, "stale-owner"),
             "different account",
         );
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            complete(3, 1, "stale-generation"),
+            &complete(3, 1, "stale-generation"),
             "generation mismatch",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, complete(3, 2, "bob-complete"))
+            .execute_instruction(&mut transaction, &BOB_ID, &complete(3, 2, "bob-complete"))
             .expect("replacement lease retains terminal authority");
     }
 
@@ -326,7 +326,7 @@ mod sorafs_repair_admission {
         .into();
         for instruction in [submission(&ALICE_ID), claim(1, "claim"), escalation] {
             Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction)
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction)
                 .expect("native repair escalation");
         }
         let appeal: InstructionBox = SubmitSorafsRepairAppeal::new(
@@ -337,16 +337,16 @@ mod sorafs_repair_admission {
             "appeal".to_owned(),
         )
         .into();
-        reject_unchanged(&mut transaction, &ALICE_ID, appeal.clone(), "owned by");
+        reject_unchanged(&mut transaction, &ALICE_ID, &appeal.clone(), "owned by");
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, appeal.clone())
+            .execute_instruction(&mut transaction, &BOB_ID, &appeal)
             .expect("governed owner appeals without worker permission");
-        replay_unchanged(&mut transaction, &BOB_ID, appeal.clone());
-        reject_unchanged(&mut transaction, &ALICE_ID, appeal, "different action");
+        replay_unchanged(&mut transaction, &BOB_ID, &appeal.clone());
+        reject_unchanged(&mut transaction, &ALICE_ID, &appeal, "different action");
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            SubmitSorafsRepairAppeal::new(
+            &SubmitSorafsRepairAppeal::new(
                 TICKET.to_owned(),
                 3,
                 [0xE2; 32],
@@ -359,7 +359,7 @@ mod sorafs_repair_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            SubmitSorafsRepairAppeal::new(
+            &SubmitSorafsRepairAppeal::new(
                 TICKET.to_owned(),
                 4,
                 EVIDENCE,

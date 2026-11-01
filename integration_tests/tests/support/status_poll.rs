@@ -25,7 +25,7 @@ fn request_deadline(timeout: Duration) -> Result<Instant> {
         .ok_or_else(|| eyre!("AMX diagnostic request deadline cannot be represented"))
 }
 
-pub(crate) async fn read_once<F, Fut>(timeout: Duration, read: F) -> Result<Status>
+pub async fn read_once<F, Fut>(timeout: Duration, read: F) -> Result<Status>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Status>>,
@@ -39,7 +39,7 @@ fn deadline_error(last: Option<Report>) -> Report {
 }
 
 /// Retry only a typed local State/worker admission refusal under one caller deadline.
-pub(crate) async fn read_until<F, Fut>(deadline: Instant, mut read: F) -> Result<Status>
+pub async fn read_until<F, Fut>(deadline: Instant, mut read: F) -> Result<Status>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Status>>,
@@ -93,7 +93,7 @@ where
 /// Observe unchanged diagnostic heights for a minimum interval under one phase bound.
 /// The final complete read round may straddle the observation threshold; it may
 /// not cross the caller's original phase deadline or turn unavailable reads into idle proof.
-pub(crate) async fn observe_idle_until<F, Fut>(
+pub async fn observe_idle_until<F, Fut>(
     deadline: Instant,
     minimum: Duration,
     mut read_round: F,

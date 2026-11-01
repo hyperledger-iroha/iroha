@@ -383,7 +383,8 @@ fn windows_borrowed_readonly_attribute_does_not_repair_an_incomplete_claim() {
     let name = OsStr::new("incomplete");
     let path = directory.path().join(name);
     drop(directory.create_borrowed_private(name, 16).unwrap());
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    let original_permissions = fs::metadata(&path).unwrap().permissions();
+    let mut permissions = original_permissions.clone();
     permissions.set_readonly(true);
     fs::set_permissions(&path, permissions).unwrap();
     assert!(directory.open_borrowed_read_only(name, 16).is_err());
@@ -395,7 +396,5 @@ fn windows_borrowed_readonly_attribute_does_not_repair_an_incomplete_claim() {
         })
         .unwrap();
     assert!(fs::metadata(&path).unwrap().permissions().readonly());
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_readonly(false);
-    fs::set_permissions(&path, permissions).unwrap();
+    fs::set_permissions(&path, original_permissions).unwrap();
 }

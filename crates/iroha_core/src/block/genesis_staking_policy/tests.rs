@@ -649,7 +649,7 @@ fn production_combined_bootstrap_installs_crypto_and_staking_at_one_pristine_cut
                 let Executable::Instructions(instructions) = input.instructions() else {
                     panic!("explicit original instructions");
                 };
-                for instruction in instructions.iter() {
+                for instruction in instructions {
                     instruction
                         .as_any()
                         .downcast_ref::<SetParameter>()

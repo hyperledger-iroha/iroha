@@ -6,14 +6,9 @@ fn real_kubo_ipns_service_view(
     api_url: &str,
     ipns_name: &str,
 ) -> SorafsGovernanceDagServiceView {
-    let paths = [source_dir, state_dir];
-    assert!(paths.iter().all(|path| {
-        let path = path.to_string_lossy();
-        !path.contains(['"', '\\', '\n', '\r'])
-    }));
     let config = format!(
         r#"[sorafs.storage]
-governance_dag_dir = "{}"
+governance_dag_dir = {}
 governance_dag_publisher_peer_id = "{TEST_PRODUCER_PEER_ID}"
 governance_dag_signer_handle = "{TEST_PRODUCER_SIGNER_HANDLE}"
 governance_dag_signer_revision = 1
@@ -22,7 +17,7 @@ governance_dag_publisher_public_key_hex = "{}"
 
 [sorafs.storage.governance_dag_service]
 enabled = true
-state_dir = "{}"
+state_dir = {}
 ipfs_api_url = "{}"
 head_mode = "ipns"
 ipns_name = "{}"
@@ -46,10 +41,10 @@ allow_private_ipfs_endpoint = true
 allow_head_bootstrap = true
 listen_addr = "127.0.0.1:0"
 "#,
-        source_dir.display(),
+        fixture_toml_path(source_dir),
         "83".repeat(32),
         hex::encode(&source.head.head_signature.public_key),
-        state_dir.display(),
+        fixture_toml_path(state_dir),
         api_url,
         ipns_name,
         KUBO_IPNS_KEY_ALIAS,

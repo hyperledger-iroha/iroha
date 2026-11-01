@@ -249,6 +249,10 @@ pub fn encode_atomic_private_settlement_reservation_v1(
 /// retain their existing zeroizing destruction. No alternate layout or decoder is accepted.
 /// # Errors
 /// Excessive/malformed encoding, wrong intent/ordinal, changed secrets or invalid authorization.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Taking ownership wipes the secret reservation bytes on success and every failure."
+)]
 pub fn decode_atomic_private_settlement_reservation_v1(
     material: Zeroizing<Vec<u8>>,
     intent: &PrivateSettlementProofIntentV1,
@@ -346,8 +350,10 @@ pub fn atomic_private_settlement_reservation_fixture_v1(
     let inputs = core::array::from_fn(|index| {
         AtomicPrivateSettlementInputSecretV1::new(
             spending_secrets[index],
-            index as u32,
-            &core::array::from_fn(|level| [0x40 + level as u8; 32]),
+            u32::try_from(index).expect("input slot fits u32"),
+            &core::array::from_fn(|level| {
+                [0x40 + u8::try_from(level).expect("tree level fits u8"); 32]
+            }),
         )
         .unwrap()
     });

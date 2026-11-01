@@ -36,7 +36,7 @@ mod gateway_check_permission_tests {
                     .execute_instruction(
                         &mut tx,
                         &ALICE_ID,
-                        Grant::account_permission(malformed, BOB_ID.clone()).into()
+                        &Grant::account_permission(malformed, BOB_ID.clone()).into()
                     )
                     .is_err()
             );
@@ -108,7 +108,7 @@ mod gateway_check_permission_tests {
             .execute_instruction(
                 &mut tx,
                 &ALICE_ID,
-                Grant::account_permission(exact.clone(), BOB_ID.clone()).into(),
+                &Grant::account_permission(exact.clone(), BOB_ID.clone()).into(),
             )
             .expect("configured manager can delegate an exact recovery Check capability");
         for via_role in [false, true] {
@@ -118,7 +118,7 @@ mod gateway_check_permission_tests {
                     .execute_instruction(
                         &mut tx,
                         &BOB_ID,
-                        Register::role(
+                        &Register::role(
                             Role::new(role, BOB_ID.clone()).add_permission(exact.clone()),
                         )
                         .into(),
@@ -128,16 +128,16 @@ mod gateway_check_permission_tests {
                     .execute_instruction(
                         &mut tx,
                         &BOB_ID,
-                        Revoke::account_permission(exact.clone(), BOB_ID.clone()).into(),
+                        &Revoke::account_permission(exact.clone(), BOB_ID.clone()).into(),
                     )
                     .unwrap();
                 assert!(!authority_has_direct_permission(&tx.world, &BOB_ID, &exact).unwrap());
             }
             for revoke in [false, true] {
                 let instruction = if revoke {
-                    Revoke::account_permission(exact.clone(), account(73)).into()
+                    &Revoke::account_permission(exact.clone(), account(73)).into()
                 } else {
-                    Grant::account_permission(exact.clone(), account(73)).into()
+                    &Grant::account_permission(exact.clone(), account(73)).into()
                 };
                 Executor::Initial
                     .execute_instruction(&mut tx, &BOB_ID, instruction)
@@ -148,9 +148,9 @@ mod gateway_check_permission_tests {
                 );
                 for forbidden in [other.clone(), operation.clone(), manage()] {
                     let instruction = if revoke {
-                        Revoke::account_permission(forbidden, account(73)).into()
+                        &Revoke::account_permission(forbidden, account(73)).into()
                     } else {
-                        Grant::account_permission(forbidden, account(73)).into()
+                        &Grant::account_permission(forbidden, account(73)).into()
                     };
                     assert!(
                         Executor::Initial
@@ -166,7 +166,7 @@ mod gateway_check_permission_tests {
             .execute_instruction(
                 &mut tx,
                 &ALICE_ID,
-                Grant::account_permission(operation, account(73)).into(),
+                &Grant::account_permission(operation, account(73)).into(),
             )
             .unwrap();
         assert!(
@@ -174,7 +174,7 @@ mod gateway_check_permission_tests {
                 .execute_instruction(
                     &mut tx,
                     &account(73),
-                    Grant::account_permission(exact, account(73)).into()
+                    &Grant::account_permission(exact, account(73)).into()
                 )
                 .is_err()
         );

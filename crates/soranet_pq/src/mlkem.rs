@@ -334,8 +334,8 @@ impl MlKemSuite {
         kind: &'static str,
         bytes: &[u8],
     ) -> Result<(), MlKemError> {
-        let chunks = bytes.chunks_exact(3);
-        let remainder_len = chunks.remainder().len();
+        let (chunks, remainder) = bytes.as_chunks::<3>();
+        let remainder_len = remainder.len();
         if remainder_len != 0 {
             return Err(MlKemError::bad_encoding(
                 kind,
@@ -349,7 +349,7 @@ impl MlKemSuite {
                 },
             ));
         }
-        for (pair_index, chunk) in chunks.enumerate() {
+        for (pair_index, chunk) in chunks.iter().enumerate() {
             let first = u16::from(chunk[0]) | (u16::from(chunk[1] & 0x0F) << 8);
             if first >= MLKEM_FIELD_MODULUS {
                 return Err(MlKemError::NonCanonicalEncoding {
@@ -1193,17 +1193,14 @@ mod tests {
         match err {
             MlKemError::BadEncoding { kind, source } => {
                 assert!(kind.contains("public key"));
-                match *source {
-                    EncodingLengthError {
-                        name,
-                        actual,
-                        expected,
-                    } => {
-                        assert_eq!(name, kind);
-                        assert_eq!(actual, 2);
-                        assert_eq!(expected, 3);
-                    }
-                }
+                let EncodingLengthError {
+                    name,
+                    actual,
+                    expected,
+                } = *source;
+                assert_eq!(name, kind);
+                assert_eq!(actual, 2);
+                assert_eq!(expected, 3);
             }
             other => panic!("unexpected partial-group validation result: {other:?}"),
         }

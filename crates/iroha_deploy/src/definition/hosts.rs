@@ -24,7 +24,7 @@ pub const DEFAULT_TORII_PORT: u16 = 8080;
 /// SSH port when `[ssh]` sets none.
 pub const DEFAULT_SSH_PORT: u16 = 22;
 
-const DEFAULT_MONITOR_INTERVAL: Interval = Interval::new(Duration::from_secs(5 * 60));
+const DEFAULT_MONITOR_INTERVAL: Interval = Interval::new(Duration::from_mins(5));
 
 /// `[ssh]`: how the controller reaches remote hosts.
 #[derive(Debug, Clone, PartialEq, Eq)]

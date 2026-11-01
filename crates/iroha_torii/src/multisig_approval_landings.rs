@@ -12,7 +12,7 @@ use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
     sync::{
-        Arc, LazyLock, Mutex, RwLock,
+        Arc, LazyLock, Mutex, RwLock, TryLockError,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -36,7 +36,7 @@ const MAX_LANDINGS: usize = 200_000;
 
 /// The block an approval landed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Landing {
+pub struct Landing {
     /// Block creation time, Unix milliseconds.
     pub(crate) at_ms: u64,
     /// Block height.
@@ -45,7 +45,7 @@ pub(crate) struct Landing {
 
 /// First landing of each (proposal, signer) pair, folded from committed blocks up to `height`.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct MultisigApprovalLandings {
+pub struct MultisigApprovalLandings {
     height: usize,
     tip: Option<HashOf<BlockHeader>>,
     first: BTreeMap<(MultisigProposalId, AccountId), Landing>,
@@ -139,11 +139,17 @@ static LANDINGS: LazyLock<RwLock<Arc<MultisigApprovalLandings>>> = LazyLock::new
 static FOLDING: Mutex<()> = Mutex::new(());
 static BACKFILLING: AtomicBool = AtomicBool::new(false);
 
-/// Clears `BACKFILLING` when the background pass ends, also by panic.
+/// Clears `BACKFILLING` when the background pass ends. Nothing joins that pass, so a panic is
+/// logged here, once, and a later read starts another pass.
 struct Backfilling;
 
 impl Drop for Backfilling {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            iroha_logger::error!(
+                "multisig approval times background pass panicked; a later read starts another"
+            );
+        }
         BACKFILLING.store(false, Ordering::Release);
     }
 }
@@ -168,6 +174,16 @@ fn publish(landings: MultisigApprovalLandings) -> Arc<MultisigApprovalLandings> 
 /// a short tail is missing. A longer gap starts one background pass and answers with what is
 /// folded so far. Emergency Fast mode reads no history, so its approvals stay untimed.
 pub(crate) async fn current(app: &crate::SharedAppState) -> Arc<MultisigApprovalLandings> {
+    current_reading(app, read_block_approvals).await
+}
+
+/// `current`, reading each block through `read`. Folds run on recoverable workers, outside the
+/// request task's suppression: a panic there answers with what is folded so far, is logged once
+/// and leaves the next read free to fold again, instead of signalling node shutdown.
+async fn current_reading(
+    app: &crate::SharedAppState,
+    read: ReadBlockApprovals,
+) -> Arc<MultisigApprovalLandings> {
     let folded = snapshot();
     let tip = app.state.committed_height();
     if folded.height >= tip || app.state.emergency_fast_startup_enabled() {
@@ -175,15 +191,26 @@ pub(crate) async fn current(app: &crate::SharedAppState) -> Arc<MultisigApproval
     }
     if tip - folded.height <= REQUEST_TAIL_BLOCKS && extends_committed_chain(app, &folded) {
         let app = app.clone();
-        return tokio::task::spawn_blocking(move || fold_to_tip(&app, false))
-            .await
-            .unwrap_or(folded);
+        let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+            fold_to_tip(&app, false, read)
+        });
+        return match crate::panic_recovery::join_recoverable(worker).await {
+            Ok(landings) => landings,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "multisig approval times answer with what is folded: this read's fold failed; a later read folds again"
+                );
+                folded
+            }
+        };
     }
     if !BACKFILLING.swap(true, Ordering::AcqRel) {
         let app = app.clone();
-        tokio::task::spawn_blocking(move || {
-            let _backfilling = Backfilling;
-            fold_to_tip(&app, true);
+        let backfilling = Backfilling;
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let _backfilling = backfilling;
+            fold_to_tip(&app, true, read);
         });
     }
     folded
@@ -206,8 +233,13 @@ fn extends_committed_chain(
 /// busy or the chain no longer holds the folded tip. The background pass folds to the tip (from
 /// genesis again on a replaced chain), publishes its progress as it goes and retries a busy
 /// history pool. A block too large for the fetch budget is skipped, so its approvals stay untimed;
-/// any other refusal stops the pass until a later read.
-fn fold_to_tip(app: &crate::SharedAppState, background: bool) -> Arc<MultisigApprovalLandings> {
+/// any other refusal stops the pass until a later read. A pass that panicked leaves `FOLDING`
+/// poisoned and the index as it last published it, so the next fold goes on from there.
+fn fold_to_tip(
+    app: &crate::SharedAppState,
+    background: bool,
+    read: ReadBlockApprovals,
+) -> Arc<MultisigApprovalLandings> {
     let _folding = if background {
         match FOLDING.lock() {
             Ok(guard) => guard,
@@ -216,7 +248,8 @@ fn fold_to_tip(app: &crate::SharedAppState, background: bool) -> Arc<MultisigApp
     } else {
         match FOLDING.try_lock() {
             Ok(guard) => guard,
-            Err(_) => return snapshot(),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return snapshot(),
         }
     };
     let folded = snapshot();
@@ -245,7 +278,7 @@ fn fold_to_tip(app: &crate::SharedAppState, background: bool) -> Arc<MultisigApp
         else {
             break;
         };
-        match read_block_approvals(app, &network, height, hash) {
+        match read(app, &network, height, hash) {
             Ok((at_ms, approvals)) => {
                 busy_retries = 0;
                 landings.fold(height.get(), hash, at_ms, approvals);
@@ -281,6 +314,14 @@ fn fold_to_tip(app: &crate::SharedAppState, background: bool) -> Arc<MultisigApp
     }
     publish(landings)
 }
+
+/// How a fold reads one committed block: `read_block_approvals`, or a panicking stand-in in tests.
+type ReadBlockApprovals = fn(
+    &crate::SharedAppState,
+    &NetworkId,
+    NonZeroUsize,
+    HashOf<BlockHeader>,
+) -> Result<(u64, Vec<(MultisigProposalId, AccountId)>), crate::Error>;
 
 /// Read one committed block under a fresh background history owner: its creation time and the
 /// proposals its successful external transactions proposed or approved, with their signers.
@@ -331,7 +372,7 @@ mod tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigProposalNonce, MultisigPropose,
     };
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, sync::atomic::AtomicUsize};
 
     fn account(seed: u8) -> AccountId {
         AccountId::new(
@@ -545,8 +586,9 @@ mod tests {
         assert_eq!(chain.commit_at(6_000, vec![approve]), [true]);
         let approved_height = chain.height();
 
-        let landings = with_empty_index(|| fold_to_tip(&app_reading(&chain), true));
-        assert_eq!(landings.height, chain.height() as usize);
+        let landings =
+            with_empty_index(|| fold_to_tip(&app_reading(&chain), true, read_block_approvals));
+        assert_eq!(landings.height, usize::try_from(chain.height()).unwrap());
         let at = |height: u64| {
             u64::try_from(
                 chain
@@ -597,12 +639,93 @@ mod tests {
         }
         let app = app_reading(&chain);
         with_empty_index(|| {
-            assert_eq!(fold_to_tip(&app, false).height, REQUEST_TAIL_BLOCKS);
             assert_eq!(
-                fold_to_tip(&app, false).height,
-                chain.height() as usize,
+                fold_to_tip(&app, false, read_block_approvals).height,
+                REQUEST_TAIL_BLOCKS
+            );
+            assert_eq!(
+                fold_to_tip(&app, false, read_block_approvals).height,
+                usize::try_from(chain.height()).unwrap(),
                 "the next read folds the rest"
             );
+        });
+    }
+
+    /// Wait for the background pass that the read just started to end.
+    async fn background_pass_ended() {
+        for _ in 0..600 {
+            if !BACKFILLING.load(Ordering::Acquire) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the background pass did not end");
+    }
+
+    /// A fold that panics on a block read stays on its recoverable worker, in the background pass
+    /// and in a read's own tail fold. The read answers with what is folded, and the next one goes
+    /// on from there although the panic poisoned the fold owner.
+    #[test]
+    fn a_panicking_fold_keeps_answering_and_a_later_pass_goes_on() {
+        static SUPPRESSED_PANICS: AtomicUsize = AtomicUsize::new(0);
+        fn panicking_read(
+            _: &crate::SharedAppState,
+            _: &NetworkId,
+            _: NonZeroUsize,
+            _: HashOf<BlockHeader>,
+        ) -> Result<(u64, Vec<(MultisigProposalId, AccountId)>), crate::Error> {
+            if iroha_panic_hook::is_suppressed() {
+                SUPPRESSED_PANICS.fetch_add(1, Ordering::AcqRel);
+            }
+            panic!("injected approval fold panic");
+        }
+
+        fn commit_ticks(chain: &mut CertifiedTestChain, key: &KeyPair, blocks: usize) {
+            for _ in 0..blocks {
+                let at = 1_000 * (chain.height() + 1);
+                let tick = chain.sign(
+                    key,
+                    [Log::new(iroha_data_model::Level::INFO, "tick".into()).into()],
+                    at,
+                );
+                assert_eq!(chain.commit_at(at, vec![tick]), [true]);
+            }
+        }
+
+        let key = KeyPair::from_seed(vec![0x92; 32], Algorithm::Ed25519);
+        let signer = AccountId::new(key.public_key().clone());
+        let mut config = TestChainConfig::new(iroha_core::state::World::new(), 1_000);
+        config.genesis_instructions = vec![Register::account(Account::new(signer)).into()];
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        commit_ticks(&mut chain, &key, REQUEST_TAIL_BLOCKS + 1);
+        let app = app_reading(&chain);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fold test runtime");
+        with_empty_index(|| {
+            runtime.block_on(async {
+                // A gap past a read's tail goes to the background pass, which nothing joins.
+                let answered = current_reading(&app, panicking_read).await;
+                assert_eq!(answered.height, 0, "the read answers with what is folded");
+                background_pass_ended().await;
+                assert_eq!(SUPPRESSED_PANICS.load(Ordering::Acquire), 1);
+                assert_eq!(snapshot().height, 0);
+
+                current(&app).await;
+                background_pass_ended().await;
+                assert_eq!(snapshot().height, chain.height() as usize);
+
+                // A read folds a short tail itself and joins that worker.
+                commit_ticks(&mut chain, &key, 2);
+                let folded = snapshot();
+                let answered = current_reading(&app, panicking_read).await;
+                assert!(Arc::ptr_eq(&answered, &folded), "keeps what is folded");
+                assert_eq!(SUPPRESSED_PANICS.load(Ordering::Acquire), 2);
+                assert!(!iroha_panic_hook::is_suppressed());
+
+                assert_eq!(current(&app).await.height, chain.height() as usize);
+            });
         });
     }
 

@@ -57,7 +57,6 @@ impl Canary<'_> {
 
 fn fixture(directory: &Path) -> Canary<'_> {
     Canary {
-        binary: Path::new("unused"),
         directory,
         config: Path::new("unused"),
         root: "http://127.0.0.1:8080".to_owned(),

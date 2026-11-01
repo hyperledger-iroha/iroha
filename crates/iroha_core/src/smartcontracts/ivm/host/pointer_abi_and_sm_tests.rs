@@ -381,9 +381,11 @@ fn sm_syscalls_ignore_local_crypto_preferences() {
         ("blake2b-256", Sm2PublicKey::DEFAULT_DISTID),
         ("sm3-256", "node-local-generation-preference"),
     ] {
-        let mut crypto = iroha_config::parameters::actual::Crypto::default();
-        crypto.default_hash = default_hash.to_owned();
-        crypto.sm2_distid_default = sm2_distid_default.to_owned();
+        let crypto = iroha_config::parameters::actual::Crypto {
+            default_hash: default_hash.to_owned(),
+            sm2_distid_default: sm2_distid_default.to_owned(),
+            ..iroha_config::parameters::actual::Crypto::default()
+        };
         let mut host = CoreHost::new(fixture_account("alice"));
         host.set_crypto_config(Arc::new(crypto));
         let mut outcomes = Vec::new();

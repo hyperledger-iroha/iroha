@@ -44,6 +44,11 @@ workspace = true
 default-features = false
 features = ["base-codec"]
 
+[lints.clippy]
+# Custody and admission failures hand their owned input back inside the error so
+# rejection never allocates; boxing those errors would allocate on failure paths.
+result_large_err = "allow"
+
 [features]
 default = []
 # Read-only physical ownership diagnostics for cross-crate custody regressions.
@@ -86,8 +91,3 @@ path = "tests/cell_generation_backing.rs"
 [[test]]
 name = "flat_index_transactions"
 path = "tests/flat_index_transactions.rs"
-
-[lints.clippy]
-# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
-# flagged sites and remove each allow.
-result_large_err = "allow"

@@ -28,11 +28,6 @@ fn open_atomic_temp_file_rejects_preexisting_symlink() {
     fs::write(&target_path, b"unchanged\n").expect("write target");
     let tmp_path = temp_path.join("index.norito.tmp");
     std::os::unix::fs::symlink(&target_path, &tmp_path).expect("create symlink");
-    let err = open_atomic_temp_file(&tmp_path).expect_err("reject temp symlink");
-    let message = err.to_string();
-    assert!(
-        message.contains("failed to create atomic temp"),
-        "unexpected error: {message}"
-    );
+    RetainedFile::create_new_private(&tmp_path).expect_err("reject temp symlink");
     assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
 }

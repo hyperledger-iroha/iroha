@@ -1,13 +1,16 @@
 //! Microbenchmarks to relate native ISI executor latency to the ISI gas meter.
 
-//! Prints per-instruction `ns/op`, `gas/op`, and `ns/gas` to guide calibration.
-use criterion::{BatchSize, Criterion};
+//! Criterion retains execution latency; `ISI_GAS_CALIBRATION` records retain
+//! the matching gas denominator for deriving `ns/op`, `gas/op`, and `ns/gas`.
+#[path = "../../ivm/benches/support/gas_policy.rs"]
+mod gas_policy;
+#[path = "support/isi_gas_fixture.rs"]
+mod isi_gas_fixture;
+
+use criterion::Criterion;
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
     gas as isi_gas,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute,
     state::{State, World},
 };
 use iroha_data_model::{
@@ -41,7 +44,7 @@ impl BenchState {
             return;
         }
         let executor = Executor::default();
-        let mut block = self.state.block(bench_block_header());
+        let mut block = self.state.block(isi_gas_fixture::block_header(&self.state));
         let mut tx = block.transaction();
         for instr in instructions {
             executor
@@ -59,9 +62,6 @@ impl BenchState {
             .expect("setup block commit");
     }
 }
-fn bench_block_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)
-}
 /// Construct a world state with a single domain and two accounts (authority + recipient)
 /// suitable for running isolated ISI executor benchmarks.
 fn build_bench_state() -> BenchState {
@@ -73,9 +73,16 @@ fn build_bench_state() -> BenchState {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let recipient_account = Account::new(recipient.clone()).build(&recipient);
     let world = World::with([domain], [authority_account, recipient_account], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
+    let state = isi_gas_fixture::state_after_signed_genesis(
+        world,
+        vec![
+            Grant::account_permission(
+                iroha_executor_data_model::permission::role::CanManageRoles,
+                authority.clone(),
+            )
+            .into(),
+        ],
+    );
     BenchState {
         state,
         ctx: BenchContext {
@@ -87,25 +94,17 @@ fn build_bench_state() -> BenchState {
 fn setup_none(_state: &mut BenchState) {}
 fn setup_role_exists(state: &mut BenchState) {
     let role_id: RoleId = "bench_role".parse().expect("role id");
-    let new_role = Role::new(role_id, state.ctx.recipient.clone());
-    let mut block = state.state.block(bench_block_header());
-    let mut tx = block.transaction();
-    // Bootstrap-only path: bypass initial-executor permission checks so the
-    // `GrantAccountRole` benchmark can measure grant cost instead of setup auth.
-    Register::role(new_role)
-        .execute(&state.ctx.authority, &mut tx)
-        .expect("setup role registration");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("setup block commit");
+    let new_role = Role::new(role_id, state.ctx.authority.clone());
+    // The signed genesis grants CanManageRoles to this authority. Setup uses
+    // the same permission-enforcing executor as the measured instruction.
+    state.apply_instrs([Register::role(new_role).into()]);
 }
 fn setup_role_assigned(state: &mut BenchState) {
     setup_role_exists(state);
     let role_id: RoleId = "bench_role".parse().expect("role id");
     state.apply_instrs([iroha_data_model::isi::Grant::account_role(
         role_id,
-        state.ctx.authority.clone(),
+        state.ctx.recipient.clone(),
     )
     .into()]);
 }
@@ -142,11 +141,9 @@ fn bench_asset_definition_id() -> AssetDefinitionId {
 }
 /// Construct a valid asset definition fixture for registration benchmarks.
 fn bench_asset_definition() -> iroha_data_model::asset::NewAssetDefinition {
-    AssetDefinition::numeric(
-        bench_asset_definition_id(),
-        BENCH_ASSET_NAME.to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+    isi_gas_fixture::domain_owned_asset_definition(
+        DomainId::try_new(BENCH_DOMAIN_NAME, BENCH_DATASPACE_NAME).expect("valid domain id"),
+        BENCH_ASSET_NAME,
     )
 }
 /// Benchmark a single ISI by executing it in a fresh transaction for each iteration.
@@ -154,35 +151,41 @@ fn bench_isi(
     c: &mut Criterion,
     label: &str,
     setup: fn(&mut BenchState),
-    mk: impl Fn(&BenchContext) -> InstructionBox + Clone,
+    mk: impl Fn(&BenchContext) -> InstructionBox,
 ) {
+    // Retain the denominator outside Criterion's timing window. The raw samples
+    // measure one execution each; benchmark IDs remain stable across profiles.
+    let mut bench_state = build_bench_state();
+    setup(&mut bench_state);
+    let quote_instruction = mk(&bench_state.ctx);
+    let gas = isi_gas::meter_instruction(&quote_instruction, &iroha_core::gas::DEFAULT_ZK_GAS)
+        .expect("gas quote must complete for this fixture");
+    println!("ISI_GAS_CALIBRATION instruction={label} operations=1 total_gas={gas}");
     let mut g = c.benchmark_group("isi-gas-cal");
     g.bench_function(label, |b| {
-        let mk_clone = mk.clone();
-        b.iter_batched(
-            || {
-                let mut bench_state = build_bench_state();
-                setup(&mut bench_state);
-                bench_state
-            },
-            |bench_state| {
-                let executor = Executor::default();
-                let instr = mk_clone(&bench_state.ctx);
-                let mut block = bench_state.state.block(bench_block_header());
-                let mut tx = block.transaction();
-                let _ = isi_gas::meter_instruction(&instr, &iroha_core::gas::DEFAULT_ZK_GAS)
-                    .expect("gas quote must complete for this fixture");
-                executor
-                    .execute_instruction_with_profile(
-                        &mut tx,
-                        &bench_state.ctx.authority,
-                        instr,
-                        InstructionExecutionProfile::Bench,
-                    )
-                    .expect("bench profile execution");
-            },
-            BatchSize::SmallInput,
-        );
+        // The original committed State stays fixed. Dropping the uncommitted
+        // transaction and block restores each iteration without replacing its
+        // authenticated root or repeating unrelated genesis startup.
+        b.iter(|| {
+            let executor = Executor::default();
+            let instr = mk(&bench_state.ctx);
+            let mut block = bench_state
+                .state
+                .block(isi_gas_fixture::block_header(&bench_state.state));
+            let mut tx = isi_gas_fixture::component_transaction(&mut block);
+            std::hint::black_box(
+                isi_gas::meter_instruction(&instr, &iroha_core::gas::DEFAULT_ZK_GAS)
+                    .expect("gas quote must complete for this fixture"),
+            );
+            executor
+                .execute_instruction_with_profile(
+                    &mut tx,
+                    &bench_state.ctx.authority,
+                    instr,
+                    InstructionExecutionProfile::Bench,
+                )
+                .expect("bench profile execution");
+        });
     });
     g.finish();
 }
@@ -205,11 +208,11 @@ fn run_benchmarks(c: &mut Criterion) {
     });
     bench_isi(c, "GrantAccountRole", setup_role_exists, |ctx| {
         let role: RoleId = "bench_role".parse().unwrap();
-        iroha_data_model::isi::Grant::account_role(role, ctx.authority.clone()).into()
+        iroha_data_model::isi::Grant::account_role(role, ctx.recipient.clone()).into()
     });
     bench_isi(c, "RevokeAccountRole", setup_role_assigned, |ctx| {
         let role: RoleId = "bench_role".parse().unwrap();
-        iroha_data_model::isi::Revoke::account_role(role, ctx.authority.clone()).into()
+        iroha_data_model::isi::Revoke::account_role(role, ctx.recipient.clone()).into()
     });
     bench_isi(
         c,
@@ -233,6 +236,7 @@ fn run_benchmarks(c: &mut Criterion) {
 }
 /// Criterion entrypoint for this benchmark binary.
 fn main() {
+    gas_policy::configure_from_environment();
     #[allow(unused_imports)]
     {
         use ivm::set_banner_enabled;

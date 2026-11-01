@@ -195,6 +195,9 @@ pub(super) fn publish_in(
                 AtomicWriteStep::WriteTail => FsStep::WriteTempRest,
                 AtomicWriteStep::SyncFile => FsStep::SyncFile,
                 AtomicWriteStep::Publish => FsStep::Rename,
+                // Keep the fault sequence at its existing operation boundaries while
+                // joining custody immediately after the native rename succeeds.
+                AtomicWriteStep::Published => return validate(),
                 AtomicWriteStep::SyncDirectory => FsStep::SyncDir,
             };
             let display_path = if step == FsStep::SyncDir {

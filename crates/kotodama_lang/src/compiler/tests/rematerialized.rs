@@ -100,10 +100,12 @@ fn rematerialized_literals_reduce_emitted_memory_traffic_and_authenticated_frame
     let memory_words = |output: &CompileOutput| {
         let metadata = ProgramMetadata::parse(&output.artifact).unwrap();
         output.artifact[metadata.code_offset..]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|word| {
                 matches!(
-                    instruction::wide::opcode(u32::from_le_bytes((*word).try_into().unwrap())),
+                    instruction::wide::opcode(u32::from_le_bytes(**word)),
                     instruction::wide::memory::LOAD64 | instruction::wide::memory::STORE64
                 )
             })

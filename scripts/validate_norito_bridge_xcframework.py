@@ -127,6 +127,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_bridge_abi_version",
     "connect_norito_zk_x509_prepare_ownership_signing_v1",
     "connect_norito_domain_id_validate_v1",
+    "connect_norito_name_validate_v1",
     "soranet_mldsa_parameters",
     "soranet_mldsa_generate_keypair",
     "soranet_mldsa_sign",

@@ -114,7 +114,7 @@ fn escaped_record_keys_and_non_ascii_canonical_identity_use_original_pool_scratc
     drop(retained);
     assert_eq!(pool.reserved_bytes(), 0);
     let noncanonical = "{\"e\u{301}\":{\"id\":\"e\u{301}\",\"payload\":null}}";
-    assert!(decode(&noncanonical, &pool).is_err());
+    assert!(decode(noncanonical, &pool).is_err());
     assert_eq!(pool.reserved_bytes(), 0);
 }
 

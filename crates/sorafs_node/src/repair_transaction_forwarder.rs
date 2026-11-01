@@ -1810,16 +1810,39 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options
-            .open(path)
-            .expect("create private checkpoint fixture");
-        file.write_all(bytes)
-            .expect("write private checkpoint fixture");
+        #[cfg(windows)]
+        {
+            let mut file = iroha_fs::RetainedFile::create_new_private(path)
+                .expect("create private checkpoint fixture");
+            file.file_mut()
+                .write_all(bytes)
+                .expect("write private checkpoint fixture");
+        }
+        #[cfg(not(windows))]
+        {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options
+                .open(path)
+                .expect("create private checkpoint fixture");
+            file.write_all(bytes)
+                .expect("write private checkpoint fixture");
+        }
     }
     fn policy() -> RepairTransactionForwarderPolicyV1 {
         RepairTransactionForwarderPolicyV1 {
@@ -2449,7 +2472,7 @@ mod tests {
     }
     #[test]
     fn unsigned_signing_crash_recovers_ready_without_refunding_attempt() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let mut bounded = policy();
         bounded.max_attempts = 2;
         let signer = key(17);
@@ -2752,7 +2775,7 @@ mod tests {
     }
     #[test]
     fn crash_recovery_preserves_ambiguous_bytes_and_resets_only_signing() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let signer = key(7);
         let forwarder = RepairTransactionForwarder::open(dir.path(), policy()).unwrap();
         let ambiguous_bytes = signed_repair_bytes(
@@ -2800,7 +2823,7 @@ mod tests {
     }
     #[test]
     fn finalized_absence_deadletters_exact_bytes_atomically_across_restart() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let mut bounded = policy();
         bounded.max_attempts = 1;
         let signer = key(8);
@@ -2904,7 +2927,7 @@ mod tests {
             forwarder.enqueue_signed_transaction(&compressed_transaction, &context(1, 1)),
             Err(RepairTransactionForwarderError::InvalidSignedTransaction)
         ));
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         write_private_checkpoint(
             &dir.path()
                 .join(REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1),
@@ -2984,7 +3007,7 @@ mod tests {
         let authority = AccountId::new(signer.public_key().clone());
         let operation =
             RepairOperationV1::Submit(submit_instruction(&signer, [0x91; 32], "REP-SCHEMA-FRAME"));
-        let directory = TempDir::new().unwrap();
+        let directory = private_state_tempdir().unwrap();
         let forwarder = RepairTransactionForwarder::open(directory.path(), policy()).unwrap();
         let id = forwarder
             .enqueue_unsigned_operation(authority, operation.clone(), &context(10, 0xA1))

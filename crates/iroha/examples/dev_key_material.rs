@@ -23,8 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "}}"
         ),
         account_id,
-        public_key.to_string(),
-        ExposedPrivateKey(private_key).to_string(),
+        public_key,
+        ExposedPrivateKey(private_key),
         hex::encode(public_key_raw),
     );
     Ok(())

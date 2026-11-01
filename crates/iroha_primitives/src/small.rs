@@ -158,7 +158,9 @@ mod tests {
     fn smallstr_golden_bytes(hex: &str) -> Vec<u8> {
         assert_eq!(hex.len() % 2, 0);
         hex.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let hi = char::from(pair[0]).to_digit(16).expect("golden hex");
                 let lo = char::from(pair[1]).to_digit(16).expect("golden hex");

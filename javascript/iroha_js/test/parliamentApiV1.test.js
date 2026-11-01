@@ -153,10 +153,10 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
 test("initial sortition draft accepts only the enclosing attempt binding", () => {
   const transition = { transition: "RegisterInitialSortition" };
   assert.deepEqual(PARLIAMENT_PUBLIC_TRANSITIONS_V1[12], {
-    noritoIndex: 12,
+    noritoIndex: 21,
     jsonTag: "RegisterInitialSortition",
     jsonPayloadRequired: false,
-    eventKindIndex: 15,
+    eventKindIndex: 24,
   });
   assert.deepEqual(
     buildParliamentTransitionDraftRequestV1(ATTEMPT_ID, transition),

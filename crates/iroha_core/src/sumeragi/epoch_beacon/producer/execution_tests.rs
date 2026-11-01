@@ -264,7 +264,13 @@ fn sccp_panel_draw_reads_the_original_pulse_at_its_actual_carrying_height() {
     let mut block = predecessor.state().block(stored.block().header());
     assert!(block.sumeragi_schedule.original_native_pulse().is_none());
     block
-        .request_sumeragi_schedule(1, stored.block(), Some(pulse), Some(pulse.context))
+        .request_sumeragi_schedule_with_preparation(
+            1,
+            stored.block(),
+            Some(pulse),
+            Some(pulse.context),
+            None,
+        )
         .unwrap();
     assert!(
         block.sumeragi_schedule.frozen_boundary().is_none(),

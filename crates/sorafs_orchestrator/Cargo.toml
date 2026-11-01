@@ -31,6 +31,7 @@ local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 moderation-grpc = ["cli-orchestrator", "dep:tonic", "dep:prost", "dep:tonic-prost"]
 
 [dependencies]
+iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
@@ -58,6 +59,7 @@ tempfile = "3.23.0"
 sha2 = { version = "0.11.1", default-features = false, features = ["alloc"], optional = true }
 sha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }
 url = { workspace = true }
+zeroize = { workspace = true }
 iroha_version = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"], optional = true }
@@ -69,6 +71,9 @@ toml = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
+iroha_data_model = { workspace = true, features = ["application-model", "test-fixtures", "transparent_api"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 iroha_logger = { workspace = true }
 futures = "0.3.31"
 hex = "0.4.3"

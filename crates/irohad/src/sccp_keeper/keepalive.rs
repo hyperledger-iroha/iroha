@@ -1,4 +1,4 @@
-//! Local heartbeat and reconciliation carriers, independent of light-client RPC.
+//! Native scheduled-Time, heartbeat and reconciliation carriers, independent of client RPC.
 
 use super::*;
 use iroha_core::{smartcontracts::isi::sccp::keepalive, sumeragi::schedule};
@@ -21,8 +21,21 @@ pub(super) struct NodeKeeper {
 
 impl Host for NodeKeeper {
     fn tick(&self, wall_ms: u64) -> eyre::Result<bool> {
-        let view = self.host.state.view();
-        if view.height() == 0 {
+        // One poll owns one nonblocking observation. A busy publication or reader
+        // cannot turn this finite native duty into a blocking-worker retry loop.
+        let view = self
+            .host
+            .state
+            .try_view_once()
+            .wrap_err("native progress snapshot is unavailable")?;
+        let height = view.height();
+        if height == 0 {
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                observation = "empty",
+                "native progress poll"
+            );
             return Ok(false);
         }
         let authority = AccountId::new(self.host.key.public_key().clone());
@@ -31,6 +44,7 @@ impl Host for NodeKeeper {
             .queue
             .has_fresh_pending_keepalive(&view, &authority, wall_ms)?
         {
+            iroha_logger::debug!(height, wall_ms, pending = "own", "native progress poll");
             return Ok(false);
         }
         if self
@@ -38,37 +52,84 @@ impl Host for NodeKeeper {
             .queue
             .has_any_fresh_pending_keepalive(&view, wall_ms)
         {
+            iroha_logger::debug!(height, wall_ms, pending = "other", "native progress poll");
             return Ok(false);
         }
         let world = view.world();
-        let Some(due_ms) = keepalive::next_progress_at_ms(world) else {
+        let committed_time_ms = view
+            .native_execution_tip()
+            .map(|tip| tip.creation_time_ms());
+        let next_height = u64::try_from(height)?
+            .checked_add(1)
+            .ok_or_else(|| eyre::eyre!("Keepalive height overflow"))?;
+        let Some(due_ms) = keepalive::next_progress_at_ms(world, committed_time_ms, next_height)
+        else {
             // TODO: Parliament's authoritative due-item iterator supplies its own due time
             // and one-second rank stagger here. Missing work is never an invented deadline.
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                ?committed_time_ms,
+                observation = "no_deadline",
+                "native progress poll"
+            );
             return Ok(false);
         };
         if wall_ms < due_ms {
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                ?committed_time_ms,
+                due_ms,
+                observation = "before_deadline",
+                "native progress poll"
+            );
             return Ok(false);
         }
-        let next_height = u64::try_from(view.height())?
-            .checked_add(1)
-            .ok_or_else(|| eyre::eyre!("Keepalive height overflow"))?;
         let committee = schedule::scheduled_committee(world, next_height)?;
         let Some(rank) = committee.iter().position(|peer| peer == &self.peer) else {
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                ?committed_time_ms,
+                due_ms,
+                observation = "not_scheduled_validator",
+                "native progress poll"
+            );
             return Ok(false);
         };
         if !scheduled_progress(
             keepalive::next_heartbeat_at_ms(world),
             keepalive::next_reconciliation_at_ms(world),
+            keepalive::next_scheduled_at_ms(world, committed_time_ms, next_height),
             rank,
             self.stagger,
             wall_ms,
         ) {
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                ?committed_time_ms,
+                due_ms,
+                rank,
+                observation = "rank_stagger",
+                "native progress poll"
+            );
             return Ok(false);
         }
         let candidate_ms = wall_ms
             .checked_add(1)
             .ok_or_else(|| eyre::eyre!("Keepalive creation time overflow"))?;
-        if !keepalive::due(world, next_height, candidate_ms)? {
+        if !keepalive::due(world, committed_time_ms, next_height, candidate_ms)? {
+            iroha_logger::debug!(
+                height,
+                wall_ms,
+                ?committed_time_ms,
+                due_ms,
+                rank,
+                observation = "not_due",
+                "native progress poll"
+            );
             return Ok(false);
         }
         drop(view);
@@ -80,6 +141,15 @@ impl Host for NodeKeeper {
             InstructionBox::from(Keepalive {}),
             wall_ms,
         )?;
+        iroha_logger::debug!(
+            height,
+            wall_ms,
+            ?committed_time_ms,
+            due_ms,
+            rank,
+            observation = "submitted",
+            "native progress poll"
+        );
         Ok(true)
     }
 }
@@ -89,6 +159,7 @@ impl Host for NodeKeeper {
 fn scheduled_progress(
     heartbeat_ms: Option<u64>,
     reconciliation_ms: Option<u64>,
+    time_output_ms: Option<u64>,
     rank: usize,
     heartbeat_stagger: Duration,
     wall_ms: u64,
@@ -96,6 +167,7 @@ fn scheduled_progress(
     heartbeat_ms.is_some_and(|due| scheduled(due, rank, heartbeat_stagger, wall_ms))
         || reconciliation_ms
             .is_some_and(|due| scheduled(due, rank, Duration::from_secs(1), wall_ms))
+        || time_output_ms.is_some_and(|due| scheduled(due, rank, Duration::from_secs(1), wall_ms))
 }
 
 /// Use the exact canonical rank without allowing overflow to move a deadline backwards.
@@ -146,7 +218,7 @@ mod tests {
 
     #[test]
     fn heartbeat_waits_for_exact_deadline_and_canonical_rank_stagger() {
-        let stagger = Duration::from_millis(15_000);
+        let stagger = Duration::from_secs(15);
         assert!(!scheduled(60_000, 0, stagger, 59_999));
         assert!(scheduled(60_000, 0, stagger, 60_000));
         assert!(!scheduled(60_000, 2, stagger, 89_999));
@@ -161,6 +233,7 @@ mod tests {
         assert!(!scheduled_progress(
             None,
             Some(110_000),
+            None,
             3,
             heartbeat_stagger,
             112_999
@@ -168,12 +241,14 @@ mod tests {
         assert!(scheduled_progress(
             None,
             Some(110_000),
+            None,
             3,
             heartbeat_stagger,
             113_000
         ));
         assert!(!scheduled_progress(
             Some(100_000),
+            None,
             None,
             3,
             heartbeat_stagger,
@@ -182,6 +257,7 @@ mod tests {
         assert!(scheduled_progress(
             Some(100_000),
             Some(110_000),
+            None,
             3,
             heartbeat_stagger,
             113_000
@@ -189,8 +265,46 @@ mod tests {
         assert!(!scheduled_progress(
             None,
             None,
+            None,
             0,
             heartbeat_stagger,
+            u64::MAX
+        ));
+    }
+
+    #[test]
+    fn scheduled_time_output_wakes_without_heartbeat_and_obeys_rank() {
+        let stagger = Duration::from_secs(15);
+        assert!(!scheduled_progress(
+            None,
+            None,
+            Some(100_001),
+            2,
+            stagger,
+            102_000
+        ));
+        assert!(scheduled_progress(
+            None,
+            None,
+            Some(100_001),
+            2,
+            stagger,
+            102_001
+        ));
+        assert!(scheduled_progress(
+            Some(900_000),
+            None,
+            Some(100_001),
+            0,
+            stagger,
+            100_001
+        ));
+        assert!(!scheduled_progress(
+            None,
+            None,
+            Some(u64::MAX),
+            1,
+            stagger,
             u64::MAX
         ));
     }
@@ -208,7 +322,7 @@ mod tests {
                 l5_cursors: parking_lot::Mutex::default(),
             }),
             peer,
-            stagger: Duration::from_millis(15_000),
+            stagger: Duration::from_secs(15),
         };
         assert!(!host.tick(1_000_000).unwrap());
     }

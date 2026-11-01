@@ -57,7 +57,7 @@ pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
         .expect("protocol-defined digest domains fit in u64")
         .to_le_bytes();
     let mut hasher = Blake2b::<U32>::new();
-    hasher.update(&domain_len);
+    hasher.update(domain_len);
     hasher.update(domain);
     hasher.update(&encoded);
     hasher.finalize().into()

@@ -211,11 +211,10 @@ fn wrapper_descriptor(layout: &Synthesized<Fp>) -> DescriptorBinding {
 fn field_words(bytes: &[u8], count: usize) -> Vec<Fp> {
     assert_eq!(bytes.len(), count * 32);
     bytes
-        .chunks_exact(32)
-        .map(|b| {
-            Option::<Fp>::from(Fp::from_repr(b.try_into().unwrap()))
-                .expect("canonical native output")
-        })
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|b| Option::<Fp>::from(Fp::from_repr(*b)).expect("canonical native output"))
         .collect()
 }
 fn mutation(original: &[u8], proof_length: usize, name: &str) -> Vec<u8> {

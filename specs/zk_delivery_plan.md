@@ -590,6 +590,19 @@ Deliverable: Implement explicit participant threshold, key generation, epoch cus
 
 Acceptance: Reject malformed, replayed, wrong-epoch and wrong-ciphertext shares; insufficient participation fails and the declared threshold succeeds. Verify secret lifecycle and malicious-party cases without borrowing consensus quorum rules.
 
+Current component: `iroha_fhe::bgv::threshold` has trusted-dealer Shamir custody,
+canonical in-place subset weighting and `ThresholdSelection::open_local` for
+one trusted, co-located owner. Local opening consumes the exact selected subset,
+forms ciphertext-share products without reconstructing a full secret key or
+exporting partial decryptions, and uses the existing centered RNS conversion.
+It accepts only two-component ciphertexts, enforces an explicit polynomial-word
+buffer ceiling and returns original unchanged owners on refusal. This does not
+authenticate the registered encryption key, application purpose, authoritative
+epoch or opening request. C.4 remains incomplete: distributed masked and proven
+ciphertext-bound contributions, malicious-party verification, authenticated
+custody, authorization and replay/retry behavior are still required. The local
+operation supplies no production network route or parameter qualification.
+
 ### C.5 ZK-AMS native40 and MKHE completion
 
 Deliverable: Migrate shared production RNS/NTT/key-switch arithmetic while retaining distinct BGV/MKHE wire and collective semantics; complete native40 source correspondence, bounded qPCS, production composite verifier, phases II/III and account provisioning.

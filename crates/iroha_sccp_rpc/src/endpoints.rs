@@ -30,12 +30,13 @@
 //! own deadline is clipped to it.
 //!
 //! Secret header values are read lazily, at every attempt, from files that
-//! must be regular, non-symlink and owner-only (mode `0600` or stricter). The
-//! read buffer is zeroized after use and values are never logged or printed.
+//! must be single-link regular files under current-owner private custody: Unix
+//! mode `0400` or `0600`, or protected owner-only Windows access. Original file
+//! and ancestor handles remain retained throughout each bounded read. The read
+//! buffer is zeroized after use and values are never logged or printed.
 
 use std::{
     fmt,
-    fs::{self, File},
     io::{self, Read as _},
     num::NonZeroU32,
     path::{Path, PathBuf},
@@ -175,8 +176,8 @@ pub enum SecretFileProblem {
     Empty,
     /// The value contains bytes an HTTP header value cannot carry.
     InvalidValue,
-    /// Owner-only files cannot be checked on this platform.
-    Unsupported,
+    /// Native custody is unsafe, including foreign owners, inherited Windows access or hard links.
+    UnsafeCustody,
 }
 
 impl fmt::Display for SecretFileError {
@@ -197,7 +198,7 @@ impl fmt::Display for SecretFileError {
             }
             SecretFileProblem::Permissions { mode } => write!(
                 formatter,
-                "`{path}` has mode {:04o}; it must be owner-only (0600 or stricter)",
+                "`{path}` has mode {:04o}; it must have exact owner-only mode 0400 or 0600",
                 mode & 0o7777
             ),
             SecretFileProblem::Replaced => {
@@ -212,9 +213,9 @@ impl fmt::Display for SecretFileError {
                 formatter,
                 "`{path}` holds bytes that an HTTP header value cannot carry"
             ),
-            SecretFileProblem::Unsupported => write!(
+            SecretFileProblem::UnsafeCustody => write!(
                 formatter,
-                "`{path}` cannot be checked for owner-only access on this platform"
+                "`{path}` requires native private current-owner custody"
             ),
         }
     }
@@ -268,8 +269,10 @@ impl SecretHeaderSource {
 
     /// Reads the value file now and returns a sensitive header value.
     ///
-    /// The file must be a regular file (not a symlink) with mode `0600` or
-    /// stricter. One trailing line break is removed. The read buffer is
+    /// The file must be a single-link regular file under current-owner private
+    /// custody: Unix `0400`/`0600` or protected Windows owner-only access.
+    /// Symlinks, reparse points and changing original files are refused.
+    /// One trailing line break is removed. The read buffer is
     /// zeroized before returning; the returned value is marked sensitive so the
     /// HTTP stack never prints it.
     ///
@@ -304,42 +307,51 @@ fn strip_line_break(value: &[u8]) -> &[u8] {
 #[cfg(unix)]
 const OWNER_ONLY_FORBIDDEN_MODE_BITS: u32 = 0o7177;
 
-/// Reads an owner-only regular file into a zeroizing buffer.
-#[cfg(unix)]
+/// Reads one original private regular file into a fixed zeroizing buffer.
 fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, SecretFileProblem> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    fn check(metadata: &fs::Metadata) -> Result<(), SecretFileProblem> {
-        if metadata.file_type().is_symlink() {
-            return Err(SecretFileProblem::Symlink);
-        }
-        if !metadata.is_file() {
-            return Err(SecretFileProblem::NotRegularFile);
-        }
-        let mode = metadata.mode();
-        if mode & OWNER_ONLY_FORBIDDEN_MODE_BITS != 0 {
-            return Err(SecretFileProblem::Permissions { mode });
-        }
-        Ok(())
-    }
-
     let io_problem = |error: io::Error| SecretFileProblem::Io {
         kind: error.kind(),
         raw_os_error: error.raw_os_error(),
     };
-    let before = fs::symlink_metadata(path).map_err(io_problem)?;
-    check(&before)?;
-    let mut file = File::open(path).map_err(io_problem)?;
-    let opened = file.metadata().map_err(io_problem)?;
-    if opened.dev() != before.dev() || opened.ino() != before.ino() {
+    let custody_problem = |error: io::Error| {
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            SecretFileProblem::UnsafeCustody
+        } else {
+            io_problem(error)
+        }
+    };
+    let before = iroha_fs::FileMetadata::symlink_metadata(path).map_err(io_problem)?;
+    if before.file_type().is_symlink() {
+        return Err(SecretFileProblem::Symlink);
+    }
+    if !before.is_file() {
+        return Err(SecretFileProblem::NotRegularFile);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let mode = before.mode();
+        if mode & OWNER_ONLY_FORBIDDEN_MODE_BITS != 0 {
+            return Err(SecretFileProblem::Permissions { mode });
+        }
+    }
+    if before.len() > MAX_SECRET_HEADER_VALUE_BYTES as u64 {
+        return Err(SecretFileProblem::TooLarge);
+    }
+    let mut original = iroha_fs::RetainedFile::open_private(path).map_err(custody_problem)?;
+    if original.identity().map_err(custody_problem)? != before.identity() {
         return Err(SecretFileProblem::Replaced);
     }
-    check(&opened)?;
-    // A fixed buffer is never reallocated, so no unzeroized copy is left behind.
+    let snapshot = original.snapshot().map_err(custody_problem)?;
+    // One allocation includes the growth sentinel; secret bytes never enter an
+    // unzeroized reallocation. The original and all ancestors stay retained.
     let mut buffer = Zeroizing::new(vec![0_u8; MAX_SECRET_HEADER_VALUE_BYTES + 1]);
     let mut filled = 0;
     loop {
-        let read = file.read(&mut buffer[filled..]).map_err(io_problem)?;
+        let read = original
+            .file_mut()
+            .read(&mut buffer[filled..])
+            .map_err(io_problem)?;
         if read == 0 {
             break;
         }
@@ -348,14 +360,11 @@ fn read_owner_only_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, SecretFilePro
             return Err(SecretFileProblem::TooLarge);
         }
     }
+    if original.snapshot().map_err(custody_problem)? != snapshot {
+        return Err(SecretFileProblem::Replaced);
+    }
     buffer.truncate(filled);
     Ok(buffer)
-}
-
-/// Owner-only files cannot be checked without Unix permissions.
-#[cfg(not(unix))]
-fn read_owner_only_file(_path: &Path) -> Result<Zeroizing<Vec<u8>>, SecretFileProblem> {
-    Err(SecretFileProblem::Unsupported)
 }
 
 /// One HTTP endpoint and its secret headers.
@@ -930,7 +939,7 @@ pub fn run_with_failover<T>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{fs, sync::Mutex};
 
     use super::*;
 
@@ -1552,5 +1561,161 @@ mod tests {
             SecretFileProblem::TooLarge
         );
         fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn native_secret_header_preserves_sensitive_values_bounds_and_single_link_custody() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("secrets")).unwrap();
+        let path = directory.path().join("header");
+        let source = SecretHeaderSource::new("x-api-key", &path).unwrap();
+        assert!(matches!(
+            source.header_value().unwrap_err().problem,
+            SecretFileProblem::Io {
+                kind: io::ErrorKind::NotFound,
+                ..
+            }
+        ));
+        directory
+            .write_atomic(
+                "header",
+                b"opaque-secret\r\n",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let value = source.header_value().unwrap();
+        assert_eq!(value.as_bytes(), b"opaque-secret");
+        assert!(value.is_sensitive());
+        assert!(!format!("{source:?}").contains("opaque-secret"));
+        assert!(!format!("{value:?}").contains("opaque-secret"));
+
+        let alias = directory.path().join("alias");
+        fs::hard_link(&path, &alias).unwrap();
+        let error = source.header_value().unwrap_err();
+        assert_eq!(error.problem, SecretFileProblem::UnsafeCustody);
+        assert!(!error.to_string().contains("opaque-secret"));
+        assert!(
+            SecretHeaderSource::new("x-api-key", &alias)
+                .unwrap()
+                .header_value()
+                .is_err()
+        );
+        fs::remove_file(alias).unwrap();
+        for (bytes, problem) in [
+            (b"\n".as_slice(), SecretFileProblem::Empty),
+            (b"bad\x01value".as_slice(), SecretFileProblem::InvalidValue),
+        ] {
+            directory
+                .write_atomic("header", bytes, iroha_fs::PublishMode::Replace)
+                .unwrap();
+            assert_eq!(source.header_value().unwrap_err().problem, problem);
+        }
+        directory
+            .write_atomic(
+                "header",
+                &vec![b'x'; MAX_SECRET_HEADER_VALUE_BYTES],
+                iroha_fs::PublishMode::Replace,
+            )
+            .unwrap();
+        let maximum = source.header_value().unwrap();
+        assert_eq!(maximum.as_bytes().len(), MAX_SECRET_HEADER_VALUE_BYTES);
+        assert!(maximum.is_sensitive());
+        directory
+            .write_atomic(
+                "header",
+                &vec![b'x'; MAX_SECRET_HEADER_VALUE_BYTES + 1],
+                iroha_fs::PublishMode::Replace,
+            )
+            .unwrap();
+        assert_eq!(
+            source.header_value().unwrap_err().problem,
+            SecretFileProblem::TooLarge
+        );
+        assert_eq!(
+            SecretHeaderSource::new("x-api-key", directory.path())
+                .unwrap()
+                .header_value()
+                .unwrap_err()
+                .problem,
+            SecretFileProblem::NotRegularFile
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_secret_header_refuses_inherited_access_and_live_acl_drift_without_repair() {
+        let temporary = tempfile::tempdir().unwrap();
+        let inherited = temporary.path().join("inherited");
+        fs::write(&inherited, b"opaque-secret").unwrap();
+        let source = SecretHeaderSource::new("x-api-key", &inherited).unwrap();
+        assert_eq!(
+            source.header_value().unwrap_err().problem,
+            SecretFileProblem::UnsafeCustody
+        );
+        assert_eq!(fs::read(&inherited).unwrap(), b"opaque-secret");
+
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("secrets")).unwrap();
+        directory
+            .write_atomic("header", b"opaque-secret", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let path = directory.path().join("header");
+        let source = SecretHeaderSource::new("x-api-key", &path).unwrap();
+        for (changed, access) in [(path.as_path(), "R"), (directory.path(), "W")] {
+            assert!(
+                std::process::Command::new("icacls")
+                    .arg(changed)
+                    .arg("/grant")
+                    .arg(format!("*S-1-1-0:{access}"))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert_eq!(
+                source.header_value().unwrap_err().problem,
+                SecretFileProblem::UnsafeCustody
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"opaque-secret");
+            assert!(
+                std::process::Command::new("icacls")
+                    .arg(changed)
+                    .arg("/remove:g")
+                    .arg("*S-1-1-0")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert_eq!(source.header_value().unwrap().as_bytes(), b"opaque-secret");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_secret_header_refuses_junction_ancestry_without_reading_target() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("secrets")).unwrap();
+        directory
+            .write_atomic("header", b"opaque-secret", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        let junction = temporary.path().join("redirect");
+        assert!(
+            std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&junction)
+                .arg(directory.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let source = SecretHeaderSource::new("x-api-key", junction.join("header")).unwrap();
+        assert!(source.header_value().is_err());
+        assert_eq!(
+            directory.read("header", 32).unwrap().as_slice(),
+            b"opaque-secret"
+        );
     }
 }

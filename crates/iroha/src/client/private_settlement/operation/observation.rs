@@ -140,14 +140,13 @@ impl SettlementLedger {
             return Ok(None);
         }
         let prepared = journal.steps[PREPARE].is_done();
-        if prepared {
-            if let Some(outcome) = self
+        if prepared
+            && let Some(outcome) = self
                 .finality_located(FinalityPhase::Finalize, None, None)
                 .await?
                 .terminal()
-            {
-                return Ok(Some(outcome));
-            }
+        {
+            return Ok(Some(outcome));
         }
         if let Some(outcome) = self
             .finality_located(FinalityPhase::Abort, None, None)

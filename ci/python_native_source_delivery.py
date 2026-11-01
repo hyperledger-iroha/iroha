@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import subprocess
 import sys
 import uuid
 import zipfile
@@ -248,9 +249,123 @@ def _same_directory(path: Path, descriptor: int) -> None:
         raise DeliveryError("original source or backup directory changed")
 
 
+class _NativeDeliverySession:
+    """Keep the canonical native filesystem owner alive through every parent check."""
+
+    def __init__(self, executable: Path):
+        if not executable.is_absolute() or executable.resolve(strict=True) != executable or not executable.is_file():
+            raise DeliveryError("native delivery helper must be an explicit canonical executable")
+        self.process = subprocess.Popen([str(executable)], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def request(self, operation: str, **fields: object) -> None:
+        raw = (_json(dict(op=operation, **fields)) + "\n").encode()
+        if len(raw) > 1024 * 1024:
+            raise DeliveryError("native delivery request exceeds its bound")
+        try:
+            self.process.stdin.write(raw)
+            self.process.stdin.flush()
+            response = self.process.stdout.readline(1024)
+        except (BrokenPipeError, OSError) as error:
+            raise DeliveryError("native delivery owner refused the operation") from error
+        if response != b"{}\n":
+            detail = self.process.stderr.read(MAX_CONTROL_BYTES).decode(errors="replace").strip()
+            raise DeliveryError("native delivery owner refused the operation: " + detail)
+
+    def close(self) -> int:
+        """EOF releases handles; partial files remain for authenticated recovery."""
+        try:
+            self.process.stdin.close()
+        except BrokenPipeError:
+            pass
+        status = self.process.wait()
+        self.process.stdout.close()
+        self.process.stderr.close()
+        return status
+
+
+def _promote_retained(
+    root: Path, expected_pin: str, expected_source: str, source: dict[str, object],
+    archive: wheel.WheelArchive, native: bytes, wheel_path: Path, wheel_seal: str,
+    manifest_path: Path, manifest_seal: str, backup_directory: Path, helper: Path,
+) -> wheel.FileSeal:
+    """Use one retained native session; the Python owner still authenticates all evidence."""
+    directory = _source_directory(root)
+    parent = wheel._canonical_directory(backup_directory.parent, "backup parent")
+    if (backup_directory != parent / backup_directory.name or root not in backup_directory.parents
+            or not backup_directory.relative_to(root).parts[0].startswith(".codex-")):
+        raise DeliveryError("source artifact backup must be in an ignored repository owner directory")
+    name = archive.native_member.removeprefix("iroha_native/")
+    old = source["native"]
+    expected_old = None if old is None else wheel.FileSeal.parse(old["seal"])
+    session = _NativeDeliverySession(helper)
+    try:
+        session.request("begin", source=str(directory), backup=str(backup_directory), name=name,
+                        old_sha256=None if expected_old is None else expected_old.sha256)
+        # Windows denies write/delete sharing on the original file and its retained
+        # ancestry. Rechecking the Python seal now binds its exact original identity
+        # without translating native 128-bit file IDs into a Unix-shaped identity.
+        if _json(inspect_source(root)) != expected_source:
+            raise DeliveryError("original source artifact changed before retained admission")
+        assert_source_pin(root, expected_pin)
+        intent = {"schema": DELIVERY_SCHEMA, "source_pin": expected_pin, "source_before": source,
+                  "wheel": str(wheel_path), "wheel_seal": wheel_seal,
+                  "manifest": str(manifest_path), "manifest_seal": manifest_seal,
+                  "native_member": archive.native_member}
+        session.request("intent", json=_json(intent))
+        temporary = f".fresh-native-{uuid.uuid4().hex}"
+        session.request("stage", name=temporary, length=len(native), sha256=hashlib.sha256(native).hexdigest())
+        for offset in range(0, len(native), 64 * 1024):
+            session.request("chunk", hex=native[offset:offset + 64 * 1024].hex())
+        session.request("seal")
+        _, fresh_seal = wheel._read_stable_regular_file(
+            backup_directory / temporary, label="original retained fresh native", max_bytes=wheel.MAX_MEMBER_BYTES
+        )
+        if _json(inspect_source(root)) != expected_source:
+            raise DeliveryError("original source artifact changed before promotion")
+        assert_source_pin(root, expected_pin)
+        session.request("backup")
+        original_backup = None
+        if expected_old is not None:
+            _, moved = wheel._read_stable_regular_file(
+                backup_directory / name, label="original retained backup", max_bytes=wheel.MAX_MEMBER_BYTES
+            )
+            if (moved.sha256, moved.device, moved.inode, moved.size, moved.mtime_ns, moved.mode) != (
+                expected_old.sha256, expected_old.device, expected_old.inode,
+                expected_old.size, expected_old.mtime_ns, expected_old.mode
+            ):
+                raise DeliveryError("moved artifact is not the original before-build owner")
+            original_backup = {"name": name, "seal": moved.render()}
+        session.request("activate")
+        promoted = inspect_source(root)
+        actual = wheel.FileSeal.parse(promoted["native"]["seal"])
+        if (actual.sha256, actual.device, actual.inode, actual.size, actual.mtime_ns, actual.mode) != (
+            fresh_seal.sha256, fresh_seal.device, fresh_seal.inode, fresh_seal.size,
+            fresh_seal.mtime_ns, fresh_seal.mode
+        ):
+            raise DeliveryError("promoted source is not the original fresh native physical object")
+        _match_sources(promoted, archive)
+        assert_source_pin(root, expected_pin)
+        receipt = _json(dict(intent, source_after=promoted, original_backup=original_backup))
+        session.request("receipt", json=receipt)
+        receipt_raw, receipt_seal = wheel._read_stable_regular_file(
+            backup_directory / "delivery.json", label="original retained delivery receipt", max_bytes=MAX_CONTROL_BYTES
+        )
+        if receipt_raw != receipt.encode():
+            raise DeliveryError("retained delivery receipt readback differs from authored content")
+        session.request("complete")
+    except BaseException:
+        session.close()
+        raise
+    if session.close() != 0:
+        raise DeliveryError("native delivery owner did not finish the original transaction")
+    return receipt_seal
+
+
 def promote_source(
     root: Path, expected_pin: str, expected_source: str, wheel_path: Path, wheel_seal: str,
     manifest_path: Path, manifest_seal: str, backup_directory: Path,
+    *, native_helper: Path | None = None,
 ) -> wheel.FileSeal:
     """Preserve the original artifact and atomically create the exact fresh member.
 
@@ -271,6 +386,12 @@ def promote_source(
     old = source["native"]
     if old is not None and old["name"] != name:
         raise DeliveryError("source native filename differs from the sole fresh native member")
+    if native_helper is not None:
+        return _promote_retained(root, expected_pin, expected_source, source, archive, native,
+                                wheel_path, wheel_seal, manifest_path, manifest_seal,
+                                backup_directory, native_helper)
+    if os.name == "nt":
+        raise DeliveryError("Windows source promotion requires the freshly built --native-helper")
     backup_directory = wheel._canonical_directory(backup_directory, "original artifact backup")
     if root not in backup_directory.parents or not backup_directory.relative_to(root).parts[0].startswith(".codex-"):
         raise DeliveryError("source artifact backup must be in an ignored repository owner directory")
@@ -441,6 +562,7 @@ def main() -> int:
     parser.add_argument("--backup-directory", type=Path)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--receipt-seal")
+    parser.add_argument("--native-helper", type=Path)
     args = parser.parse_args()
     allowed = {
         "pin": {"root"}, "inspect": {"root"}, "assert-pin": {"root", "source_pin"},
@@ -448,6 +570,8 @@ def main() -> int:
         "verify": {"root", "source_pin", "wheel", "wheel_seal", "manifest", "manifest_seal", "receipt", "receipt_seal"},
     }
     provided = {name for name, value in vars(args).items() if name != "mode" and value is not None}
+    if args.mode == "promote" and args.native_helper is not None:
+        allowed["promote"] = allowed["promote"] | {"native_helper"}
     if provided != allowed[args.mode]:
         parser.error("the selected command requires its exact original field inventory")
     try:
@@ -465,7 +589,8 @@ def main() -> int:
                 if args.source_state is None or args.backup_directory is None:
                     parser.error("promotion requires the original source state and fresh backup directory")
                 print(promote_source(args.root, args.source_pin, args.source_state, args.wheel, args.wheel_seal,
-                                     args.manifest, args.manifest_seal, args.backup_directory).render())
+                                     args.manifest, args.manifest_seal, args.backup_directory,
+                                     native_helper=args.native_helper).render())
             else:
                 if args.receipt is None or args.receipt_seal is None:
                     parser.error("verification requires the original delivery receipt and seal")

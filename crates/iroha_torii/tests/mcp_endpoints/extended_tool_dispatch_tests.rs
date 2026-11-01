@@ -8,7 +8,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_list_accepts_fla
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1062231,
+            "id": 1_062_231,
             "method": "tools/call",
             "params": {
                 "name": "iroha.subscriptions.plans.list",
@@ -45,7 +45,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_create_accepts_b
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 10622315,
+            "id": 10_622_315,
             "method": "tools/call",
             "params": {
                 "name": "iroha.subscriptions.plans.create",
@@ -73,7 +73,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_list_accepts_flat_quer
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1062232,
+            "id": 1_062_232,
             "method": "tools/call",
             "params": {
                 "name": "iroha.subscriptions.list",
@@ -127,7 +127,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 10622325,
+            "id": 10_622_325,
             "method": "tools/call",
             "params": {
                 "name": "iroha.subscriptions.create",
@@ -148,7 +148,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_canonical_path => error(
-        1062233,
+        1_062_233,
         "iroha.subscriptions.get",
         InvalidSubscriptionId,
         "invalid subscription id should be marked as MCP tool error for subscription detail alias",
@@ -165,7 +165,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_exact_s
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 10622335,
+            "id": 10_622_335,
             "method": "tools/call",
             "params": {
                 "name": "iroha.subscriptions.cancel",
@@ -190,10 +190,10 @@ async fn mcp_jsonrpc_tools_call_subscription_draft_actions_use_exact_id() {
     enable_writer_mcp(&mut cfg);
     let app = build_router(cfg);
     for (id, tool_name) in [
-        (10622341, "iroha.subscriptions.pause"),
-        (10622342, "iroha.subscriptions.resume"),
-        (10622343, "iroha.subscriptions.keep"),
-        (10622345, "iroha.subscriptions.charge_now"),
+        (10_622_341, "iroha.subscriptions.pause"),
+        (10_622_342, "iroha.subscriptions.resume"),
+        (10_622_343, "iroha.subscriptions.keep"),
+        (10_622_345, "iroha.subscriptions.charge_now"),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -221,7 +221,7 @@ async fn mcp_jsonrpc_tools_call_subscription_draft_actions_use_exact_id() {
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path => schema_error(
-        10622344,
+        10_622_344,
         "iroha.subscriptions.usage",
         InvalidSubscriptionId,
         "invalid canonical subscription path must fail advertised-schema validation",
@@ -237,7 +237,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106224,
+            "id": 106_224,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.definitions",
@@ -265,7 +265,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1062242,
+            "id": 1_062_242,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.definitions",
@@ -293,7 +293,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
 mcp_alias_dispatch_test! {
     #[tokio::test]
     async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_canonical_path => error(
-        1062241,
+        1_062_241,
         "iroha.assets.definitions.get",
         InvalidDefinitionId,
         "invalid definition id should be marked as MCP tool error for definition detail alias",
@@ -310,7 +310,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106225,
+            "id": 106_225,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.definitions.query",
@@ -339,7 +339,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106226,
+            "id": 106_226,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.holders",
@@ -370,7 +370,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 1062261,
+            "id": 1_062_261,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.holders",
@@ -400,7 +400,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_canonica
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106227,
+            "id": 106_227,
             "method": "tools/call",
             "params": {
                 "name": "iroha.assets.holders.query",
