@@ -27,7 +27,7 @@ use norito::NoritoSerialize;
 #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
 use super::compact_sha3::PreparedHashFrame;
 use super::{
-    compact_protocol::FixedAir,
+    air::{SemanticAir, q77::SealedView},
     compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
     compact_sha3::{BodyFields, Context as FramingContext, Frame},
     deep_geometry::{
@@ -200,13 +200,15 @@ impl Context {
     /// schema or statement divergence before framing or allocating context bytes.
     pub(super) fn for_relation(relation: &impl DeepRelation) -> Result<Self> {
         Self::preflight_relation(relation)?;
-        Self::with_identity(relation.schema().identity, relation.statement_bytes())
+        let view = SealedView::new(relation);
+        Self::with_identity(view.schema().identity, view.statement_bytes())
     }
 
     /// Validate the closed relation and fixed envelope without framing or hashing.
     pub(super) fn preflight_relation(relation: &impl DeepRelation) -> Result<()> {
-        let schema = relation.schema();
-        let inner = relation.deep_relation();
+        let view = SealedView::new(relation);
+        let schema = view.schema();
+        let inner = SealedView::new(relation.deep_relation());
         let reference = inner.schema();
         if schema.trace_rows != TRACE_ROWS
             || schema.width != 342
@@ -214,11 +216,11 @@ impl Context {
             || reference.trace_rows != schema.trace_rows
             || reference.width != schema.width
             || reference.constraints != schema.constraints
-            || relation.statement_bytes() != inner.statement_bytes()
+            || view.statement_bytes() != inner.statement_bytes()
         {
             return Err(BindingError::Context);
         }
-        Self::check_envelope(schema.identity, relation.statement_bytes())
+        Self::check_envelope(schema.identity, view.statement_bytes())
     }
 
     /// Explicit raw context fixture, never the prover/verifier relation entry.

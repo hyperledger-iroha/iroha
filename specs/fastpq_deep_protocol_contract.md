@@ -45,10 +45,14 @@ public columns and one field-generic evaluator):
 - construction and verification report their public outcome to the
   `air::q77` process observer, which cannot change a result.
 
-These readers still bypass the interface and are B.2 work: transcript binding
-reads the relation identity and statement from `FixedAir`
-([`deep_binding`](../crates/fastpq_prover/src/backend/deep_binding.rs)); the
-producer's masked quotient uses the prepared evaluator and the degree owner of
+Transcript binding reads the outer relation identity, declared geometry and
+complete statement through the sealed `SemanticAir` view
+([`deep_binding`](../crates/fastpq_prover/src/backend/deep_binding.rs)). Before
+framing, it checks the original arithmetic owner's matching geometry and
+statement through that same view.
+
+These readers still bypass the interface and are B.2 work: the producer's
+masked quotient uses the prepared evaluator and the degree owner of
 `CompactTransferAir`
 ([`deep_masked_quotient`](../crates/fastpq_prover/src/backend/deep_masked_quotient.rs));
 and public columns are rebuilt by the closed-form `PublicColumnReconstruction`,

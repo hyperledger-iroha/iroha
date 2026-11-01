@@ -63,7 +63,10 @@ fn completed(binding: &Context, levels: &[Vec<Digest>]) -> CompletedNodes {
     reason = "passed directly as the fallible regeneration callback of `open`"
 )]
 fn fill(indices: &[usize], output: &mut [u8]) -> Result<()> {
-    for (&index, row) in indices.iter().zip(output.chunks_exact_mut(128)) {
+    for (&index, row) in indices
+        .iter()
+        .zip(output.as_chunks_mut::<128>().0.iter_mut())
+    {
         payload(index, row);
     }
     Ok(())

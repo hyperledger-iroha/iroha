@@ -237,15 +237,35 @@ fn the_printed_manifest_is_one_the_predecessor_admits() {
 #[test]
 fn records_roundtrip_through_their_predecessor_encoding() {
     let record = activated(5);
-    let bytes = norito::encode_canonical(&record.record).expect("encode");
-    let decoded: PredecessorUpgradeRecord = norito::decode_canonical(&bytes).expect("decode");
+    // World entries use the fixed V1 bare payload, not a schema-framed archive.
+    let bytes = norito::codec::Encode::encode(&record.record);
+    let decoded: PredecessorUpgradeRecord =
+        norito::codec::DecodeAll::decode_all(&mut bytes.as_slice()).expect("decode");
     assert_eq!(decoded, record.record);
     let (key, value) = record.element_hashes().expect("hashes");
     assert_ne!(key, value);
+    // The predecessor's derived RuntimeUpgradeId is one [u8; 32] field:
+    // its fixed V1 payload is a compact field length followed by raw key bytes.
+    // A standalone array instead encodes each element and is not that key layout.
+    let mut predecessor_key_payload = [5_u8; 33];
+    predecessor_key_payload[0] = 32;
     assert_eq!(
+        norito::codec::Encode::encode(&record.id),
+        predecessor_key_payload
+    );
+    let predecessor_key_hash = Hash::new_from_chunks(&[
+        b"iroha:world-net-delta:value:bare-v1\0",
+        &predecessor_key_payload,
+        &33_u64.to_le_bytes(),
+    ]);
+    assert_eq!(
+        key, predecessor_key_hash,
+        "the identity retains the predecessor's key layout"
+    );
+    assert_ne!(
         key,
         crate::state::world_projection::hash_value(&[5_u8; 32]).unwrap(),
-        "the identity hashes as the predecessor's 32-byte key"
+        "a standalone byte array is not the predecessor's derived key type"
     );
 }
 

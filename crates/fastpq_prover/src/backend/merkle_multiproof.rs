@@ -1379,7 +1379,7 @@ mod tests {
                 words[lane] = invalid;
                 assert!(Digest::new(words).is_none());
                 let mut bytes = [0; 48];
-                for (word, chunk) in words.iter().zip(bytes.chunks_exact_mut(8)) {
+                for (word, chunk) in words.iter().zip(bytes.as_chunks_mut::<8>().0.iter_mut()) {
                     chunk.copy_from_slice(&word.to_le_bytes());
                 }
                 assert!(Digest::from_le_bytes(bytes).is_none());

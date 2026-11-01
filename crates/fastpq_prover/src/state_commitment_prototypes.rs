@@ -72,9 +72,9 @@ pub const DOMAIN_BOUND_HEAD: u64 = DOMAIN_NAMESPACE | 8;
 /// Domain of the digest of the upper sentinel of the linked-leaf map.
 pub const DOMAIN_BOUND_END: u64 = DOMAIN_NAMESPACE | 9;
 /// Domain of a hash-chain step and of the chain's start value.
-pub const DOMAIN_CHAIN: u64 = DOMAIN_NAMESPACE | 10;
+pub const DOMAIN_CHAIN: u64 = DOMAIN_NAMESPACE | 0x0a;
 /// Domain of an interior node of the sorted Merkle B-tree.
-pub const DOMAIN_PAGE_NODE: u64 = DOMAIN_NAMESPACE | 11;
+pub const DOMAIN_PAGE_NODE: u64 = DOMAIN_NAMESPACE | 0x0b;
 
 /// Why a carried witness does not establish its statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

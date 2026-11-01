@@ -1,10 +1,14 @@
 //! Fixed transcript, canonicality and shared-framing regression tests.
 
 use super::*;
+use crate::backend::compact_protocol::FixedAir;
 
 fn tape(round: Round, values: impl IntoIterator<Item = u64>) -> Vec<u8> {
     let mut bytes = vec![0; round.tape_bytes()];
-    for (value, target) in values.into_iter().zip(bytes.chunks_exact_mut(8)) {
+    for (value, target) in values
+        .into_iter()
+        .zip(bytes.as_chunks_mut::<8>().0.iter_mut())
+    {
         target.copy_from_slice(&value.to_le_bytes());
     }
     bytes

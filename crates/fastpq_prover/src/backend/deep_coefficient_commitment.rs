@@ -376,7 +376,10 @@ fn pack(values: &[F], output: &mut [u8]) -> Result<()> {
             "DEEP coefficient leaf packing has wrong exact length",
         ));
     }
-    for (&value, bytes) in values.iter().zip(output.chunks_exact_mut(F::BYTES)) {
+    for (&value, bytes) in values
+        .iter()
+        .zip(output.as_chunks_mut::<{ F::BYTES }>().0.iter_mut())
+    {
         bytes.copy_from_slice(&value.to_le_bytes());
     }
     Ok(())

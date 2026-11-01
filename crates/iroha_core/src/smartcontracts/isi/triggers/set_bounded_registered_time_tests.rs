@@ -157,8 +157,13 @@ fn registered_metadata_rejects_quoted_negative_fractional_and_extra_values_befor
     view.visit_borrowed_trigger_sources(|source| {
         let source = source.unwrap();
         for metadata in &variants {
+            // Retain valid current consent so malformed numeric values reach
+            // their own admission branches instead of missing-consent refusal.
+            let mut metadata = metadata.clone();
+            let key = super::super::runtime_expectation::metadata_key();
+            metadata.insert(key.clone(), source.metadata().get(key).unwrap().clone());
             let mut probe = source_with_probe(source);
-            probe.metadata = metadata;
+            probe.metadata = &metadata;
             assert_source_frame_refuses(&probe);
         }
         Ok(core::ops::ControlFlow::Continue(()))
@@ -340,4 +345,37 @@ fn registered_frame_resource_refusal_keeps_store_and_retry_policy_unchanged() {
         norito::encode_canonical(view.triggers_iter().next().unwrap().action()).unwrap(),
         expected
     );
+}
+
+#[test]
+fn bounded_time_source_requires_consent_and_the_complete_registration_pair() {
+    let set = registered_time_set(
+        "required_consent",
+        scheduled_invocation("execute_scheduled_payment"),
+        registration_metadata(1, 2),
+    );
+    let view = set.view();
+    view.visit_borrowed_trigger_sources(|source| {
+        let source = source.unwrap();
+        let consent_key = super::super::runtime_expectation::metadata_key();
+        let mut missing_consent = source.metadata().clone();
+        missing_consent.remove(consent_key);
+        let mut missing_height = source.metadata().clone();
+        missing_height.remove::<str>("__registered_block_height");
+        let mut missing_time = source.metadata().clone();
+        missing_time.remove::<str>("__registered_at_ms");
+        for metadata in [
+            Metadata::default(),
+            missing_consent,
+            missing_height,
+            missing_time,
+        ] {
+            let mut probe = source_with_probe(source);
+            probe.metadata = &metadata;
+            // MustNotSerialize and the zero peak charge assert early refusal.
+            assert_source_frame_refuses(&probe);
+        }
+        Ok(core::ops::ControlFlow::Continue(()))
+    })
+    .unwrap();
 }
